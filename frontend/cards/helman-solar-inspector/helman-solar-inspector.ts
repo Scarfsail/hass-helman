@@ -1796,6 +1796,7 @@ export class HelmanSolarInspector extends LitElement {
           .rows=${rows}
           .bucket=${this._spanBucket()}
           .selectedKey=${this._selectedBucket}
+          .currency=${this._span?.currency ?? ""}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
           @aggregate-bucket-hover=${this._handleBucketHover}
@@ -1876,6 +1877,28 @@ export class HelmanSolarInspector extends LitElement {
       measured(this._t("bias_correction.inspector.battery_charge"), row.batteryChargeWh, CHART_COLORS.battery),
       measured(this._t("bias_correction.inspector.battery_discharge"), row.batteryDischargeWh, CHART_COLORS.battery),
     ].filter((candidate) => candidate.forecast !== null);
+    // The popup says everything the three panels below it do, or hovering a
+    // column would answer half the question and leave the reader to click for
+    // the rest. The SoC range and the money are formatted rather than passed
+    // through `_formatWh`, so each carries its own unit.
+    const socRange = this._formatSocRange(row);
+    if (socRange !== null) {
+      rows.push({
+        label: this._t("bias_correction.inspector.soc_range"),
+        actual: null,
+        forecast: { value: socRange, color: CHART_COLORS.battery },
+      });
+    }
+    const money = this._spanMoney([row], [row.date]);
+    if (money !== null) {
+      const amount = (labelKey: string, value: number, color: string) => rows.push({
+        label: this._t(`bias_correction.inspector.${labelKey}`),
+        actual: null,
+        forecast: { value: this._formatSpanMoney(value), color },
+      });
+      amount("import_cost", money.cost, GRID_IMPORT_COLOR);
+      amount("export_gain", money.gain, GRID_EXPORT_COLOR);
+    }
     this._tooltip = {
       x,
       y,
@@ -1885,8 +1908,72 @@ export class HelmanSolarInspector extends LitElement {
     };
   };
 
+  /**
+   * The span's money as `MoneyPoint`s keyed by bucket.
+   *
+   * `sumMoney` matches a point's `slot` against a set of keys and never parses
+   * it, so a `YYYY-MM-DD` bucket key stands in for an `HH:MM` slot label with no
+   * change to the model -- which is why the aggregate views sum money through
+   * the same function the day view's selection does rather than growing a second
+   * one that could disagree with it.
+   *
+   * A bucket the backend could price neither side of is left out entirely, so
+   * "no priced bucket in the selection" stays distinguishable from "priced, and
+   * it came to nothing". A bucket priced on only one side contributes that side
+   * and a zero for the other, which is what the missing direction actually
+   * means once the other is known: no energy flowed that way.
+   */
+  private _spanMoneyPoints(rows: readonly SpanAggregateRow[]): MoneyPoint[] {
+    const points: MoneyPoint[] = [];
+    for (const row of rows) {
+      const cost = Number.isFinite(row.moneyCost as number) ? (row.moneyCost as number) : null;
+      const gain = Number.isFinite(row.moneyGain as number) ? (row.moneyGain as number) : null;
+      if (cost === null && gain === null) continue;
+      points.push({ slot: row.date, cost: cost ?? 0, gain: gain ?? 0 });
+    }
+    return points;
+  }
+
+  /**
+   * The three money figures over a set of buckets, or null where none of them
+   * carries a price at all -- an em dash, never a zero.
+   */
+  private _spanMoney(
+    rows: readonly SpanAggregateRow[],
+    keys: readonly string[],
+  ): MoneyTotals | null {
+    const points = this._spanMoneyPoints(rows);
+    const wanted = new Set(keys);
+    if (!points.some((point) => wanted.has(point.slot))) return null;
+    return sumMoney(points, keys);
+  }
+
+  private _formatSpanMoney(value: number | null): string {
+    if (value === null || !Number.isFinite(value)) {
+      return this._t("bias_correction.inspector.actual_not_available");
+    }
+    return `${value.toFixed(2)} ${this._span?.currency ?? ""}`.trim();
+  }
+
+  /**
+   * How low the battery got and how high it came back, over one bucket.
+   *
+   * Both bounds or nothing: half a range is not a range, and writing the known
+   * end alone would read as a battery that sat still. Same rule the chart's SoC
+   * row draws by.
+   */
+  private _formatSocRange(row: SpanAggregateRow): string | null {
+    const min = row.batteryMinSocPct;
+    const max = row.batteryMaxSocPct;
+    if (min === null || max === null) return null;
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    return `${Math.min(min, max).toFixed(0)}–${Math.max(min, max).toFixed(0)} %`;
+  }
+
   private _renderBucketMetrics(row: SpanAggregateRow) {
     const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
+    const money = this._spanMoney([row], [row.date]);
+    const socRange = this._formatSocRange(row);
     return html`
       ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(row.solarWh), CHART_COLORS.corrected)}
       ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(row.houseWh), CHART_COLORS.house)}
@@ -1894,6 +1981,12 @@ export class HelmanSolarInspector extends LitElement {
       ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhToWh(row.gridExportKwh)), CHART_COLORS.grid)}
       ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(row.batteryChargeWh), CHART_COLORS.battery)}
       ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(row.batteryDischargeWh), CHART_COLORS.battery)}
+      ${socRange === null
+        ? ""
+        : this._renderMetric(this._t("bias_correction.inspector.soc_range"), socRange, CHART_COLORS.battery)}
+      ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), GRID_IMPORT_COLOR)}
+      ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), GRID_EXPORT_COLOR)}
+      ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
     `;
   }
 
@@ -1950,6 +2043,10 @@ export class HelmanSolarInspector extends LitElement {
       const total = sum(read);
       return total === null ? null : total * 1000;
     };
+    // Summed through `sumMoney` over every bucket on screen, so the span's
+    // money and a single bucket's follow one rule -- the same one the day view's
+    // selection follows.
+    const money = this._spanMoney(rows, rows.map((row) => row.date));
     return html`
       <div class="metrics-section">
         <strong>${this._t("bias_correction.inspector.span_totals")}</strong>
@@ -1960,6 +2057,9 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhSum((row) => row.gridExportKwh)), CHART_COLORS.grid)}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(sum((row) => row.batteryChargeWh)), CHART_COLORS.battery)}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(sum((row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
+          ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), GRID_IMPORT_COLOR)}
+          ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), GRID_EXPORT_COLOR)}
+          ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
         </div>
       </div>
     `;

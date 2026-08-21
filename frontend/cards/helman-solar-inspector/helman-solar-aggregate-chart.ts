@@ -4,7 +4,14 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, SOLAR_COLOR } from "../color-utils";
+import {
+    BATT_COLOR,
+    GRID_COLOR,
+    GRID_EXPORT_COLOR,
+    GRID_IMPORT_COLOR,
+    HOUSE_COLOR,
+    SOLAR_COLOR,
+} from "../color-utils";
 import { symmetricEnergyAxis } from "./chart-axis";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 
@@ -69,6 +76,79 @@ const BAND_FILL_OPACITY = 0.45;
 const MIN_LABEL_PX = 13;
 
 /**
+ * The two rows drawn under the energy chart, on its x geometry.
+ *
+ * They keep the chart's left and right margins and take their column positions
+ * from it, so the three panels line up by construction rather than by two sets
+ * of numbers that have to be kept equal. Each is its own `<svg>` because each
+ * has its own y scale -- a percentage, and an amount of money -- and nothing
+ * about them belongs on the kWh axis above.
+ */
+const SOC_ROW = { height: 96, marginTop: 14, marginBottom: 10 } as const;
+const MONEY_ROW = { height: 96, marginTop: 14, marginBottom: 10 } as const;
+
+/** A state of charge is a percentage, so its axis is the fixed 0..100. */
+const SOC_TICKS = [0, 50, 100] as const;
+
+/**
+ * The buckets that have something to draw, split into unbroken stretches.
+ *
+ * A gap is a break rather than a zero, in every row of this chart: a bucket the
+ * meter has no reading for, a bucket whose SoC bounds are missing, a bucket that
+ * cost nothing. Each stretch becomes its own path, so an absent bucket stays
+ * visibly absent instead of being bridged by a straight edge across it.
+ */
+function contiguousRuns(indices: readonly number[], has: (index: number) => boolean): number[][] {
+    const runs: number[][] = [];
+    for (const index of indices) {
+        if (!has(index)) continue;
+        const current = runs[runs.length - 1];
+        if (current && current[current.length - 1] === index - 1) current.push(index);
+        else runs.push([index]);
+    }
+    return runs;
+}
+
+/**
+ * One run of buckets as a closed step area: along the top edge and back along
+ * the base.
+ *
+ * Every filled shape in this chart is built this way -- the energy bands, the
+ * SoC ranges and the money cells alike -- because a bucket is an *interval*:
+ * its edge runs flat across the whole width it stands for and meets its
+ * neighbour's, which is what makes the aggregate views read as the day chart at
+ * a wider zoom rather than as a bar chart of separate things.
+ */
+/**
+ * A money gridline's label: enough digits to tell two ticks apart, and no more.
+ *
+ * A row's ticks are its extremes and zero, so they are far apart; two decimals
+ * on a month's worth of import cost would be four digits of noise in a
+ * left gutter sized for two.
+ */
+function formatMoneyTick(value: number): string {
+    if (value === 0) return "0";
+    return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+function stepAreaPath(
+    run: readonly number[],
+    topAt: (index: number) => number,
+    baseAt: (index: number) => number,
+    xFor: (index: number) => number,
+): string {
+    const edge = (index: number, at: (index: number) => number) => {
+        const y = at(index);
+        return [[xFor(index), y], [xFor(index + 1), y]] as const;
+    };
+    const outer = run.flatMap((index) => [...edge(index, topAt)]);
+    const inner = [...run].reverse().flatMap((index) => [...edge(index, baseAt)].reverse());
+    return [...outer, ...inner]
+        .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+        .join(" ") + " Z";
+}
+
+/**
  * A span of history as one column per bucket.
  *
  * Its own element rather than a mode of the inspector's day chart, and that is
@@ -120,6 +200,12 @@ export class HelmanSolarAggregateChart extends LitElement {
     @property({ type: String }) public selectedKey: string | null = null;
     /** viewBox width; the SVG scales to its container, so this is only a ratio. */
     @property({ type: Number }) public width = 900;
+    /**
+     * The currency the money row's amounts are in, as the span payload carries
+     * it. Empty where the backend could not derive one -- the amounts are still
+     * drawn, because their relative sizes are the point of the row.
+     */
+    @property({ type: String }) public currency = "";
 
     /** The column under the pointer, as an index into {@link rows}. */
     @state() private _hoveredIndex: number | null = null;
@@ -229,7 +315,247 @@ export class HelmanSolarAggregateChart extends LitElement {
                 </svg>
             `}
             </div>
+            ${this._renderSocRow(rows, xFor, columnWidth, plotWidth)}
+            ${this._renderMoneyRow(rows, xFor, columnWidth, plotWidth)}
         `;
+    }
+
+    /**
+     * The battery's SoC as one range per bucket, on a fixed 0..100 axis.
+     *
+     * A *range*, not a trajectory. The day view's SoC bars are the level each
+     * slot ended at, with a measured/forecast seam and charge/discharge
+     * colouring -- none of which survives collapsing a day: there is no level a
+     * day "ended at" worth drawing, no forecast here at all, and a direction is
+     * not a property a whole day has. What a day does have is how low the
+     * battery got and how high it came back, which is why this is the one panel
+     * of the day view that is rebuilt here rather than reused. `buildSocBars`
+     * and the inspector's SoC section stay day-only and untouched.
+     *
+     * One neutral battery colour for the same reason: `resolveSocDirection`
+     * answers a question a range does not ask.
+     *
+     * A bucket missing *either* bound draws nothing, rather than a zero-height
+     * range at the bound that is known -- a half-known range is not a range, and
+     * drawing it at the known end would read as a battery that never moved. That
+     * is P1's null-not-zero rule applied to a pair.
+     *
+     * The axis is fixed rather than fitted to the span: a percentage has its own
+     * ends, and scaling to the data would make a month that stayed between 40
+     * and 60 look like one that swung the full range.
+     */
+    private _renderSocRow(
+        rows: readonly SpanAggregateRow[],
+        xFor: (index: number) => number,
+        columnWidth: number,
+        plotWidth: number,
+    ) {
+        const bounds = (row: SpanAggregateRow | undefined) => {
+            const min = row?.batteryMinSocPct ?? null;
+            const max = row?.batteryMaxSocPct ?? null;
+            if (min === null || max === null) return null;
+            if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+            return { min: Math.min(min, max), max: Math.max(min, max) };
+        };
+        const indices = rows.map((_, index) => index);
+        const runs = contiguousRuns(indices, (index) => bounds(rows[index]) !== null);
+        if (runs.length === 0) return nothing;
+
+        const plotHeight = SOC_ROW.height - SOC_ROW.marginTop - SOC_ROW.marginBottom;
+        const yFor = (pct: number) => SOC_ROW.marginTop + (1 - pct / 100) * plotHeight;
+        return html`
+            <div class="chart-wrap">
+                ${svg`
+                <svg
+                    viewBox="0 0 ${this.width} ${SOC_ROW.height}"
+                    role="img"
+                    class="soc-row"
+                    aria-label=${this._t("bias_correction.inspector.aggregate_soc_row")}
+                >
+                    ${this._renderRowGuides(SOC_TICKS, yFor, plotWidth, (tick) => String(tick))}
+                    ${this._renderRowMarkers(rows, xFor, columnWidth, SOC_ROW.marginTop, plotHeight)}
+                    ${runs.map((run) => svg`
+                        <path
+                            class="soc-band"
+                            d=${stepAreaPath(
+                                run,
+                                (index) => yFor(bounds(rows[index])!.max),
+                                (index) => yFor(bounds(rows[index])!.min),
+                                xFor,
+                            )}
+                            fill=${BATT_COLOR} fill-opacity=${BAND_FILL_OPACITY}
+                            stroke=${BATT_COLOR} stroke-width="0.75" stroke-opacity="0.6"
+                            pointer-events="none"
+                        ></path>
+                    `)}
+                    ${this._renderRowCaption(this._t("bias_correction.inspector.aggregate_soc_row"))}
+                </svg>
+            `}
+            </div>
+        `;
+    }
+
+    /**
+     * What each bucket cost and earned, cost above the line and gain below it.
+     *
+     * Not `helman-solar-money-strip`: that strip is day-shaped where it counts
+     * -- its cells are minute positions, floored by the inspector's slot width,
+     * and split at a measured/forecast seam that a span has no equivalent of. It
+     * stays day-only. What *is* reused is the model underneath it, unchanged:
+     * `MoneyPoint` and `sumMoney` match on a slot key and never parse it, so a
+     * bucket key works where an `HH:MM` one did, and the inspector's totals sum
+     * these buckets through the same function the day's selection uses.
+     *
+     * Signed the way the strip is: cost rises, gain falls, so the two are never
+     * told apart by colour alone, and a negative amount -- a gain earned at a
+     * negative export rate -- simply crosses the line. The two directions share
+     * one scale so their heights stay comparable, and a side with nothing on it
+     * gets no half of the plot.
+     */
+    private _renderMoneyRow(
+        rows: readonly SpanAggregateRow[],
+        xFor: (index: number) => number,
+        columnWidth: number,
+        plotWidth: number,
+    ) {
+        const amount = (value: number | null | undefined) =>
+            value === null || value === undefined || !Number.isFinite(value) ? null : value;
+        const cost = (index: number) => amount(rows[index]?.moneyCost);
+        // Drawn downward, so the sign is flipped once here and nowhere else.
+        const gain = (index: number) => {
+            const value = amount(rows[index]?.moneyGain);
+            return value === null ? null : -value;
+        };
+        const indices = rows.map((_, index) => index);
+        const drawn = indices.flatMap((index) => [cost(index), gain(index)])
+            .filter((value): value is number => value !== null);
+        if (drawn.length === 0) return nothing;
+
+        const plotHeight = MONEY_ROW.height - MONEY_ROW.marginTop - MONEY_ROW.marginBottom;
+        const maxUp = Math.max(0, ...drawn);
+        const maxDown = Math.max(0, ...drawn.map((value) => -value));
+        const bands = (maxUp > 0 ? 1 : 0) + (maxDown > 0 ? 1 : 0);
+        const bandHeight = bands > 0 ? plotHeight / bands : plotHeight;
+        const zeroY = MONEY_ROW.marginTop + (maxUp > 0 ? bandHeight : 0);
+        const extent = Math.max(0.0001, maxUp, maxDown);
+        const yFor = (value: number) => zeroY - (value / extent) * bandHeight;
+        const ticks = [
+            ...(maxUp > 0 ? [maxUp] : []),
+            0,
+            ...(maxDown > 0 ? [-maxDown] : []),
+        ];
+        const caption = this.currency
+            ? `${this._t("bias_correction.inspector.aggregate_money_row")} (${this.currency})`
+            : this._t("bias_correction.inspector.aggregate_money_row");
+        const cell = (
+            klass: string,
+            color: string,
+            read: (index: number) => number | null,
+        ) => contiguousRuns(indices, (index) => {
+            const value = read(index);
+            return value !== null && value !== 0;
+        }).map((run) => svg`
+            <path
+                class=${klass}
+                d=${stepAreaPath(run, (index) => yFor(read(index)!), () => zeroY, xFor)}
+                fill=${color} fill-opacity=${BAND_FILL_OPACITY}
+                stroke=${color} stroke-width="0.75" stroke-opacity="0.6"
+                pointer-events="none"
+            ></path>
+        `);
+        return html`
+            <div class="chart-wrap">
+                ${svg`
+                <svg
+                    viewBox="0 0 ${this.width} ${MONEY_ROW.height}"
+                    role="img"
+                    class="money-row"
+                    aria-label=${caption}
+                >
+                    ${this._renderRowGuides(ticks, yFor, plotWidth, formatMoneyTick)}
+                    ${this._renderRowMarkers(rows, xFor, columnWidth, MONEY_ROW.marginTop, plotHeight)}
+                    ${cell("money-band cost", GRID_IMPORT_COLOR, cost)}
+                    ${cell("money-band gain", GRID_EXPORT_COLOR, gain)}
+                    ${this._renderRowCaption(caption)}
+                </svg>
+            `}
+            </div>
+        `;
+    }
+
+    /** A row's gridlines and their left-gutter labels, on the chart's x span. */
+    private _renderRowGuides(
+        ticks: readonly number[],
+        yFor: (value: number) => number,
+        plotWidth: number,
+        label: (tick: number) => string,
+    ) {
+        const right = CHART.marginLeft + plotWidth;
+        return ticks.map((tick) => {
+            const y = yFor(tick);
+            return svg`
+                <line
+                    x1=${CHART.marginLeft} y1=${y} x2=${right} y2=${y}
+                    stroke="var(--divider-color)" stroke-width="1"
+                    opacity=${tick === 0 ? 0.9 : 0.35}
+                    pointer-events="none"
+                ></line>
+                <text
+                    x=${CHART.marginLeft - 6} y=${y + 4} text-anchor="end"
+                    fill="var(--secondary-text-color)" font-size="10"
+                    pointer-events="none"
+                >${label(tick)}</text>
+            `;
+        });
+    }
+
+    /** What the row is, written into its top margin -- it has no legend. */
+    private _renderRowCaption(text: string) {
+        return svg`
+            <text
+                class="row-caption"
+                x=${CHART.marginLeft + 2} y="10"
+                fill="var(--secondary-text-color)" font-size="9"
+                pointer-events="none"
+            >${text}</text>
+        `;
+    }
+
+    /**
+     * The selected and hovered columns repeated in a row below the chart.
+     *
+     * The rows carry no hit targets of their own -- pointing at a column is
+     * done once, on the chart -- but they must *show* which column is in play,
+     * or a reader hovering a day in the chart has to find it again by eye in
+     * two more panels standing on the same axis.
+     */
+    private _renderRowMarkers(
+        rows: readonly SpanAggregateRow[],
+        xFor: (index: number) => number,
+        columnWidth: number,
+        top: number,
+        height: number,
+    ) {
+        const marker = (index: number, klass: string, style: string) => svg`
+            <rect
+                class=${klass}
+                x=${xFor(index)} y=${top}
+                width=${columnWidth} height=${height}
+                style=${style}
+                pointer-events="none"
+            ></rect>
+        `;
+        const selectedIndex = rows.findIndex((row) => row.date === this.selectedKey);
+        return [
+            selectedIndex >= 0
+                ? marker(selectedIndex, "bucket-tint selected",
+                    "fill: var(--helman-selection); fill-opacity: 0.18;")
+                : nothing,
+            this._hoveredIndex !== null
+                ? marker(this._hoveredIndex, "bucket-tint hovered",
+                    "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection); stroke-width: 1;")
+                : nothing,
+        ];
     }
 
     /**
@@ -252,35 +578,22 @@ export class HelmanSolarAggregateChart extends LitElement {
     ) {
         const thickness = (index: number) =>
             (band.top.get(index) ?? 0) - (band.base.get(index) ?? 0);
-        const runs: number[][] = [];
-        for (const index of indices) {
-            if (thickness(index) === 0) continue;
-            const current = runs[runs.length - 1];
-            if (current && current[current.length - 1] === index - 1) current.push(index);
-            else runs.push([index]);
-        }
-
-        const edge = (index: number, level: Map<number, number>) => {
-            const y = yFor(level.get(index) ?? 0);
-            return [[xFor(index), y], [xFor(index + 1), y]] as const;
-        };
-        const toPath = (points: readonly (readonly number[])[]) =>
-            points
-                .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
-                .join(" ");
-
+        const runs = contiguousRuns(indices, (index) => thickness(index) !== 0);
         return runs.map((run) => {
-            const outer = run.flatMap((index) => [...edge(index, band.top)]);
-            const inner = [...run]
-                .reverse()
-                .flatMap((index) => [...edge(index, band.base)].reverse());
+            const d = stepAreaPath(
+                run,
+                (index) => yFor(band.top.get(index) ?? 0),
+                (index) => yFor(band.base.get(index) ?? 0),
+                xFor,
+            );
             // Painted over the hit rects, so it must not take the pointer: the
             // bands cover most of a column, and without this a click or hover
             // aimed at the stack itself -- the obvious place to aim -- reaches
             // nothing. Every drawn element in the day chart does the same.
             return svg`
                 <path
-                    d=${`${toPath([...outer, ...inner])} Z`}
+                    class="energy-band"
+                    d=${d}
                     fill=${band.layer.color} fill-opacity=${BAND_FILL_OPACITY}
                     stroke=${band.layer.color} stroke-width="0.75" stroke-opacity="0.6"
                     pointer-events="none"
