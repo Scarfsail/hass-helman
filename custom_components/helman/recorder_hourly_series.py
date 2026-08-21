@@ -586,6 +586,70 @@ async def query_slot_boundary_state_values_for_range(
     )
 
 
+async def query_slot_boundary_state_values_for_entities(
+    hass: HomeAssistant,
+    entity_ids: Sequence[str],
+    *,
+    local_start: datetime,
+    local_end: datetime,
+    interval_minutes: int,
+) -> dict[str, dict[datetime, float]]:
+    """Sample several entities' recorded states at every slot boundary, in ONE read.
+
+    Same window, same grid and same sampler as
+    :func:`query_slot_boundary_state_values_for_range` -- see it for what a
+    boundary sample means for a rate. The recorder runs its queries on a single
+    DB executor thread, so N separate calls are N serial round-trips no matter
+    how they are awaited; ``get_significant_states`` takes a list of entity ids,
+    which turns them into one.
+
+    Returns a map keyed by entity id. An entity the recorder has nothing for maps
+    to ``{}``, matching the singular function.
+    """
+    unique_entity_ids = list(dict.fromkeys(eid for eid in entity_ids if eid))
+    if not unique_entity_ids:
+        return {}
+
+    local_boundaries = _build_local_slot_starts_until(
+        local_start,
+        local_end,
+        interval_minutes=interval_minutes,
+    )
+    if not local_boundaries:
+        return {entity_id: {} for entity_id in unique_entity_ids}
+
+    boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+    utc_end = dt_util.as_utc(local_end)
+
+    def _query_and_parse() -> dict[str, dict[datetime, float]]:
+        history = get_significant_states(
+            hass,
+            boundaries[0],
+            utc_end,
+            entity_ids=unique_entity_ids,
+            filters=None,
+            include_start_time_state=True,
+            # The singular query reads real state changes only; this one has to
+            # read the same rows or it is not the same function. These are rate
+            # sensors, and no ``sensor`` is in a significant domain, so True
+            # applies exactly the filter the singular query applies.
+            significant_changes_only=True,
+            minimal_response=False,
+            no_attributes=True,
+            compressed_state_format=False,
+        )
+        return {
+            entity_id: _sample_rate_values_at_boundaries(
+                _states_for_entity(history, entity_id),
+                boundaries,
+                interval_minutes=interval_minutes,
+            )
+            for entity_id in unique_entity_ids
+        }
+
+    return await get_instance(hass).async_add_executor_job(_query_and_parse)
+
+
 async def estimate_average_hourly_energy_when_switch_on(
     hass: HomeAssistant,
     *,

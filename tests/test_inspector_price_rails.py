@@ -352,7 +352,100 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(samples, {})
 
 
-class TestLoadRecordedPriceRail(unittest.IsolatedAsyncioTestCase):
+class TestBatchedBoundarySampler(unittest.IsolatedAsyncioTestCase):
+    """Both rails share a window, so they share a query."""
+
+    def setUp(self):
+        self.recorder = importlib.import_module(
+            "custom_components.helman.recorder_hourly_series"
+        )
+
+    async def _sample(self, history, entity_ids):
+        calls: list[dict] = []
+
+        def _fake_query(hass, start, end, **kwargs):
+            calls.append({"start": start, "end": end, **kwargs})
+            return history
+
+        class _Recorder:
+            @staticmethod
+            async def async_add_executor_job(func):
+                return func()
+
+        with patch.object(
+            self.recorder, "get_significant_states", _fake_query
+        ), patch.object(self.recorder, "get_instance", lambda hass: _Recorder()):
+            samples = await self.recorder.query_slot_boundary_state_values_for_entities(
+                object(),
+                entity_ids,
+                local_start=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+                local_end=datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE),
+                interval_minutes=15,
+            )
+        return samples, calls
+
+    async def test_two_entities_cost_one_query_and_come_back_apart(self):
+        history = {
+            IMPORT_ENTITY: [
+                SimpleNamespace(
+                    last_updated=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+                    state="2.0",
+                ),
+            ],
+            EXPORT_ENTITY: [
+                SimpleNamespace(
+                    last_updated=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+                    state="1.0",
+                ),
+                SimpleNamespace(
+                    last_updated=datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE),
+                    state="3.0",
+                ),
+            ],
+        }
+        samples, calls = await self._sample(history, [IMPORT_ENTITY, EXPORT_ENTITY])
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["entity_ids"], [IMPORT_ENTITY, EXPORT_ENTITY])
+        # Same rows the singular query reads: state changes only, no attributes,
+        # and the state standing when the window opened.
+        self.assertTrue(calls[0]["significant_changes_only"])
+        self.assertTrue(calls[0]["no_attributes"])
+        self.assertTrue(calls[0]["include_start_time_state"])
+        self.assertEqual(calls[0]["start"], datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE))
+        self.assertEqual(calls[0]["end"], datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE))
+        # The carry-forward runs per entity, exactly as the singular sampler does.
+        self.assertEqual(
+            samples[IMPORT_ENTITY],
+            {
+                datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE): 2.0,
+                datetime(2026, 5, 10, 0, 15, tzinfo=PRAGUE): 2.0,
+                datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE): 2.0,
+                datetime(2026, 5, 10, 0, 45, tzinfo=PRAGUE): 2.0,
+            },
+        )
+        self.assertEqual(
+            samples[EXPORT_ENTITY],
+            {
+                datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE): 1.0,
+                datetime(2026, 5, 10, 0, 15, tzinfo=PRAGUE): 1.0,
+                datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE): 3.0,
+                datetime(2026, 5, 10, 0, 45, tzinfo=PRAGUE): 3.0,
+            },
+        )
+
+    async def test_an_entity_the_recorder_has_nothing_for_maps_to_empty(self):
+        samples, calls = await self._sample({}, [IMPORT_ENTITY, EXPORT_ENTITY])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(samples, {IMPORT_ENTITY: {}, EXPORT_ENTITY: {}})
+
+    async def test_no_entities_means_no_query(self):
+        samples, calls = await self._sample({}, [])
+        self.assertEqual(samples, {})
+        self.assertEqual(calls, [])
+
+
+class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
     def _make_service(self):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
@@ -362,37 +455,74 @@ class TestLoadRecordedPriceRail(unittest.IsolatedAsyncioTestCase):
 
     async def test_labels_boundary_samples_by_local_slot(self):
         service = self._make_service()
-        samples = {
-            datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 2.0,
-            datetime(2026, 5, 10, 6, 15, tzinfo=PRAGUE): 4.0,
+        by_entity = {
+            IMPORT_ENTITY: {
+                datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 1.0,
+            },
+            EXPORT_ENTITY: {
+                datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 2.0,
+                datetime(2026, 5, 10, 6, 15, tzinfo=PRAGUE): 4.0,
+            },
         }
+        batched = AsyncMock(return_value=by_entity)
         with patch.object(
             importlib.import_module("custom_components.helman.recorder_hourly_series"),
-            "query_slot_boundary_state_values_for_range",
-            AsyncMock(return_value=samples),
+            "query_slot_boundary_state_values_for_entities",
+            batched,
         ):
-            points = await service._load_recorded_price_rail(
-                EXPORT_ENTITY,
+            imported, exported = await service._load_recorded_price_rails(
+                [IMPORT_ENTITY, EXPORT_ENTITY],
                 date(2026, 5, 10),
                 PRAGUE,
                 local_end=datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE),
             )
+        # Both rails came out of a single read, in the order they were asked for.
+        self.assertEqual(batched.await_count, 1)
+        self.assertEqual(batched.await_args.args[1], [IMPORT_ENTITY, EXPORT_ENTITY])
+        self.assertEqual(imported, [{"slot": "06:00", "value": 1.0}])
         self.assertEqual(
-            points,
+            exported,
             [{"slot": "06:00", "value": 2.0}, {"slot": "06:15", "value": 4.0}],
         )
 
     async def test_an_unconfigured_entity_reads_nothing(self):
         service = self._make_service()
-        self.assertEqual(
-            await service._load_recorded_price_rail(
-                None,
+        batched = AsyncMock(return_value={IMPORT_ENTITY: {}})
+        with patch.object(
+            importlib.import_module("custom_components.helman.recorder_hourly_series"),
+            "query_slot_boundary_state_values_for_entities",
+            batched,
+        ):
+            imported, exported = await service._load_recorded_price_rails(
+                [IMPORT_ENTITY, None],
                 date(2026, 5, 10),
                 PRAGUE,
                 local_end=datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE),
-            ),
-            [],
-        )
+            )
+        # The unconfigured rail keeps its slot in the result and never reaches
+        # the recorder.
+        self.assertEqual(batched.await_args.args[1], [IMPORT_ENTITY])
+        self.assertEqual(imported, [])
+        self.assertEqual(exported, [])
+
+    async def test_two_unconfigured_entities_skip_the_recorder_entirely(self):
+        service = self._make_service()
+        batched = AsyncMock(return_value={})
+        with patch.object(
+            importlib.import_module("custom_components.helman.recorder_hourly_series"),
+            "query_slot_boundary_state_values_for_entities",
+            batched,
+        ):
+            self.assertEqual(
+                await service._load_recorded_price_rails(
+                    [None, None],
+                    date(2026, 5, 10),
+                    PRAGUE,
+                    local_end=datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE),
+                ),
+                ([], []),
+            )
+        batched.assert_not_awaited()
 
 
 class _PayloadCase(unittest.IsolatedAsyncioTestCase):
@@ -446,8 +576,8 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
         stubs that say nothing about them.
         """
 
-        async def _fake_rail(entity_id, target_date, local_tz, *, local_end):
-            return recorded.get(entity_id, [])
+        async def _fake_rails(entity_ids, target_date, local_tz, *, local_end):
+            return tuple(recorded.get(entity_id, []) for entity_id in entity_ids)
 
         old_actuals = service_mod.load_actuals_for_day
         try:
@@ -469,7 +599,7 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
                 "_house_consumer_breakdown_for_date",
                 Mock(return_value=([], [])),
             ), patch.object(
-                service, "_load_recorded_price_rail", side_effect=_fake_rail
+                service, "_load_recorded_price_rails", side_effect=_fake_rails
             ):
                 return await service.async_get_inspector_day(raw_date)
         finally:

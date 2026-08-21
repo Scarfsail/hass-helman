@@ -155,7 +155,7 @@ from .scheduling.runtime_status import (
     schedule_execution_status_to_dict,
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
-from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_history
+from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
 from .scheduling.normal_state import (
     ControllableEntityDict,
     build_controllable_entities,
@@ -1673,21 +1673,26 @@ class HelmanCoordinator:
     ) -> dict[str, list[ActualHistorySlot]]:
         """What each controllable entity actually did earlier today.
 
-        Queried per entity rather than in one sweep because that is how the
-        recorder answers, and the set is small: it is the same roster the card
-        already lists.
+        The whole roster shares one reference time, so it shares one window --
+        and the recorder answers a window for many entities in a single read.
+        Asking per entity would queue one round-trip per controllable entity on
+        the recorder's single DB thread for no gain.
         """
-        reference_time = dt_util.utcnow()
-        history: dict[str, list[ActualHistorySlot]] = {}
-        for entity in self.get_controllable_entities():
-            history[entity["entityId"]] = await build_entity_actual_history(
-                self._hass,
-                entity_id=entity["entityId"],
-                normal_state=entity["normalState"],
-                reference_time=reference_time,
-                interval_minutes=SCHEDULE_SLOT_MINUTES,
-            )
-        return history
+        entities = self.get_controllable_entities()
+        history = await build_entity_actual_histories(
+            self._hass,
+            normal_states={
+                entity["entityId"]: entity["normalState"] for entity in entities
+            },
+            reference_time=dt_util.utcnow(),
+            interval_minutes=SCHEDULE_SLOT_MINUTES,
+        )
+        # Keep the roster's order and its full membership, so a caller sees the
+        # same keys it would have seen from the per-entity loop.
+        return {
+            entity["entityId"]: history.get(entity["entityId"], [])
+            for entity in entities
+        }
 
     def _refresh_climate_appliance_capabilities(self) -> None:
         refreshed_appliances = []

@@ -195,7 +195,9 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
                 "load_house_forecast_points_for_day",
                 AsyncMock(return_value=[]),
             ), patch.object(
-                service, "_load_recorded_price_rail", AsyncMock(return_value=[])
+                service,
+                "_load_recorded_price_rails",
+                AsyncMock(return_value=([], [])),
             ):
                 await service.async_get_inspector_day(TARGET_DATE)
         finally:
