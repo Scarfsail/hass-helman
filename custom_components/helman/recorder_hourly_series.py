@@ -536,54 +536,78 @@ async def query_slot_boundary_state_values(
     )
 
 
-async def query_slot_boundary_state_values_for_range(
+async def query_slot_boundary_state_values_for_entities(
     hass: HomeAssistant,
-    entity_id: str,
+    entity_ids: Sequence[str],
     *,
     local_start: datetime,
     local_end: datetime,
     interval_minutes: int,
-) -> dict[datetime, float]:
-    """Sample an entity's recorded state at every slot boundary in a date range.
+) -> dict[str, dict[datetime, float]]:
+    """Sample several entities' recorded states at every slot boundary, in ONE read.
 
-    The same read as :func:`query_slot_boundary_state_values`, freed of its
-    hardcoded "today": the caller names the window the way
-    :func:`query_cumulative_slot_energy_changes` does, so a day that ended a
-    week ago can be sampled as readily as the one in progress.
+    The caller names the window the way :func:`query_cumulative_slot_energy_changes`
+    does, so a day that ended a week ago can be sampled as readily as the one in
+    progress -- the difference from the today-scoped
+    :func:`query_slot_boundary_state_values`.
 
     Boundaries are the slot *starts* in ``[local_start, local_end)``. Each takes
     the first state written *inside* its own slot, and only falls back to the
-    last state before it when the slot contains no write at all — see
+    last state before it when the slot contains no write at all -- see
     :func:`_sample_rate_values_at_boundaries` for why a rate needs that rather
-    than the plain carry-forward a meter gets. Slots before the entity's first
+    than the plain carry-forward a meter gets. Slots before an entity's first
     ever reading are absent rather than guessed.
+
+    The recorder runs its queries on a single DB executor thread, so N separate
+    calls are N serial round-trips no matter how they are awaited;
+    ``get_significant_states`` takes a list of entity ids, which turns them into
+    one.
+
+    Returns a map keyed by entity id. An entity the recorder has nothing for maps
+    to ``{}``.
     """
+    unique_entity_ids = list(dict.fromkeys(eid for eid in entity_ids if eid))
+    if not unique_entity_ids:
+        return {}
+
     local_boundaries = _build_local_slot_starts_until(
         local_start,
         local_end,
         interval_minutes=interval_minutes,
     )
     if not local_boundaries:
-        return {}
+        return {entity_id: {} for entity_id in unique_entity_ids}
 
     boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
     utc_end = dt_util.as_utc(local_end)
-    history = await get_instance(hass).async_add_executor_job(
-        lambda: state_changes_during_period(
+
+    def _query_and_parse() -> dict[str, dict[datetime, float]]:
+        history = get_significant_states(
             hass,
             boundaries[0],
             utc_end,
-            entity_id,
-            True,
-            False,
-            None,
-            True,
+            entity_ids=unique_entity_ids,
+            filters=None,
+            include_start_time_state=True,
+            # The singular query reads real state changes only; this one has to
+            # read the same rows or it is not the same function. These are rate
+            # sensors, and no ``sensor`` is in a significant domain, so True
+            # applies exactly the filter the singular query applies.
+            significant_changes_only=True,
+            minimal_response=False,
+            no_attributes=True,
+            compressed_state_format=False,
         )
-    )
-    states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    return _sample_rate_values_at_boundaries(
-        states, boundaries, interval_minutes=interval_minutes
-    )
+        return {
+            entity_id: _sample_rate_values_at_boundaries(
+                _states_for_entity(history, entity_id),
+                boundaries,
+                interval_minutes=interval_minutes,
+            )
+            for entity_id in unique_entity_ids
+        }
+
+    return await get_instance(hass).async_add_executor_job(_query_and_parse)
 
 
 async def estimate_average_hourly_energy_when_switch_on(

@@ -231,8 +231,8 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
         return service
 
     async def _payload(self, service, *, grid_sides, rails):
-        async def _fake_rail(entity_id, target_date, local_tz, *, local_end):
-            return rails.get(entity_id, [])
+        async def _fake_rails(entity_ids, target_date, local_tz, *, local_end):
+            return tuple(rails.get(entity_id, []) for entity_id in entity_ids)
 
         old_actuals = service_mod.load_actuals_for_day
         try:
@@ -256,7 +256,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
                 "_house_consumer_breakdown_for_date",
                 Mock(return_value=([], [])),
             ), patch.object(
-                service, "_load_recorded_price_rail", side_effect=_fake_rail
+                service, "_load_recorded_price_rails", side_effect=_fake_rails
             ):
                 return await service.async_get_inspector_day(TODAY)
         finally:

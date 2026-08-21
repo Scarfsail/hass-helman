@@ -85,6 +85,7 @@ _install_import_stubs()
 
 from custom_components.helman.scheduling import actual_history  # noqa: E402
 from custom_components.helman.scheduling.actual_history import (  # noqa: E402
+    build_entity_actual_histories,
     build_entity_actual_history,
 )
 
@@ -209,6 +210,163 @@ class BuildEntityActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(history, [])
+
+
+class BuildEntityActualHistoriesTests(unittest.IsolatedAsyncioTestCase):
+    """The whole roster off one recorder read."""
+
+    def setUp(self) -> None:
+        self._saved = actual_history.get_significant_states
+        self._calls: list[dict] = []
+
+    def tearDown(self) -> None:
+        actual_history.get_significant_states = self._saved
+
+    def _serve(self, history: dict[str, list[_FakeState]]):
+        def _fake(hass, start, end, **kwargs):
+            self._calls.append({"start": start, "end": end, **kwargs})
+            return history
+
+        actual_history.get_significant_states = _fake
+
+    async def _build(self, history, normal_states, *, now: datetime):
+        self._serve(history)
+        return await build_entity_actual_histories(
+            object(),
+            normal_states=normal_states,
+            reference_time=now,
+            interval_minutes=30,
+        )
+
+    async def test_every_entity_comes_out_of_a_single_query(self) -> None:
+        history = await self._build(
+            {
+                "switch.boiler": [
+                    _FakeState("off", _local(0)),
+                    _FakeState("on", _local(8)),
+                    _FakeState("off", _local(9)),
+                ],
+                "select.inverter": [
+                    _FakeState("Normal", _local(0)),
+                    _FakeState("Charge", _local(8, 30)),
+                    _FakeState("Normal", _local(9)),
+                ],
+            },
+            {"switch.boiler": "off", "select.inverter": "Normal"},
+            now=_local(10, 20),
+        )
+
+        self.assertEqual(len(self._calls), 1)
+        self.assertEqual(
+            self._calls[0]["entity_ids"], ["switch.boiler", "select.inverter"]
+        )
+        # The same rows the singular query reads: state changes only, no
+        # attributes, and the state standing when the window opened.
+        self.assertTrue(self._calls[0]["significant_changes_only"])
+        self.assertTrue(self._calls[0]["no_attributes"])
+        self.assertTrue(self._calls[0]["include_start_time_state"])
+        self.assertFalse(self._calls[0]["minimal_response"])
+        # Each entity is bucketed against its own resting state.
+        self.assertEqual(
+            [
+                (entry["slot"][11:16], entry["state"])
+                for entry in history["switch.boiler"]
+            ],
+            [("08:00", "on"), ("08:30", "on")],
+        )
+        self.assertEqual(
+            [
+                (entry["slot"][11:16], entry["state"])
+                for entry in history["select.inverter"]
+            ],
+            [("08:30", "Charge")],
+        )
+
+    async def test_the_batched_result_matches_the_singular_one(self) -> None:
+        states = [
+            _FakeState("off", _local(0)),
+            _FakeState("on", _local(8, 20)),
+            _FakeState("off", _local(8, 30)),
+        ]
+        actual_history.state_changes_during_period = (
+            lambda *args, **kwargs: {"switch.boiler": states}
+        )
+        try:
+            singular = await build_entity_actual_history(
+                object(),
+                entity_id="switch.boiler",
+                normal_state="off",
+                reference_time=_local(10, 20),
+                interval_minutes=30,
+            )
+        finally:
+            actual_history.state_changes_during_period = (
+                lambda *args, **kwargs: {}
+            )
+
+        batched = await self._build(
+            {"switch.boiler": states},
+            {"switch.boiler": "off"},
+            now=_local(10, 20),
+        )
+        self.assertEqual(batched["switch.boiler"], singular)
+
+    async def test_attribute_only_rows_change_nothing(self) -> None:
+        # ``climate`` is in both SIGNIFICANT_DOMAINS and NEED_ATTRIBUTE_DOMAINS,
+        # so significant_changes_only=True still returns rows written for an
+        # attribute change alone. Such a row repeats the state beside it, and a
+        # row that does not change the state is not a boundary of anything.
+        without_attribute_rows = await self._build(
+            {
+                "climate.pool": [
+                    _FakeState("off", _local(0)),
+                    _FakeState("heat", _local(8)),
+                    _FakeState("off", _local(9)),
+                ]
+            },
+            {"climate.pool": "off"},
+            now=_local(10, 20),
+        )
+        with_attribute_rows = await self._build(
+            {
+                "climate.pool": [
+                    _FakeState("off", _local(0)),
+                    _FakeState("heat", _local(8)),
+                    _FakeState("heat", _local(8, 10)),
+                    _FakeState("heat", _local(8, 40)),
+                    _FakeState("off", _local(9)),
+                ]
+            },
+            {"climate.pool": "off"},
+            now=_local(10, 20),
+        )
+
+        self.assertEqual(with_attribute_rows, without_attribute_rows)
+
+    async def test_an_entity_the_recorder_has_nothing_for_reports_nothing(self) -> None:
+        history = await self._build(
+            {},
+            {"switch.boiler": "off", "switch.pump": "off"},
+            now=_local(10, 20),
+        )
+
+        self.assertEqual(history, {"switch.boiler": [], "switch.pump": []})
+
+    async def test_no_entities_means_no_query(self) -> None:
+        history = await self._build({}, {}, now=_local(10, 20))
+
+        self.assertEqual(history, {})
+        self.assertEqual(self._calls, [])
+
+    async def test_nothing_to_report_before_the_first_slot_completes(self) -> None:
+        history = await self._build(
+            {"switch.boiler": [_FakeState("on", _local(0))]},
+            {"switch.boiler": "off"},
+            now=_local(0, 20),
+        )
+
+        self.assertEqual(history, {"switch.boiler": []})
+        self.assertEqual(self._calls, [])
 
 
 if __name__ == "__main__":

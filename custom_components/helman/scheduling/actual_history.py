@@ -12,11 +12,15 @@ meet its scheduled continuation without a seam.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, TypedDict
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.history import (
+    get_significant_states,
+    state_changes_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -72,6 +76,103 @@ async def build_entity_actual_history(
         window_start=window_start,
         window_end=window_end,
     )
+    return _build_slot_history(
+        states=states,
+        completed_slots=completed_slots,
+        window_start=window_start,
+        window_end=window_end,
+        normal_state=normal_state,
+        interval_minutes=interval_minutes,
+    )
+
+
+async def build_entity_actual_histories(
+    hass: HomeAssistant,
+    *,
+    normal_states: Mapping[str, str],
+    reference_time: datetime,
+    interval_minutes: int,
+) -> dict[str, list[ActualHistorySlot]]:
+    """Today's away-from-rest slots for several entities, in ONE recorder read.
+
+    Same shape and same semantics as :func:`build_entity_actual_history`, for a
+    set of entities that share a reference time and a slot grid. The recorder
+    runs its queries on a single DB executor thread, so N separate calls are N
+    serial round-trips no matter how they are awaited; ``get_significant_states``
+    takes a list of entity ids, which turns them into one.
+
+    ``normal_states`` maps each entity id to its resting state. Returns a map
+    keyed by the same entity ids; an entity the recorder has nothing for maps to
+    ``[]``, matching the singular function.
+    """
+    entity_ids = [entity_id for entity_id in normal_states if entity_id]
+    if not entity_ids:
+        return {}
+
+    completed_slots = get_today_completed_local_slots(
+        reference_time,
+        interval_minutes=interval_minutes,
+    )
+    if not completed_slots:
+        return {entity_id: [] for entity_id in entity_ids}
+
+    window_start = dt_util.as_utc(completed_slots[0])
+    window_end = dt_util.as_utc(
+        get_local_current_slot_start(reference_time, interval_minutes=interval_minutes)
+    )
+
+    def _query_and_parse() -> dict[str, list[ActualHistorySlot]]:
+        history = get_significant_states(
+            hass,
+            window_start,
+            window_end,
+            entity_ids=entity_ids,
+            filters=None,
+            include_start_time_state=True,
+            # The singular query reads real state changes only, and this one has
+            # to read the same rows or it is not the same function. For the
+            # domains here True is exactly that filter, with one exception:
+            # ``climate`` sits in both SIGNIFICANT_DOMAINS and
+            # NEED_ATTRIBUTE_DOMAINS, so a climate entity also returns rows
+            # written for an attribute change alone. Those are inert here --
+            # such a row repeats the state string it was written beside, and
+            # _build_non_normal_intervals drops any row that does not change the
+            # state it is tracking. Keeping ``no_attributes`` True also spares
+            # every climate row the attributes join it would otherwise force.
+            significant_changes_only=True,
+            minimal_response=False,
+            no_attributes=True,
+            compressed_state_format=False,
+        )
+        return {
+            entity_id: _build_slot_history(
+                states=_states_for_entity(history, entity_id),
+                completed_slots=completed_slots,
+                window_start=window_start,
+                window_end=window_end,
+                normal_state=normal_states[entity_id],
+                interval_minutes=interval_minutes,
+            )
+            for entity_id in entity_ids
+        }
+
+    return await get_instance(hass).async_add_executor_job(_query_and_parse)
+
+
+def _states_for_entity(history: Any, entity_id: str) -> list[Any]:
+    return (history or {}).get(entity_id) or (history or {}).get(entity_id.lower()) or []
+
+
+def _build_slot_history(
+    *,
+    states: list[Any],
+    completed_slots: list[datetime],
+    window_start: datetime,
+    window_end: datetime,
+    normal_state: str,
+    interval_minutes: int,
+) -> list[ActualHistorySlot]:
+    """Bucket one entity's recorded states onto its elapsed slots."""
     intervals = _build_non_normal_intervals(
         states=states,
         window_start=window_start,

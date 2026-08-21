@@ -605,23 +605,18 @@ class SolarBiasCorrectionService:
                     self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
                     "battery actual",
                 ),
-                self._guarded_points(
-                    self._load_recorded_price_rail(
-                        GRID_IMPORT_PRICE_ENTITY_ID,
+                self._guarded_point_sets(
+                    self._load_recorded_price_rails(
+                        [
+                            GRID_IMPORT_PRICE_ENTITY_ID,
+                            self._grid_export_price_entity_id(),
+                        ],
                         target_date,
                         timezone,
                         local_end=price_history_end,
                     ),
-                    "import price history",
-                ),
-                self._guarded_points(
-                    self._load_recorded_price_rail(
-                        self._grid_export_price_entity_id(),
-                        target_date,
-                        timezone,
-                        local_end=price_history_end,
-                    ),
-                    "export price history",
+                    "price history",
+                    count=2,
                 ),
             ]
             if need_past
@@ -648,9 +643,11 @@ class SolarBiasCorrectionService:
                 battery_soc_actual_points,
                 grid_actual_series,
                 battery_actual_points,
-                recorded_import_price_points,
-                recorded_export_price_points,
-            ) = gathered[:7]
+                recorded_price_series,
+            ) = gathered[:6]
+            recorded_import_price_points, recorded_export_price_points = (
+                recorded_price_series
+            )
             # Shaping only — the consumer meters came out of the batched read
             # above, so this is not another recorder round-trip.
             breakdown_consumers, consumer_slot_maps = (
@@ -1442,40 +1439,58 @@ class SolarBiasCorrectionService:
             _slot_energy_points(export_wh_by_slot, target_date),
         )
 
-    async def _load_recorded_price_rail(
+    async def _load_recorded_price_rails(
         self,
-        entity_id: str | None,
+        entity_ids: Sequence[str | None],
         target_date: date,
         local_tz: ZoneInfo,
         *,
         local_end: datetime,
-    ) -> list[dict]:
-        """A price entity's recorder history sampled onto the day's slots.
+    ) -> tuple[list[dict], ...]:
+        """The price entities' recorder history sampled onto the day's slots.
 
         A price is a rate that only writes a new state when it changes, so a
         slot takes the last state at or before its start and the sampler carries
         it forward across the slots in between. Slots the entity has no reading
         for at all — before it existed, or past recorder retention — are simply
         absent; the caller decides whether it has anything better to put there.
+
+        Both rails share this window and this sampler, so they share one recorder
+        read: the recorder serves its queries from one DB executor thread, and a
+        read per rail is a serial round-trip per rail no matter how the awaits
+        are arranged. Returns one series per requested entity id, in order; an
+        unconfigured entity yields an empty series.
         """
-        if not entity_id:
-            return []
         from ..recorder_hourly_series import (
-            query_slot_boundary_state_values_for_range,
+            query_slot_boundary_state_values_for_entities,
         )
 
+        requested = list(entity_ids)
+        if not any(requested):
+            return tuple([] for _ in requested)
+
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
-        by_boundary = await query_slot_boundary_state_values_for_range(
+        by_entity = await query_slot_boundary_state_values_for_entities(
             self._hass,
-            entity_id,
+            [entity_id for entity_id in requested if entity_id],
             local_start=local_start,
             local_end=local_end,
             interval_minutes=15,
         )
-        return [
-            {"slot": dt_util.as_local(boundary).strftime("%H:%M"), "value": float(value)}
-            for boundary, value in sorted(by_boundary.items())
-        ]
+        return tuple(
+            [
+                {
+                    "slot": dt_util.as_local(boundary).strftime("%H:%M"),
+                    "value": float(value),
+                }
+                for boundary, value in sorted(
+                    (by_entity.get(entity_id) or {}).items()
+                )
+            ]
+            if entity_id
+            else []
+            for entity_id in requested
+        )
 
     def _grid_export_price_entity_unit(self) -> str | None:
         """The sell-price entity's own unit, for days with no live snapshot."""
