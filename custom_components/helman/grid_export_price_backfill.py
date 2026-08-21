@@ -109,7 +109,15 @@ class GridExportPriceBackfillStore:
 
     Persisted payload shape (v1)::
 
-        {"version": 1, "oldest_hour": "2026-05-01T00:00:00+00:00", "done": bool}
+        {"version": 1, "source": "sensor.x", "oldest_hour": "...", "done": bool}
+
+    ``source`` is what the cursor was walked *from*, and it is why ``done`` can
+    be trusted. A finished walk means "that entity's history is exhausted", not
+    "there is nothing left to import": point the config at a different
+    sell-price entity -- a provider switch, or an integration that renames its
+    entities -- and the new one's years of history would otherwise never be
+    read, because a `done` set against the old id latches forever with no way
+    back short of deleting this file by hand.
 
     Its own store rather than a key in an existing one: this is written a handful
     of times in a back-fill's life and then never again, while the stores it
@@ -127,10 +135,21 @@ class GridExportPriceBackfillStore:
             return
         self._document = stored
 
-    @property
-    def done(self) -> bool:
-        """Whether a previous run already walked the source's history to its end."""
+    def done_for(self, source_entity_id: str) -> bool:
+        """Whether a previous run exhausted *this* source's history.
+
+        A cursor recorded against another entity says nothing about this one, so
+        it reads as unfinished and the walk starts again from the top.
+        """
+        if self._document.get("source") != source_entity_id:
+            return False
         return bool(self._document.get("done"))
+
+    def oldest_hour_for(self, source_entity_id: str) -> datetime | None:
+        """Where the walk got to for this source, or None to start afresh."""
+        if self._document.get("source") != source_entity_id:
+            return None
+        return self.oldest_hour
 
     @property
     def oldest_hour(self) -> datetime | None:
@@ -143,9 +162,12 @@ class GridExportPriceBackfillStore:
         except ValueError:
             return None
 
-    async def async_record(self, *, oldest_hour: datetime, done: bool) -> None:
+    async def async_record(
+        self, *, source_entity_id: str, oldest_hour: datetime, done: bool
+    ) -> None:
         self._document = {
             "version": _STORAGE_VERSION,
+            "source": source_entity_id,
             "oldest_hour": oldest_hour.isoformat(),
             "done": done,
         }
@@ -172,10 +194,10 @@ async def async_backfill_grid_export_price_statistics(
     try:
         store = GridExportPriceBackfillStore(hass)
         await store.async_load()
-        if store.done:
+        if store.done_for(source_entity_id):
             return
 
-        cursor = store.oldest_hour or await _first_hour_home_assistant_owns(
+        cursor = store.oldest_hour_for(source_entity_id) or await _first_hour_home_assistant_owns(
             hass, target_entity_id
         )
         floor = dt_util.as_utc(dt_util.now()) - _MAX_SPAN
@@ -202,7 +224,9 @@ async def async_backfill_grid_export_price_statistics(
                 )
                 written += len(rows)
             cursor = chunk_start
-            await store.async_record(oldest_hour=cursor, done=exhausted)
+            await store.async_record(
+                source_entity_id=source_entity_id, oldest_hour=cursor, done=exhausted
+            )
             if exhausted:
                 break
             await asyncio.sleep(_CHUNK_PAUSE_SECONDS)

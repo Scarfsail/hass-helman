@@ -2668,15 +2668,24 @@ def _prefer_rows(
     whole span would either blank the hours only the other one covers or discard
     Helman's own record in favour of a third party's.
 
-    Helman's own series wins where both have the hour. They mirror the same
-    number, so they agree; where they somehow do not, the one Helman archived is
-    the one it can account for.
+    Helman's own series wins where both have the hour *and its row carries a
+    rate*. They mirror the same number, so they agree; where they somehow do
+    not, the one Helman archived is the one it can account for. But a row is not
+    the same as a reading: the span read folds five-minute tail rows onto their
+    containing hour and emits a row whether or not any of them carried a mean,
+    so the hour in progress can arrive present-but-empty -- and preferring it on
+    presence alone would blank an hour the fallback could have priced.
     """
     if not fallback:
         return preferred
     if not preferred:
         return fallback
-    return {**fallback, **preferred}
+    merged = dict(fallback)
+    for hour, row in preferred.items():
+        if row.get("mean") is None and merged.get(hour, {}).get("mean") is not None:
+            continue
+        merged[hour] = row
+    return merged
 
 
 def _hourly_rate(

@@ -367,6 +367,7 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
             stored={
                 backfill._STORAGE_KEY: {
                     "version": backfill._STORAGE_VERSION,
+                    "source": SOURCE,
                     "oldest_hour": resume_from.isoformat(),
                     "done": False,
                 }
@@ -386,6 +387,7 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
             stored={
                 backfill._STORAGE_KEY: {
                     "version": backfill._STORAGE_VERSION,
+                    "source": SOURCE,
                     "oldest_hour": (CURRENT_HOUR - timedelta(days=30)).isoformat(),
                     "done": True,
                 }
@@ -396,6 +398,32 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(HISTORY_CALLS, [])
         self.assertEqual(IMPORTS, [])
+
+    async def test_a_finished_walk_does_not_latch_across_a_change_of_source(self):
+        # ``done`` means "that entity's history is exhausted", not "there is
+        # nothing left to import". Point the config at a different sell-price
+        # entity -- a provider switch, or an integration that renames what it
+        # publishes -- and the new one's history has never been read. A cursor
+        # recorded against the old id must not speak for it, or those years stay
+        # unpriced with no way back short of deleting the store by hand.
+        _reset(
+            [(CURRENT_HOUR - timedelta(hours=3), "2.0")],
+            stored={
+                backfill._STORAGE_KEY: {
+                    "version": backfill._STORAGE_VERSION,
+                    "source": "sensor.the_previous_provider",
+                    "oldest_hour": (CURRENT_HOUR - timedelta(days=30)).isoformat(),
+                    "done": True,
+                }
+            },
+        )
+
+        await _run()
+
+        self.assertNotEqual(HISTORY_CALLS, [])
+        self.assertNotEqual(IMPORTS, [])
+        # And the cursor now belongs to the entity actually walked.
+        self.assertEqual(STORED[backfill._STORAGE_KEY]["source"], SOURCE)
 
     async def test_a_source_with_no_history_at_all_costs_one_read(self):
         _reset([])

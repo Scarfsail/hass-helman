@@ -434,6 +434,66 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertIsNone(coordinator.get_grid_export_price_unit())
 
+    async def test_the_backfill_waits_for_a_unit_before_it_writes_metadata(self) -> None:
+        # The first import writes the mirror's statistics metadata. Writing it
+        # with a null unit leaves the archived series claiming no unit while the
+        # sensor's own states carry one -- a disagreement the recorder surfaces
+        # and that nothing here would ever correct. Price and unit are read
+        # independently off the snapshot, so a source publishing a bare number
+        # has one without the other.
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        # The starter lazily imports the back-fill module; stand in for it so
+        # the import does not drag the whole integration into this stubbed
+        # environment. What is under test is the gate, not the walk.
+        backfill_stub = types.ModuleType(
+            "custom_components.helman.grid_export_price_backfill"
+        )
+
+        async def _never_runs(*args, **kwargs):
+            return None
+
+        backfill_stub.async_backfill_grid_export_price_statistics = _never_runs
+        sys.modules["custom_components.helman.grid_export_price_backfill"] = backfill_stub
+        self.addCleanup(
+            sys.modules.pop,
+            "custom_components.helman.grid_export_price_backfill",
+            None,
+        )
+
+        started: list[object] = []
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._grid_export_price_backfill_started = False
+        coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
+        coordinator._hass = SimpleNamespace(
+            async_create_background_task=lambda coro, name: (
+                coro.close(), started.append(name)
+            )[1],
+        )
+
+        # A price with no unit: nothing starts.
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "partial", "currentPrice": 2.5}}
+        )
+        coordinator._maybe_start_grid_export_price_backfill()
+        self.assertEqual(started, [])
+        self.assertFalse(coordinator._grid_export_price_backfill_started)
+
+        # The next beat carries both, and the walk begins.
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
+        )
+        coordinator._maybe_start_grid_export_price_backfill()
+        self.assertEqual(len(started), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

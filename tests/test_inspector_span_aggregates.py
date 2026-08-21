@@ -651,6 +651,33 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         # 4 kWh at the mirror's 5.0.
         self.assertEqual(payload["days"][0]["moneyGain"], 28.0)
 
+    async def test_a_mirror_row_without_a_rate_yields_to_one_that_has_one(self):
+        # A row is not a reading. The span read folds five-minute tail rows onto
+        # their containing hour and emits a row whether or not any of them
+        # carried a mean, so the hour in progress can arrive present-but-empty --
+        # a mirror that has just come back from `unavailable`, say. Preferring it
+        # on presence alone would blank an hour the configured entity priced.
+        _set_rows(
+            {
+                GRID_EXPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T10:00:00+02:00"), state=2.0),
+                ],
+                HELMAN_EXPORT_PRICE: [
+                    _row(_hour("2026-04-23T10:00:00+02:00"), mean=None),
+                ],
+                EXPORT_PRICE: [
+                    _row(_hour("2026-04-23T10:00:00+02:00"), mean=4.0),
+                ],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # 2 kWh at the only rate anything actually recorded.
+        self.assertEqual(payload["days"][0]["moneyGain"], 8.0)
+
     async def test_the_export_rate_falls_back_when_the_mirror_has_no_rows(self):
         _set_rows(
             {

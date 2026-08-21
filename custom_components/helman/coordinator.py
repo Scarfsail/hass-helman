@@ -1648,7 +1648,17 @@ class HelmanCoordinator:
             return
         if getattr(self, "_grid_export_price_current", None) is None:
             return
-        unit = self._grid_export_price_unit
+        unit = getattr(self, "_grid_export_price_unit", None)
+        if unit is None:
+            # No unit yet, so wait. The first import writes the mirror's
+            # statistics metadata, and writing it with a null unit would leave
+            # the archived series claiming no unit while the sensor's own states
+            # carry one -- a disagreement the recorder surfaces as a statistics
+            # issue and that nothing here would ever correct. The rate and the
+            # unit are read independently off the price snapshot, so a source
+            # publishing a bare number has one without the other; the next beat
+            # that carries both starts the walk.
+            return
         source_entity_id = self._get_grid_sell_price_entity_id()
         if not source_entity_id:
             return
@@ -1658,6 +1668,11 @@ class HelmanCoordinator:
         )
 
         self._grid_export_price_backfill_started = True
+        # Tracked so it can be cancelled on unload: a config-entry reload builds
+        # a fresh coordinator whose "started" flag is False, and a second walk
+        # over the same store would trample the first's cursor. The imports
+        # themselves upsert, so nothing is corrupted -- but progress is lost and
+        # the region is walked again on the next start.
         self._grid_export_price_backfill_task = self._hass.async_create_background_task(
             async_backfill_grid_export_price_statistics(
                 self._hass,
@@ -4600,6 +4615,14 @@ class HelmanCoordinator:
         if training_batch is not None:
             training_batch.cancel()
             self._training_batch = None
+        # The back-fill walks for as long as the source's history is deep, so a
+        # reload can easily land mid-walk. Cancelling here keeps the reloaded
+        # coordinator's walk the only one holding the cursor; the work already
+        # imported stands, and the persisted cursor is where the new one starts.
+        backfill_task = getattr(self, "_grid_export_price_backfill_task", None)
+        if backfill_task is not None:
+            backfill_task.cancel()
+            self._grid_export_price_backfill_task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
