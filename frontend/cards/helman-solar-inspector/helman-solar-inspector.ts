@@ -839,6 +839,11 @@ export class HelmanSolarInspector extends LitElement {
       cursor: pointer;
     }
 
+    .drill-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
     .icon-button {
       min-width: 40px;
       min-height: 36px;
@@ -1867,10 +1872,21 @@ export class HelmanSolarInspector extends LitElement {
    * Drilling is one level finer and no further: a month view opens a day, a year
    * view opens that month. It moves the selected date as well as the view, so
    * the day the user pointed at is the day that loads.
+   *
+   * A month reaches further back than a day can, because the two views read two
+   * different stores — so the day this offers to open may be one the recorder
+   * purged the raw states for. Opening it would draw an empty chart under a
+   * back arrow that is dead on arrival, the day being older than the day view's
+   * own floor. The control says so instead. Only the month view can produce
+   * this: a year view opens a month, and the month view's floor is the deep one.
    */
   private _renderSelectedBucket(rows: readonly SpanAggregateRow[]) {
     const row = rows.find((candidate) => candidate.date === this._selectedBucket);
     if (!row) return "";
+    const dayFloor = this._dayRange?.minDate ?? null;
+    const beyondDayHistory = this._viewMode === "month"
+      && dayFloor !== null
+      && row.date < dayFloor;
     const drillKey = this._viewMode === "month"
       ? "bias_correction.inspector.open_day"
       : "bias_correction.inspector.open_month";
@@ -1878,7 +1894,13 @@ export class HelmanSolarInspector extends LitElement {
       <div class="metrics-section">
         <strong>${this._formatBucket(row.date)}</strong>
         <div class="metric-grid">${this._renderBucketMetrics(row)}</div>
-        <button class="drill-button" type="button" @click=${() => this._drillInto(row.date)}>
+        <button
+          class="drill-button"
+          type="button"
+          ?disabled=${beyondDayHistory}
+          title=${beyondDayHistory ? this._t("bias_correction.inspector.day_beyond_history") : ""}
+          @click=${() => this._drillInto(row.date)}
+        >
           ${this._t(drillKey)}
         </button>
       </div>

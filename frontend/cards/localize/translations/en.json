@@ -21,6 +21,7 @@
       "battery_discharge": "Battery discharge",
       "open_day": "Open this day",
       "open_month": "Open this month",
+      "day_beyond_history": "The recorder no longer holds this day in detail",
       "refresh": "Refresh",
       "daylight_only": "Show only hours with solar energy",
       "day_pills": "Pick a day",

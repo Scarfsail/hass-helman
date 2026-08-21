@@ -619,13 +619,12 @@ class SolarBiasCorrectionService:
     def _trainer_window_floor(self, local_now: datetime) -> date:
         """The oldest day the bias trainer demonstrably read.
 
-        ``usable_days`` counts training samples it actually built, and the
-        trainer reads raw states just as the day view does, so this date is
-        *evidence* that those states exist rather than a guess about retention.
-        Both floors lean on it, for opposite reasons: the aggregate floor uses it
-        as the fallback when the recorder has no statistics to point at, and the
-        day floor uses it as the guarantee that a day the trainer read is never
-        hidden.
+        ``usable_days`` counts training samples the last run actually built, so
+        this date is evidence about a moment that has passed rather than a claim
+        about now. That is enough for the one thing it is used for -- standing in
+        as the aggregate floor when the recorder has no statistics to point at,
+        on a fresh install that still has to be browsable -- and not enough for
+        the day view's floor, which :meth:`_day_view_floor` explains.
         """
         return local_now.date() - timedelta(days=max(self._metadata.usable_days, 0))
 
@@ -703,6 +702,12 @@ class SolarBiasCorrectionService:
                 return None
             keep_days = recorder.keep_days
         except Exception:
+            # Debug rather than silent: "the recorder is not set up" and "the
+            # attribute this code reads has moved" produce the same answer here,
+            # and only one of them is a state worth knowing about. Without a
+            # trace, a rename upstream would quietly restore the deep floor and
+            # the un-drawable days it was introduced to remove.
+            _LOGGER.debug("No recorder purge horizon available", exc_info=True)
             return None
         if isinstance(keep_days, bool) or not isinstance(keep_days, int):
             return None
@@ -719,23 +724,32 @@ class SolarBiasCorrectionService:
         would give it a back arrow offering hundreds of days that can only ever
         draw empty.
 
-        Two guards sit around the purge horizon, and neither is decoration:
+        ``keep_days - 1``, not ``keep_days``: the recorder purges everything
+        older than ``utcnow() - keep_days``, so the day that subtraction names
+        is the one being deleted *through* rather than the oldest one kept. It
+        has already lost its small hours by the time the nightly purge runs and
+        loses the rest at the next one, so offering it means offering a chart
+        that shrinks every night. One day later is the first that is whole.
 
-        * the ``min`` with the trainer's window, because a day the trainer
-          demonstrably read must not be hidden -- it read raw states too, so
-          ``usable_days`` is evidence those states are there whatever the
-          retention setting says about them;
-        * the outer ``max``, because the day view can never usefully reach
-          further back than the statistics do, and a purge horizon longer than
-          the recorded history would otherwise offer days that predate the
-          meters entirely.
+        The ``max`` with the aggregate floor is the only guard needed: the day
+        view can never usefully reach further back than the statistics do, and a
+        retention setting longer than the recorded history would otherwise offer
+        days that predate the meters entirely.
+
+        The trainer's window is deliberately *not* consulted here, though an
+        earlier draft did. ``usable_days`` counts samples the last training run
+        built; it is evidence that raw states existed when it ran, not that they
+        exist now. Shortening ``purge_keep_days`` after a run leaves that count
+        untouched, and honouring it would hand back the very back arrow full of
+        purged days this method exists to prevent. Where retention and the
+        training window agree -- the ordinary case, since the trainer reads the
+        same purged store -- the guard changed nothing anyway.
         """
         keep_days = self._purge_horizon_days()
         if keep_days is None:
             return aggregate_floor
-        purge_horizon = local_now.date() - timedelta(days=keep_days)
-        trainer_floor = self._trainer_window_floor(local_now)
-        return max(aggregate_floor, min(purge_horizon, trainer_floor))
+        purge_horizon = local_now.date() - timedelta(days=keep_days - 1)
+        return max(aggregate_floor, purge_horizon)
 
     async def _async_navigation_range(
         self, local_now: datetime, *, view: Literal["day", "span"]

@@ -540,6 +540,7 @@
       "battery_discharge": "Vybíjení baterie",
       "open_day": "Otevřít tento den",
       "open_month": "Otevřít tento měsíc",
+      "day_beyond_history": "Databáze už tento den nemá v detailu",
       "refresh": "Obnovit",
       "daylight_only": "Zobrazit jen hodiny se solární energií",
       "day_pills": "Výběr dne",

@@ -1182,25 +1182,28 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
             day = await service.async_get_inspector_day("2026-05-25")
 
         self.assertEqual(span["range"]["minDate"], "2024-03-01")
-        self.assertEqual(day["range"]["minDate"], "2026-05-15")
+        # keep_days - 1: the recorder purges through today-10, so today-9 is the
+        # oldest day it still holds whole.
+        self.assertEqual(day["range"]["minDate"], "2026-05-16")
         # Forward is one answer for everyone; only the floor is per view.
         self.assertEqual(day["range"]["maxDate"], span["range"]["maxDate"])
         # The day payload keeps its own four extra keys; the shared helper only
         # owns the two bounds.
         self.assertTrue(day["range"]["canGoPrevious"])
 
-    async def test_a_day_the_trainer_read_is_never_hidden_by_the_purge_horizon(self):
-        # usable_days counts samples the trainer actually built, and it reads raw
-        # states just as the day view does -- so it is evidence those states are
-        # there, whatever the retention setting says about them. Sixty days of
-        # them against a ten-day horizon: the evidence wins.
+    async def test_a_stale_training_window_does_not_reopen_purged_days(self):
+        # usable_days counts samples the *last* training run built, so it is
+        # evidence that raw states existed when it ran and not that they exist
+        # now. Shortening purge_keep_days after a run leaves the count untouched,
+        # and honouring it would hand back the back arrow full of purged days the
+        # floor exists to prevent.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 60)
 
-        with _purging_after(10):
+        with _purging_after(3):
             day = await service.async_get_inspector_day("2026-05-25")
 
-        self.assertEqual(day["range"]["minDate"], "2026-03-26")
+        self.assertEqual(day["range"]["minDate"], "2026-05-23")
 
     async def test_without_a_purge_horizon_the_day_view_keeps_the_deep_floor(self):
         # No recorder to ask, so there is no horizon to floor on. Erring towards

@@ -456,6 +456,41 @@ test.describe("solar inspector aggregate views", () => {
         expect(requests).not.toContain(iso(7));
     });
 
+    test("a day the recorder has purged is named but not drillable", async ({ page }) => {
+        // The month view reaches further back than the day view can, because the
+        // two read two different stores. Opening such a day would draw an empty
+        // chart under a back arrow already dead on arrival -- the day being
+        // older than the day view's own floor -- so the control says so instead.
+        const iso = (daysBack: number) => {
+            const day = new Date();
+            day.setUTCDate(day.getUTCDate() - daysBack);
+            return day.toISOString().slice(0, 10);
+        };
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        // Two months back is comfortably beyond a three-day day-view floor.
+        await pageBackAndWait(page);
+        await pageBackAndWait(page);
+
+        const keys = await columns(page);
+        await selectColumn(page, 0);
+
+        const drill = await page.evaluate(() => {
+            const button = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".drill-button") as HTMLButtonElement;
+            return { disabled: button.disabled, title: button.getAttribute("title") };
+        });
+        expect(drill.disabled).toBe(true);
+        expect(drill.title).toBeTruthy();
+
+        // And no day was asked for behind the reader's back.
+        const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
+        expect(requests).not.toContain(keys[0]);
+    });
+
     test("the year view draws one column per month", async ({ page }) => {
         await clickStop(page, STOP_YEAR_VIEW);
         await waitForAggregateChart(page);
