@@ -1476,8 +1476,8 @@ export class HelmanSolarInspector extends LitElement {
                that when the header runs out of width the row keeps a line to
                itself and every control drops to the next one together. -->
           <div class="week-nav">
-            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("previous"))} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveSpan(-1)}>&lsaquo;&lsaquo;</button>
-            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("next"))} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveSpan(1)}>&rsaquo;&rsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("previous"))} ?disabled=${!canGoBack || this._viewLoading()} @click=${() => this._moveSpan(-1)}>&lsaquo;&lsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("next"))} ?disabled=${!canGoForward || this._viewLoading()} @click=${() => this._moveSpan(1)}>&rsaquo;&rsaquo;</button>
           </div>
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${VIEW_STOPS.map((stop) => {
@@ -1597,12 +1597,25 @@ export class HelmanSolarInspector extends LitElement {
     if (stop.minutes !== undefined) {
       this._viewMode = "day";
       this._setSlotMinutes(stop.minutes);
+      this._ensureDayLoaded();
       return;
     }
     if (this._viewMode === stop.mode) return;
     this._viewMode = stop.mode;
     this._selectedBucket = null;
     this._loadSpan();
+  }
+
+  /**
+   * Whether the view on screen is waiting on its own fetch.
+   *
+   * The two views have separate in-flight flags, and a control that reads the
+   * wrong one lies in both directions: the span arrows would stay live through
+   * a span load, and freeze during a day load that has nothing to do with what
+   * is drawn.
+   */
+  private _viewLoading(): boolean {
+    return this._viewMode === "day" ? this._loading : this._spanLoading;
   }
 
   /** What one column is in the current view; the day view has no aggregate. */
@@ -1677,6 +1690,23 @@ export class HelmanSolarInspector extends LitElement {
   private _spanNavKey(direction: "previous" | "next"): string {
     const span = this._viewMode === "day" ? "week" : this._viewMode === "month" ? "month" : "year";
     return `bias_correction.inspector.${direction}_${span}`;
+  }
+
+  /**
+   * One bucket in words -- a date in the month view, a month in the year view.
+   *
+   * The panel states what its numbers are for, so a month's totals must not be
+   * headed with the 1st of that month, which is merely the key they arrive
+   * under.
+   */
+  private _formatBucket(dateKey: string): string {
+    if (this._spanBucket() === "day") return this._formatDay(dateKey);
+    const { year, month } = this._parseIsoDate(dateKey);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "long",
+    });
   }
 
   /** The span on screen, in words: "July 2026" or "2026". */
@@ -1795,7 +1825,7 @@ export class HelmanSolarInspector extends LitElement {
       : "bias_correction.inspector.open_month";
     return html`
       <div class="metrics-section">
-        <strong>${this._formatDay(row.date)}</strong>
+        <strong>${this._formatBucket(row.date)}</strong>
         <div class="metric-grid">${this._renderBucketMetrics(row)}</div>
         <button class="drill-button" type="button" @click=${() => this._drillInto(row.date)}>
           ${this._t(drillKey)}
@@ -1828,15 +1858,31 @@ export class HelmanSolarInspector extends LitElement {
     this._selectedBucket = null;
     if (this._viewMode === "month") {
       this._viewMode = "day";
-      if (this._selectedDate !== bucketKey) {
-        this._selectedDate = bucketKey;
-        this._load();
-      }
+      this._selectedDate = bucketKey;
+      this._ensureDayLoaded();
       return;
     }
     this._viewMode = "month";
     this._selectedDate = bucketKey;
     this._loadSpan();
+  }
+
+  /**
+   * Fetch the day view's payload unless it already holds the selected day.
+   *
+   * Both ways into the day view -- picking a minutes stop, and drilling into a
+   * bucket -- can arrive with `_selectedDate` already equal to the day they
+   * want, because span navigation moves it to a span start. Guarding on
+   * `_selectedDate` therefore skips the load in exactly the case that needs it,
+   * and `_renderBody` nulls out a payload stamped with any other date, so the
+   * card draws a header over an empty body and issues no request to fix it.
+   * The payload's own date is the only thing that answers "does the day view
+   * have what it needs".
+   */
+  private _ensureDayLoaded() {
+    if (this._payload?.date !== this._selectedDate) {
+      this._load();
+    }
   }
 
   /** What the whole span came to, summed from the buckets already on screen. */

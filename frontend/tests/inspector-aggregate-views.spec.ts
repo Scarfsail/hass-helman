@@ -176,6 +176,20 @@ async function columns(page: Page): Promise<string[]> {
     });
 }
 
+/** Step the span nav one click back. */
+async function pageBack(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        const buttons = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelectorAll(".week-nav .week-arrow");
+        (buttons[0] as HTMLElement).click();
+    });
+}
+
+async function waitForDayChart(page: Page): Promise<void> {
+    await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".chart-wrap svg"));
+}
+
 async function waitForAggregateChart(page: Page): Promise<void> {
     await page.waitForFunction(() => {
         const chart = (document.querySelector("helman-solar-inspector") as any)
@@ -351,5 +365,112 @@ test.describe("solar inspector aggregate views", () => {
         // The day payload was never dropped, so coming back costs no re-read.
         expect(after.requests).toBe(before.requests);
         expect(before.paths).toBeGreaterThan(0);
+    });
+
+    test("returning to the day view after paging a span loads the day it landed on", async ({ page }) => {
+        // Span navigation moves the selection to a span start, so the payload on
+        // hand is for some other day. Coming back has to notice that and fetch;
+        // guarding the fetch on the selection rather than on the payload's own
+        // date leaves the card drawing a header over nothing at all, with no
+        // request in flight to fix it and no error to explain it.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await pageBack(page);
+        await waitForAggregateChart(page);
+
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+
+        const state = await page.evaluate(() => {
+            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+            const requests = (window as any).__dayRequests as string[];
+            return {
+                hasChart: !!root.querySelector(".chart-wrap svg"),
+                lastRequest: requests[requests.length - 1],
+            };
+        });
+
+        expect(state.hasChart).toBe(true);
+        // The day it landed on, not the day that happened to be loaded before.
+        expect(state.lastRequest.endsWith("-01")).toBe(true);
+    });
+
+    test("drilling into the span's first day loads it even though it is already selected", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await pageBack(page);
+        await waitForAggregateChart(page);
+
+        // The 1st -- the very day span navigation parked the selection on.
+        await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            (chart.shadowRoot.querySelectorAll(".bucket-column")[0] as SVGElement)
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".drill-button"));
+        await page.evaluate(() => {
+            ((document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".drill-button") as HTMLElement).click();
+        });
+        await waitForDayChart(page);
+
+        expect(await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".chart-wrap svg"))).toBe(true);
+    });
+
+    test("a real click on the coloured stack selects the column under it", async ({ page }) => {
+        // The bars cover most of a column and are painted after the hit rects,
+        // so without pointer-events they swallow the click that matters most --
+        // the one aimed at the bar the reader is asking about. Dispatching
+        // straight at the hit rect cannot see this; a real click can.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const box = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            const bars = [...chart.shadowRoot.querySelectorAll("svg rect")]
+                .filter((rect: Element) => !rect.classList.contains("bucket-column"));
+            // The tallest bar, so the click lands well inside it.
+            const tallest = bars
+                .map((rect: Element) => rect.getBoundingClientRect())
+                .sort((a: DOMRect, b: DOMRect) => b.height - a.height)[0];
+            return tallest
+                ? { x: tallest.x + tallest.width / 2, y: tallest.y + tallest.height / 2 }
+                : null;
+        });
+        expect(box).not.toBeNull();
+
+        await page.mouse.click(box!.x, box!.y);
+
+        expect(await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            return !!chart.shadowRoot.querySelector(".bucket-column.selected");
+        })).toBe(true);
+    });
+
+    test("a year view's selected bucket is headed as a month, not as its first day", async ({ page }) => {
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            (chart.shadowRoot.querySelectorAll(".bucket-column")[0] as SVGElement)
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".metrics-section strong"));
+
+        const heading = await page.evaluate(() => (
+            document.querySelector("helman-solar-inspector") as any
+        ).shadowRoot.querySelector(".metrics-section strong").textContent.trim());
+
+        // A month's totals must not be labelled with the 1st of that month.
+        expect(heading).toMatch(/January/i);
+        expect(heading).not.toMatch(/\b1\b/);
     });
 });

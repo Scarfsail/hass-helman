@@ -208,11 +208,17 @@ export class HelmanSolarAggregateChart extends LitElement {
                         const barWidth = Math.max(1, columnWidth * 0.8);
                         const yTop = Math.min(yFor(top), yFor(base));
                         const barHeight = Math.max(1, Math.abs(yFor(top) - yFor(base)));
+                        // Painted over the hit rects, so it must not take the
+                        // pointer: the bars cover most of a column, and without
+                        // this a click on the stack itself -- the obvious place
+                        // to aim -- selects nothing. Every drawn element in the
+                        // day chart does the same.
                         return svg`
                             <rect
                                 x=${left} y=${yTop}
                                 width=${barWidth} height=${barHeight}
                                 fill=${band.layer.color} fill-opacity="0.85"
+                                pointer-events="none"
                             ></rect>
                         `;
                     }))}
@@ -236,10 +242,12 @@ export class HelmanSolarAggregateChart extends LitElement {
                     x1=${CHART.marginLeft} y1=${y} x2=${right} y2=${y}
                     stroke="var(--divider-color)" stroke-width="1"
                     opacity=${tick === 0 ? 0.9 : 0.35}
+                    pointer-events="none"
                 ></line>
                 <text
                     x=${CHART.marginLeft - 6} y=${y + 4} text-anchor="end"
                     fill="var(--secondary-text-color)" font-size="10"
+                    pointer-events="none"
                 >${tick}</text>
             `;
         });
@@ -309,6 +317,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     class="bucket-label"
                     x=${xFor(index) + columnWidth / 2} y=${y} text-anchor="middle"
                     fill="var(--secondary-text-color)" font-size="10"
+                    pointer-events="none"
                 >${this._bucketLabel(row.date)}</text>
             `;
         });
