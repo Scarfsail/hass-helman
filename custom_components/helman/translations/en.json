@@ -36,6 +36,9 @@
       "energy_production_d7": {
         "name": "Energy production day 7"
       },
+      "grid_export_price": {
+        "name": "Grid export price"
+      },
       "grid_import_price": {
         "name": "Grid import price"
       },

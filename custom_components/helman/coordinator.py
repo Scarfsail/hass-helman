@@ -469,6 +469,16 @@ class HelmanCoordinator:
         # sensor hands the recorder to archive.
         self._grid_import_price_current: float | None = None
         self._grid_import_price_unit: str | None = None
+        self._grid_export_price_sensor = None
+        # The export rate in force right now, mirrored off the configured
+        # sell-price entity on the same beat. Its own entity typically declares
+        # no `state_class`, so this mirror is what gives the rate a long-term
+        # statistics series to price history from.
+        self._grid_export_price_current: float | None = None
+        self._grid_export_price_unit: str | None = None
+        #: The one-shot statistics back-fill for the export price mirror.
+        self._grid_export_price_backfill_task: Any | None = None
+        self._grid_export_price_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
@@ -707,6 +717,17 @@ class HelmanCoordinator:
         price_sensor = getattr(self, "_grid_import_price_sensor", None)
         if price_sensor is not None and getattr(price_sensor, "hass", None) is not None:
             price_sensor.async_write_ha_state()
+        # The export mirror rides the same beat. Its source entity moves on the
+        # hour and this refresh is slot-aligned, so the mirror lands in the same
+        # slot as the change it copies; the recorder's own hourly mean is time
+        # weighted, so a mirror written at :00 values the whole hour correctly.
+        export_price_sensor = getattr(self, "_grid_export_price_sensor", None)
+        if (
+            export_price_sensor is not None
+            and getattr(export_price_sensor, "hass", None) is not None
+        ):
+            export_price_sensor.async_write_ha_state()
+        self._maybe_start_grid_export_price_backfill()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1581,6 +1602,71 @@ class HelmanCoordinator:
         self._grid_import_price_current = float(raw_price)
         self._grid_import_price_unit = unit if isinstance(unit, str) and unit else None
 
+    def _absorb_grid_export_price(self, grid_price_snapshot: Any) -> None:
+        """Take the current export rate off a freshly built price snapshot.
+
+        The channel's ``status`` is deliberately not gated on. It grades the
+        *forecast* -- "partial" means the sell-price entity published a price
+        but no forward points, which is a complete answer to the only question
+        this mirror asks. A numeric ``currentPrice`` is therefore taken whatever
+        the status says, and anything else clears the value: a rate that stopped
+        being published is not a rate that has not moved, and the recorder must
+        not archive a stale one as though it still applied.
+        """
+        channel = (
+            grid_price_snapshot.get("export")
+            if isinstance(grid_price_snapshot, dict)
+            else None
+        )
+        raw_price = channel.get("currentPrice") if isinstance(channel, dict) else None
+        if isinstance(raw_price, bool) or not isinstance(raw_price, (int, float)):
+            self._grid_export_price_current = None
+            self._grid_export_price_unit = None
+            return
+
+        unit = channel.get("unit")
+        self._grid_export_price_current = float(raw_price)
+        self._grid_export_price_unit = unit if isinstance(unit, str) and unit else None
+
+    def _maybe_start_grid_export_price_backfill(self) -> None:
+        """Start the one-shot statistics back-fill, once the mirror has a value.
+
+        Deliberately triggered from the publish beat rather than from setup: the
+        back-fill writes into the mirror's own statistics series, so it must not
+        run before the mirror exists, has a rate and knows its unit -- writing
+        metadata with the wrong unit would make the recorder treat the compiled
+        rows and the imported ones as two different quantities.
+
+        It runs at most once per Home Assistant start. The task keeps its own
+        persisted cursor, so a run cut short by a restart resumes where it
+        stopped rather than starting over.
+        """
+        # ``getattr`` throughout, like the sensor lookups above it: this runs
+        # off the publish beat, which several tests and the recovery path reach
+        # with a partially built coordinator.
+        if getattr(self, "_grid_export_price_backfill_started", True):
+            return
+        if getattr(self, "_grid_export_price_current", None) is None:
+            return
+        unit = self._grid_export_price_unit
+        source_entity_id = self._get_grid_sell_price_entity_id()
+        if not source_entity_id:
+            return
+
+        from .grid_export_price_backfill import (
+            async_backfill_grid_export_price_statistics,
+        )
+
+        self._grid_export_price_backfill_started = True
+        self._grid_export_price_backfill_task = self._hass.async_create_background_task(
+            async_backfill_grid_export_price_statistics(
+                self._hass,
+                source_entity_id=source_entity_id,
+                unit_of_measurement=unit,
+            ),
+            "helman_grid_export_price_backfill",
+        )
+
     async def _async_get_canonical_solar_forecast(
         self,
         *,
@@ -1970,6 +2056,17 @@ class HelmanCoordinator:
     def get_grid_import_price_unit(self) -> str | None:
         """The configured currency-per-energy unit of the import price."""
         return self._grid_import_price_unit
+
+    def register_grid_export_price_sensor(self, sensor) -> None:
+        self._grid_export_price_sensor = sensor
+
+    def get_grid_export_price_current(self) -> float | None:
+        """The export rate in force right now, or None when unconfigured."""
+        return self._grid_export_price_current
+
+    def get_grid_export_price_unit(self) -> str | None:
+        """The mirrored sell-price entity's own currency-per-energy unit."""
+        return self._grid_export_price_unit
 
     def get_house_consumption_forecast_current_w(self) -> float | None:
         # Report the same house demand the battery and grid forecasts are built
@@ -2511,6 +2608,7 @@ class HelmanCoordinator:
             # published sensor republishes what it just computed rather than
             # deriving the rate a second time.
             self._absorb_grid_import_price(raw_forecast.get("grid"))
+            self._absorb_grid_export_price(raw_forecast.get("grid"))
             self._publish_solar_forecast_entities()
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")

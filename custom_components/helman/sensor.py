@@ -8,7 +8,7 @@ from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, GRID_IMPORT_PRICE_ENTITY_ID
+from .const import DOMAIN, GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 
 _HYSTERESIS_W: float = 5.0
 _HYSTERESIS_MAX_GAP_S: float = 30.0
@@ -96,6 +96,10 @@ async def async_setup_entry(
     grid_import_price_sensor = HelmanGridImportPriceSensor(coordinator, entry)
     async_add_entities([grid_import_price_sensor])
     coordinator.register_grid_import_price_sensor(grid_import_price_sensor)
+
+    grid_export_price_sensor = HelmanGridExportPriceSensor(coordinator, entry)
+    async_add_entities([grid_export_price_sensor])
+    coordinator.register_grid_export_price_sensor(grid_export_price_sensor)
 
 
 class HelmanBatteryTimeSensor(SensorEntity):
@@ -450,3 +454,48 @@ class HelmanGridImportPriceSensor(SensorEntity):
     @property
     def native_unit_of_measurement(self) -> str | None:
         return self._coordinator.get_grid_import_price_unit()
+
+
+class HelmanGridExportPriceSensor(SensorEntity):
+    """Mirrors the configured sell-price entity so the recorder archives the rate.
+
+    The counterpart of :class:`HelmanGridImportPriceSensor`, and it exists for a
+    neighbouring reason rather than the same one. The import rate has no entity
+    at all behind it; the export rate does -- a third-party spot-price entity --
+    but that entity typically declares no ``state_class``, so Home Assistant
+    never compiles long-term statistics for it. The aggregate month and year
+    views price history hour by hour off exactly those statistics, so an export
+    could not be valued at all: every bucket reported no gain, honestly and
+    uselessly.
+
+    Publishing the same number under an entity Helman owns, with
+    ``state_class = MEASUREMENT``, hands the archiving to the recorder for good.
+    It also survives what the configured entity cannot promise: an upstream
+    rename, or a change of ``state_class``, cannot silently empty the series
+    Helman prices from.
+
+    No device class, and the unit is taken from the mirrored entity rather than
+    fixed -- both for the reasons spelled out on the import sensor.
+    """
+
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        self._coordinator = coordinator
+        self.entity_id = GRID_EXPORT_PRICE_ENTITY_ID
+        self._attr_unique_id = f"{entry.entry_id}_grid_export_price"
+        self._attr_translation_key = "grid_export_price"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.get_grid_export_price_current() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.get_grid_export_price_current()
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        return self._coordinator.get_grid_export_price_unit()
