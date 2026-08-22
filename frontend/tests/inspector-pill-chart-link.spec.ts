@@ -11,7 +11,10 @@ import {
     dayPillsWithClass,
     hoverColumn,
     hoverDayPill,
+    hoverSpanPill,
+    clickSpanPill,
     loadCardBundle,
+    spanPillsWithClass,
     unreachableDayPills,
     mountInspector,
     toggleMore,
@@ -35,6 +38,9 @@ import {
  */
 
 const THIS_YEAR = new Date().getUTCFullYear();
+
+/** `SELECTION_COLOR` as the browser resolves it: the card's one highlight amber. */
+const AMBER = "rgb(245, 158, 11)";
 
 /** The D view with the picker open: columns and pills showing the same month. */
 async function openDayColumnsWithPills(page: Page): Promise<void> {
@@ -143,7 +149,7 @@ test.describe("the day pills and the chart highlight together", () => {
 
         // Amber takes the border and the fill on the chart's selected day.
         await expect.poll(() => look(wanted).then((seen) => seen.borderColor))
-            .toBe("rgb(245, 158, 11)");
+            .toBe(AMBER);
         const bucketOnly = await look(wanted);
         expect(bucketOnly.classes.split(" ")).toContain("bucket-selected");
         expect(bucketOnly.classes.split(" ")).not.toContain("selected");
@@ -164,7 +170,7 @@ test.describe("the day pills and the chart highlight together", () => {
         const both = await look(wanted);
         // The amber is unchanged -- it still says "this is the column being
         // read" exactly as it did before the other state arrived.
-        expect(both.borderColor).toBe("rgb(245, 158, 11)");
+        expect(both.borderColor).toBe(AMBER);
         expect(both.background).toBe(bucketOnly.background);
         // And the blue ring survives underneath it, which is the whole reason
         // the two can coexist: neither claim is lost.
@@ -238,7 +244,7 @@ test.describe("where the correlation does and does not reach", () => {
         expect(await columnsWithClass(page, "hovered")).toEqual([]);
     });
 
-    test("a day the row cannot open is lit without being made to look clickable", async ({ page }) => {
+    test("a day the row cannot open is still lit when the chart names it", async ({ page }) => {
         // The aggregates reach two years back; the raw states a day view needs
         // stop at the 10th of the month two months ago.
         const floorMonth = monthsBack(2);
@@ -250,17 +256,35 @@ test.describe("where the correlation does and does not reach", () => {
 
         const unreachable = await unreachableDayPills(page);
         expect(unreachable.length).toBeGreaterThan(0);
-        const border = await pillBorderColor(page, unreachable[0]);
 
-        // The chart names it -- which is right, the column is real -- and the
-        // pill lights up without claiming it can be opened.
+        // Following the pointer is what the highlight is for, so a day the row
+        // cannot open is highlighted like any other -- the column is real and
+        // the reader is looking at it. What says it cannot be opened is the
+        // dimming, which the highlight must not undo.
         const index = (await columns(page)).indexOf(unreachable[0]);
         expect(index).toBeGreaterThanOrEqual(0);
         await hoverColumn(page, index);
         expect(await dayPillsWithClass(page, "hovered")).toContain(unreachable[0]);
-        expect(await pillBorderColor(page, unreachable[0])).toBe(border);
+
+        // Polled, not read once: .pill transitions border-color over 120ms, so
+        // a single read lands on whatever frame the animation is on.
+        await expect
+            .poll(() => pillBorderColor(page, unreachable[0]))
+            .toBe(AMBER);
+        // And the dimming, which is what says it cannot be opened, survives it.
+        expect(await pillOpacity(page, unreachable[0])).toBe("0.4");
     });
 });
+
+/** One pill's resolved opacity. */
+async function pillOpacity(page: Page, day: string): Promise<string> {
+    return page.evaluate((wanted) => {
+        const pill = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")
+            ?.shadowRoot?.querySelector(`.pill[data-day="${wanted}"]`);
+        return pill ? getComputedStyle(pill).opacity : "";
+    }, day);
+}
 
 /** One pill's resolved top border colour. */
 async function pillBorderColor(page: Page, day: string): Promise<string> {
@@ -277,4 +301,128 @@ function monthsBack(count: number): string {
     const now = new Date();
     const moved = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - count, 1));
     return moved.toISOString().slice(0, 7);
+}
+
+/**
+ * The same correlation one granularity up.
+ *
+ * At M a column is a month and the picker's month row is showing months, so
+ * the pair is exactly the pair the day pills and the day columns make at D --
+ * and it has to behave identically, because a reader moving between the two
+ * granularities is doing one thing, not two. The year row never joins in: a
+ * year is not a bucket in either view.
+ */
+test.describe("the month row and the month columns", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    /** The M view, whose columns are months and whose month row matches them. */
+    async function openMonthColumns(page: Page): Promise<void> {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+    }
+
+    test("hovering a month column lights its pill", async ({ page }) => {
+        await openMonthColumns(page);
+        const all = await columns(page);
+        const wanted = all[2];
+
+        await hoverColumn(page, 2);
+        expect(await spanPillsWithClass(page, "months", "hovered")).toEqual([wanted]);
+        // And never the year row, which has no column behind it.
+        expect(await spanPillsWithClass(page, "years", "hovered")).toEqual([]);
+    });
+
+    test("hovering a month pill lights its column", async ({ page }) => {
+        await openMonthColumns(page);
+        const wanted = (await columns(page))[3];
+
+        await hoverSpanPill(page, "months", wanted);
+        expect(await columnsWithClass(page, "hovered")).toEqual([wanted]);
+
+        await hoverSpanPill(page, "months", null);
+        expect(await columnsWithClass(page, "hovered")).toEqual([]);
+    });
+
+    test("the clicked column's month wears the chart's amber in the row", async ({ page }) => {
+        await openMonthColumns(page);
+        const wanted = (await columns(page))[4];
+
+        await clickColumn(page, 4);
+        expect(await spanPillsWithClass(page, "months", "bucket-selected")).toEqual([wanted]);
+    });
+
+    test("a day column never lights a month pill", async ({ page }) => {
+        // The mirror of "a month column lights no pill": at D the columns are
+        // days, so the month row is a navigation control and nothing else.
+        await openDayColumnsWithPills(page);
+        await hoverColumn(page, 0);
+        expect(await spanPillsWithClass(page, "months", "hovered")).toEqual([]);
+    });
+});
+
+/**
+ * Dashed means forecast, everywhere on this card.
+ *
+ * Every series in the chart sets a dash pattern on its forecast half and
+ * leaves the measured half solid. A pill makes the same claim about a whole
+ * day, so it has to draw it the same way round.
+ */
+test.describe("the pill row's border says which days have happened", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("a measured day is solid and a forecast day is dashed", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        // `border: 1px solid var(--divider-color)` is invalid at computed-value
+        // time when the variable is unset, which collapses the whole shorthand
+        // to `none` -- so the bare test page has to supply the one token the
+        // border is built from before a border style can be read at all.
+        await page.evaluate(() => {
+            (document.querySelector("helman-solar-inspector") as HTMLElement)
+                .style.setProperty("--divider-color", "#d4d4d8");
+        });
+
+        // The closed row runs from today to the end of the forecast, so it is
+        // the window that reliably holds days that have not happened yet.
+        const forward = await pillBorderStyles(page);
+        expect(forward.length).toBeGreaterThan(0);
+        expect(forward.some((pill) => !pill.history)).toBe(true);
+        for (const pill of forward) {
+            expect(pill.border).toBe(pill.history ? "solid" : "dashed");
+        }
+
+        // And a month that is entirely behind, for the other half of the rule.
+        // March of this year: one press, since the year row does not move.
+        await toggleMore(page);
+        await clickSpanPill(page, "months", `${THIS_YEAR}-03-01`);
+        await waitForDayChart(page);
+
+        const past = await pillBorderStyles(page);
+        expect(past.length).toBeGreaterThan(0);
+        expect(past.some((pill) => pill.history)).toBe(true);
+        for (const pill of past) {
+            expect(pill.border).toBe(pill.history ? "solid" : "dashed");
+        }
+    });
+});
+
+/** Every day pill's measured-ness and its resolved border style. */
+async function pillBorderStyles(
+    page: Page,
+): Promise<Array<{ history: boolean; border: string }>> {
+    return page.evaluate(() => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(".pill")].map((pill: Element) => ({
+            history: pill.getAttribute("data-history") === "true",
+            border: getComputedStyle(pill).borderTopStyle,
+        }));
+    });
 }

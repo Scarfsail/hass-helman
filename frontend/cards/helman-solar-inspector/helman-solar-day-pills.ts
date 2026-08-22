@@ -182,19 +182,27 @@ export class HelmanSolarDayPills extends LitElement {
            selected state -- the pointer is about the pill under it, whatever is
            already picked. The .hovered class is set from the card, so a hover
            that started on a chart column looks exactly like one that started
-           here. */
+           here.
+
+           The amber is the chart's, not the card's blue: the hover overlay over
+           a column is --helman-selection at 14 % with an amber edge, and this
+           is the same hover drawn on the same day a few pixels away. Blue here
+           made one gesture wear two colours depending on which half of the card
+           the pointer was over. */
         .pill:hover,
         .pill.hovered {
-            border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
+            border-color: var(--helman-selection);
+            background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
         }
 
-        /* The disabled guard has to cover the chart-driven half too. The
-           pointer never enters an unreachable pill, so :disabled:hover alone
-           never fires for one -- but the chart can still name that day, and a
-           dimmed pill drawing the "you can click me" border would be the one
-           promise this row must not make. */
+        /* Unreachable days are highlighted too, deliberately. The pointer never
+           enters one -- the browser sends no events to a disabled button -- but
+           the chart can still name it, and following the reader's pointer is
+           what the highlight is for. It says "this is the day you are looking
+           at", not "you may click it"; the 0.4 opacity is what says the
+           second. */
         .pill:disabled.hovered {
-            border-color: var(--divider-color);
+            opacity: 0.4;
         }
 
         /* The label sets the pill's floor, so it is never clipped: a day nobody
@@ -206,9 +214,13 @@ export class HelmanSolarDayPills extends LitElement {
             white-space: nowrap;
         }
 
-        /* Measured, not planned: the dashed edge says this day is history, and
-           it is the one pill whose numbers can never change again. */
-        .pill.history {
+        /* Dashed is what the whole card draws a forecast with -- every series
+           in the chart above sets stroke-dasharray on its forecast half and
+           leaves the measured half solid. A pill is the same claim about a
+           whole day, so a day that has already happened is solid and a day
+           still being predicted is dashed. It read the other way round until
+           the pills and the chart were put side by side. */
+        .pill:not(.history) {
             border-style: dashed;
         }
 

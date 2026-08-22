@@ -37,6 +37,16 @@ export interface SpanPillSelectDetail {
     viewMode: SpanPillMode;
 }
 
+/**
+ * The month under the pointer, or null on leaving one.
+ *
+ * Only the month row raises it. A year is not a bucket in either view, so
+ * there is never a column for it to correspond with.
+ */
+export interface SpanPillHoverDetail {
+    date: string | null;
+}
+
 @customElement("helman-solar-span-pills")
 export class HelmanSolarSpanPills extends LitElement {
     static styles = [helmanColorVars, css`
@@ -80,10 +90,6 @@ export class HelmanSolarSpanPills extends LitElement {
             transition: border-color 120ms ease, background-color 120ms ease;
         }
 
-        .pill:hover {
-            border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
-        }
-
         /* The fallback matches the card's other active controls, so a theme
            without --primary-color still shows which span is on screen. */
         .pill.selected {
@@ -91,6 +97,26 @@ export class HelmanSolarSpanPills extends LitElement {
             background: color-mix(in srgb, var(--primary-color, #2563eb) 14%, var(--card-background-color));
             box-shadow: inset 0 0 0 1px var(--primary-color, #2563eb);
             color: var(--primary-color, #2563eb);
+        }
+
+        /* The column the reader clicked in the chart, in the amber that column
+           is already filled with -- same token, same 18 %, because it is the
+           same fact drawn twice. After .selected on purpose: when both land on
+           one pill the amber takes the fill and the blue keeps its inner ring,
+           so neither claim is lost. */
+        .pill.bucket-selected {
+            border-color: var(--helman-selection);
+            background: color-mix(in srgb, var(--helman-selection) 18%, var(--card-background-color));
+        }
+
+        /* The chart's own hover treatment, and last so it reads over either
+           selected state. .hovered comes from the card, so a hover that
+           started on a chart column is indistinguishable from one that started
+           here -- which is the whole point of routing both through the card. */
+        .pill:hover,
+        .pill.hovered {
+            border-color: var(--helman-selection);
+            background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
         }
 
         /* Shown, not hidden: a month the recorder has nothing for is a fact
@@ -101,8 +127,12 @@ export class HelmanSolarSpanPills extends LitElement {
             opacity: 0.4;
         }
 
-        .pill:disabled:hover {
-            border-color: var(--divider-color);
+        /* Highlighted like any other, and dimmed like any other: the pointer
+           never enters a disabled pill, but the chart can still name it, and
+           following the reader is what the highlight is for. The opacity is
+           what says it cannot be opened. */
+        .pill:disabled.hovered {
+            opacity: 0.4;
         }
     `];
 
@@ -115,6 +145,16 @@ export class HelmanSolarSpanPills extends LitElement {
     @property({ type: String }) public minDate = "";
     /** Today in the house's time zone, `YYYY-MM-DD`. The row's far end. */
     @property({ type: String }) public todayKey = "";
+    /**
+     * The bucket under the pointer and the one clicked in the chart, as month
+     * keys, or null when the columns on screen are not months.
+     *
+     * Both come from the card rather than being worked out here, because the
+     * chart is drawing the same months a few pixels away and one of the two has
+     * to be the single answer to "which month is hot".
+     */
+    @property({ type: String }) public hoveredKey: string | null = null;
+    @property({ type: String }) public selectedBucket: string | null = null;
 
     private _localizeFn?: LocalizeFunction;
     /** The span the row was last scrolled to, so a re-render does not re-scroll. */
@@ -150,23 +190,53 @@ export class HelmanSolarSpanPills extends LitElement {
                     role="group"
                     aria-label=${this._localize("bias_correction.inspector.span_pills_months")}
                 >
-                    ${months.map((pill) => this._renderPill(pill, () => this._selectMonth(pill)))}
+                    ${months.map((pill) => this._renderPill(
+                        pill,
+                        () => this._selectMonth(pill),
+                        true,
+                    ))}
                 </div>
             </div>
         `;
     }
 
-    private _renderPill(pill: SpanPill, select: () => void) {
+    private _renderPill(pill: SpanPill, select: () => void, correlated = false) {
+        const classes = [
+            "pill",
+            pill.selected ? "selected" : "",
+            correlated && pill.key === this.selectedBucket ? "bucket-selected" : "",
+            correlated && pill.key === this.hoveredKey ? "hovered" : "",
+        ].filter((name) => name !== "").join(" ");
         return html`
             <button
-                class="pill ${pill.selected ? "selected" : ""}"
+                class=${classes}
                 type="button"
                 data-span=${pill.key}
                 ?disabled=${pill.disabled}
                 aria-pressed=${pill.selected ? "true" : "false"}
                 @click=${select}
+                @mouseenter=${correlated ? () => this._hover(pill.key) : nothing}
+                @mouseleave=${correlated ? () => this._hover(null) : nothing}
             >${pill.label}</button>
         `;
+    }
+
+    /**
+     * Report the month under the pointer.
+     *
+     * No guard on the value being unchanged: `mouseenter` and `mouseleave` fire
+     * once per pill crossed rather than per pointer move, and the card skips
+     * its own redundant writes. A disabled pill sends nothing -- the browser
+     * dispatches no mouse events on one -- but the chart can still light it
+     * through `hoveredKey`, which is right: naming the month the reader is
+     * looking at is not a claim that it can be opened.
+     */
+    private _hover(key: string | null): void {
+        this.dispatchEvent(new CustomEvent<SpanPillHoverDetail>("span-pill-hover", {
+            bubbles: true,
+            composed: true,
+            detail: { date: key },
+        }));
     }
 
     private _options() {

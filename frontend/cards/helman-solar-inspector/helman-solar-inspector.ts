@@ -54,7 +54,7 @@ import type {
   DayPillSelectDetail,
 } from "./helman-solar-day-pills";
 import "./helman-solar-span-pills";
-import type { SpanPillSelectDetail } from "./helman-solar-span-pills";
+import type { SpanPillHoverDetail, SpanPillSelectDetail } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
@@ -684,10 +684,11 @@ export class HelmanSolarInspector extends LitElement {
    * could disagree about which day is hot. So both report into this and both
    * are handed it back.
    *
-   * A bucket key, so at M it holds a month rather than a day. The chart wants
-   * that; the pill row is handed null there instead -- see `_dayShapedKey`.
+   * A bucket key, whatever a bucket is in the view on screen: a day at D, a
+   * month at M. The chart always wants it raw; each nav row is handed it only
+   * where that row's pills are the same shape -- see `_correlatedRow`.
    */
-  @state() private _hoveredDayKey: string | null = null;
+  @state() private _hoveredBucketKey: string | null = null;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
@@ -1512,7 +1513,10 @@ export class HelmanSolarInspector extends LitElement {
             .selectedDate=${this._selectedDate}
             .minDate=${this._navFloor()}
             .todayKey=${today}
+            .hoveredKey=${this._shapedKey("month", this._hoveredBucketKey)}
+            .selectedBucket=${this._shapedKey("month", this._selectedBucket)}
             @span-pill-select=${this._handleSpanPillSelect}
+            @span-pill-hover=${this._handleSpanPillHover}
           ></helman-solar-span-pills>`}
           <!-- Expanded, the row is a whole month and reads as a calendar; the
                window itself is derived in _pillWindow, so the layout named here
@@ -1527,8 +1531,8 @@ export class HelmanSolarInspector extends LitElement {
             .endDate=${this._pillWindowEnd}
             .reachableFrom=${this._dayRange?.minDate ?? ""}
             .reachableTo=${this._dayRange?.maxDate ?? ""}
-            .hoveredDate=${this._dayShapedKey(this._hoveredDayKey)}
-            .selectedBucket=${this._dayShapedKey(this._selectedBucket)}
+            .hoveredDate=${this._shapedKey("day", this._hoveredBucketKey)}
+            .selectedBucket=${this._shapedKey("day", this._selectedBucket)}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
@@ -1938,7 +1942,7 @@ export class HelmanSolarInspector extends LitElement {
           .rows=${rows}
           .bucket=${this._spanBucket()}
           .selectedKey=${this._selectedBucket}
-          .hoveredKey=${this._hoveredDayKey}
+          .hoveredKey=${this._hoveredBucketKey}
           .currency=${this._span?.currency ?? ""}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
@@ -1953,34 +1957,37 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * A bucket key the day pills can act on, or null.
    *
-   * The two rows only line up where a column is a day. At M the chart's buckets
-   * are months, and handing the row a month key would either light nothing --
-   * the pills are keyed by day -- or, worse, light the 1st, claiming a
-   * correspondence that is not there. The chart keeps the raw key; the pill row
-   * is told there is nothing to show.
+   * A row is handed the key only where its pills are the same shape as the
+   * chart's columns, and otherwise null. Handing the day row a month key would
+   * either light nothing -- its pills are keyed by day -- or, worse, light the
+   * 1st, claiming a correspondence that is not there.
    */
-  private _dayShapedKey(key: string | null): string | null {
-    return this._bucketsAreDays() ? key : null;
+  private _shapedKey(row: "day" | "month", key: string | null): string | null {
+    return this._correlatedRow() === row ? key : null;
   }
 
   /**
-   * Whether there is a chart on screen whose columns are days.
+   * Which navigation row the chart's columns line up with, if any.
    *
-   * True in the month view alone, and that is narrower than
-   * `_spanBucket() === "day"` on purpose: the day view answers "day" to that
-   * question too, because a day view's *slots* are inside one day -- but it
-   * draws no bucket chart at all, so there is nothing for the row to line up
-   * with. The correlation is switched off from both ends here rather than
-   * being drawn to no effect.
+   * The picker has two rows of pills and the chart has one shape of column, so
+   * exactly one row can correspond at a time: at D the columns are days and the
+   * day pills match, at M they are months and the month row matches. The day
+   * view matches nothing -- it draws no bucket chart at all, only slots inside
+   * a single day -- which is why this is narrower than `_spanBucket()`, whose
+   * answer there is "day".
+   *
+   * The year row never correlates. A year is not a bucket in either view.
    */
-  private _bucketsAreDays(): boolean {
-    return this._viewMode === "month";
+  private _correlatedRow(): "day" | "month" | null {
+    if (this._viewMode === "month") return "day";
+    if (this._viewMode === "year") return "month";
+    return null;
   }
 
-  /** Store the hovered day, skipping redundant updates. */
-  private _setHoveredDay(key: string | null) {
-    if (this._hoveredDayKey === key) return;
-    this._hoveredDayKey = key;
+  /** Store the hovered bucket, skipping redundant updates. */
+  private _setHoveredBucket(key: string | null) {
+    if (this._hoveredBucketKey === key) return;
+    this._hoveredBucketKey = key;
   }
 
   /** Drop whatever the chart was focused on; nothing survives a change of view. */
@@ -1990,7 +1997,7 @@ export class HelmanSolarInspector extends LitElement {
     // under the pointer never fires one, so a view change that unmounts the
     // chart or the row would otherwise leave a phantom amber column waiting on
     // the next visit.
-    this._hoveredDayKey = null;
+    this._hoveredBucketKey = null;
   }
 
   /**
@@ -2005,10 +2012,24 @@ export class HelmanSolarInspector extends LitElement {
     // Ignored outright in the day view, where the row is on screen with no
     // bucket chart beside it. Routing the hover through the card there would
     // buy a whole-card render per pill crossed -- thirty-one of them across an
-    // open calendar -- to arrive back at the border `.pill:hover` had already
-    // drawn for free.
-    if (!this._bucketsAreDays()) return;
-    this._setHoveredDay(event.detail.date);
+    // open calendar -- to arrive back at the highlight `.pill:hover` had
+    // already drawn for free.
+    if (this._correlatedRow() !== "day") return;
+    this._setHoveredBucket(event.detail.date);
+  };
+
+  /**
+   * The month row's hover, which is the same correlation one granularity up.
+   *
+   * At M a column *is* a month pill, so the two behave exactly as the day pills
+   * and the day columns do at D -- same key, same amber, same both-directions.
+   * The guard is the mirror of the day row's: a month pill at D is a navigation
+   * control with no column behind it.
+   */
+  private _handleSpanPillHover = (event: CustomEvent<SpanPillHoverDetail>) => {
+    event.stopPropagation();
+    if (this._correlatedRow() !== "month") return;
+    this._setHoveredBucket(event.detail.date);
   };
 
   private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
@@ -2076,7 +2097,7 @@ export class HelmanSolarInspector extends LitElement {
     // Before either bail: the highlight is about which column the pointer is
     // over, and a bucket the span has no row for is still a column. Only the
     // popup needs the numbers.
-    this._setHoveredDay(key);
+    this._setHoveredBucket(key);
     if (key === null) {
       this._clearTooltip();
       return;

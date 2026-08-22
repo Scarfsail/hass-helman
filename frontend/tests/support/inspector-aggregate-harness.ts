@@ -348,6 +348,47 @@ export async function spanPillRow(
     }, row);
 }
 
+/** Fire a pointer enter/leave on one span pill, as the correlation sees it. */
+export async function hoverSpanPill(
+    page: Page,
+    row: "years" | "months",
+    key: string | null,
+): Promise<void> {
+    await page.evaluate(({ row, key }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        // One event, on one pill. Sweeping the row and sending `mouseleave` to
+        // every other pill would land after the `mouseenter` for any pill that
+        // is not last, and the leave would clear the hover the enter just set.
+        const pills = [...host.shadowRoot.querySelectorAll(`.pill-row.${row} .pill`)];
+        if (key === null) {
+            for (const pill of pills) {
+                pill.dispatchEvent(new MouseEvent("mouseleave"));
+            }
+        } else {
+            pills.find((pill: Element) => pill.getAttribute("data-span") === key)
+                ?.dispatchEvent(new MouseEvent("mouseenter"));
+        }
+        return (document.querySelector("helman-solar-inspector") as any).updateComplete;
+    }, { row, key });
+}
+
+/** The span pills in one row carrying the given class, by span key. */
+export async function spanPillsWithClass(
+    page: Page,
+    row: "years" | "months",
+    cls: string,
+): Promise<string[]> {
+    return page.evaluate(({ row, cls }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        if (!host?.shadowRoot) return [];
+        return [...host.shadowRoot.querySelectorAll(`.pill-row.${row} .pill`)]
+            .filter((pill: Element) => pill.classList.contains(cls))
+            .map((pill: Element) => pill.getAttribute("data-span") ?? "");
+    }, { row, cls });
+}
+
 /** The day pills that cannot be clicked, by date. */
 export async function unreachableDayPills(page: Page): Promise<string[]> {
     return page.evaluate(() => {
