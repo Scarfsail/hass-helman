@@ -1,10 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
     STOP_MONTH_VIEW,
     STOP_SLOT_60,
     STOP_YEAR_VIEW,
     bandRuns,
     canPageBack,
+    clickColumn,
     clickStop,
     columns,
     loadCardBundle,
@@ -62,8 +63,10 @@ test.describe("solar inspector aggregate views", () => {
         });
         expect(bands).toBe(6);
 
-        // The span is one read, for whole months, at day resolution.
-        const requests = await page.evaluate(() => (window as any).__spanRequests);
+        // The span is one read, for whole months, at day resolution. Filtered to
+        // the bucketed reads: the day pills share this endpoint and ask for
+        // their own window without a bucket, which is not what this is about.
+        const requests = await spanReads(page);
         expect(requests).toHaveLength(1);
         expect(requests[0].bucket).toBe("day");
         expect(requests[0].start_date.slice(-2)).toBe("01");
@@ -188,7 +191,7 @@ test.describe("solar inspector aggregate views", () => {
         await waitForAggregateChart(page);
 
         expect(await columns(page)).toHaveLength(12);
-        const requests = await page.evaluate(() => (window as any).__spanRequests);
+        const requests = await spanReads(page);
         expect(requests[0].bucket).toBe("month");
     });
 
@@ -576,6 +579,15 @@ test.describe("solar inspector aggregate views", () => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
 
+        // Arriving from the day view carries that day across as the selected
+        // column, so the span's own totals are what shows once it is dropped.
+        // Pressing the selected column again is what drops it.
+        const carried = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket"));
+        expect(carried).not.toBeNull();
+        await clickColumn(page, (await columns(page)).indexOf(carried as string));
+
         const days = (await columns(page)).length;
         const totals = await sectionMetrics(page, 0);
         expect(totals["Import cost"]).toBe(`${(40 * days).toFixed(2)} CZK`);
@@ -834,3 +846,9 @@ test.describe("solar inspector aggregate views", () => {
         expect(selected).toBe(keys[4]);
     });
 });
+
+/** The bucketed span reads, without the day pills' own unbucketed window read. */
+async function spanReads(page: Page): Promise<Array<Record<string, string>>> {
+    return page.evaluate(() => ((window as any).__spanRequests as Array<Record<string, string>>)
+        .filter((request) => request.bucket !== undefined));
+}

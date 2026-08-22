@@ -276,27 +276,33 @@ test.describe("solar inspector span pills", () => {
             .toEqual([iso(THIS_YEAR - 1, 1)]);
     });
 
-    test("picking a month from the year view drops to day granularity", async ({ page }) => {
-        // The year view's columns are months, so clicking one is asking to open
-        // it -- the same move drilling into that column makes.
+    test("picking a month from the year view picks its column, not its days", async ({ page }) => {
+        // The year view's columns *are* months, so pressing a month pill is
+        // pressing that column: it selects, it does not open. A press that
+        // changed granularity would make the picker the one control on the card
+        // that moves the reader somewhere they did not ask to go.
         await mountInspector(page, false, "", `${THIS_YEAR - 2}-06-15`);
         await clickStop(page, STOP_YEAR_VIEW);
         await waitForAggregateChart(page);
 
+        const before = await spanStarts(page, "month");
         await clickPill(page, "months", iso(THIS_YEAR, 3));
-        // A day-bucketed span request *is* the change of granularity: the year
-        // view asks for months.
-        await waitForSpanRequest(page, "day", iso(THIS_YEAR, 3));
-        await waitForAggregateChart(page);
+        await page.waitForTimeout(150);
 
+        // No new span was asked for: nothing about what is drawn has changed.
+        expect(await spanStarts(page, "month")).toEqual(before);
         const columns = await page.evaluate(() => {
             const chart = (document.querySelector("helman-solar-inspector") as any)
                 .shadowRoot.querySelector("helman-solar-aggregate-chart");
             return chart.shadowRoot.querySelectorAll(".bucket-column").length;
         });
-        // A month of days, not a year of months.
-        expect(columns).toBe(31);
-        expect((await pills(page, "months")).filter((pill) => pill.selected).map((pill) => pill.key))
+        // Still a year of months.
+        expect(columns).toBe(12);
+        // And the column it named is the selected one.
+        expect(await page.evaluate(() => [...(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelectorAll(".bucket-column.selected")]
+            .map((rect: Element) => rect.getAttribute("data-bucket"))))
             .toEqual([iso(THIS_YEAR, 3)]);
     });
 
@@ -355,14 +361,19 @@ test.describe("solar inspector span pills", () => {
         expect(await spanStarts(page, "day")).toEqual(before);
         expect(stillSelected).toBe(true);
 
-        // And back in the day view it is still the day the card arrived on.
+        // And a minutes stop opens the column that is selected, which is what
+        // the reader pointed at -- not the date span navigation happens to have
+        // parked `_selectedDate` on.
+        const column = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket"));
         await clickStop(page, STOP_SLOT_60);
         await waitForDayChart(page);
         const landed = await page.evaluate(() => {
             const requests = (window as any).__dayRequests as string[];
             return requests[requests.length - 1];
         });
-        expect(landed).toBe(TODAY);
+        expect(landed).toBe(column);
     });
 
     test("a row too narrow for its pills scrolls to the lit one", async ({ page }) => {
@@ -388,22 +399,18 @@ test.describe("solar inspector span pills", () => {
         // never needed scrolling at all.
         expect(overflows).toBe(true);
 
-        // The row scrolls smoothly; wait for it to settle rather than racing it.
-        // The lit pill comes to rest against an edge when it is near an end, so
-        // its centre being in view is the real claim -- it is on screen rather
-        // than parked at January.
-        await page.waitForFunction(() => {
+        // The row scrolls smoothly, so the claim has to be polled rather than
+        // read once. Polling the scroll offset itself, not the lit pill's
+        // position: the pill it scrolls to sits near the end of the row and its
+        // centre is already inside the viewport at rest, so a test that waited
+        // on the centre was satisfied before the scroll had begun and then read
+        // the offset mid-animation.
+        await expect.poll(() => page.evaluate(() => {
             const host = (document.querySelector("helman-solar-inspector") as any)
                 .shadowRoot.querySelector("helman-solar-span-pills");
-            const row = host?.shadowRoot?.querySelector(".pill-row.months") as HTMLElement | null;
-            const pill = host?.shadowRoot
-                ?.querySelector(".pill-row.months .pill.selected") as HTMLElement | null;
-            if (!row || !pill) return false;
-            const rowBox = row.getBoundingClientRect();
-            const pillBox = pill.getBoundingClientRect();
-            const centre = pillBox.left + pillBox.width / 2;
-            return centre >= rowBox.left && centre <= rowBox.right;
-        }, undefined, { timeout: 3000 });
+            return (host?.shadowRoot?.querySelector(".pill-row.months") as HTMLElement | null)
+                ?.scrollLeft ?? 0;
+        }), { timeout: 3000 }).toBeGreaterThan(0);
 
         const scrollLeft = await page.evaluate(() => {
             const host = (document.querySelector("helman-solar-inspector") as any)
@@ -504,7 +511,7 @@ test.describe("day pills inside an aggregate view", () => {
         expect(lit).toBe(0);
     });
 
-    test("clicking a day pill returns to the day view at the width last used", async ({ page }) => {
+    test("a day pill picks the column, and a minutes stop opens it at the width last used", async ({ page }) => {
         await mountInspector(page, false, "", `${THIS_YEAR - 1}-06-15`);
         await waitForDayChart(page);
 
@@ -520,15 +527,20 @@ test.describe("day pills inside an aggregate view", () => {
         const days = await dayPillDates(page);
         expect(days.length).toBeGreaterThan(0);
         const wanted = days[Math.floor(days.length / 2)];
-        await clickDayPill(page, wanted);
-        await waitForDayChart(page);
 
-        const active = await page.evaluate(() => [...(document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelectorAll(".slot-size-button")]
-            .filter((button: Element) => button.classList.contains("active"))
-            .map((button: Element) => button.textContent?.trim()));
-        expect(active).toEqual(["60"]);
-        // And it is the clicked day that is drawn, lit in the row it came from.
+        // The press picks the column and stays where it is: at D these pills
+        // *are* the columns, so pressing one is pressing the column.
+        await clickDayPill(page, wanted);
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket")))
+            .toBe(wanted);
+        expect(await activeStops(page)).toEqual(["D"]);
+
+        // The minutes stop is what opens it, at the width last used.
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+        expect(await activeStops(page)).toEqual(["60"]);
         const lit = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector("helman-solar-day-pills")
             .shadowRoot.querySelector(".pill.selected")?.getAttribute("data-day"));

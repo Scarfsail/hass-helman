@@ -1498,7 +1498,11 @@ export class HelmanSolarInspector extends LitElement {
     // extra and the span rows are the day view's, so a single flag drives both
     // conditions from opposite sides -- see `_navExpanded`.
     const showSpanRows = this._viewMode !== "day" || this._navExpanded;
-    const showDayPills = this._viewMode === "day" || this._navExpanded;
+    // Never at M. The chart there is drawing a whole year a month at a time, so
+    // there is no one month a calendar would be about -- and the row would be
+    // offering days at a granularity that has no day in it.
+    const showDayPills = this._viewMode === "day"
+      || (this._navExpanded && this._viewMode === "month");
     return html`
       <div class="nav">
         <div class="day-nav">
@@ -1515,6 +1519,7 @@ export class HelmanSolarInspector extends LitElement {
             .todayKey=${today}
             .hoveredKey=${this._shapedKey("month", this._hoveredBucketKey)}
             .selectedBucket=${this._shapedKey("month", this._selectedBucket)}
+            .selectsSlot=${this._correlatedRow() === "month"}
             @span-pill-select=${this._handleSpanPillSelect}
             @span-pill-hover=${this._handleSpanPillHover}
           ></helman-solar-span-pills>`}
@@ -1529,10 +1534,11 @@ export class HelmanSolarInspector extends LitElement {
             .currentDate=${today}
             .startDate=${this._pillWindowStart}
             .endDate=${this._pillWindowEnd}
-            .reachableFrom=${this._dayRange?.minDate ?? ""}
-            .reachableTo=${this._dayRange?.maxDate ?? ""}
+            .reachableFrom=${this._viewMode === "day" ? (this._dayRange?.minDate ?? "") : ""}
+            .reachableTo=${this._viewMode === "day" ? (this._dayRange?.maxDate ?? "") : ""}
             .hoveredDate=${this._shapedKey("day", this._hoveredBucketKey)}
             .selectedBucket=${this._shapedKey("day", this._selectedBucket)}
+            .selectsSlot=${this._correlatedRow() === "day"}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
@@ -1547,13 +1553,17 @@ export class HelmanSolarInspector extends LitElement {
                It leads the toolbar rather than standing beside the pills, so
                that when the header runs out of width the row keeps a line to
                itself and every control drops to the next one together. -->
-          <button
+          <!-- Not at M, where it has nothing to open. The span rows are always
+               up there and the day row never is, so the toggle would be a
+               control that changes nothing -- and a control that does nothing
+               is worse than no control, because it invites the press. -->
+          ${this._viewMode === "year" ? "" : html`<button
             class="icon-button nav-more ${this._navExpanded ? "active" : ""}"
             type="button"
             title=${this._t("bias_correction.inspector.more_days")}
             aria-expanded=${this._navExpanded ? "true" : "false"}
             @click=${() => { this._navExpanded = !this._navExpanded; }}
-          >&#9776;</button>
+          >&#9776;</button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${VIEW_STOPS.map((stop) => {
               const active = stop.minutes === undefined
@@ -1670,15 +1680,88 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _selectViewStop(stop: { mode: InspectorViewMode; minutes?: 15 | 30 | 60 }) {
     if (stop.minutes !== undefined) {
+      // The day the aggregate views left selected, not whatever `_selectedDate`
+      // happens to hold: span navigation parks it on a span start, so arriving
+      // from M without this opened the 1st of January.
+      this._selectedDate = this._dayForMinutesStop();
+      this._clearChartFocus();
       this._viewMode = "day";
       this._setSlotMinutes(stop.minutes);
       this._ensureDayLoaded();
       return;
     }
     if (this._viewMode === stop.mode) return;
+    // Worked out before the mode moves, because every helper it leans on reads
+    // `_viewMode` to decide what a span is.
+    const carried = this._spanForViewStop(stop.mode);
     this._viewMode = stop.mode;
-    this._clearChartFocus();
+    this._selectedDate = carried.date;
+    this._selectedBucket = carried.bucket;
+    this._hoveredBucketKey = null;
     this._loadSpan();
+  }
+
+  /**
+   * What the next granularity should be showing, and which of its columns
+   * should still be picked.
+   *
+   * A change of stop is a change of *scale*, not of subject: the reader is
+   * asking to see the same thing coarser or finer. So whatever was picked
+   * carries across, reshaped to whatever a column is on the other side --
+   * a month selected at M opens as the month D draws, and the day being read
+   * at 15/30/60 arrives at D as the column already selected.
+   *
+   * Where nothing was picked there is nothing to carry, and the browsed date
+   * decides on its own -- which is the case the reader means when they leave a
+   * month unselected.
+   */
+  private _spanForViewStop(mode: InspectorViewMode): { date: string; bucket: string | null } {
+    const today = this._todayIso();
+    const anchor = this._selectedBucket ?? (this._selectedDate || today);
+    if (mode === "month") {
+      // Into D, whose columns are days. A month picked at M names the month to
+      // draw and leaves no day picked inside it; a day carries as itself.
+      const day = this._correlatedRow() === "day" || this._viewMode === "day"
+        ? anchor
+        : null;
+      return day !== null
+        ? { date: day, bucket: day }
+        : { date: this._monthBounds(anchor).start, bucket: null };
+    }
+    // Into M, whose columns are months: the month around whatever was picked.
+    return { date: anchor, bucket: this._monthBounds(anchor).start };
+  }
+
+  /**
+   * Which day a minutes stop should open, given where the reader is coming
+   * from.
+   *
+   * At D the picked column is itself a day and is the obvious answer. At M the
+   * columns are months, so the answer is whichever day the calendar was
+   * offering: the one already selected when it falls inside the picked month,
+   * and that month's first day otherwise -- a day from some other month would
+   * be a jump nobody asked for.
+   *
+   * Then clamped into what the day view can actually open. The recorder purges
+   * raw states from under the aggregates, so a month the year view draws
+   * happily can be entirely beyond the day view; landing on the floor is the
+   * first day that has anything to show, which beats an empty chart.
+   */
+  private _dayForMinutesStop(): string {
+    const today = this._todayIso();
+    const column = this._shapedKey("day", this._selectedBucket);
+    const month = this._correlatedRow() === "month" ? this._selectedBucket : null;
+    const selected = this._selectedDate || today;
+    let day = column ?? selected;
+    if (column === null && month !== null) {
+      const bounds = this._monthBounds(month);
+      day = selected >= bounds.start && selected <= bounds.end ? selected : bounds.start;
+    }
+    const floor = this._dayRange?.minDate ?? "";
+    const horizon = this._dayRange?.maxDate ?? "";
+    if (floor !== "" && day < floor) return floor;
+    if (horizon !== "" && day > horizon) return horizon;
+    return day;
   }
 
   /**
@@ -1794,7 +1877,15 @@ export class HelmanSolarInspector extends LitElement {
       this._slideDayCalendar(event.detail.date);
       return;
     }
-    this._showSpan(event.detail.date, event.detail.viewMode);
+    // At M the month row *is* the chart's columns, so pressing one picks the
+    // bucket rather than opening it -- the same press the column takes, and the
+    // same toggle. Every other press moves the span the view is showing, and
+    // the view it is showing in stays what it was.
+    if (event.detail.row === "months" && this._correlatedRow() === "month") {
+      this._toggleBucket(event.detail.date);
+      return;
+    }
+    this._showSpan(event.detail.date, this._viewMode);
   };
 
   /**
@@ -2034,10 +2125,19 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
     event.stopPropagation();
-    // Clicking the selected column clears it, the way the day chart's slot
-    // selection toggles rather than latching.
-    this._selectedBucket = this._selectedBucket === event.detail.key ? null : event.detail.key;
+    this._toggleBucket(event.detail.key);
   };
+
+  /**
+   * Pick a bucket, or drop it if it was already the one.
+   *
+   * Toggling rather than latching is the day chart's own slot behaviour, and
+   * the column and its pill are two hit targets for one act -- so they share
+   * this rather than each deciding what a second press means.
+   */
+  private _toggleBucket(key: string) {
+    this._selectedBucket = this._selectedBucket === key ? null : key;
+  }
 
   /**
    * The clicked bucket's own numbers, and the control that opens it.
@@ -4797,15 +4897,28 @@ export class HelmanSolarInspector extends LitElement {
     if (!this.hass) {
       return;
     }
-    const key = `${start}..${end}`;
+    // Never ask past today: nothing after it has been measured, so the days
+    // beyond are always an empty answer. Clamping here rather than filtering the
+    // reply is what makes the collapsed row one read instead of two -- its
+    // window is today to the forecast's end, and it widens the moment the day
+    // range lands, which under an unclamped key was a second request for the
+    // same single measurable day.
+    const measuredEnd = end > this._todayKey ? this._todayKey : end;
+    const key = `${start}..${measuredEnd}`;
     if (this._historyDaysFor === key) {
       return;
     }
     this._historyDaysFor = key;
-    if (start >= this._todayKey) {
-      // A forward window has no measured days. Clearing keeps a past week's
-      // measurements from lingering after paging forward again; Lit drops the
-      // assignment on `===` once the constant is already in place.
+    if (start > this._todayKey) {
+      // A window that begins after today has no measured days. Clearing keeps a
+      // past week's measurements from lingering after paging forward again; Lit
+      // drops the assignment on `===` once the constant is already in place.
+      //
+      // `>` and not `>=`: today itself has been measured up to now, and a
+      // window that opens on it must fetch that. The collapsed row starts on
+      // today and the expanded calendar starts on the 1st, so the stricter test
+      // made today's own pill measured in one and forecast in the other --
+      // dashed, solid, dashed as the picker opened and closed.
       this._historyDays = EMPTY_HISTORY_DAYS;
       return;
     }
@@ -4813,7 +4926,7 @@ export class HelmanSolarInspector extends LitElement {
       const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
         type: "helman/solar_bias/day_aggregates",
         start_date: start,
-        end_date: end,
+        end_date: measuredEnd,
       });
       if (this._historyDaysFor !== key) {
         return;
@@ -4834,21 +4947,30 @@ export class HelmanSolarInspector extends LitElement {
     this._forecast = event.detail.forecast;
   };
 
+  /**
+   * A day pill was pressed. What that means depends on what the chart is
+   * drawing, and in no case is it a change of granularity.
+   *
+   * At D the columns *are* these days, so the press is the column press: it
+   * picks the bucket the panel describes, and toggles like the column does.
+   * Anywhere else there is no column for the day, and the press says which day
+   * is being browsed -- loading it outright in the day view, and at M merely
+   * naming the day a minutes stop would open, since the chart there is drawing
+   * a whole year.
+   */
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
     event.stopPropagation();
-    // From an aggregate view the click is a change of granularity as well as of
-    // day -- the same move drilling into a day column makes -- so it goes
-    // through the one path that owns it. `_selectedDate` is a span start there,
-    // so the day is genuinely new even when the guard below would say otherwise.
-    if (this._viewMode !== "day") {
-      this._showDay(event.detail.date);
+    if (this._correlatedRow() === "day") {
+      this._toggleBucket(event.detail.date);
       return;
     }
     if (event.detail.date === this._selectedDate) {
       return;
     }
     this._selectedDate = event.detail.date;
-    this._load();
+    if (this._viewMode === "day") {
+      this._load();
+    }
   };
 
   private _selectTrainingDate(date: string) {

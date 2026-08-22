@@ -24,17 +24,17 @@ import {
  */
 
 /**
- * The span a pill was clicked for, as its first day, and the view that should
- * be showing it.
+ * The span a pill was pressed for, as its first day, and which row it was in.
  *
- * The mode travels with the date because picking a month is also a change of
- * granularity: a year view has months for columns, so clicking one is asking to
- * open it — the same move drilling into a column makes. Picking a year never
- * changes the mode; it moves within whichever view is on screen.
+ * The row travels with the date and the view mode no longer does. A press means
+ * different things in different views — at M a month press picks the column the
+ * panel describes, everywhere else it moves the span on screen — and the card is
+ * the only thing that knows which view it is in. The element reports what was
+ * pressed; it does not decide what pressing it does.
  */
 export interface SpanPillSelectDetail {
     date: string;
-    viewMode: SpanPillMode;
+    row: "years" | "months";
 }
 
 /**
@@ -113,7 +113,19 @@ export class HelmanSolarSpanPills extends LitElement {
            selected state. .hovered comes from the card, so a hover that
            started on a chart column is indistinguishable from one that started
            here -- which is the whole point of routing both through the card. */
-        .pill:hover,
+        /* Blue by default, because by default a press moves the span on screen.
+           The card's other navigation controls are blue and this is one of
+           them. */
+        .pill:hover {
+            border-color: var(--primary-color, #2563eb);
+            background: color-mix(in srgb, var(--primary-color, #2563eb) 14%, var(--card-background-color));
+        }
+
+        /* Amber where the press picks a column instead, and always for a hover
+           the chart drove -- that one only ever reaches the row whose pills are
+           the columns. Same token and same weight as the chart's own overlay,
+           so the pair reads as one highlight. */
+        .selects-slot .pill:hover,
         .pill.hovered {
             border-color: var(--helman-selection);
             background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
@@ -155,6 +167,16 @@ export class HelmanSolarSpanPills extends LitElement {
      */
     @property({ type: String }) public hoveredKey: string | null = null;
     @property({ type: String }) public selectedBucket: string | null = null;
+    /**
+     * Whether pressing a month picks a chart column rather than moving the span.
+     *
+     * It decides the hover colour and nothing else, because the colour is the
+     * card's one promise about what a press will do: amber where a press picks
+     * the slot the panel describes, blue where it changes what is on screen.
+     * The card sets it, since only the card knows which of its rows the columns
+     * currently line up with.
+     */
+    @property({ type: Boolean }) public selectsSlot = false;
 
     private _localizeFn?: LocalizeFunction;
     /** The span the row was last scrolled to, so a re-render does not re-scroll. */
@@ -186,7 +208,7 @@ export class HelmanSolarSpanPills extends LitElement {
                     ${years.map((pill) => this._renderPill(pill, () => this._selectYear(pill)))}
                 </div>
                 <div
-                    class="pill-row months"
+                    class="pill-row months ${this.selectsSlot ? "selects-slot" : ""}"
                     role="group"
                     aria-label=${this._localize("bias_correction.inspector.span_pills_months")}
                 >
@@ -258,19 +280,13 @@ export class HelmanSolarSpanPills extends LitElement {
     private _selectYear(pill: SpanPill): void {
         const key = spanKeyForYear(this._options(), Number(pill.key.slice(0, 4)));
         if (key !== null) {
-            this._emit(key, this.viewMode);
+            this._emit(key, "years");
         }
     }
 
-    /**
-     * Pick a month, which always means showing that month's days.
-     *
-     * From the month view it is a move within the row. From the year view it is
-     * also a change of granularity: the year view's columns are months, so
-     * clicking one asks to open it, exactly as drilling into that column does.
-     */
+    /** Pick a month. What that means is the card's to decide -- see the detail. */
     private _selectMonth(pill: SpanPill): void {
-        this._emit(pill.key, "month");
+        this._emit(pill.key, "months");
     }
 
     /**
@@ -281,11 +297,11 @@ export class HelmanSolarSpanPills extends LitElement {
      * the date does not shift -- and answering it in two places is how the two
      * answers drift apart.
      */
-    private _emit(spanKey: string, viewMode: SpanPillMode): void {
+    private _emit(spanKey: string, row: "years" | "months"): void {
         this.dispatchEvent(new CustomEvent<SpanPillSelectDetail>("span-pill-select", {
             bubbles: true,
             composed: true,
-            detail: { date: spanKey, viewMode },
+            detail: { date: spanKey, row },
         }));
     }
 

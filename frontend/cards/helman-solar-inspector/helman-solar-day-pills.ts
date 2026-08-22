@@ -189,7 +189,16 @@ export class HelmanSolarDayPills extends LitElement {
            is the same hover drawn on the same day a few pixels away. Blue here
            made one gesture wear two colours depending on which half of the card
            the pointer was over. */
-        .pill:hover,
+        /* Blue where the press chooses the day being browsed, which is what it
+           does everywhere the chart is not drawing these days as columns. */
+        .pill:hover {
+            border-color: var(--primary-color, #2563eb);
+            background: color-mix(in srgb, var(--primary-color, #2563eb) 14%, var(--card-background-color));
+        }
+
+        /* Amber where the press picks a column instead, and always for a hover
+           the chart drove. Same token and weight as the chart's own overlay. */
+        .selects-slot .pill:hover,
         .pill.hovered {
             border-color: var(--helman-selection);
             background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
@@ -295,6 +304,12 @@ export class HelmanSolarDayPills extends LitElement {
      * only says how to lay out whatever days arrive.
      */
     @property({ type: String }) public layout: "row" | "calendar" = "row";
+    /**
+     * Whether pressing a pill picks a chart column rather than choosing the day
+     * being browsed. It decides the hover colour and nothing else -- see the
+     * matching property on the span row, which makes the same promise.
+     */
+    @property({ type: Boolean }) public selectsSlot = false;
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _forecast: ForecastPayload | null = null;
@@ -387,7 +402,7 @@ export class HelmanSolarDayPills extends LitElement {
 
         return html`
             <div
-                class=${`pill-row${calendar ? " calendar" : ""}`}
+                class=${`pill-row${calendar ? " calendar" : ""}${this.selectsSlot ? " selects-slot" : ""}`}
                 role="group"
                 aria-label=${this._localize("bias_correction.inspector.day_pills")}
             >

@@ -12,6 +12,7 @@ import {
     hoverColumn,
     hoverDayPill,
     hoverSpanPill,
+    clickDayPill,
     clickSpanPill,
     loadCardBundle,
     spanPillsWithClass,
@@ -41,6 +42,9 @@ const THIS_YEAR = new Date().getUTCFullYear();
 
 /** `SELECTION_COLOR` as the browser resolves it: the card's one highlight amber. */
 const AMBER = "rgb(245, 158, 11)";
+
+/** The card's navigation blue: the --primary-color fallback, resolved. */
+const BLUE = "rgb(37, 99, 235)";
 
 /** The D view with the picker open: columns and pills showing the same month. */
 async function openDayColumnsWithPills(page: Page): Promise<void> {
@@ -179,17 +183,25 @@ test.describe("the day pills and the chart highlight together", () => {
     });
 
     test("a month column lights no pill", async ({ page }) => {
+        // Opened expanded, so "no day row at M" is the view's doing rather than
+        // the picker merely being shut.
         await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
         await waitForDayChart(page);
+        await toggleMore(page);
         await clickStop(page, STOP_YEAR_VIEW);
         await waitForAggregateChart(page);
-        await toggleMore(page);
 
-        // The row is on screen and full of days, so "nothing lit" is a real
-        // answer rather than an empty row's.
-        expect((await dayPillDates(page)).length).toBeGreaterThan(20);
+        // At M there is no day row at all -- the chart is drawing a year a
+        // month at a time, so there is no one month a calendar would be about
+        // -- and no toggle either, there being nothing for it to open.
+        expect(await dayPillDates(page)).toEqual([]);
+        expect(await hasMoreToggle(page)).toBe(false);
+        await clickColumn(page, 3);
+        expect(await dayPillDates(page)).toEqual([]);
 
-        await hoverColumn(page, 3);
+        // Hovering a month column therefore lights no day pill, there being
+        // none -- the month row is what lights instead.
+        await hoverColumn(page, 5);
         expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
         // The chart still highlights its own column — only the correspondence
         // to a day is missing at M, not the hover.
@@ -244,57 +256,36 @@ test.describe("where the correlation does and does not reach", () => {
         expect(await columnsWithClass(page, "hovered")).toEqual([]);
     });
 
-    test("a day the row cannot open is still lit when the chart names it", async ({ page }) => {
+    test("at D every day is takeable, because pressing one only picks a column", async ({ page }) => {
         // The aggregates reach two years back; the raw states a day view needs
-        // stop at the 10th of the month two months ago.
+        // stop at the 10th of the month two months ago. In the day view that
+        // floor disables pills, because a press there opens the day. At D a
+        // press picks a column instead, and the column exists either way -- so
+        // the floor has nothing to say about it.
         const floorMonth = monthsBack(2);
         await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`, `${floorMonth}-10`);
         await waitForDayChart(page);
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
         await toggleMore(page);
+        await clickSpanPill(page, "months", `${floorMonth}-01`);
+        await waitForAggregateChart(page);
 
-        const unreachable = await unreachableDayPills(page);
-        expect(unreachable.length).toBeGreaterThan(0);
+        // The month straddles the floor, so this is the case that would have
+        // disabled pills under the old rule.
+        const days = await dayPillDates(page);
+        expect(days).toContain(`${floorMonth}-09`);
+        expect(await unreachableDayPills(page)).toEqual([]);
 
-        // Following the pointer is what the highlight is for, so a day the row
-        // cannot open is highlighted like any other -- the column is real and
-        // the reader is looking at it. What says it cannot be opened is the
-        // dimming, which the highlight must not undo.
-        const index = (await columns(page)).indexOf(unreachable[0]);
-        expect(index).toBeGreaterThanOrEqual(0);
-        await hoverColumn(page, index);
-        expect(await dayPillsWithClass(page, "hovered")).toContain(unreachable[0]);
-
-        // Polled, not read once: .pill transitions border-color over 120ms, so
-        // a single read lands on whatever frame the animation is on.
-        await expect
-            .poll(() => pillBorderColor(page, unreachable[0]))
-            .toBe(AMBER);
-        // And the dimming, which is what says it cannot be opened, survives it.
-        expect(await pillOpacity(page, unreachable[0])).toBe("0.4");
+        // And pressing the one below the floor picks its column rather than
+        // trying to open a day the recorder cannot answer for.
+        await clickDayPill(page, `${floorMonth}-09`);
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket")))
+            .toBe(`${floorMonth}-09`);
     });
 });
-
-/** One pill's resolved opacity. */
-async function pillOpacity(page: Page, day: string): Promise<string> {
-    return page.evaluate((wanted) => {
-        const pill = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-day-pills")
-            ?.shadowRoot?.querySelector(`.pill[data-day="${wanted}"]`);
-        return pill ? getComputedStyle(pill).opacity : "";
-    }, day);
-}
-
-/** One pill's resolved top border colour. */
-async function pillBorderColor(page: Page, day: string): Promise<string> {
-    return page.evaluate((wanted) => {
-        const pill = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-day-pills")
-            ?.shadowRoot?.querySelector(`.pill[data-day="${wanted}"]`);
-        return pill ? getComputedStyle(pill).borderTopColor : "";
-    }, day);
-}
 
 /** `YYYY-MM` for the month `count` months before this one. */
 function monthsBack(count: number): string {
@@ -388,41 +379,208 @@ test.describe("the pill row's border says which days have happened", () => {
                 .style.setProperty("--divider-color", "#d4d4d8");
         });
 
-        // The closed row runs from today to the end of the forecast, so it is
-        // the window that reliably holds days that have not happened yet.
-        const forward = await pillBorderStyles(page);
-        expect(forward.length).toBeGreaterThan(0);
-        expect(forward.some((pill) => !pill.history)).toBe(true);
-        for (const pill of forward) {
-            expect(pill.border).toBe(pill.history ? "solid" : "dashed");
-        }
-
-        // And a month that is entirely behind, for the other half of the rule.
-        // March of this year: one press, since the year row does not move.
+        // The expanded calendar of the current month, which straddles today and
+        // so holds both kinds of day at once.
         await toggleMore(page);
-        await clickSpanPill(page, "months", `${THIS_YEAR}-03-01`);
-        await waitForDayChart(page);
-
-        const past = await pillBorderStyles(page);
-        expect(past.length).toBeGreaterThan(0);
-        expect(past.some((pill) => pill.history)).toBe(true);
-        for (const pill of past) {
+        const styles = await pillBorderStyles(page);
+        expect(styles.some((pill) => pill.history)).toBe(true);
+        expect(styles.some((pill) => !pill.history)).toBe(true);
+        for (const pill of styles) {
             expect(pill.border).toBe(pill.history ? "solid" : "dashed");
         }
+
+        // Today is measured -- it has already partly happened -- and it stays
+        // measured when the picker closes. Its window changes; the day does not.
+        const today = new Date().toISOString().slice(0, 10);
+        expect(styles.find((pill) => pill.day === today)?.border).toBe("solid");
+        await toggleMore(page);
+        const closed = await pillBorderStyles(page);
+        expect(closed.find((pill) => pill.day === today)?.border).toBe("solid");
     });
 });
 
 /** Every day pill's measured-ness and its resolved border style. */
 async function pillBorderStyles(
     page: Page,
-): Promise<Array<{ history: boolean; border: string }>> {
+): Promise<Array<{ day: string; history: boolean; border: string }>> {
     return page.evaluate(() => {
         const root = (document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
         if (!root) return [];
         return [...root.querySelectorAll(".pill")].map((pill: Element) => ({
+            day: pill.getAttribute("data-day") ?? "",
             history: pill.getAttribute("data-history") === "true",
             border: getComputedStyle(pill).borderTopStyle,
         }));
     });
 }
+
+/**
+ * The hover colour is a promise about what the press will do.
+ *
+ * Amber is the chart's selection colour, so an amber pill says "this press
+ * picks the slot the panel describes". Blue is the card's navigation colour, so
+ * a blue pill says "this press changes what is on screen". Every pill is one or
+ * the other, and which one depends on the view, because the same pill means
+ * different things at different granularities.
+ */
+test.describe("what the hover colour promises", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("a day pill is blue in the day view and amber at D", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+
+        // In the day view the press loads the day: navigation, so blue.
+        const day = (await dayPillDates(page))[0];
+        await expect
+            .poll(() => hoverBorderColor(page, `helman-solar-day-pills .pill[data-day="${day}"]`))
+            .toBe(BLUE);
+
+        // At D the same pill is a column, and the press picks it: amber.
+        // No second toggle: the picker is already open and switching stops does
+        // not close it, so pressing again would collapse the row being read.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        const atD = (await dayPillDates(page))[0];
+        await expect
+            .poll(() => hoverBorderColor(page, `helman-solar-day-pills .pill[data-day="${atD}"]`))
+            .toBe(AMBER);
+    });
+
+    test("a month pill is blue at D and amber at M", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const month = `helman-solar-span-pills .pill-row.months .pill[data-span="${THIS_YEAR}-03-01"]`;
+        // At D a month press moves the month on screen: navigation, so blue.
+        await expect.poll(() => hoverBorderColor(page, month)).toBe(BLUE);
+
+        // At M the months *are* the columns, so the press picks one: amber.
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+        await expect.poll(() => hoverBorderColor(page, month)).toBe(AMBER);
+    });
+});
+
+/**
+ * Leaving an aggregate view for a minutes stop lands on the day the reader
+ * pointed at, and never on a day the day view cannot draw.
+ */
+test.describe("what a minutes stop opens", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("a month picked at M opens that month, clamped to the first day there is", async ({ page }) => {
+        // The aggregates reach two years back; the raw states only to the 10th
+        // of the month two months ago. So a month picked at M is one the day
+        // view cannot open the start of.
+        const floorMonth = monthsBack(2);
+        const dayFloor = `${floorMonth}-10`;
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`, dayFloor);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        const months = await columns(page);
+        const index = months.indexOf(`${floorMonth}-01`);
+        expect(index).toBeGreaterThanOrEqual(0);
+        await clickColumn(page, index);
+
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+        const landed = await page.evaluate(() => {
+            const requests = (window as any).__dayRequests as string[];
+            return requests[requests.length - 1];
+        });
+        // The 1st is below the floor, so the first day there is data for wins.
+        expect(landed).toBe(dayFloor);
+    });
+});
+
+/**
+ * Hover one pill for real and read the border colour that results.
+ *
+ * Playwright's selector engine pierces open shadow roots, so this is a genuine
+ * pointer hover rather than a synthetic event -- which matters, because `:hover`
+ * is exactly the thing a dispatched MouseEvent cannot produce.
+ */
+async function hoverBorderColor(page: Page, selector: string): Promise<string> {
+    const pill = page.locator(selector).first();
+    await pill.hover();
+    return pill.evaluate((node) => getComputedStyle(node).borderTopColor);
+}
+
+/** Whether the picker's "more" toggle is on screen at all. */
+async function hasMoreToggle(page: Page): Promise<boolean> {
+    return page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".nav-more"));
+}
+
+/**
+ * A change of stop is a change of scale, not of subject.
+ *
+ * Whatever the reader had picked survives the move, reshaped to whatever a
+ * column is on the other side. Losing it meant every zoom landed somewhere the
+ * reader had to navigate back from.
+ */
+test.describe("what a change of granularity carries across", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("a month picked at M is the month D opens", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        // A month that is not the browsed one, so "it opened the month I picked"
+        // is distinguishable from "it opened the month it was already on".
+        const wanted = `${THIS_YEAR}-03-01`;
+        const index = (await columns(page)).indexOf(wanted);
+        expect(index).toBeGreaterThanOrEqual(0);
+        await clickColumn(page, index);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        // D is drawing that month's days.
+        expect((await columns(page))[0]).toBe(wanted);
+        // And no day inside it is picked, because none was.
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected"))).toBeNull();
+    });
+
+    test("the day being read at 15/30/60 arrives at D already picked", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+        // A day that is not today, so the carry is visible.
+        const wanted = (await dayPillDates(page))[4];
+        await clickDayPill(page, wanted);
+        await waitForDayChart(page);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket")))
+            .toBe(wanted);
+
+        // And back again lands on the same day rather than on a span start.
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+        const landed = await page.evaluate(() => {
+            const requests = (window as any).__dayRequests as string[];
+            return requests[requests.length - 1];
+        });
+        expect(landed).toBe(wanted);
+    });
+});

@@ -601,8 +601,15 @@ test.describe("solar inspector past days", () => {
         await waitForDays(page, month);
         await waitForHistoryPills(page, pastDays);
 
+        // Two reads, and only one of them is the month's: the closed row asks
+        // for today, the only day it holds that can have been measured, and the
+        // month asks for its own days up to today. Neither reaches past today,
+        // because nothing there has happened yet.
         const afterOpening = await readRequestedRanges(page);
-        expect(afterOpening).toEqual([`${month[0]}..${month[month.length - 1]}`]);
+        expect(afterOpening).toEqual([
+            `${dayAt(0)}..${dayAt(0)}`,
+            `${month[0]}..${dayAt(0)}`,
+        ]);
 
         const target = (await readPills(page)).find((pill) => pill.isHistory)!.day;
         await clickPill(page, month.indexOf(target));
