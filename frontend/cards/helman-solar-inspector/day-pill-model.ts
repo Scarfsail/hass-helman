@@ -21,6 +21,17 @@ import type { ScheduleDisplaySlot } from "../shared/schedule/schedule-types";
 /** Days a pill row will ever draw, however far a bad `maxDate` reaches. */
 const MAX_PILL_DAYS = 31;
 
+/** Home Assistant's `first_weekday` values, in `getUTCDay` order. */
+const WEEKDAY_NAMES = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+];
+
 /**
  * Which of a pill's three metrics exist at all.
  *
@@ -78,6 +89,72 @@ export function buildDayPillKeys(startDayKey: string, endDayKey: string): string
     }
 
     return keys;
+}
+
+/**
+ * The pill list with the leading blanks a calendar grid needs.
+ *
+ * A month laid out as seven columns only reads as a calendar if the first of
+ * the month sits under its own weekday, so the row is preceded by as many empty
+ * cells as there are days between the week's start and that weekday. Trailing
+ * blanks are not returned: a grid ends where its items do, and cells nobody can
+ * see are cells the element would have to skip when rendering.
+ *
+ * The blanks are `null` rather than a placeholder shape, because that is what
+ * they are — the element renders an inert spacer for each and nothing else.
+ */
+export function buildDayPillCalendarCells(
+    pills: readonly SolarInspectorDayPill[],
+    firstWeekdayIndex: number,
+): readonly (SolarInspectorDayPill | null)[] {
+    const first = pills[0];
+    if (first === undefined || !_isDayKey(first.dayKey)) {
+        return pills;
+    }
+
+    const weekday = new Date(`${first.dayKey}T00:00:00Z`).getUTCDay();
+    // Modulo twice: the inner difference is negative whenever the week starts
+    // after the first day's weekday, and a negative count of blanks would drop
+    // the row a column to the left instead of shifting it right.
+    const blanks = (((weekday - firstWeekdayIndex) % 7) + 7) % 7;
+    return [...Array<null>(blanks).fill(null), ...pills];
+}
+
+/**
+ * Which weekday a calendar starts on, from Home Assistant's locale settings.
+ *
+ * This is `firstWeekdayIndex` from `hass-frontend/src/common/datetime/first_weekday`
+ * reimplemented rather than imported, and the reason is mechanical: that module
+ * falls back to the `weekstart` package, which is a dependency of the vendored
+ * frontend and is not installed for the card bundle, so importing it fails the
+ * build. What is left is the same logic without that fallback — an explicit
+ * setting wins, `"language"` asks `Intl`, and anything `Intl` cannot answer is
+ * Monday, which is what the upstream fallback returns too.
+ */
+export function resolveFirstWeekdayIndex(
+    locale: { language?: string; first_weekday?: string } | undefined,
+): number {
+    const explicit = locale?.first_weekday;
+    if (explicit !== undefined && explicit !== "language") {
+        const index = WEEKDAY_NAMES.indexOf(explicit);
+        return index === -1 ? 1 : index;
+    }
+
+    try {
+        const info = (new Intl.Locale(locale?.language || "en") as unknown as {
+            weekInfo?: { firstDay?: number };
+            getWeekInfo?: () => { firstDay?: number };
+        });
+        const firstDay = info.getWeekInfo?.().firstDay ?? info.weekInfo?.firstDay;
+        if (typeof firstDay === "number") {
+            // `Intl` counts Monday as 1 and Sunday as 7; `getUTCDay` counts
+            // Sunday as 0, and the blanks above are computed against the latter.
+            return firstDay % 7;
+        }
+    } catch {
+        // A language string `Intl` will not parse is not worth a broken row.
+    }
+    return 1;
 }
 
 export function buildSolarInspectorDayPills({

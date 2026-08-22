@@ -38,8 +38,12 @@ async function loadCardBundle(page: Page): Promise<void> {
  * two-day hourly schedule, and a forecast whose solar total falls day by day so
  * the pills' shared scale is visible in the bar widths.
  */
-async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack }) => {
+async function mountInspector(
+    page: Page,
+    minDaysBack = 30,
+    firstWeekday = "language",
+): Promise<void> {
+    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -236,7 +240,7 @@ async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
         const el = document.createElement("helman-solar-inspector") as HTMLElement & Record<string, unknown>;
         el.hass = {
             language: "en",
-            locale: { language: "en" },
+            locale: { language: "en", first_weekday: firstWeekday },
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async (msg: { type: string }) =>
@@ -292,6 +296,7 @@ async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
         forecastDays: FORECAST_DAYS,
         scheduledDays: SCHEDULED_DAYS,
         minDaysBack,
+        firstWeekday,
     });
 
     await page.waitForFunction((expected) => {
@@ -331,22 +336,22 @@ async function readPills(page: Page): Promise<PillReadout[]> {
     });
 }
 
-/** Page the row a week with the inspector's own buttons: negative goes back. */
-async function stepWeek(page: Page, delta: number): Promise<void> {
-    await page.evaluate((step) => {
+/** Open or close the picker with its own toggle. */
+async function pressMore(page: Page): Promise<void> {
+    await page.evaluate(() => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        const arrows = Array.from(root?.querySelectorAll(".week-arrow") ?? []);
-        (arrows[step < 0 ? 0 : 1] as HTMLElement | undefined)?.click();
-    }, delta);
+        (root?.querySelector(".nav-more") as HTMLButtonElement | undefined)?.click();
+    });
 }
 
-/** Whether each week button is takeable, back first. */
-async function readWeekArrows(page: Page): Promise<boolean[]> {
-    return page.evaluate(() => {
-        const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        return Array.from(root?.querySelectorAll(".week-arrow") ?? [])
-            .map((button) => !(button as HTMLButtonElement).disabled);
-    });
+/** Every day of the calendar month `today` falls in, in order. */
+function daysOfThisMonth(): string[] {
+    const today = new Date();
+    const year = today.getUTCFullYear();
+    const month = today.getUTCMonth();
+    const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return Array.from({ length: last }, (_, i) =>
+        new Date(Date.UTC(year, month, i + 1)).toISOString().slice(0, 10));
 }
 
 /** The day `offset` days from today, as the fixture writes its dates. */
@@ -505,152 +510,204 @@ test.describe("solar inspector day pills", () => {
     });
 });
 
-test.describe("solar inspector history pill", () => {
+test.describe("solar inspector past days", () => {
     test.beforeEach(async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page);
     });
 
-    test("no past day is offered until one is asked for", async ({ page }) => {
+    test("no past day is offered until the picker is opened", async ({ page }) => {
         const pills = await readPills(page);
         expect(pills.some((pill) => pill.isHistory)).toBe(false);
     });
 
-    test("paging back shows that whole week, landing on its first day", async ({ page }) => {
-        await stepWeek(page, -1);
-
-        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
-        await waitForDays(page, week);
+    /**
+     * What the toggle is for. Closed, the row is today and the days ahead;
+     * opened, it is the whole calendar month, which is what makes every day of
+     * it one click away instead of a week's paging apiece.
+     */
+    test("opening the picker widens the row to the whole month", async ({ page }) => {
+        const month = daysOfThisMonth();
+        await pressMore(page);
+        await waitForDays(page, month);
 
         const pills = await readPills(page);
-        expect(pills.map((pill) => pill.day)).toEqual(week);
-        // The landing day is the one the button stepped to, a week back.
-        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-7)]);
+        expect(pills.map((pill) => pill.day)).toEqual(month);
+        // Today is still the day on screen: widening the row is not a move.
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(0)]);
     });
 
-    test("a second page back moves a whole week, not a day", async ({ page }) => {
-        await stepWeek(page, -1);
-        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 + i)));
+    test("closing the picker puts the rolling row back", async ({ page }) => {
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
 
-        await stepWeek(page, -1);
-        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-14 + i)));
-
-        const pills = await readPills(page);
-        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-14)]);
+        await pressMore(page);
+        await waitForDays(page, Array.from({ length: PILL_DAYS }, (_, i) => dayAt(i)));
     });
 
     /**
-     * The whole point of paging by weeks: travel to the week, then pick the day
-     * out of it. If picking a day re-derived a different week the row would slide
-     * out from under the click.
+     * The whole point of opening the month: travel to the day, then pick it out
+     * of the row. If picking a day re-derived a different window the row would
+     * slide out from under the click.
      */
-    test("picking a day inside the week leaves the week where it is", async ({ page }) => {
-        await stepWeek(page, -1);
-        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
-        await waitForDays(page, week);
+    test("picking a day inside the month leaves the month where it is", async ({ page }) => {
+        const month = daysOfThisMonth();
+        const pastDays = month.filter((day) => day < dayAt(0)).length;
+        test.skip(pastDays === 0, "the 1st has no past day in its own month");
+        await pressMore(page);
+        await waitForDays(page, month);
+        await waitForHistoryPills(page, pastDays);
 
-        await clickPill(page, 4);
+        const target = (await readPills(page)).find((pill) => pill.isHistory)!.day;
+        await clickPill(page, month.indexOf(target));
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),
-            week[4],
+            target,
         );
 
         const pills = await readPills(page);
-        expect(pills.map((pill) => pill.day)).toEqual(week);
-        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([week[4]]);
-    });
-
-    test("paging forward from a past week comes back to today", async ({ page }) => {
-        await stepWeek(page, -1);
-        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 + i)));
-
-        await stepWeek(page, 1);
-        await waitForDays(page, Array.from({ length: PILL_DAYS }, (_, i) => dayAt(i)));
-
-        const pills = await readPills(page);
-        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(0)]);
-        expect(pills.some((pill) => pill.isHistory)).toBe(false);
-    });
-
-    test("forward is closed on today, and back closes where the data stops", async ({ page }) => {
-        expect(await readWeekArrows(page)).toEqual([true, false]);
-
-        // minDate is four weeks back, so the fifth page lands on it exactly.
-        for (let week = 1; week <= 5; week += 1) {
-            await stepWeek(page, -1);
-            await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 * week + i)));
-        }
-
-        const pills = await readPills(page);
-        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-30)]);
-        expect(await readWeekArrows(page)).toEqual([false, true]);
+        expect(pills.map((pill) => pill.day)).toEqual(month);
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([target]);
     });
 
     /**
-     * A past week has to be a comparison, not just a picker: every day of it
-     * draws what was measured, so the sunny one is visible before it is picked.
+     * A month has to be a comparison, not just a picker: every day already
+     * lived through draws what was measured, so the sunny one is visible before
+     * it is picked.
      */
-    test("every day of a past week carries its measured bars", async ({ page }) => {
-        await stepWeek(page, -1);
-        await waitForHistoryPills(page, 7);
+    test("every past day of the month carries its measured bars", async ({ page }) => {
+        await pressMore(page);
+        const month = daysOfThisMonth();
+        await waitForDays(page, month);
+        const pastDays = month.filter((day) => day < dayAt(0)).length;
+        test.skip(pastDays === 0, "the 1st has no past day in its own month");
+        await waitForHistoryPills(page, pastDays);
 
         const pills = await readPills(page);
-        expect(pills.filter((pill) => pill.isHistory)).toHaveLength(7);
-        for (const pill of pills) {
+        expect(pills.filter((pill) => pill.isHistory)).toHaveLength(pastDays);
+        for (const pill of pills.filter((candidate) => candidate.isHistory)) {
             const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
             expect(gauges.get("solar")!.text).not.toBe("");
             expect(gauges.get("battery")!.unavailable).toBe(false);
             expect(gauges.get("grid")!.unavailable).toBe(false);
         }
-        // A week back is far enough that the landing day carries its date.
-        expect(pills[0].day).toBe(dayAt(-7));
-        expect(pills[0].selected).toBe(true);
-        expect(pills[0].label).toMatch(/\d/);
     });
 
-    test("the week's figures are one read, and picking a day inside it is none", async ({ page }) => {
-        await stepWeek(page, -1);
-        await waitForHistoryPills(page, 7);
+    test("the month's figures are one read, and picking a day inside it is none", async ({ page }) => {
+        const month = daysOfThisMonth();
+        const pastDays = month.filter((day) => day < dayAt(0)).length;
+        test.skip(pastDays === 0, "the 1st has no past day in its own month");
+        await pressMore(page);
+        await waitForDays(page, month);
+        await waitForHistoryPills(page, pastDays);
 
-        const afterPaging = await readRequestedRanges(page);
-        expect(afterPaging).toEqual([`${dayAt(-7)}..${dayAt(-1)}`]);
+        // Two reads, and only one of them is the month's: the closed row asks
+        // for today, the only day it holds that can have been measured, and the
+        // month asks for its own days up to today. Neither reaches past today,
+        // because nothing there has happened yet.
+        const afterOpening = await readRequestedRanges(page);
+        expect(afterOpening).toEqual([
+            `${dayAt(0)}..${dayAt(0)}`,
+            `${month[0]}..${dayAt(0)}`,
+        ]);
 
-        await clickPill(page, 3);
+        const target = (await readPills(page)).find((pill) => pill.isHistory)!.day;
+        await clickPill(page, month.indexOf(target));
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),
-            dayAt(-4),
+            target,
         );
-        expect(await readRequestedRanges(page)).toEqual(afterPaging);
-
-        await stepWeek(page, -1);
-        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-14 + i)));
-        await waitForHistoryPills(page, 7);
-        expect(await readRequestedRanges(page)).toEqual([
-            `${dayAt(-7)}..${dayAt(-1)}`,
-            `${dayAt(-14)}..${dayAt(-8)}`,
-        ]);
+        expect(await readRequestedRanges(page)).toEqual(afterOpening);
     });
 
     /**
-     * Yesterday is the one past day that still names itself, and it is reached
-     * by paging back a week and clicking the last pill — so the label has to
-     * come from today, not from where the row happens to start.
+     * Yesterday is the one past day that still names itself, and inside a month
+     * it is just another pill — so the label has to come from today, not from
+     * where the row happens to start.
      */
-    test("the pill for yesterday still names itself inside a past week", async ({ page }) => {
-        await stepWeek(page, -1);
-        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
-        await waitForDays(page, week);
+    test("the pill for yesterday still names itself inside the month", async ({ page }) => {
+        test.skip(dayAt(-1) < daysOfThisMonth()[0], "yesterday is in the previous month");
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
 
         const pills = await readPills(page);
-        expect(pills[0].label).toMatch(/\d/);
-        expect(pills[6].day).toBe(dayAt(-1));
-        expect(pills[6].label).not.toMatch(/\d/);
+        const yesterday = pills.find((pill) => pill.day === dayAt(-1))!;
+        expect(yesterday.label).not.toMatch(/\d/);
+        // A day further back does carry its date, so the word is the exception.
+        const older = pills.find((pill) => pill.day < dayAt(-1));
+        if (older !== undefined) {
+            expect(older.label).toMatch(/\d/);
+        }
     });
 
     test("the header no longer repeats the day in words", async ({ page }) => {
         const hasDayMeta = await page.evaluate(() =>
             !!document.querySelector("helman-solar-inspector")?.shadowRoot?.querySelector(".nav .day-meta"));
         expect(hasDayMeta).toBe(false);
+    });
+});
+
+/**
+ * The opened row is a calendar, and a calendar is only readable if the 1st sits
+ * under its own weekday. That is the whole job of the leading blanks, and it is
+ * locale-dependent: the same month starts a column further along in a week that
+ * begins on Sunday than in one that begins on Monday.
+ */
+test.describe("solar inspector calendar layout", () => {
+    /** The cells before the first pill, and the column the 1st lands in. */
+    async function readGrid(page: Page): Promise<{ blanks: number; columns: string }> {
+        return page.evaluate(() => {
+            const root = document.querySelector("helman-solar-inspector")
+                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+            const row = root?.querySelector(".pill-row") as HTMLElement;
+            return {
+                blanks: root?.querySelectorAll(".pill-blank").length ?? 0,
+                columns: getComputedStyle(row).gridTemplateColumns,
+            };
+        });
+    }
+
+    /** Which column the month's 1st belongs in, counting from the week's start. */
+    function expectedBlanks(firstWeekdayIndex: number): number {
+        const today = new Date();
+        const weekday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).getUTCDay();
+        return (((weekday - firstWeekdayIndex) % 7) + 7) % 7;
+    }
+
+    test("a Monday-first locale offsets the month to its Monday column", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, 30, "monday");
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
+
+        const grid = await readGrid(page);
+        expect(grid.blanks).toBe(expectedBlanks(1));
+        expect(grid.columns.split(" ")).toHaveLength(7);
+    });
+
+    test("a Sunday-first locale offsets it one column further", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, 30, "sunday");
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
+
+        expect((await readGrid(page)).blanks).toBe(expectedBlanks(0));
+    });
+
+    test("the closed row is not a grid", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, 30, "monday");
+
+        const closed = await page.evaluate(() => {
+            const root = document.querySelector("helman-solar-inspector")
+                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+            const row = root?.querySelector(".pill-row") as HTMLElement;
+            return {
+                blanks: root?.querySelectorAll(".pill-blank").length ?? 0,
+                display: getComputedStyle(row).display,
+            };
+        });
+        expect(closed).toEqual({ blanks: 0, display: "flex" });
     });
 });
 
@@ -694,42 +751,34 @@ test.describe("solar inspector header layout", () => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
             const top = (selector: string) =>
                 Math.round((root.querySelector(selector) as HTMLElement).getBoundingClientRect().top);
-            return { dayNav: top(".day-nav"), actions: top(".nav-actions"), arrow: top(".week-nav") };
+            return { dayNav: top(".day-nav"), actions: top(".nav-actions"), more: top(".nav-more") };
         });
 
         expect(rows.actions).toBeGreaterThan(rows.dayNav);
         // Everything that is not a day goes with the toolbar, so the narrow
         // header is one line of days and one line of controls.
-        expect(rows.arrow).toBe(rows.actions);
+        expect(rows.more).toBe(rows.actions);
     });
 
     /**
-     * The week buttons lead the toolbar, back then forward, and are the same
-     * height as the controls beside them — they are read as part of that row,
-     * not as an appendage of the pills.
+     * The toggle leads the toolbar and is the same height as the controls
+     * beside it — it is read as part of that row, not as an appendage of the
+     * pills.
      */
-    test("the week buttons sit side by side at the head of the toolbar", async ({ page }) => {
+    test("the more toggle leads the toolbar", async ({ page }) => {
         await page.setViewportSize({ width: 360, height: 900 });
         await mountInspector(page);
 
         const geometry = await page.evaluate(() => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-            const box = (element: Element) => element.getBoundingClientRect();
-            const buttons = Array.from(root.querySelectorAll(".week-arrow"));
-            return {
-                count: buttons.length,
-                boxes: buttons.map(box),
-                slotToggle: box(root.querySelector(".slot-size-toggle")!),
-            };
+            const box = (selector: string) =>
+                (root.querySelector(selector) as HTMLElement).getBoundingClientRect();
+            return { more: box(".nav-more"), slotToggle: box(".slot-size-toggle") };
         });
 
-        expect(geometry.count).toBe(2);
-        // Side by side on one line, back to the left of forward.
-        expect(Math.round(geometry.boxes[0].top)).toBe(Math.round(geometry.boxes[1].top));
-        expect(geometry.boxes[0].right).toBeLessThanOrEqual(geometry.boxes[1].left);
-        // And ahead of the rest of the toolbar.
-        expect(geometry.boxes[1].right).toBeLessThanOrEqual(geometry.slotToggle.left);
-        expect(Math.round(geometry.boxes[0].height)).toBe(Math.round(geometry.slotToggle.height));
+        // Ahead of the rest of the toolbar, and the same height as it.
+        expect(geometry.more.right).toBeLessThanOrEqual(geometry.slotToggle.left);
+        expect(Math.round(geometry.more.height)).toBe(Math.round(geometry.slotToggle.height));
     });
 
     /**
@@ -805,7 +854,7 @@ test.describe("solar inspector header layout", () => {
 
     /**
      * Wide enough for one line: the days lead it and every control follows,
-     * with the week buttons first among them.
+     * with the more toggle first among them.
      */
     test("a header that fits keeps the days and the controls on one line", async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 900 });
@@ -817,7 +866,7 @@ test.describe("solar inspector header layout", () => {
                 (root.querySelector(selector) as HTMLElement).getBoundingClientRect();
             return {
                 dayNav: box(".day-nav"),
-                weekNav: box(".week-nav"),
+                more: box(".nav-more"),
                 actions: box(".nav-actions"),
                 slotToggle: box(".slot-size-toggle"),
                 // Direct child: `››` is the last `.icon-button` of its own
@@ -830,12 +879,12 @@ test.describe("solar inspector header layout", () => {
         // One line: the toolbar is centred against the taller day row rather
         // than sitting below it.
         expect(layout.actions.top).toBeLessThan(layout.dayNav.bottom);
-        // The week buttons follow the last pill rather than the card's far
-        // edge — they page the row, so they belong where the hand already is.
-        expect(layout.weekNav.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
-        expect(layout.weekNav.left - layout.dayNav.right).toBeLessThanOrEqual(12);
+        // The toggle follows the last pill rather than the card's far edge — it
+        // opens the row, so it belongs where the hand already is.
+        expect(layout.more.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
+        expect(layout.more.left - layout.dayNav.right).toBeLessThanOrEqual(12);
         // The settings take the other end.
-        expect(layout.slotToggle.left).toBeGreaterThan(layout.weekNav.right);
+        expect(layout.slotToggle.left).toBeGreaterThan(layout.more.right);
         expect(layout.nav.right - layout.refresh.right).toBeLessThanOrEqual(2);
     });
 });

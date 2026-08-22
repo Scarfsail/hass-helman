@@ -1,10 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
     STOP_MONTH_VIEW,
     STOP_SLOT_60,
     STOP_YEAR_VIEW,
     bandRuns,
     canPageBack,
+    clickColumn,
     clickStop,
     columns,
     loadCardBundle,
@@ -62,8 +63,10 @@ test.describe("solar inspector aggregate views", () => {
         });
         expect(bands).toBe(6);
 
-        // The span is one read, for whole months, at day resolution.
-        const requests = await page.evaluate(() => (window as any).__spanRequests);
+        // The span is one read, for whole months, at day resolution. Filtered to
+        // the bucketed reads: the day pills share this endpoint and ask for
+        // their own window without a bucket, which is not what this is about.
+        const requests = await spanReads(page);
         expect(requests).toHaveLength(1);
         expect(requests[0].bucket).toBe("day");
         expect(requests[0].start_date.slice(-2)).toBe("01");
@@ -74,10 +77,10 @@ test.describe("solar inspector aggregate views", () => {
      *
      * The floor used to be the solar-bias trainer's window -- a couple of
      * months -- so a backwards step in the year view clamped onto the year it
-     * was already showing: nothing moved, and the arrow then read as disabled
-     * because `canGoBack` compared a *day* against that floor. Both halves are
-     * asserted here: that the step really travels, and that the arrow goes dead
-     * exactly once, on the span the data actually stops in.
+     * was already showing: nothing moved, and the control then read as dead.
+     * The rows replaced that control, and both halves still hold of them: that
+     * a step really travels, and that the picker runs out of years exactly
+     * once, on the span the data actually stops in.
      */
     test("the year view steps back a year at a time to the oldest data", async ({ page }) => {
         const thisYear = new Date().getUTCFullYear();
@@ -101,13 +104,13 @@ test.describe("solar inspector aggregate views", () => {
         expect(await canPageBack(page)).toBe(false);
     });
 
-    test("a floor inside the current year disables the arrow rather than offering a dead click", async ({ page }) => {
-        // The reported symptom, in its own right. `_moveSpan` clamps a backwards
-        // step to the span holding the floor, so with the floor inside this year
-        // there is nowhere to go -- but `canGoBack` compared today's *date*
-        // against the floor, said yes, and left an arrow that moved nothing and
-        // then went dead. Comparing spans is what makes the control honest
-        // before it is pressed.
+    test("a floor inside the current year leaves no earlier year to offer", async ({ page }) => {
+        // The reported symptom, in its own right. The floor sits inside this
+        // year, so there is no earlier year with data and the year row holds a
+        // single pill -- the one already lit. The arrow this was written against
+        // compared today's *date* against the floor, said yes, and then moved
+        // nothing; a row that only draws the years it has cannot make that
+        // claim in the first place.
         const thisYear = new Date().getUTCFullYear();
         await mountInspector(page, false, "", `${thisYear}-02-01`);
         await clickStop(page, STOP_YEAR_VIEW);
@@ -142,41 +145,12 @@ test.describe("solar inspector aggregate views", () => {
      * The two views are bounded by two different stores, so the card keeps two
      * floors rather than one field whichever view loaded last overwrote.
      *
-     * Drilling is the path that catches it: coming back to a day the card
-     * already holds skips the day's own load, so a single field would still be
-     * carrying the span's floor -- and the day view's back arrow would offer
-     * days from before the recorder's raw states, every one of them empty.
+     * The day view used to catch this with its back arrow, which clamped to the
+     * day floor; there is no arrow now, and the day view's pills do not clamp --
+     * they offer the month they are showing. What still separates the two
+     * floors is the drill control below, which reads the day floor while the
+     * month view's own floor is what put the column on screen.
      */
-    test("returning to the day view navigates by the day's floor, not the span's", async ({ page }) => {
-        const iso = (daysBack: number) => {
-            const day = new Date();
-            day.setUTCDate(day.getUTCDate() - daysBack);
-            return day.toISOString().slice(0, 10);
-        };
-        const thisYear = new Date().getUTCFullYear();
-        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
-
-        // Into the month view and straight back out, so the span load has
-        // happened and the day the card holds is still the one it wants.
-        await clickStop(page, STOP_MONTH_VIEW);
-        await waitForAggregateChart(page);
-        await clickStop(page, STOP_SLOT_60);
-        await waitForDayChart(page);
-
-        await pageBack(page);
-        await page.waitForFunction(
-            (floor) => ((window as any).__dayRequests as string[]).includes(floor),
-            iso(3),
-            { timeout: 2000 },
-        );
-
-        // A week back would be day seven; the day floor is day three, and it is
-        // the day floor that clamps.
-        const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
-        expect(requests[requests.length - 1]).toBe(iso(3));
-        expect(requests).not.toContain(iso(7));
-    });
-
     test("a day the recorder has purged is named but not drillable", async ({ page }) => {
         // The month view reaches further back than the day view can, because the
         // two read two different stores. Opening such a day would draw an empty
@@ -217,7 +191,7 @@ test.describe("solar inspector aggregate views", () => {
         await waitForAggregateChart(page);
 
         expect(await columns(page)).toHaveLength(12);
-        const requests = await page.evaluate(() => (window as any).__spanRequests);
+        const requests = await spanReads(page);
         expect(requests[0].bucket).toBe("month");
     });
 
@@ -605,6 +579,15 @@ test.describe("solar inspector aggregate views", () => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
 
+        // Arriving from the day view carries that day across as the selected
+        // column, so the span's own totals are what shows once it is dropped.
+        // Pressing the selected column again is what drops it.
+        const carried = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket"));
+        expect(carried).not.toBeNull();
+        await clickColumn(page, (await columns(page)).indexOf(carried as string));
+
         const days = (await columns(page)).length;
         const totals = await sectionMetrics(page, 0);
         expect(totals["Import cost"]).toBe(`${(40 * days).toFixed(2)} CZK`);
@@ -863,3 +846,9 @@ test.describe("solar inspector aggregate views", () => {
         expect(selected).toBe(keys[4]);
     });
 });
+
+/** The bucketed span reads, without the day pills' own unbucketed window read. */
+async function spanReads(page: Page): Promise<Array<Record<string, string>>> {
+    return page.evaluate(() => ((window as any).__spanRequests as Array<Record<string, string>>)
+        .filter((request) => request.bucket !== undefined));
+}

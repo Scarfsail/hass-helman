@@ -209,22 +209,201 @@ export async function columns(page: Page): Promise<string[]> {
     });
 }
 
-/** Step the span nav one click back. */
-export async function pageBack(page: Page): Promise<void> {
+/**
+ * Press the picker's "more" toggle: the one control that opens and closes the
+ * span rows and the month of day pills together.
+ */
+export async function toggleMore(page: Page): Promise<void> {
     await page.evaluate(() => {
-        const buttons = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelectorAll(".week-nav .week-arrow");
-        (buttons[0] as HTMLElement).click();
+        const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+        (root.querySelector(".nav-more") as HTMLElement).click();
+        return (document.querySelector("helman-solar-inspector") as any).updateComplete;
     });
 }
 
-/** Whether the backwards span arrow is offering to go anywhere. */
-export async function canPageBack(page: Page): Promise<boolean> {
+/** Whether the picker is expanded, as the toggle reports it. */
+export async function isExpanded(page: Page): Promise<boolean> {
+    return page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".nav-more")?.getAttribute("aria-expanded") === "true");
+}
+
+/** The day pills on screen: their dates, in the order the row draws them. */
+export async function dayPillDates(page: Page): Promise<string[]> {
     return page.evaluate(() => {
-        const button = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".week-nav .week-arrow") as HTMLButtonElement;
-        return !button.disabled;
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(".pill")]
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
     });
+}
+
+/** Click the day pill carrying the given date. */
+export async function clickDayPill(page: Page, day: string): Promise<void> {
+    await page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills").shadowRoot;
+        (root.querySelector(`.pill[data-day="${wanted}"]`) as HTMLElement).click();
+    }, day);
+}
+
+/** One pill to press, named by the row it is in and the span it carries. */
+interface SpanPillRef {
+    row: "years" | "months";
+    key: string;
+}
+
+/**
+ * The presses that step the span picker one span back, in order.
+ *
+ * There are no arrows any more: travel is the year row and the month row, so a
+ * step back is whichever pill sits before the selected one. In the year view
+ * that is one press on the previous year. In the month view it is one press on
+ * the previous month -- except across January, where it is two: the rows split
+ * a span into two independent choices, and picking a year keeps the month it
+ * already had, so reaching the previous December means moving the year and then
+ * the month. Empty when the rows offer nothing further back, which is the
+ * answer the disabled arrow used to give.
+ */
+async function previousSpanPresses(page: Page): Promise<SpanPillRef[]> {
+    const selected = await selectedSpan(page);
+    const match = /^(\d{4})-(\d{2})-01$/.exec(selected);
+    if (match === null) {
+        return [];
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    // Only the month view lights a month pill, and `selectedSpan` prefers it, so
+    // a lit month row is what tells the two views apart here.
+    const inMonthView = await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector("helman-solar-span-pills")
+        ?.shadowRoot?.querySelector(".pill-row.months .pill.selected"));
+
+    const presses: SpanPillRef[] = inMonthView
+        ? (month > 1
+            ? [{ row: "months", key: `${year}-${String(month - 1).padStart(2, "0")}-01` }]
+            : [{ row: "years", key: `${year - 1}-01-01` }, { row: "months", key: `${year - 1}-12-01` }])
+        : [{ row: "years", key: `${year - 1}-01-01` }];
+
+    // Only the first press can be checked up front -- the later ones are in a
+    // row that has not been rendered yet -- and it is the one that decides
+    // whether the step is on offer at all.
+    return (await pillIsTakeable(page, presses[0])) ? presses : [];
+}
+
+/** Whether a span pill is on screen and not disabled. */
+async function pillIsTakeable(page: Page, ref: SpanPillRef): Promise<boolean> {
+    return page.evaluate(({ row, key }) => {
+        const pill = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills")
+            ?.shadowRoot?.querySelector(`.pill-row.${row} .pill[data-span="${key}"]`) as
+            HTMLButtonElement | null;
+        return !!pill && !pill.disabled;
+    }, ref);
+}
+
+/**
+ * Press one span pill, named by its row and the span it carries.
+ *
+ * Awaits the element rather than the page, because a press re-renders the row
+ * the next one is in: a caller pressing twice has to have the first render
+ * before it can find the second pill.
+ */
+export async function clickSpanPill(
+    page: Page,
+    row: "years" | "months",
+    key: string,
+): Promise<void> {
+    await page.evaluate(({ row, key }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        (host.shadowRoot.querySelector(
+            `.pill-row.${row} .pill[data-span="${key}"]`,
+        ) as HTMLElement | null)?.click();
+        return host.updateComplete;
+    }, { row, key });
+}
+
+/** Step the span picker one span back, however many presses that takes. */
+export async function pageBack(page: Page): Promise<void> {
+    for (const ref of await previousSpanPresses(page)) {
+        await clickSpanPill(page, ref.row, ref.key);
+    }
+}
+
+/** The spans one row of the picker is offering, and whether each is takeable. */
+export async function spanPillRow(
+    page: Page,
+    row: "years" | "months",
+): Promise<Array<{ key: string; disabled: boolean }>> {
+    return page.evaluate((wanted) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        if (!host?.shadowRoot) return [];
+        return [...host.shadowRoot.querySelectorAll(`.pill-row.${wanted} .pill`)]
+            .map((pill: Element) => ({
+                key: pill.getAttribute("data-span") ?? "",
+                disabled: (pill as HTMLButtonElement).disabled,
+            }));
+    }, row);
+}
+
+/** Fire a pointer enter/leave on one span pill, as the correlation sees it. */
+export async function hoverSpanPill(
+    page: Page,
+    row: "years" | "months",
+    key: string | null,
+): Promise<void> {
+    await page.evaluate(({ row, key }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        // One event, on one pill. Sweeping the row and sending `mouseleave` to
+        // every other pill would land after the `mouseenter` for any pill that
+        // is not last, and the leave would clear the hover the enter just set.
+        const pills = [...host.shadowRoot.querySelectorAll(`.pill-row.${row} .pill`)];
+        if (key === null) {
+            for (const pill of pills) {
+                pill.dispatchEvent(new MouseEvent("mouseleave"));
+            }
+        } else {
+            pills.find((pill: Element) => pill.getAttribute("data-span") === key)
+                ?.dispatchEvent(new MouseEvent("mouseenter"));
+        }
+        return (document.querySelector("helman-solar-inspector") as any).updateComplete;
+    }, { row, key });
+}
+
+/** The span pills in one row carrying the given class, by span key. */
+export async function spanPillsWithClass(
+    page: Page,
+    row: "years" | "months",
+    cls: string,
+): Promise<string[]> {
+    return page.evaluate(({ row, cls }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        if (!host?.shadowRoot) return [];
+        return [...host.shadowRoot.querySelectorAll(`.pill-row.${row} .pill`)]
+            .filter((pill: Element) => pill.classList.contains(cls))
+            .map((pill: Element) => pill.getAttribute("data-span") ?? "");
+    }, { row, cls });
+}
+
+/** The day pills that cannot be clicked, by date. */
+export async function unreachableDayPills(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(".pill")]
+            .filter((pill: Element) => (pill as HTMLButtonElement).disabled)
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
+    });
+}
+
+/** Whether the span picker is offering anywhere further back. */
+export async function canPageBack(page: Page): Promise<boolean> {
+    return (await previousSpanPresses(page)).length > 0;
 }
 
 /**
@@ -310,6 +489,88 @@ export async function sectionMetrics(page: Page, index: number): Promise<Record<
             out[label] = card.querySelector(".metric-value")?.textContent?.trim() ?? "";
         }
         return out;
+    }, index);
+}
+
+/**
+ * Move the pointer onto one aggregate column.
+ *
+ * `mousemove` rather than `mouseenter`, because that is what the chart listens
+ * for -- its popup follows the cursor within a column as well as between them.
+ */
+export async function hoverColumn(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
+            .dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                composed: true,
+                clientX: 10,
+                clientY: 10,
+            }));
+        return host.updateComplete;
+    }, index);
+}
+
+/** Move the pointer onto one day pill, or off it when `day` is null. */
+export async function hoverDayPill(page: Page, day: string | null): Promise<void> {
+    await page.evaluate((wanted) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        const root = host.shadowRoot.querySelector("helman-solar-day-pills").shadowRoot;
+        const selector = wanted === null ? ".pill" : `.pill[data-day="${wanted}"]`;
+        (root.querySelector(selector) as HTMLElement)
+            .dispatchEvent(new MouseEvent(wanted === null ? "mouseleave" : "mouseenter", {
+                bubbles: true,
+                composed: true,
+            }));
+        return host.updateComplete;
+    }, day);
+}
+
+/** The days whose pill carries the given class, in row order. */
+export async function dayPillsWithClass(page: Page, cls: string): Promise<string[]> {
+    return page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(`.pill.${wanted}`)]
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
+    }, cls);
+}
+
+/**
+ * The buckets whose column tint carries the given class, in chart order.
+ *
+ * Deduped, because a bucket gets one tint rect per hit row -- the SoC row and
+ * the money row each carry the pointer as well as the chart does -- and a test
+ * about *which* bucket is lit should not have to know how many rows there are.
+ */
+export async function columnsWithClass(page: Page, cls: string): Promise<string[]> {
+    return page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")?.shadowRoot;
+        if (!root) return [];
+        return [...new Set([...root.querySelectorAll(`.bucket-tint.${wanted}`)]
+            .map((rect: Element) => rect.getAttribute("data-bucket") ?? ""))];
+    }, cls);
+}
+
+/**
+ * Click a column and wait only for the card to re-render.
+ *
+ * The difference from `selectColumn` is what is *not* waited for: the drill
+ * button belongs to a bucket the card can open, and a future day of the current
+ * month has no such button. A test about the selection itself must not require
+ * one.
+ */
+export async function clickColumn(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
+            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        return host.updateComplete;
     }, index);
 }
 

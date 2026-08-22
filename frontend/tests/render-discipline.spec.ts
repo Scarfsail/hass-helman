@@ -190,16 +190,65 @@ test("an idle hass replacement re-renders nothing", async ({ page }) => {
     }))).toEqual(before);
 });
 
+/**
+ * Take a day behind today out of the expanded picker.
+ *
+ * Normally the current month holds one, but on the 1st it does not, and the
+ * picker then has to be walked back a month first — through the year row too if
+ * that month is in the previous year, since the rows are two independent
+ * choices and picking a year keeps the month it already had.
+ */
+async function selectAPastDay(page: Page): Promise<void> {
+    const stepped = await page.evaluate(() => {
+        const today = new Date().toISOString().slice(0, 10);
+        const dayPills = () => [...(window.__inspectorRoot()
+            ?.querySelector("helman-solar-day-pills")?.shadowRoot
+            ?.querySelectorAll(".pill") ?? [])];
+        const past = () => dayPills().filter((pill) => (pill.getAttribute("data-day") ?? "") < today);
+        if (past().length > 0) {
+            (past().pop() as HTMLButtonElement).click();
+            return true;
+        }
+        const spans = window.__inspectorRoot()?.querySelector("helman-solar-span-pills")?.shadowRoot;
+        const months = [...(spans?.querySelectorAll(".pill-row.months .pill") ?? [])];
+        const selectedIndex = months.findIndex((pill) => pill.classList.contains("selected"));
+        if (selectedIndex > 0) {
+            (months[selectedIndex - 1] as HTMLButtonElement).click();
+            return false;
+        }
+        const years = [...(spans?.querySelectorAll(".pill-row.years .pill") ?? [])];
+        const yearIndex = years.findIndex((pill) => pill.classList.contains("selected"));
+        (years[yearIndex - 1] as HTMLButtonElement).click();
+        return false;
+    });
+    if (stepped) {
+        return;
+    }
+    // A month behind: every one of its days is past, so the last pill will do.
+    await page.evaluate(() => {
+        const pills = [...(window.__inspectorRoot()
+            ?.querySelector("helman-solar-day-pills")!.shadowRoot!
+            .querySelectorAll(".pill") ?? [])];
+        (pills[pills.length - 1] as HTMLButtonElement).click();
+    });
+}
+
 test("a re-render for an unrelated reason does not hand the pills a new historyDays", async ({ page }) => {
     await mountCard(page);
 
-    // Page back a week, so the pills carry measured days and `historyDays` is a
-    // built array rather than the shared empty constant — an identity that
-    // could plausibly churn is the only one worth pinning.
+    // Open the picker, so the row becomes the whole current month and the pills
+    // carry measured days — `historyDays` is then a built array rather than the
+    // shared empty constant, an identity that could plausibly churn and so the
+    // only one worth pinning. Then take a day behind today out of that month.
     await page.evaluate(() => {
-        const arrows = window.__inspectorRoot()?.querySelectorAll(".week-arrow");
-        (arrows?.[0] as HTMLButtonElement | undefined)?.click();
+        (window.__inspectorRoot()?.querySelector(".nav-more") as HTMLButtonElement | undefined)?.click();
     });
+    // The row has to be the month before a day can be taken out of it: the
+    // toggle's re-render is what replaces today-and-forward with the calendar.
+    await page.waitForFunction(() => (window.__inspectorRoot()
+        ?.querySelector("helman-solar-day-pills")?.shadowRoot
+        ?.querySelectorAll(".pill").length ?? 0) > 20);
+    await selectAPastDay(page);
     await page.waitForFunction(() => window.__pendingInspector() === 1);
     await page.evaluate(() => window.__releaseInspector());
     await expect.poll(() => hasChart(page)).toBe(true);
