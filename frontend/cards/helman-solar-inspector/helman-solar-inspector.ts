@@ -49,6 +49,8 @@ import type {
 } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-solar-day-pills";
 import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
+import "./helman-solar-span-pills";
+import type { SpanPillSelectDetail } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
@@ -63,6 +65,7 @@ import "./helman-solar-aggregate-chart";
 import type {
   AggregateBucketSelectDetail,
   AggregateBucketHoverDetail,
+  NavigationRange,
   SpanAggregatePayload,
   SpanAggregateRow,
 } from "./helman-solar-aggregate-chart";
@@ -452,9 +455,7 @@ type InspectorPayload = {
   status: string;
   effectiveVariant: string | null;
   trainedAt: string | null;
-  range: {
-    minDate: string;
-    maxDate: string;
+  range: NavigationRange & {
     canGoPrevious: boolean;
     canGoNext: boolean;
     isToday: boolean;
@@ -570,12 +571,25 @@ export class HelmanSolarInspector extends LitElement {
    */
   private readonly _breakdownGroups = new Map<string, DeviceNode>();
   /**
-   * The day range the last successful load reported. Kept apart from the
-   * payload so the day pills stay put while the next day loads — the payload is
-   * cleared for the duration, and a header that emptied on every click would
-   * reflow the whole card under the pointer.
+   * How far navigation may travel, kept once per view because the two answers
+   * genuinely differ. The aggregate views are bounded by the long-term
+   * statistics, which the recorder keeps indefinitely; the day view is bounded
+   * by the raw states behind its actuals, which the recorder purges. One field
+   * would mean whichever view loaded last decided the other's floor — and
+   * drilling from a month into an already-loaded day skips the day's own load,
+   * so the day view would keep the deep floor and offer a back arrow full of
+   * days it cannot draw.
+   *
+   * Kept apart from the payload so the day pills stay put while the next day
+   * loads — the payload is cleared for the duration, and a header that emptied
+   * on every click would reflow the whole card under the pointer.
+   *
+   * Only the bounds. The day payload's `canGoPrevious`/`isToday` and friends
+   * describe one particular day and are read from that payload where they are
+   * needed.
    */
-  @state() private _range: InspectorPayload["range"] | null = null;
+  @state() private _dayRange: NavigationRange | null = null;
+  @state() private _spanRange: NavigationRange | null = null;
   /** Whole-day measurements for the past days the pill row is showing. */
   @state() private _historyDays: readonly SolarInspectorHistoryDay[] = EMPTY_HISTORY_DAYS;
   /**
@@ -807,13 +821,11 @@ export class HelmanSolarInspector extends LitElement {
       font-weight: 600;
     }
 
-    /* The aggregate views' stand-in for the pill row: the span in words, on the
-       line the pills would have occupied so the toolbar wraps the same way. */
-    .span-label {
-      font-size: 1rem;
-      font-weight: 600;
-      padding: 6px 2px;
-      white-space: nowrap;
+    /* The aggregate views' pill row, on the line the day row occupies so the
+       toolbar wraps the same way whichever view is on screen. */
+    .span-pills {
+      flex: 1 1 auto;
+      min-width: 0;
     }
 
     .drill-button {
@@ -825,6 +837,11 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--primary-text-color);
       font: inherit;
       cursor: pointer;
+    }
+
+    .drill-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
     }
 
     .icon-button {
@@ -1451,8 +1468,16 @@ export class HelmanSolarInspector extends LitElement {
   private _renderNavigation() {
     // Both computed in `willUpdate`; nothing is derived or assigned here.
     const today = this._todayKey;
-    const minDate = this._range?.minDate ?? null;
-    const canGoBack = minDate === null || this._selectedDate > minDate;
+    const minDate = this._activeRange()?.minDate ?? null;
+    // Spans, not days: the aggregate views step a month or a year at a time, so
+    // a floor that falls mid-span still leaves that span reachable. Comparing
+    // raw dates said otherwise and disagreed with the clamp in `_moveSpan`,
+    // which is what made the year view's arrow go dead on a span it had just
+    // arrived at. In the day view `_spanStart` is the identity, so this is the
+    // comparison it has always made.
+    const canGoBack =
+      minDate === null
+      || this._spanStart(this._selectedDate) > this._spanStart(minDate);
     // Forward stops at the span that contains today, whatever a span is in the
     // current view: tomorrow does not exist, and neither does next month. In the
     // day view a span is a day and this is the comparison it has always made.
@@ -1480,7 +1505,19 @@ export class HelmanSolarInspector extends LitElement {
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
-          ${this._viewMode === "day" ? "" : html`<div class="span-label">${this._spanLabel()}</div>`}
+          <!-- The aggregate views get the same manners the day view has: every
+               neighbouring span one click away, with the arrows there to leave
+               the row. It replaces the label that used to sit here — the pills
+               name the span on screen and name every other one with it. -->
+          ${this._viewMode === "day" ? "" : html`<helman-solar-span-pills
+            class="span-pills"
+            .hass=${this.hass}
+            .viewMode=${this._viewMode}
+            .selectedDate=${this._selectedDate}
+            .minDate=${this._spanRange?.minDate ?? ""}
+            .todayKey=${today}
+            @span-pill-select=${this._handleSpanPillSelect}
+          ></helman-solar-span-pills>`}
         </div>
         <div class="nav-actions">
           <!-- One week per click rather than one day: the row already offers
@@ -1633,6 +1670,16 @@ export class HelmanSolarInspector extends LitElement {
     return this._viewMode === "day" ? this._loading : this._spanLoading;
   }
 
+  /**
+   * The bounds the view on screen navigates by.
+   *
+   * `null` until that view has loaded once, which the callers read as "no floor
+   * known yet" rather than as a floor of any particular depth.
+   */
+  private _activeRange(): NavigationRange | null {
+    return this._viewMode === "day" ? this._dayRange : this._spanRange;
+  }
+
   /** What one column is in the current view; the day view has no aggregate. */
   private _spanBucket(): "day" | "month" {
     return this._viewMode === "year" ? "month" : "day";
@@ -1691,15 +1738,47 @@ export class HelmanSolarInspector extends LitElement {
     }
     const today = this._todayIso();
     const target = this._addSpans(this._selectedDate || today, delta);
-    const minDate = this._range?.minDate ?? null;
+    const minDate = this._spanRange?.minDate ?? null;
     const clamped = delta < 0
       ? (minDate !== null && target < minDate ? this._spanStart(minDate) : target)
       : (target > today ? this._spanStart(today) : target);
-    if (clamped === this._selectedDate) return;
-    this._selectedDate = clamped;
+    this._showSpan(clamped);
+  }
+
+  /**
+   * Put a span on screen, whether an arrow or a pill asked for it.
+   *
+   * The two ways in must agree on what changing span means -- the date moves,
+   * the bucket the panel was describing is no longer in view, and the new span
+   * has to be fetched -- so they share this rather than each doing it. Landing
+   * on the span already shown is a no-op, which is what keeps a pill click on
+   * the current span from reloading it.
+   *
+   * The comparison is between *spans*, not dates. `_selectedDate` is a span
+   * start only after span navigation put it there; arriving from the day view
+   * on the 14th leaves it on the 14th, and comparing raw dates would treat a
+   * click on the already-lit pill as a move -- dropping the selected column and
+   * rewriting the date, so that returning to the day view landed on the 1st
+   * rather than the day the reader came from.
+   */
+  private _showSpan(spanKey: string, mode: InspectorViewMode = this._viewMode) {
+    // The mode is checked first and separately: picking a month from the year
+    // view lands on a span the year view would call unchanged, and it is still
+    // a move -- to a different view of it.
+    if (mode === this._viewMode
+      && spanKey === this._spanStart(this._selectedDate || this._todayIso())) {
+      return;
+    }
+    this._viewMode = mode;
+    this._selectedDate = spanKey;
     this._selectedBucket = null;
     this._loadSpan();
   }
+
+  private _handleSpanPillSelect = (event: CustomEvent<SpanPillSelectDetail>): void => {
+    event.stopPropagation();
+    this._showSpan(event.detail.date, event.detail.viewMode);
+  };
 
   /** The nav arrows say what a step actually is in the current view. */
   private _spanNavKey(direction: "previous" | "next"): string {
@@ -1776,6 +1855,9 @@ export class HelmanSolarInspector extends LitElement {
       });
       if (this._spanRequestKey !== key) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
+      // Same stale-request guard as the payload above: a span view is a way into
+      // the card, so this is where the floor arrives when no day was ever loaded.
+      if (result?.range) this._spanRange = result.range;
     } catch (err: any) {
       if (this._spanRequestKey !== key) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
@@ -1834,10 +1916,21 @@ export class HelmanSolarInspector extends LitElement {
    * Drilling is one level finer and no further: a month view opens a day, a year
    * view opens that month. It moves the selected date as well as the view, so
    * the day the user pointed at is the day that loads.
+   *
+   * A month reaches further back than a day can, because the two views read two
+   * different stores — so the day this offers to open may be one the recorder
+   * purged the raw states for. Opening it would draw an empty chart under a
+   * back arrow that is dead on arrival, the day being older than the day view's
+   * own floor. The control says so instead. Only the month view can produce
+   * this: a year view opens a month, and the month view's floor is the deep one.
    */
   private _renderSelectedBucket(rows: readonly SpanAggregateRow[]) {
     const row = rows.find((candidate) => candidate.date === this._selectedBucket);
     if (!row) return "";
+    const dayFloor = this._dayRange?.minDate ?? null;
+    const beyondDayHistory = this._viewMode === "month"
+      && dayFloor !== null
+      && row.date < dayFloor;
     const drillKey = this._viewMode === "month"
       ? "bias_correction.inspector.open_day"
       : "bias_correction.inspector.open_month";
@@ -1845,7 +1938,13 @@ export class HelmanSolarInspector extends LitElement {
       <div class="metrics-section">
         <strong>${this._formatBucket(row.date)}</strong>
         <div class="metric-grid">${this._renderBucketMetrics(row)}</div>
-        <button class="drill-button" type="button" @click=${() => this._drillInto(row.date)}>
+        <button
+          class="drill-button"
+          type="button"
+          ?disabled=${beyondDayHistory}
+          title=${beyondDayHistory ? this._t("bias_correction.inspector.day_beyond_history") : ""}
+          @click=${() => this._drillInto(row.date)}
+        >
           ${this._t(drillKey)}
         </button>
       </div>
@@ -4453,7 +4552,7 @@ export class HelmanSolarInspector extends LitElement {
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
         this._emitWatchedEntities(payload);
-        this._range = payload.range;
+        this._dayRange = payload.range;
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
           this._slotSelection,
@@ -4489,7 +4588,7 @@ export class HelmanSolarInspector extends LitElement {
   private _moveWeek(delta: number) {
     const today = this._todayIso();
     const target = this._addDays(this._selectedDate || today, delta * 7);
-    const minDate = this._range?.minDate ?? null;
+    const minDate = this._dayRange?.minDate ?? null;
     const clamped = delta < 0
       ? (minDate !== null && target < minDate ? minDate : target)
       : (target > today ? today : target);
@@ -4513,7 +4612,7 @@ export class HelmanSolarInspector extends LitElement {
   private _pillWindow(today: string): { start: string; end: string } {
     const selected = this._selectedDate || today;
     if (selected >= today) {
-      return { start: today, end: this._range?.maxDate ?? today };
+      return { start: today, end: this._dayRange?.maxDate ?? today };
     }
 
     const daysBack = Math.round(

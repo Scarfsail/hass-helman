@@ -21,10 +21,13 @@ of ``test_inspector_recorder_query_count.py``.
 
 from __future__ import annotations
 
+import asyncio
 import sys
+from contextlib import contextmanager
 import types
 import unittest
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -38,6 +41,11 @@ STATISTICS_CALLS: list[dict] = []
 STATISTICS_ROWS: dict[str, list[dict]] = {}
 #: The same, for the short-term table the tail read asks for.
 STATISTICS_ROWS_5MIN: dict[str, list[dict]] = {}
+#: The same, for the month-reduced rows the history-floor probe asks for. Kept
+#: apart from the hourly source because the real API reduces before returning:
+#: a probe row's ``start`` is local midnight on the first of a month, not an
+#: hour, and a fake that served hours here could not tell the two reads apart.
+STATISTICS_ROWS_MONTH: dict[str, list[dict]] = {}
 
 
 def _install_import_stubs() -> None:
@@ -62,12 +70,20 @@ def _install_import_stubs() -> None:
     sys.modules["homeassistant.components"] = components_mod
 
     async def _run_in_executor(func, *args):
+        # Yields before running, the way a real executor hand-off does. Without
+        # this the fake never lets a second coroutine interleave, and anything
+        # racing a recorder read would pass here no matter how it behaved.
+        await asyncio.sleep(0)
         return func(*args)
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
+    # One shared instance rather than a fresh namespace per call, so a test can
+    # give the recorder a purge horizon. ``keep_days`` and ``auto_purge`` are
+    # absent by default, which is how the fake says "no horizon to be had".
+    recorder_mod.instance_stub = SimpleNamespace(
         async_add_executor_job=_run_in_executor
     )
+    recorder_mod.get_instance = lambda hass: recorder_mod.instance_stub
     sys.modules["homeassistant.components.recorder"] = recorder_mod
 
     history_mod = types.ModuleType("homeassistant.components.recorder.history")
@@ -88,14 +104,22 @@ def _install_import_stubs() -> None:
                 "types": set(types_),
             }
         )
-        source = STATISTICS_ROWS_5MIN if period == "5minute" else STATISTICS_ROWS
+        source = {
+            "5minute": STATISTICS_ROWS_5MIN,
+            "month": STATISTICS_ROWS_MONTH,
+        }.get(period, STATISTICS_ROWS)
         # The real reader only ever returns rows inside the window it was given,
         # which is the whole point of the tail read's clamps -- a fake that
         # ignored the window could not tell a correct clamp from a missing one.
-        window = (start_time.timestamp(), end_time.timestamp())
+        # ``end_time=None`` means "everything newer than the start", which is how
+        # the history-floor probe asks.
+        lower = start_time.timestamp()
+        upper = None if end_time is None else end_time.timestamp()
         return {
             statistic_id: [
-                row for row in rows if window[0] <= row["start"] < window[1]
+                row
+                for row in rows
+                if lower <= row["start"] and (upper is None or row["start"] < upper)
             ]
             for statistic_id, rows in source.items()
             if statistic_ids is None or statistic_id in statistic_ids
@@ -131,6 +155,20 @@ _install_import_stubs()
 
 #: The stubbed ``dt_util`` module, so a test can move the clock.
 DT_STUB = sys.modules["homeassistant.util.dt"]
+#: The stubbed recorder instance, so a test can give it a purge horizon.
+RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
+
+
+@contextmanager
+def _purging_after(keep_days: int, *, auto_purge: bool = True):
+    """Give the fake recorder a purge horizon for the duration of a test."""
+    RECORDER_STUB.keep_days = keep_days
+    RECORDER_STUB.auto_purge = auto_purge
+    try:
+        yield
+    finally:
+        del RECORDER_STUB.keep_days
+        del RECORDER_STUB.auto_purge
 
 import importlib  # noqa: E402
 
@@ -214,12 +252,15 @@ def _five_minute_row(local_instant: datetime, **fields) -> dict:
 def _set_rows(
     rows_by_entity: dict[str, list[dict]],
     five_minute: dict[str, list[dict]] | None = None,
+    month: dict[str, list[dict]] | None = None,
 ) -> None:
     STATISTICS_CALLS.clear()
     STATISTICS_ROWS.clear()
     STATISTICS_ROWS.update(rows_by_entity)
     STATISTICS_ROWS_5MIN.clear()
     STATISTICS_ROWS_5MIN.update(five_minute or {})
+    STATISTICS_ROWS_MONTH.clear()
+    STATISTICS_ROWS_MONTH.update(month or {})
 
 
 def _calls(period: str) -> list[dict]:
@@ -306,10 +347,11 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-        # One statistics call for every entity and every day of the span.
-        self.assertEqual(len(STATISTICS_CALLS), 1)
-        call = STATISTICS_CALLS[0]
-        self.assertEqual(call["period"], "hour")
+        # One statistics call for every entity and every day of the span. The
+        # history-floor probe is a separate, month-reduced read and is counted
+        # separately throughout this file.
+        self.assertEqual(len(_calls("hour")), 1)
+        call = _calls("hour")[0]
         self.assertEqual(call["units"], {"energy": "kWh"})
         self.assertEqual(call["types"], {"state", "min", "max", "mean"})
         self.assertEqual(
@@ -376,7 +418,11 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
         STATISTICS_CALLS.clear()
         future_only = await service.async_get_span_aggregates("2026-06-01", "2026-06-30")
         self.assertEqual(future_only["days"], [])
-        self.assertEqual(STATISTICS_CALLS, [])
+        # No data read at all. The floor probe does not reappear here either --
+        # the first call cached it -- but what this test is about is that a span
+        # with nothing to measure measures nothing.
+        self.assertEqual(_calls("hour"), [])
+        self.assertEqual(_calls("5minute"), [])
 
     async def test_a_year_wide_span_is_still_one_query(self):
         _set_rows({})
@@ -513,7 +559,7 @@ class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):
             [(day["date"], day["solarWh"]) for day in payload["days"]],
             [("2026-03-01", 5000.0), ("2026-04-01", 4000.0)],
         )
-        call = STATISTICS_CALLS[0]
+        call = _calls("hour")[0]
         self.assertEqual(
             call["start_time"],
             _hour("2026-03-01T00:00:00+01:00").astimezone(timezone.utc)
@@ -537,7 +583,7 @@ class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):
         )
         # The read stops at the end of today, not at the end of the month.
         self.assertEqual(
-            STATISTICS_CALLS[0]["end_time"],
+            _calls("hour")[0]["end_time"],
             _hour("2026-05-26T00:00:00+02:00").astimezone(timezone.utc),
         )
 
@@ -919,3 +965,305 @@ class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _month_row(local_first: datetime) -> dict:
+    """One month-reduced ``StatisticsRow``.
+
+    The real reducer buckets by *local* month and stamps each row with local
+    midnight on the first, which is exactly why the probe can floor to a month
+    without doing any arithmetic of its own.
+    """
+    start = local_first.timestamp()
+    return {"start": start, "end": start}
+
+
+def _with_usable_days(service, usable_days: int):
+    """Move the trainer's window, which is the floor's fallback."""
+    service._metadata = replace(service._metadata, usable_days=usable_days)
+    return service
+
+
+class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
+    """How far back the inspector says it can be browsed.
+
+    The floor used to be ``today - usable_days`` -- a count of usable *training
+    samples*, which on a two-month training window hid two years of recorded
+    history behind a disabled button. It is now the recorder's own answer, and
+    these tests hold the three properties that answer has to have: it is cheap,
+    it is honest about having nothing, and it can only ever widen the range.
+    """
+
+    async def test_the_floor_is_the_oldest_month_the_meters_have(self):
+        _set_rows(
+            {},
+            month={
+                # Not the first entity, and not the first row: the floor is the
+                # oldest across all of them, because one meter installed later
+                # than another does not make the earlier meter's months
+                # undrawable.
+                GRID_IMPORT_METER: [_month_row(_hour("2025-07-01T00:00:00+02:00"))],
+                SOLAR_METER: [
+                    _month_row(_hour("2024-03-01T00:00:00+01:00")),
+                    _month_row(_hour("2024-04-01T00:00:00+02:00")),
+                ],
+            },
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+
+        self.assertEqual(payload["range"]["minDate"], "2024-03-01")
+        self.assertEqual(payload["range"]["maxDate"], "2026-05-25")
+
+    async def test_the_probe_is_one_cheap_month_wide_read_of_the_meters_alone(self):
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _make_service()
+
+        await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+
+        probes = _calls("month")
+        self.assertEqual(len(probes), 1)
+        probe = probes[0]
+        # Empty ``types`` is what keeps the scan two columns wide however deep
+        # the history goes, and ``end_time=None`` is what makes it open-ended.
+        self.assertEqual(probe["types"], set())
+        self.assertIsNone(probe["units"])
+        self.assertIsNone(probe["end_time"])
+        self.assertEqual(probe["start_time"], span_mod._HISTORY_PROBE_EPOCH)
+        # The six meters, and nothing else. The SoC sensor and the price rails
+        # are read by the span itself but do not decide whether a bucket has
+        # history to draw, so probing them would only widen the scan.
+        self.assertEqual(
+            probe["statistic_ids"],
+            {
+                SOLAR_METER,
+                HOUSE_METER,
+                GRID_IMPORT_METER,
+                GRID_EXPORT_METER,
+                BATTERY_CHARGE_METER,
+                BATTERY_DISCHARGE_METER,
+            },
+        )
+
+    async def test_no_statistics_falls_back_to_the_training_window(self):
+        _set_rows({}, month={})
+        service = _with_usable_days(_make_service(), 12)
+
+        payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+
+        self.assertEqual(len(_calls("month")), 1)
+        self.assertEqual(payload["range"]["minDate"], "2026-05-13")
+
+    async def test_the_floor_never_lands_later_than_the_training_window(self):
+        # A recorder that has been purged back to this month still must not
+        # narrow a range the trainer can reach past: the day view reads raw
+        # states, not statistics, so those days are still there.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2026-05-01T00:00:00+02:00"))]})
+        service = _with_usable_days(_make_service(), 90)
+
+        payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+
+        self.assertEqual(payload["range"]["minDate"], "2026-02-24")
+
+    async def test_the_floor_is_probed_once_until_the_ttl_expires(self):
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _make_service()
+        original_now = DT_STUB.now
+        try:
+            await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+            await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+            self.assertEqual(len(_calls("month")), 1)
+
+            # Past the TTL the question is asked again -- a purge moves the true
+            # floor forward and a back-fill moves it back, and neither should go
+            # unnoticed for the life of the process.
+            DT_STUB.now = lambda: NOW + service_mod._HISTORY_FLOOR_TTL
+            await service.async_get_span_aggregates("2026-05-23", "2026-05-23")
+            self.assertEqual(len(_calls("month")), 2)
+        finally:
+            DT_STUB.now = original_now
+
+    async def test_a_recorder_that_raises_leaves_the_trainer_window_standing(self):
+        _set_rows({}, month={})
+        service = _with_usable_days(_make_service(), 12)
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("recorder is down")
+
+        original = span_mod.statistics_during_period
+        span_mod.statistics_during_period = _explode
+        try:
+            payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        finally:
+            span_mod.statistics_during_period = original
+
+        self.assertEqual(payload["range"]["minDate"], "2026-05-13")
+
+    async def test_a_failed_probe_is_retried_soon_but_not_at_once(self):
+        # Two costs to sit between. Caching a failure for the whole TTL would pin
+        # the shallow fallback over a moment's unavailability; not caching it at
+        # all would put the probe's full-history scan in front of every request
+        # for as long as the recorder stayed unwell -- on the one executor thread
+        # the day view's own reads queue behind.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("recorder is down")
+
+        original_now = DT_STUB.now
+        original = span_mod.statistics_during_period
+        span_mod.statistics_during_period = _explode
+        try:
+            first = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        finally:
+            span_mod.statistics_during_period = original
+        self.assertEqual(first["range"]["minDate"], "2026-05-13")
+        failed_probes = len(_calls("month"))
+
+        try:
+            # Inside the retry window the failure stands, and costs nothing.
+            during = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+            self.assertEqual(during["range"]["minDate"], "2026-05-13")
+            self.assertEqual(len(_calls("month")), failed_probes)
+
+            # Past it the recorder is asked again, and its answer lands -- well
+            # inside the six hours a successful probe would have been trusted for.
+            DT_STUB.now = lambda: NOW + service_mod._HISTORY_FLOOR_RETRY
+            after = await service.async_get_span_aggregates("2026-05-23", "2026-05-23")
+            self.assertEqual(after["range"]["minDate"], "2024-03-01")
+        finally:
+            DT_STUB.now = original_now
+
+    async def test_a_failure_does_not_narrow_a_floor_already_learned(self):
+        # A recorder that has stopped answering is no reason to pull the range in
+        # under a reader mid-session: the floor already learned is still the best
+        # answer available.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        good = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        self.assertEqual(good["range"]["minDate"], "2024-03-01")
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("recorder is down")
+
+        original_now = DT_STUB.now
+        original = span_mod.statistics_during_period
+        span_mod.statistics_during_period = _explode
+        DT_STUB.now = lambda: NOW + service_mod._HISTORY_FLOOR_TTL
+        try:
+            after = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+        finally:
+            span_mod.statistics_during_period = original
+            DT_STUB.now = original_now
+
+        self.assertEqual(after["range"]["minDate"], "2024-03-01")
+
+    async def test_a_caller_arriving_mid_probe_waits_for_its_answer(self):
+        # What a card mounting into an aggregate view really does: both websocket
+        # commands are dispatched together, and one of them reaches the floor
+        # while the other's read is still in flight. A probe that merely
+        # deduplicated the read would let the late caller past a stamp the first
+        # had not yet filled in and hand it the trainer window -- so the two
+        # payloads would disagree about minDate on exactly the load this bound
+        # exists to fix. The barrier holds the probe open so the overlap is the
+        # test's, not the scheduler's to grant.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        probing = asyncio.Event()
+        release = asyncio.Event()
+        real_probe = service._async_probe_history_floor
+
+        async def _held_probe():
+            probing.set()
+            await release.wait()
+            return await real_probe()
+
+        service._async_probe_history_floor = _held_probe
+
+        first = asyncio.ensure_future(service._async_history_floor(NOW))
+        await probing.wait()
+        second = asyncio.ensure_future(service._async_history_floor(NOW))
+        # Let the late caller run as far as it can get on its own.
+        await asyncio.sleep(0)
+        release.set()
+
+        self.assertEqual(await first, date(2024, 3, 1))
+        self.assertEqual(await second, date(2024, 3, 1))
+        self.assertEqual(len(_calls("month")), 1)
+
+    async def test_an_empty_span_still_carries_the_range(self):
+        # The reader is never more likely to press an arrow than when the span
+        # in front of them has nothing in it.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-06-01", "2026-06-30")
+
+        self.assertEqual(payload["days"], [])
+        self.assertEqual(payload["range"]["minDate"], "2024-03-01")
+
+    async def test_the_day_view_stops_at_the_purge_horizon_and_the_spans_do_not(self):
+        # The two floors differ on purpose, because the two views read two
+        # different stores. The month and year views read long-term statistics,
+        # which the recorder keeps indefinitely; the day view reads raw states
+        # through load_actuals_for_day, which the recorder purges at
+        # purge_keep_days. One deep floor would give the day view a back arrow
+        # offering hundreds of days that can only ever draw empty.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        with _purging_after(10):
+            span = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+            day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(span["range"]["minDate"], "2024-03-01")
+        # keep_days - 1: the recorder purges through today-10, so today-9 is the
+        # oldest day it still holds whole.
+        self.assertEqual(day["range"]["minDate"], "2026-05-16")
+        # Forward is one answer for everyone; only the floor is per view.
+        self.assertEqual(day["range"]["maxDate"], span["range"]["maxDate"])
+        # The day payload keeps its own four extra keys; the shared helper only
+        # owns the two bounds.
+        self.assertTrue(day["range"]["canGoPrevious"])
+
+    async def test_a_stale_training_window_does_not_reopen_purged_days(self):
+        # usable_days counts samples the *last* training run built, so it is
+        # evidence that raw states existed when it ran and not that they exist
+        # now. Shortening purge_keep_days after a run leaves the count untouched,
+        # and honouring it would hand back the back arrow full of purged days the
+        # floor exists to prevent.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 60)
+
+        with _purging_after(3):
+            day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2026-05-23")
+
+    async def test_without_a_purge_horizon_the_day_view_keeps_the_deep_floor(self):
+        # No recorder to ask, so there is no horizon to floor on. Erring towards
+        # offering a day rather than hiding one is the safe direction, and it is
+        # what the day view did before the horizon was consulted at all.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+
+    async def test_purging_switched_off_is_not_a_horizon(self):
+        # keep_days keeps its configured value while auto_purge is off, so
+        # flooring on it would hide raw states the recorder is deliberately
+        # still holding.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        with _purging_after(10, auto_purge=False):
+            day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+

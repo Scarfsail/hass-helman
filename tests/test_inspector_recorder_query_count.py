@@ -58,6 +58,15 @@ def _install_import_stubs() -> None:
     history_mod.get_significant_states = lambda *args, **kwargs: {}
     sys.modules["homeassistant.components.recorder.history"] = history_mod
 
+    # The inspector day asks the recorder where its statistics begin, which
+    # imports the span module. Nothing here is about that read -- it is
+    # month-reduced and cached, and this file counts the *raw state* queries the
+    # meters cost -- so it answers with nothing and the floor falls back to the
+    # trainer's window.
+    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
+    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+
     core_mod = types.ModuleType("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
@@ -73,6 +82,7 @@ def _install_import_stubs() -> None:
     util_mod.dt = dt_mod
 
     sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
+    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
     sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
 
 

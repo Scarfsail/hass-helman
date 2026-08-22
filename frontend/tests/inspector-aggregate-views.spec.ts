@@ -1,5 +1,23 @@
-import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { test, expect } from "@playwright/test";
+import {
+    STOP_MONTH_VIEW,
+    STOP_SLOT_60,
+    STOP_YEAR_VIEW,
+    bandRuns,
+    canPageBack,
+    clickStop,
+    columns,
+    loadCardBundle,
+    mountInspector,
+    pageBack,
+    pageBackAndWait,
+    sectionMetrics,
+    selectColumn,
+    selectedSpan,
+    spanStarts,
+    waitForAggregateChart,
+    waitForDayChart,
+} from "./support/inspector-aggregate-harness";
 
 /**
  * The inspector's month and year views.
@@ -13,247 +31,6 @@ import { resolve } from "node:path";
  * views exist. The day-view specs assert that half by passing unchanged; this
  * file asserts that switching away and back leaves the day exactly as it was.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
-/** Toggle stops, narrowest first: three slot widths, then day and month. */
-const STOP_MONTH_VIEW = 3;
-const STOP_YEAR_VIEW = 4;
-const STOP_SLOT_60 = 2;
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
-}
-
-/**
- * The inspector against a backend that answers both the day read and the span
- * read, recording what each was asked for.
- *
- * The span answer is generated from the requested window rather than fixed, so
- * the test can assert "one column per day of the month" without hard-coding a
- * month — which month it is depends on when the suite runs.
- *
- * `holes` punches two gaps into a day-bucketed span: the fourth bucket keeps
- * only its upper SoC bound, and the fifth has no readings at all. Both are
- * shapes the backend really produces — a battery sensor that started recording
- * mid-day, a day the recorder never saw — and both are drawn by *not* drawing.
- */
-async function mountInspector(
-    page: Page,
-    holes = false,
-    variant: "" | "no-gain" | "over-soc" | "no-energy" = "",
-): Promise<void> {
-    await page.evaluate(([punchHoles, shape]: [boolean, string]) => {
-        const today = new Date();
-        const iso = (date: Date) => date.toISOString().slice(0, 10);
-        const date = iso(today);
-
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const price: Array<{ slot: string; value: number }> = [];
-        for (let m = 0; m < 1440; m += 15) {
-            const hh = String(Math.floor(m / 60)).padStart(2, "0");
-            const mm = String(m % 60).padStart(2, "0");
-            corrected.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
-                valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
-            });
-            price.push({ slot: `${hh}:${mm}`, value: 3.5 });
-        }
-
-        const dayPayload = {
-            date,
-            timezone: "UTC",
-            status: "ok",
-            effectiveVariant: null,
-            trainedAt: null,
-            priceUnit: "CZK/kWh",
-            range: {
-                minDate: "2020-01-01", maxDate: date, canGoPrevious: true, canGoNext: false,
-                isToday: true, isFuture: false,
-            },
-            series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact: [],
-                houseForecast: [], houseActual: [],
-                batterySocForecast: [], batterySocActual: [],
-                gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
-                importPrice: price, exportPrice: [],
-            },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null,
-                houseForecastWh: null, houseActualWh: null,
-                gridForecastWh: null, gridActualWh: null,
-                batteryForecastWh: null, batteryActualWh: null,
-            },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
-            },
-            batterySocBounds: [],
-            trainingExplainability: null,
-        };
-
-        (window as any).__spanRequests = [];
-        (window as any).__dayRequests = [];
-
-        /** Every bucket of the requested window, with plausible numbers. */
-        const spanDays = (start: string, end: string, bucket: string) => {
-            const rows: Array<Record<string, unknown>> = [];
-            const cursor = new Date(`${start}T00:00:00Z`);
-            const last = new Date(`${end}T00:00:00Z`);
-            let index = 0;
-            while (cursor <= last) {
-                const halfKnown = punchHoles && bucket !== "month" && index === 3;
-                const missing = punchHoles && bucket !== "month" && index === 4;
-                // An export price entity with no statistics: every bucket is
-                // priced on the import side and on neither other.
-                const noGain = shape === "no-gain";
-                // A BMS that rounds past the top of its own scale, and the same
-                // bucket's neighbour sitting exactly on it.
-                const overSoc = shape === "over-soc";
-                // Energy meters with no statistics at all, SoC and money intact.
-                const noEnergy = shape === "no-energy";
-                rows.push({
-                    date: iso(cursor),
-                    solarWh: missing || noEnergy ? null : 20000 + index * 500,
-                    gridImportKwh: missing || noEnergy ? null : 4,
-                    gridExportKwh: missing || noEnergy ? null : 6,
-                    batteryMinSocPct: halfKnown || missing ? null : 20,
-                    batteryMaxSocPct: missing
-                        ? null
-                        : overSoc ? (index === 0 ? 100.4 : 100) : 90,
-                    houseWh: missing || noEnergy ? null : 18000,
-                    batteryChargeWh: missing || noEnergy ? null : 7000,
-                    batteryDischargeWh: missing || noEnergy ? null : 6000,
-                    moneyCost: missing ? null : 40,
-                    moneyGain: missing || noGain ? null : 12,
-                });
-                index += 1;
-                if (bucket === "month") {
-                    cursor.setUTCMonth(cursor.getUTCMonth() + 1, 1);
-                } else {
-                    cursor.setUTCDate(cursor.getUTCDate() + 1);
-                }
-            }
-            return rows;
-        };
-
-        document.body.innerHTML = "";
-        const el = document.createElement("helman-solar-inspector") as any;
-        el.daylightOnlyDefault = false;
-        el.slotMinutesDefault = 30;
-        el.hass = {
-            language: "en",
-            config: { time_zone: "UTC" },
-            connection: {},
-            callWS: async (msg: any) => {
-                if (msg.type === "helman/solar_bias/day_aggregates") {
-                    (window as any).__spanRequests.push(msg);
-                    return {
-                        bucket: msg.bucket ?? "day",
-                        currency: "CZK",
-                        days: spanDays(msg.start_date, msg.end_date, msg.bucket ?? "day"),
-                    };
-                }
-                if (msg.type === "helman/solar_bias/inspector") {
-                    (window as any).__dayRequests.push(msg.date);
-                    return { ...dayPayload, date: msg.date };
-                }
-                return {};
-            },
-        };
-        document.body.appendChild(el);
-    }, [holes, variant] as [boolean, string]);
-
-    await page.waitForFunction(() => {
-        const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
-    });
-}
-
-async function clickStop(page: Page, index: number): Promise<void> {
-    await page.evaluate((i) => {
-        const buttons = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelectorAll(".slot-size-toggle .slot-size-button");
-        (buttons[i] as HTMLElement).click();
-    }, index);
-}
-
-/** The aggregate chart's per-bucket hit rects, in order. */
-async function columns(page: Page): Promise<string[]> {
-    return page.evaluate(() => {
-        const chart = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-aggregate-chart");
-        if (!chart?.shadowRoot) return [];
-        return [...chart.shadowRoot.querySelectorAll(".bucket-column")]
-            .map((rect: Element) => rect.getAttribute("data-bucket") || "");
-    });
-}
-
-/** Step the span nav one click back. */
-async function pageBack(page: Page): Promise<void> {
-    await page.evaluate(() => {
-        const buttons = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelectorAll(".week-nav .week-arrow");
-        (buttons[0] as HTMLElement).click();
-    });
-}
-
-async function waitForDayChart(page: Page): Promise<void> {
-    await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-        .shadowRoot.querySelector(".chart-wrap svg"));
-}
-
-async function waitForAggregateChart(page: Page): Promise<void> {
-    await page.waitForFunction(() => {
-        const chart = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-aggregate-chart");
-        return !!chart?.shadowRoot?.querySelector(".bucket-column");
-    });
-}
-
-/** The vertex count of each path matching `selector`, in document order. */
-async function bandRuns(page: Page, selector: string): Promise<number[]> {
-    return page.evaluate((sel) => {
-        const chart = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-aggregate-chart");
-        return [...chart.shadowRoot.querySelectorAll(sel)]
-            .map((path: Element) => (path.getAttribute("d") || "").match(/[ML]/g)?.length ?? 0);
-    }, selector);
-}
-
-/** One metrics panel's tiles, as label to value. */
-async function sectionMetrics(page: Page, index: number): Promise<Record<string, string>> {
-    return page.evaluate((i) => {
-        const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
-        const section = root.querySelectorAll(".metrics-section")[i];
-        const out: Record<string, string> = {};
-        for (const card of section.querySelectorAll(".metric-card")) {
-            const label = card.querySelector(".metric-label")?.textContent?.trim() ?? "";
-            out[label] = card.querySelector(".metric-value")?.textContent?.trim() ?? "";
-        }
-        return out;
-    }, index);
-}
-
-/** Click a column, and wait for the selected-bucket panel it opens. */
-async function selectColumn(page: Page, index: number): Promise<void> {
-    await page.evaluate((i) => {
-        const chart = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-aggregate-chart");
-        (chart.shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
-            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-    }, index);
-    await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-        .shadowRoot.querySelector(".drill-button"));
-}
 
 test.describe("solar inspector aggregate views", () => {
     test.beforeEach(async ({ page }) => {
@@ -290,6 +67,149 @@ test.describe("solar inspector aggregate views", () => {
         expect(requests).toHaveLength(1);
         expect(requests[0].bucket).toBe("day");
         expect(requests[0].start_date.slice(-2)).toBe("01");
+    });
+
+    /**
+     * The bug these two tests were written for.
+     *
+     * The floor used to be the solar-bias trainer's window -- a couple of
+     * months -- so a backwards step in the year view clamped onto the year it
+     * was already showing: nothing moved, and the arrow then read as disabled
+     * because `canGoBack` compared a *day* against that floor. Both halves are
+     * asserted here: that the step really travels, and that the arrow goes dead
+     * exactly once, on the span the data actually stops in.
+     */
+    test("the year view steps back a year at a time to the oldest data", async ({ page }) => {
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        for (let step = 0; step < 3; step += 1) {
+            expect(await canPageBack(page)).toBe(true);
+            await pageBackAndWait(page);
+        }
+
+        expect(await spanStarts(page, "month")).toEqual([
+            `${thisYear}-01-01`,
+            `${thisYear - 1}-01-01`,
+            `${thisYear - 2}-01-01`,
+            `${thisYear - 3}-01-01`,
+        ]);
+        expect(await selectedSpan(page)).toBe(`${thisYear - 3}-01-01`);
+        // The floor's own year is reachable and is where travel stops.
+        expect(await canPageBack(page)).toBe(false);
+    });
+
+    test("a floor inside the current year disables the arrow rather than offering a dead click", async ({ page }) => {
+        // The reported symptom, in its own right. `_moveSpan` clamps a backwards
+        // step to the span holding the floor, so with the floor inside this year
+        // there is nowhere to go -- but `canGoBack` compared today's *date*
+        // against the floor, said yes, and left an arrow that moved nothing and
+        // then went dead. Comparing spans is what makes the control honest
+        // before it is pressed.
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear}-02-01`);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        expect(await selectedSpan(page)).toBe(`${thisYear}-01-01`);
+        expect(await canPageBack(page)).toBe(false);
+    });
+
+    test("the month view reaches every month back to the oldest data", async ({ page }) => {
+        const floor = new Date();
+        floor.setUTCDate(1);
+        floor.setUTCMonth(floor.getUTCMonth() - 14);
+        const floorIso = floor.toISOString().slice(0, 10);
+        await mountInspector(page, false, "", floorIso);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        for (let step = 0; step < 14; step += 1) {
+            expect(await canPageBack(page)).toBe(true);
+            await pageBackAndWait(page);
+        }
+
+        // The selection, not the request log: the day pills share the span
+        // endpoint and ask for day buckets of their own, and what this test is
+        // about is that fourteen clicks really travel fourteen months.
+        expect(await selectedSpan(page)).toBe(floorIso);
+        expect(await canPageBack(page)).toBe(false);
+    });
+
+    /**
+     * The two views are bounded by two different stores, so the card keeps two
+     * floors rather than one field whichever view loaded last overwrote.
+     *
+     * Drilling is the path that catches it: coming back to a day the card
+     * already holds skips the day's own load, so a single field would still be
+     * carrying the span's floor -- and the day view's back arrow would offer
+     * days from before the recorder's raw states, every one of them empty.
+     */
+    test("returning to the day view navigates by the day's floor, not the span's", async ({ page }) => {
+        const iso = (daysBack: number) => {
+            const day = new Date();
+            day.setUTCDate(day.getUTCDate() - daysBack);
+            return day.toISOString().slice(0, 10);
+        };
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+
+        // Into the month view and straight back out, so the span load has
+        // happened and the day the card holds is still the one it wants.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+
+        await pageBack(page);
+        await page.waitForFunction(
+            (floor) => ((window as any).__dayRequests as string[]).includes(floor),
+            iso(3),
+            { timeout: 2000 },
+        );
+
+        // A week back would be day seven; the day floor is day three, and it is
+        // the day floor that clamps.
+        const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
+        expect(requests[requests.length - 1]).toBe(iso(3));
+        expect(requests).not.toContain(iso(7));
+    });
+
+    test("a day the recorder has purged is named but not drillable", async ({ page }) => {
+        // The month view reaches further back than the day view can, because the
+        // two read two different stores. Opening such a day would draw an empty
+        // chart under a back arrow already dead on arrival -- the day being
+        // older than the day view's own floor -- so the control says so instead.
+        const iso = (daysBack: number) => {
+            const day = new Date();
+            day.setUTCDate(day.getUTCDate() - daysBack);
+            return day.toISOString().slice(0, 10);
+        };
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        // Two months back is comfortably beyond a three-day day-view floor.
+        await pageBackAndWait(page);
+        await pageBackAndWait(page);
+
+        const keys = await columns(page);
+        await selectColumn(page, 0);
+
+        const drill = await page.evaluate(() => {
+            const button = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".drill-button") as HTMLButtonElement;
+            return { disabled: button.disabled, title: button.getAttribute("title") };
+        });
+        expect(drill.disabled).toBe(true);
+        expect(drill.title).toBeTruthy();
+
+        // And no day was asked for behind the reader's back.
+        const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
+        expect(requests).not.toContain(keys[0]);
     });
 
     test("the year view draws one column per month", async ({ page }) => {

@@ -7,7 +7,7 @@ from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
@@ -42,6 +42,7 @@ from .models import (
     SolarBiasSlotExplainability,
     SolarBiasTrainingExplainability,
     inspector_day_to_payload,
+    navigation_range_payload,
     training_explainability_to_payload,
 )
 from .trainer import compute_fingerprint, train
@@ -60,6 +61,26 @@ _LOGGER = logging.getLogger(__name__)
 #: the same span, which is the point -- the ceiling on the query is the same
 #: either way, and it admits the year view the aggregate views are for.
 _MAX_AGGREGATE_BUCKETS = {"day": 366, "month": 13}
+#: How long the recorder's answer about where history begins is trusted for.
+#:
+#: The floor moves for two reasons and neither is urgent: a purge trims the far
+#: end, a back-fill extends it. Six hours is short enough that neither goes
+#: unnoticed for a session and long enough that the probe is invisible next to
+#: the reads the views themselves issue.
+_HISTORY_FLOOR_TTL = timedelta(hours=6)
+
+#: How long a *failed* probe is left alone before it is tried again.
+#:
+#: Not the full TTL, because a failure is not an answer and pinning the shallow
+#: fallback for six hours over a moment's unavailability is the wrong trade. Not
+#: zero either, which is what "retry immediately" amounts to: the probe scans
+#: every hourly row the meters own, so a recorder failing *after* that scan --
+#: a lock, a timeout, executor pressure -- would have every inspector request
+#: re-run it, on the one executor thread the day view's own reads queue behind.
+#: Five minutes bounds that to something the reader will not notice and the
+#: recorder can carry.
+_HISTORY_FLOOR_RETRY = timedelta(minutes=5)
+
 #: The price rails' own grid, matching the schedule's canonical slot.
 PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
@@ -137,6 +158,18 @@ class SolarBiasCorrectionService:
         self._training_lock = asyncio.Lock()
         self._training_in_progress = False
         self._last_emitted_status: tuple[str, str] | None = None
+        #: The recorder's last answer about where the meters' history begins, and
+        #: when it was asked. ``None`` for "asked, and there is nothing" -- which
+        #: is why the timestamp is what decides whether to re-ask, not the value.
+        self._history_floor: date | None = None
+        self._history_floor_probed_at: datetime | None = None
+        #: How long the last attempt's outcome is trusted for -- the full TTL
+        #: after an answer, a short retry window after a failure.
+        self._history_floor_lifetime = _HISTORY_FLOOR_TTL
+        #: Held across the probe so concurrent callers await one read rather than
+        #: racing it. A card mounting into an aggregate view dispatches the day
+        #: and span commands together, and both ask for the floor.
+        self._history_floor_lock = asyncio.Lock()
 
     async def async_setup(self) -> None:
         stored = self._store.profile
@@ -374,8 +407,22 @@ class SolarBiasCorrectionService:
         # short at today: a partial current month is the answer, not an absent
         # one.
         end_date = min(end_date, local_now.date())
+        # The range travels with every answer, empty ones included: it is what
+        # the card navigates by, and a span with no rows is exactly when the
+        # reader is about to press an arrow.
+        span_min_date, span_max_date = await self._async_navigation_range(
+            local_now, view="span"
+        )
+        navigation_range = navigation_range_payload(
+            span_min_date.isoformat(), span_max_date.isoformat()
+        )
         if end_date < start_date:
-            return {"bucket": bucket, "currency": None, "days": []}
+            return {
+                "bucket": bucket,
+                "currency": None,
+                "days": [],
+                "range": navigation_range,
+            }
         start_date = _trim_span_to_cap(start_date, end_date, bucket)
 
         local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
@@ -400,18 +447,14 @@ class SolarBiasCorrectionService:
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
 
-        raw_solar_entity = self._cfg.total_energy_entity_id
-        solar_entity = (
-            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
-        )
-        import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
-        export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
-        # The house's own meter, never solar/grid/battery arithmetic: the day
-        # view reads this same meter, and a second, subtractive definition of
-        # house load would disagree with the number sitting next to it.
-        house_entity = _entity_id(self._house_energy_entity_id_provider)
-        charge_entity = _entity_id(self._battery_charge_energy_entity_id_provider)
-        discharge_entity = _entity_id(self._battery_discharge_energy_entity_id_provider)
+        (
+            solar_entity,
+            import_entity,
+            export_entity,
+            house_entity,
+            charge_entity,
+            discharge_entity,
+        ) = self._energy_meter_entity_ids()
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
         # Two export rate sources, asked for together and resolved per hour
         # below: the mirror Helman publishes, whose statistics are the only ones
@@ -495,6 +538,7 @@ class SolarBiasCorrectionService:
             "bucket": bucket,
             "currency": self._resolve_span_currency(import_price_config),
             "days": days,
+            "range": navigation_range,
         }
 
     def _resolve_span_currency(self, import_price_config) -> str | None:
@@ -514,15 +558,255 @@ class SolarBiasCorrectionService:
                 return unit
         return self._grid_export_price_entity_unit()
 
+    def _energy_meter_entity_ids(
+        self,
+    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+        """The six meters whose history the inspector actually draws.
+
+        Solar, grid import, grid export, house, battery charge, battery
+        discharge -- in that order, and always in that order, because two callers
+        unpack this positionally. The house entry is the house's *own* meter and
+        never solar/grid/battery arithmetic: the day view reads this same meter,
+        and a second, subtractive definition of house load would disagree with
+        the number sitting next to it.
+
+        These are the meters, and only the meters. The battery SoC sensor and the
+        price rails are read alongside them by the span aggregates, but they are
+        not history in the sense that matters here -- a month with prices and no
+        meters has nothing to draw -- which is why the history floor asks about
+        this list rather than about everything the span read touches.
+        """
+
+        def _entity_id(provider) -> str | None:
+            return provider() if provider is not None else None
+
+        raw_solar_entity = self._cfg.total_energy_entity_id
+        solar_entity = (
+            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
+        )
+        return (
+            solar_entity,
+            _entity_id(self._grid_import_energy_entity_id_provider),
+            _entity_id(self._grid_export_energy_entity_id_provider),
+            _entity_id(self._house_energy_entity_id_provider),
+            _entity_id(self._battery_charge_energy_entity_id_provider),
+            _entity_id(self._battery_discharge_energy_entity_id_provider),
+        )
+
+    async def _async_history_floor(self, local_now: datetime) -> date:
+        """The oldest date the inspector may be browsed back to.
+
+        The recorder's answer where it has one, and the bias trainer's window
+        where it does not. The trainer's window is the floor this used to be --
+        ``today - usable_days``, a count of usable *training samples* -- and it
+        was wrong in the only way a bound can be: it hid data that exists. It
+        stays as the fallback because a fresh install with no compiled statistics
+        yet still has to be able to browse the days it has, and because taking
+        the *minimum* of the two means this change can only ever widen the range,
+        never narrow one somebody is already using.
+
+        Cached, and deliberately not forever. A purge moves the true floor
+        forward and a back-fill moves it back, so the answer is re-asked every
+        :data:`_HISTORY_FLOOR_TTL`; between refreshes it is a field read, which
+        is what lets both payloads ask on every request without either of them
+        having to know it is a database read.
+
+        The lock is not an optimisation. Both payloads are dispatched at once
+        when a card mounts, and a probe that merely *deduplicated* the read would
+        let the second caller past a stamp the first had not yet filled in --
+        handing it the fallback while the first got the recorder's answer. The
+        two payloads would then disagree about ``minDate`` on exactly the load
+        this whole change exists to fix. Queueing behind the read instead means
+        every caller sees the same answer.
+        """
+        fallback = self._trainer_window_floor(local_now)
+
+        if self._history_floor_is_stale(local_now):
+            async with self._history_floor_lock:
+                # Re-checked under the lock: whoever queued behind the probe
+                # wants its answer, not a second read of the same rows.
+                if self._history_floor_is_stale(local_now):
+                    await self._async_refresh_history_floor(local_now)
+
+        probed = self._history_floor
+        return fallback if probed is None else min(probed, fallback)
+
+    def _trainer_window_floor(self, local_now: datetime) -> date:
+        """The oldest day the bias trainer demonstrably read.
+
+        ``usable_days`` counts training samples the last run actually built, so
+        this date is evidence about a moment that has passed rather than a claim
+        about now. That is enough for the one thing it is used for -- standing in
+        as the aggregate floor when the recorder has no statistics to point at,
+        on a fresh install that still has to be browsable -- and not enough for
+        the day view's floor, which :meth:`_day_view_floor` explains.
+        """
+        return local_now.date() - timedelta(days=max(self._metadata.usable_days, 0))
+
+    def _history_floor_is_stale(self, local_now: datetime) -> bool:
+        cached_at = self._history_floor_probed_at
+        if cached_at is None:
+            return True
+        return local_now - cached_at >= self._history_floor_lifetime
+
+    async def _async_refresh_history_floor(self, local_now: datetime) -> None:
+        """Ask the recorder again, and remember how the asking went.
+
+        A probe that came back empty *is* an answer -- a fresh install with no
+        compiled statistics -- and is trusted for the full TTL like any other. A
+        probe that raised is not an answer, and is trusted only until
+        :data:`_HISTORY_FLOOR_RETRY` has passed. Both halves matter: caching a
+        failure for six hours would pin the shallow fallback over a moment's
+        unavailability, and not caching it at all would put the probe's
+        full-history scan in front of every inspector request for as long as the
+        recorder stayed unwell.
+
+        Note that a failure leaves ``_history_floor`` alone rather than clearing
+        it. A floor already learned is still the best answer available, and a
+        recorder that has stopped answering is no reason to narrow the range
+        under a reader mid-session.
+        """
+        try:
+            self._history_floor = await self._async_probe_history_floor()
+        except Exception:
+            _LOGGER.exception("Failed to probe the recorder for the history floor")
+            self._history_floor_lifetime = _HISTORY_FLOOR_RETRY
+        else:
+            self._history_floor_lifetime = _HISTORY_FLOOR_TTL
+        self._history_floor_probed_at = local_now
+
+    async def _async_probe_history_floor(self) -> date | None:
+        """Ask the recorder where the meters' statistics begin, or ``None``.
+
+        ``None`` means the recorder answered and there is nothing yet. Failure
+        is raised rather than folded into that answer, so the caller can tell the
+        two apart and decline to cache one of them; it is
+        :meth:`_async_refresh_history_floor` that keeps a failure from costing
+        the reader anything more than the shallower range.
+
+        The import is deferred, and it runs inside this coroutine, so the
+        caller's ``except`` covers it: ``recorder_statistics_span`` reaches into
+        the recorder integration, which need not be set up, and an import error
+        is one more way the recorder cannot answer -- not a reason for the whole
+        inspector request to fail.
+        """
+        from ..recorder_statistics_span import query_oldest_statistics_date
+
+        return await query_oldest_statistics_date(
+            self._hass,
+            self._energy_meter_entity_ids(),
+            local_tz=ZoneInfo(str(self._hass.config.time_zone)),
+        )
+
+    def _purge_horizon_days(self) -> int | None:
+        """How many days of raw state the recorder is keeping, or ``None``.
+
+        ``keep_days`` is the recorder's own ``purge_keep_days`` setting, and it
+        is the same number ``Recorder._purge`` turns into
+        ``utcnow() - timedelta(days=self.keep_days)``. Reading it means the day
+        view's floor *is* the purge horizon rather than a guess about where the
+        purge has got to.
+
+        ``None`` for every way of there not being a horizon to speak of -- the
+        recorder integration is not set up, ``get_instance`` raises, the
+        attribute is missing or is not a usable count, or ``auto_purge`` is off
+        and nothing is being trimmed at all. Every one of them is answered the
+        same way by the caller: leave the day view on the aggregate floor, which
+        is what it had before this method existed, and which errs towards
+        offering a day rather than hiding one.
+
+        ``auto_purge`` is the case worth spelling out, because ``keep_days``
+        keeps its configured value while purging is disabled. Flooring on it
+        then would hide raw states the recorder is deliberately still holding.
+        The recorder's own schema pins ``keep_days`` at one day or more
+        (``vol.Range(min=1)``), so anything below that is a value this code does
+        not understand rather than a shorter horizon.
+        """
+        try:
+            from homeassistant.components.recorder import get_instance
+
+            recorder = get_instance(self._hass)
+            if not getattr(recorder, "auto_purge", True):
+                return None
+            keep_days = recorder.keep_days
+        except Exception:
+            # Debug rather than silent: "the recorder is not set up" and "the
+            # attribute this code reads has moved" produce the same answer here,
+            # and only one of them is a state worth knowing about. Without a
+            # trace, a rename upstream would quietly restore the deep floor and
+            # the un-drawable days it was introduced to remove.
+            _LOGGER.debug("No recorder purge horizon available", exc_info=True)
+            return None
+        if isinstance(keep_days, bool) or not isinstance(keep_days, int):
+            return None
+        return keep_days if keep_days >= 1 else None
+
+    def _day_view_floor(self, local_now: datetime, aggregate_floor: date) -> date:
+        """The oldest day the *day* view may be browsed back to.
+
+        Shallower than the aggregate floor, and deliberately so. The two views
+        read two different stores: the month and year views read long-term
+        statistics, which the recorder keeps indefinitely, while the day view
+        reads raw states through ``load_actuals_for_day``, which the recorder
+        purges at ``purge_keep_days``. Handing the day view the statistics floor
+        would give it a back arrow offering hundreds of days that can only ever
+        draw empty.
+
+        ``keep_days - 1``, not ``keep_days``: the recorder purges everything
+        older than ``utcnow() - keep_days``, so the day that subtraction names
+        is the one being deleted *through* rather than the oldest one kept. It
+        has already lost its small hours by the time the nightly purge runs and
+        loses the rest at the next one, so offering it means offering a chart
+        that shrinks every night. One day later is the first that is whole.
+
+        The ``max`` with the aggregate floor is the only guard needed: the day
+        view can never usefully reach further back than the statistics do, and a
+        retention setting longer than the recorded history would otherwise offer
+        days that predate the meters entirely.
+
+        The trainer's window is deliberately *not* consulted here, though an
+        earlier draft did. ``usable_days`` counts samples the last training run
+        built; it is evidence that raw states existed when it ran, not that they
+        exist now. Shortening ``purge_keep_days`` after a run leaves that count
+        untouched, and honouring it would hand back the very back arrow full of
+        purged days this method exists to prevent. Where retention and the
+        training window agree -- the ordinary case, since the trainer reads the
+        same purged store -- the guard changed nothing anyway.
+        """
+        keep_days = self._purge_horizon_days()
+        if keep_days is None:
+            return aggregate_floor
+        purge_horizon = local_now.date() - timedelta(days=keep_days - 1)
+        return max(aggregate_floor, purge_horizon)
+
+    async def _async_navigation_range(
+        self, local_now: datetime, *, view: Literal["day", "span"]
+    ) -> tuple[date, date]:
+        """The dates the inspector's navigation may move between, inclusive.
+
+        Forward is one answer for everyone: one day per configured daily-energy
+        entity, which is how far the forecast reaches. Backwards is two, because
+        the views read two different stores and are bounded by two different
+        retention horizons -- see :meth:`_day_view_floor`. ``view`` names which
+        payload is asking, and that is the only distinction that exists here.
+
+        Both floors still come from one place, so neither payload can invent its
+        own: the day floor is derived *from* the aggregate floor and can only be
+        shallower than it, never deeper and never unrelated.
+        """
+        max_date = local_now.date() + timedelta(
+            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
+        )
+        aggregate_floor = await self._async_history_floor(local_now)
+        if view == "span":
+            return aggregate_floor, max_date
+        return self._day_view_floor(local_now, aggregate_floor), max_date
+
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
-        previous_days = max(self._metadata.usable_days, 0)
-        min_date = today - timedelta(days=previous_days)
-        max_date = today + timedelta(
-            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
-        )
+        min_date, max_date = await self._async_navigation_range(local_now, view="day")
 
         status, effective_variant, _fallback_reason = self._resolve_status()
         timezone = ZoneInfo(str(self._hass.config.time_zone))

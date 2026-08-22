@@ -32,11 +32,23 @@ export interface SpanAggregateRow {
     moneyGain: number | null;
 }
 
+/**
+ * How far the inspector may be navigated, in either direction.
+ *
+ * Both payloads carry it, so a card that opened straight into a span view
+ * navigates against the same floor a day view would have given it.
+ */
+export interface NavigationRange {
+    minDate: string;
+    maxDate: string;
+}
+
 /** What `helman/solar_bias/day_aggregates` answers with. */
 export interface SpanAggregatePayload {
     bucket: "day" | "month";
     currency: string | null;
     days: SpanAggregateRow[];
+    range?: NavigationRange;
 }
 
 /** A column was clicked; the inspector holds the selection. */
