@@ -157,9 +157,10 @@ export class HelmanOptimizerEditDialog extends LitElement {
     /**
      * The config changed under us, and the draft must not be written over it.
      *
-     * Raised by the live `helman_data_changed` feed and, as a backstop, by the
-     * re-read at save time -- a page that missed the event still cannot
-     * clobber. See `_handleSave`.
+     * Every `helman_data_changed` sends the dialog to look -- the event says
+     * something moved, never who moved it -- and the re-read at save time is
+     * the backstop for a page that missed the announcement entirely. See
+     * `_refreshStale` and `_handleSave`.
      */
     @state() private _stale = false;
 
@@ -187,13 +188,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
     private _loadedIds: string | null = null;
 
     /**
-     * Our own save is about to fire `helman_data_changed`. Ignore that one.
-     *
-     * Same flag, and the same reason, as `helman-config-editor`'s
-     * `_expectOwnDataChange`: the announcement of a write we performed is not
-     * news that someone else wrote.
+     * A staleness check in flight, so a burst does not fan out into reads.
      */
-    private _expectOwnDataChange = false;
+    private _stalenessCheck: Promise<void> | null = null;
 
     /**
      * The `editor.*` strings, which live in the config editor's own table.
@@ -212,11 +209,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         const hass = this.hass;
         if (hass) {
             this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-                if (this._expectOwnDataChange) {
-                    this._expectOwnDataChange = false;
-                    return;
-                }
-                this._stale = true;
+                void this._refreshStale();
             });
         }
     }
@@ -468,7 +461,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 };
                 return;
             }
-            this._expectOwnDataChange = true;
             const response = await this.hass.callWS<SaveConfigResponse>({
                 type: "helman/save_config",
                 config: view.config,
@@ -480,6 +472,10 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 // draft: the backend stamps `config_version` on write, and the
                 // baseline has to be what a later read will actually return.
                 await this._rebaseline();
+                // The stored document *is* the baseline again, so whatever the
+                // reload's own announcements arrive to say, they are not news
+                // that somebody else wrote.
+                this._stale = false;
                 this._dirty = false;
                 this._message = {
                     kind: "success",
@@ -502,7 +498,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
                     ),
             };
         } catch (error) {
-            this._expectOwnDataChange = false;
             this._message = {
                 kind: "error",
                 text: `${this._editorText("editor.messages.save_failed")} ${describeError(error)}`,
@@ -521,19 +516,63 @@ export class HelmanOptimizerEditDialog extends LitElement {
      * the same endpoint, so `save_config`'s `config_version` stamping cannot
      * show up here as a difference on its own.
      *
-     * A failed re-read is treated as "changed": refusing to save costs the user
-     * a retry, and saving anyway could cost them someone else's work.
+     * A failed re-read answers `"unknown"`, and the two callers want opposite
+     * things from that: the save must refuse (a retry costs the user a click,
+     * saving over someone else costs them their work), while the banner must
+     * stay quiet (a dropped frame is not evidence that anybody wrote anything).
      */
-    private async _configChangedElsewhere(): Promise<boolean> {
+    private async _compareToBaseline(): Promise<"same" | "changed" | "unknown"> {
         if (!this.hass || this._baseline === null) {
-            return false;
+            return "same";
         }
         try {
             const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
-            return current === null || canonicalJson(current) !== this._baseline;
+            if (current === null) {
+                return "unknown";
+            }
+            return canonicalJson(current) === this._baseline ? "same" : "changed";
         } catch {
-            return true;
+            return "unknown";
         }
+    }
+
+    private async _configChangedElsewhere(): Promise<boolean> {
+        return (await this._compareToBaseline()) !== "same";
+    }
+
+    /**
+     * Whether to raise the "changed elsewhere" banner, checked rather than
+     * inferred from the announcement.
+     *
+     * `helman_data_changed` cannot tell us who wrote: one `save_config` fires
+     * several of them -- the entry reload it starts re-plans, and the plan and
+     * schedule announcements land well after the feed's collapse window closes
+     * on the first. A dialog that treated "one event is mine, the rest are
+     * someone else's" therefore accused itself, showing the banner beside its
+     * own success message. Reading the document and comparing it is the only
+     * thing that actually answers the question the banner asks.
+     *
+     * Skipped while our own write is in flight: the document is legitimately in
+     * motion then, and `_handleSave` adopts the result as the new baseline the
+     * moment it settles.
+     */
+    private async _refreshStale(): Promise<void> {
+        if (this._saving || this._stalenessCheck !== null) {
+            return this._stalenessCheck ?? undefined;
+        }
+
+        this._stalenessCheck = (async () => {
+            try {
+                const verdict = await this._compareToBaseline();
+                if (verdict !== "unknown") {
+                    this._stale = verdict === "changed";
+                }
+            } finally {
+                this._stalenessCheck = null;
+            }
+        })();
+
+        return this._stalenessCheck;
     }
 
     /** Adopt the stored config as the baseline, without touching the draft. */

@@ -457,6 +457,9 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         power_devices: { house: { base_load_w: 900 } },
     };
 
+    /** What the stored document looks like once this dialog's own save landed. */
+    const SAVED_CONFIG = { ...CONFIG, config_version: 5 };
+
     test("a config that changed between open and save blocks the save", async ({ page }) => {
         await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
         await openDialog(page);
@@ -500,7 +503,7 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
     });
 
     test("the notice arrives while the dialog is open, not only at save", async ({ page }) => {
-        await mountPanel(page);
+        await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
         await openDialog(page);
         await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
 
@@ -510,15 +513,35 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
     });
 
-    test("the dialog's own save does not raise its own notice", async ({ page }) => {
+    test("an announcement that moved nothing raises no notice", async ({ page }) => {
+        // `helman_data_changed` is fired for a re-plan and a retrained bias
+        // profile too, neither of which touches the document this dialog is
+        // editing. The event says something moved, never what.
         await mountPanel(page);
+        await openDialog(page);
+
+        await fireDataChanged(page, "plan");
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+    });
+
+    test("the dialog's own save does not raise its own notice", async ({ page }) => {
+        // The reads in order: the open, the pre-save guard, the re-baseline,
+        // and then whatever the announcements send it to check. From the
+        // re-baseline on, the stored document is what this save wrote.
+        await mountPanel(page, { configSequence: [CONFIG, CONFIG, SAVED_CONFIG] });
         await openDialog(page);
         await dialog(page).getByText("Save and reload").click();
         await expect(dialog(page).locator(".message.success")).toHaveCount(1);
 
-        // The backend fires the event *because of* this save; it is not news.
-        await fireDataChanged(page);
+        // `save_config` reloads the config entry, and the reload re-plans --
+        // so one save fires several announcements, spread well past the feed's
+        // collapse window. A dialog that took "the first one is mine, the rest
+        // are somebody else's" accused itself, beside its own success message.
+        await fireDataChanged(page, "config");
+        await fireDataChanged(page, "plan");
+        await fireDataChanged(page, "schedule");
         await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        await expect(dialog(page).locator(".message.success")).toHaveCount(1);
     });
 
     test("a second save is not blocked by the first one's own write", async ({ page }) => {
