@@ -170,10 +170,9 @@ export class HelmanSolarDayPills extends LitElement {
            it is the same fact drawn twice.
 
            After the .selected rule on purpose. The two can land on one pill:
-           the day
-           the card has loaded is blue, the column being read is amber, and when
-           they coincide the amber takes the fill while the blue keeps its inner
-           ring, so neither claim is lost. */
+           the day the card has loaded is blue, the column being read is amber,
+           and when they coincide the amber takes the fill while the blue keeps
+           its inner ring, so neither claim is lost. */
         .pill.bucket-selected {
             border-color: var(--helman-selection);
             background: color-mix(in srgb, var(--helman-selection) 18%, var(--card-background-color));
@@ -182,11 +181,20 @@ export class HelmanSolarDayPills extends LitElement {
         /* One rule for both directions, and last so it reads over either
            selected state -- the pointer is about the pill under it, whatever is
            already picked. The .hovered class is set from the card, so a hover
-           that
-           started on a chart column looks exactly like one that started here. */
+           that started on a chart column looks exactly like one that started
+           here. */
         .pill:hover,
         .pill.hovered {
             border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
+        }
+
+        /* The disabled guard has to cover the chart-driven half too. The
+           pointer never enters an unreachable pill, so :disabled:hover alone
+           never fires for one -- but the chart can still name that day, and a
+           dimmed pill drawing the "you can click me" border would be the one
+           promise this row must not make. */
+        .pill:disabled.hovered {
+            border-color: var(--divider-color);
         }
 
         /* The label sets the pill's floor, so it is never clipped: a day nobody
@@ -430,7 +438,6 @@ export class HelmanSolarDayPills extends LitElement {
         `;
     }
 
-    /** Re-selecting the shown day would reload it for nothing. */
     /**
      * Report the day under the pointer.
      *
@@ -450,6 +457,7 @@ export class HelmanSolarDayPills extends LitElement {
         }));
     }
 
+    /** Re-selecting the shown day would reload it for nothing. */
     private _select(dayKey: string): void {
         if (dayKey === this.selectedDate) {
             return;

@@ -1673,7 +1673,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     if (this._viewMode === stop.mode) return;
     this._viewMode = stop.mode;
-    this._selectedBucket = null;
+    this._clearChartFocus();
     this._loadSpan();
   }
 
@@ -1761,7 +1761,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     this._viewMode = mode;
     this._selectedDate = spanKey;
-    this._selectedBucket = null;
+    this._clearChartFocus();
     this._loadSpan();
   }
 
@@ -1960,13 +1960,37 @@ export class HelmanSolarInspector extends LitElement {
    * is told there is nothing to show.
    */
   private _dayShapedKey(key: string | null): string | null {
-    return this._spanBucket() === "day" ? key : null;
+    return this._bucketsAreDays() ? key : null;
+  }
+
+  /**
+   * Whether there is a chart on screen whose columns are days.
+   *
+   * True in the month view alone, and that is narrower than
+   * `_spanBucket() === "day"` on purpose: the day view answers "day" to that
+   * question too, because a day view's *slots* are inside one day -- but it
+   * draws no bucket chart at all, so there is nothing for the row to line up
+   * with. The correlation is switched off from both ends here rather than
+   * being drawn to no effect.
+   */
+  private _bucketsAreDays(): boolean {
+    return this._viewMode === "month";
   }
 
   /** Store the hovered day, skipping redundant updates. */
   private _setHoveredDay(key: string | null) {
     if (this._hoveredDayKey === key) return;
     this._hoveredDayKey = key;
+  }
+
+  /** Drop whatever the chart was focused on; nothing survives a change of view. */
+  private _clearChartFocus() {
+    this._selectedBucket = null;
+    // The hovered key has no `mouseleave` to rely on here: a node removed from
+    // under the pointer never fires one, so a view change that unmounts the
+    // chart or the row would otherwise leave a phantom amber column waiting on
+    // the next visit.
+    this._hoveredDayKey = null;
   }
 
   /**
@@ -1978,6 +2002,12 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _handleDayPillHover = (event: CustomEvent<DayPillHoverDetail>) => {
     event.stopPropagation();
+    // Ignored outright in the day view, where the row is on screen with no
+    // bucket chart beside it. Routing the hover through the card there would
+    // buy a whole-card render per pill crossed -- thirty-one of them across an
+    // open calendar -- to arrive back at the border `.pill:hover` had already
+    // drawn for free.
+    if (!this._bucketsAreDays()) return;
     this._setHoveredDay(event.detail.date);
   };
 
@@ -2225,7 +2255,7 @@ export class HelmanSolarInspector extends LitElement {
       this._showDay(bucketKey);
       return;
     }
-    this._selectedBucket = null;
+    this._clearChartFocus();
     this._viewMode = "month";
     this._selectedDate = bucketKey;
     this._loadSpan();
@@ -2247,7 +2277,7 @@ export class HelmanSolarInspector extends LitElement {
    * whatever the reader last chose and arriving here restores it.
    */
   private _showDay(dayKey: string) {
-    this._selectedBucket = null;
+    this._clearChartFocus();
     this._viewMode = "day";
     this._selectedDate = dayKey;
     this._ensureDayLoaded();

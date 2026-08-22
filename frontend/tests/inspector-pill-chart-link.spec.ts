@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
     STOP_MONTH_VIEW,
+    STOP_SLOT_60,
     STOP_YEAR_VIEW,
     clickStop,
     columns,
@@ -11,6 +12,7 @@ import {
     hoverColumn,
     hoverDayPill,
     loadCardBundle,
+    unreachableDayPills,
     mountInspector,
     toggleMore,
     waitForAggregateChart,
@@ -188,3 +190,91 @@ test.describe("the day pills and the chart highlight together", () => {
         expect((await columnsWithClass(page, "hovered")).length).toBe(1);
     });
 });
+
+/**
+ * The three edges of the correlation, each of which was drawing something the
+ * card could not back up.
+ *
+ * The link exists only where a column is a day, which is the month view alone:
+ * the day view has the row on screen with no bucket chart beside it, and the
+ * year view has a chart whose columns are months. And it is hover state with no
+ * `mouseleave` to depend on, because a node taken out from under the pointer
+ * never fires one.
+ */
+test.describe("where the correlation does and does not reach", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("a pill hover in the day view never reaches the card", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+
+        const days = await dayPillDates(page);
+        const wanted = days[Math.floor(days.length / 2)];
+        await hoverDayPill(page, wanted);
+
+        // `.hovered` is the card's answer coming back down. In the day view
+        // there is nothing to correlate with, so the card must not have one --
+        // the pointer's own `:hover` is already drawing the border.
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
+    });
+
+    test("a hover does not survive the view it was made in", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+        await hoverColumn(page, 0);
+        expect((await dayPillsWithClass(page, "hovered")).length).toBe(1);
+
+        // Leaving by a control rather than by the pointer: the row and the
+        // chart are unmounted under it, so no `mouseleave` is coming.
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await toggleMore(page);
+
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
+        expect(await columnsWithClass(page, "hovered")).toEqual([]);
+    });
+
+    test("a day the row cannot open is lit without being made to look clickable", async ({ page }) => {
+        // The aggregates reach two years back; the raw states a day view needs
+        // stop at the 10th of the month two months ago.
+        const floorMonth = monthsBack(2);
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`, `${floorMonth}-10`);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await toggleMore(page);
+
+        const unreachable = await unreachableDayPills(page);
+        expect(unreachable.length).toBeGreaterThan(0);
+        const border = await pillBorderColor(page, unreachable[0]);
+
+        // The chart names it -- which is right, the column is real -- and the
+        // pill lights up without claiming it can be opened.
+        const index = (await columns(page)).indexOf(unreachable[0]);
+        expect(index).toBeGreaterThanOrEqual(0);
+        await hoverColumn(page, index);
+        expect(await dayPillsWithClass(page, "hovered")).toContain(unreachable[0]);
+        expect(await pillBorderColor(page, unreachable[0])).toBe(border);
+    });
+});
+
+/** One pill's resolved top border colour. */
+async function pillBorderColor(page: Page, day: string): Promise<string> {
+    return page.evaluate((wanted) => {
+        const pill = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")
+            ?.shadowRoot?.querySelector(`.pill[data-day="${wanted}"]`);
+        return pill ? getComputedStyle(pill).borderTopColor : "";
+    }, day);
+}
+
+/** `YYYY-MM` for the month `count` months before this one. */
+function monthsBack(count: number): string {
+    const now = new Date();
+    const moved = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - count, 1));
+    return moved.toISOString().slice(0, 7);
+}
