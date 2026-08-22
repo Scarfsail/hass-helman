@@ -5,7 +5,7 @@ import type { LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm } from "../load-ha-elements";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
-import { asJsonArray, asJsonObject, cloneJson } from "../config/config-document";
+import { asJsonArray, asJsonObject, cloneJson, setValueAtPath } from "../config/config-document";
 import {
     getLocalizeFunction,
     type LocalizeFunction as EditorLocalizeFunction,
@@ -14,6 +14,7 @@ import type {
     ApplianceMetadataResponse,
     HomeAssistantLike,
     JsonObject,
+    PathSegment,
     SaveConfigResponse,
 } from "../config/types";
 import { fetchOptimizerSchema, type OptimizerSchemaDocument } from "./optimizer-schema";
@@ -30,7 +31,7 @@ type EditViewState =
     /** The websocket refused, or the config could not be read. */
     | { kind: "failed"; message: string }
     /**
-     * The config loaded but holds no optimizer with this id.
+     * The config loaded but holds none of the named optimizers.
      *
      * A live possibility rather than a defensive branch: the explanation comes
      * from a plan that ran earlier, and the optimizer it names may have been
@@ -39,9 +40,18 @@ type EditViewState =
     | { kind: "not_found" }
     | {
         kind: "ready";
-        /** The whole document. The editor edits it; the save sends it. */
+        /** The whole document. The editors edit it; the save sends it. */
         config: JsonObject;
-        index: number;
+        /**
+         * Where each named optimizer sits in the pipeline, in config order.
+         *
+         * A lane can be driven by several optimizers -- the inverter routinely
+         * is -- and the badge that opens this dialog names all of them at once.
+         * They share one draft and one Save, because they share one document.
+         */
+        indices: readonly number[];
+        /** How many optimizers the document holds, for the cards' bounds. */
+        total: number;
         schema: OptimizerSchemaDocument | null;
         applianceMetadata: ApplianceMetadataResponse | null;
     };
@@ -53,7 +63,7 @@ interface SaveMessage {
 }
 
 /**
- * One optimizer, editable from wherever it is being explained.
+ * The automations behind one lane, editable from wherever they are named.
  *
  * Not a second editor: it mounts `<helman-optimizer-editor>` -- the same
  * element the config panel's optimizer list is made of -- and adds only what a
@@ -127,8 +137,14 @@ export class HelmanOptimizerEditDialog extends LitElement {
 
     @property({ type: Boolean }) public open = false;
 
-    /** Which optimizer to edit, by `automation.optimizers[].id`. */
-    @property({ type: String }) public optimizerId = "";
+    /**
+     * Which optimizers to edit, by `automation.optimizers[].id`.
+     *
+     * A list rather than one id because a lane is not a single automation: the
+     * inverter has three, and the coverage badge that opens this dialog means
+     * "show me what drives this lane", not "show me one of the things that do".
+     */
+    @property({ attribute: false }) public optimizerIds: readonly string[] = [];
 
     @state() private _view: EditViewState = { kind: "loading" };
 
@@ -158,6 +174,17 @@ export class HelmanOptimizerEditDialog extends LitElement {
     private _baseline: string | null = null;
 
     private _unsubscribeDataChanged?: () => void;
+
+    /**
+     * The ids the current view was loaded for.
+     *
+     * Compared by content, not by identity: a caller that builds the array
+     * inline hands over a new one on every render, and reloading on that would
+     * throw the draft away for nothing. Compared at all because `_load` runs
+     * once on connect, so an element reused for a different lane would
+     * otherwise keep showing the lane before it.
+     */
+    private _loadedIds: string | null = null;
 
     /**
      * Our own save is about to fire `helman_data_changed`. Ignore that one.
@@ -198,6 +225,12 @@ export class HelmanOptimizerEditDialog extends LitElement {
         super.disconnectedCallback();
         this._unsubscribeDataChanged?.();
         this._unsubscribeDataChanged = undefined;
+    }
+
+    protected willUpdate(): void {
+        if (this._loadedIds !== null && this._loadedIds !== _optimizerIdKey(this.optimizerIds)) {
+            void this._load();
+        }
     }
 
     render() {
@@ -265,24 +298,85 @@ export class HelmanOptimizerEditDialog extends LitElement {
             case "not_found":
                 return html`
                     <div class="placeholder error">
-                        ${this._format("not_found", { id: this.optimizerId })}
+                        ${this._format("not_found", { id: this.optimizerIds.join(", ") })}
                     </div>
                 `;
             case "ready":
+                // Stacked and all expanded rather than tabbed: seeing what
+                // drives a lane *together* is the reason the badge opens more
+                // than one, and one shared draft with one Save is what makes
+                // them one edit rather than several.
                 return html`
-                    <helman-optimizer-editor
-                        .config=${view.config}
-                        .index=${view.index}
-                        .total=${1}
-                        .schema=${view.schema}
-                        .applianceMetadata=${view.applianceMetadata}
-                        .expanded=${true}
-                        .hass=${this.hass}
-                        .localize=${(key: string) => this._editorText(key)}
-                        @optimizer-config-changed=${this._handleConfigChanged}
-                    ></helman-optimizer-editor>
+                    ${view.indices.map((index) => html`
+                        <helman-optimizer-editor
+                            .config=${view.config}
+                            .index=${index}
+                            .total=${view.total}
+                            .schema=${view.schema}
+                            .applianceMetadata=${view.applianceMetadata}
+                            .expanded=${true}
+                            .hass=${this.hass}
+                            .localize=${(key: string) => this._editorText(key)}
+                            .listActions=${(basePath: PathSegment[], enabled: boolean) =>
+                                this._renderEnabledToggle(basePath, enabled)}
+                            @optimizer-config-changed=${this._handleConfigChanged}
+                        ></helman-optimizer-editor>
+                    `)}
                 `;
         }
+    }
+
+    /**
+     * The optimizer's on/off switch, in the card's summary row.
+     *
+     * Only the switch -- not the up/down/remove the config panel puts beside
+     * it. Those are *pipeline* operations: they change which optimizers exist
+     * and in what order they run, which is the document's business and not
+     * something to do from a dialog opened by pressing one lane. Turning an
+     * automation off is the opposite: it is about this optimizer alone, and it
+     * is the thing a person who just found out a lane is automated most often
+     * wants.
+     */
+    private _renderEnabledToggle(basePath: PathSegment[], enabled: boolean) {
+        // Both guards, exactly as the config panel wires them: the row lives
+        // inside the card's `<summary>`, where an unhandled click is the
+        // browser's own "collapse this card".
+        return html`
+            <div class="list-actions" @click=${preventSummaryToggle}>
+                <div class="summary-toggle" @click=${stopSummaryToggle}>
+                    <span>${this._editorText("editor.fields.optimizer_enabled")}</span>
+                    <ha-switch
+                        .checked=${enabled}
+                        @change=${(event: Event) =>
+                            this._setEnabled(
+                                [...basePath, "enabled"],
+                                (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+                            )}
+                    ></ha-switch>
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Write the switch into the draft the editors are sharing.
+     *
+     * The editor cards report their edits rather than applying them, and this
+     * row is rendered *by the dialog* into a card -- so the write belongs here
+     * too, on the same draft and through the same `_dirty` flag, which is what
+     * lets the existing Save and the existing collision guard cover it
+     * unchanged.
+     */
+    private _setEnabled(path: PathSegment[], enabled: boolean): void {
+        const view = this._view;
+        if (view.kind !== "ready") {
+            return;
+        }
+        const draft = cloneJson(view.config);
+        setValueAtPath(draft, path, enabled);
+        this._view = { ...view, config: draft };
+        this._dirty = true;
+        this._message = null;
     }
 
     /**
@@ -302,6 +396,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._view = { kind: "loading" };
         this._dirty = false;
         this._stale = false;
+        this._loadedIds = _optimizerIdKey(this.optimizerIds);
         this._editorLocalize = getLocalizeFunction(hass);
         try {
             const [config, schema, appliances] = await Promise.all([
@@ -317,14 +412,15 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 return;
             }
             this._baseline = canonicalJson(document);
-            const index = findOptimizerIndex(document, this.optimizerId);
+            const indices = findOptimizerIndices(document, this.optimizerIds);
             this._view =
-                index === null
+                indices.length === 0
                     ? { kind: "not_found" }
                     : {
                           kind: "ready",
                           config: cloneJson(document),
-                          index,
+                          indices,
+                          total: optimizerCount(document),
                           schema,
                           applianceMetadata: appliances,
                       };
@@ -508,18 +604,48 @@ export class HelmanOptimizerEditDialog extends LitElement {
     }
 }
 
-/** Where the named optimizer sits in the pipeline, or null if it is gone. */
-function findOptimizerIndex(config: JsonObject, optimizerId: string): number | null {
-    if (!optimizerId) {
-        return null;
+/**
+ * Where the named optimizers sit in the pipeline, in *config* order.
+ *
+ * Config order rather than the order the ids were asked for: the cards are read
+ * top to bottom as the pipeline that produced the lane, and the pipeline's
+ * order is the document's, not the caller's. Ids that no longer resolve are
+ * dropped -- an empty result is what raises `not_found`.
+ */
+function findOptimizerIndices(config: JsonObject, optimizerIds: readonly string[]): number[] {
+    const wanted = new Set(optimizerIds.filter((id) => id.length > 0));
+    if (wanted.size === 0) {
+        return [];
     }
-    const automation = asJsonObject(config.automation);
-    const optimizers = asJsonArray(automation?.optimizers) ?? [];
-    const index = optimizers.findIndex(
-        (entry) => asJsonObject(entry)?.id === optimizerId,
-    );
-    return index === -1 ? null : index;
+    return readOptimizers(config)
+        .map((entry, index): [number, string | undefined] => [index, asJsonObject(entry)?.id as string | undefined])
+        .filter(([, id]) => id !== undefined && wanted.has(id))
+        .map(([index]) => index);
 }
+
+/** How many optimizers the pipeline holds, for the cards' list bounds. */
+function optimizerCount(config: JsonObject): number {
+    return readOptimizers(config).length;
+}
+
+function readOptimizers(config: JsonObject) {
+    return asJsonArray(asJsonObject(config.automation)?.optimizers) ?? [];
+}
+
+/** One spelling of "this id set", so the two sides of the comparison cannot drift. */
+function _optimizerIdKey(optimizerIds: readonly string[]): string {
+    return optimizerIds.join("\n");
+}
+
+/** A click in the summary row must not collapse the card it sits in. */
+const preventSummaryToggle = (event: Event): void => {
+    event.preventDefault();
+    event.stopPropagation();
+};
+
+const stopSummaryToggle = (event: Event): void => {
+    event.stopPropagation();
+};
 
 /**
  * A document as one string, with object keys in a stable order.

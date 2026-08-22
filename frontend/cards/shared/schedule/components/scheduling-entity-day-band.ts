@@ -1,4 +1,4 @@
-import { LitElement, css, html } from "lit-element";
+import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../hass-frontend/src/types";
@@ -30,6 +30,13 @@ import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
+import "../../optimizer/helman-optimizer-edit-dialog";
+import {
+    getLaneAutomationCoverage,
+    getSharedAutomationCoverage,
+    type AutomationCoverageIndex,
+} from "../../optimizer/automation-coverage";
+import type { HomeAssistantLike } from "../../config/types";
 
 const MINUTE_MS = 60_000;
 /** An hour label this close to an edge is pulled inside it rather than centred. */
@@ -243,15 +250,22 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: pointer;
             }
 
-            .lane-label ha-icon {
+            /* The icon and the coverage badge sit beside the name button,
+               not inside it, so the sizing hangs off the row rather than off
+               the button it used to live in. */
+            /* A direct child: the coverage badge beside it carries an icon
+               element of its own, and a descendant selector would set this
+               size on that one too, over the size the badge sets on itself. */
+            .lane-label-row > ha-icon {
                 flex: 0 0 auto;
                 --mdc-icon-size: 15px;
+                cursor: pointer;
             }
 
             /* The live badge stands in for that icon, so it has to be boxed to
                the same size -- left to itself it sizes for an entity row and
                would set the lane's height. */
-            .lane-label state-badge,
+            .lane-label-row state-badge,
             .track-label state-badge {
                 flex: 0 0 auto;
                 width: 18px;
@@ -260,12 +274,59 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: pointer;
             }
 
-            .lane-label state-badge {
+            .lane-label-row state-badge {
                 --mdc-icon-size: 15px;
             }
 
             .lane.unavailable state-badge {
                 opacity: 0.6;
+            }
+
+            /* Whether a lane is on autopilot, next to the icon that says which
+               lane it is. Boxed to the entity icon's size for the same reason
+               the live badge is: a lane's height is set by its label row.
+
+               The palette is the authorship palette the action chips already
+               use, because it is the same distinction -- automation against the
+               user's own hand -- and two colour vocabularies for one question
+               would be one to unlearn. */
+            .automation-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 auto;
+                width: 18px;
+                height: 18px;
+                padding: 0;
+                border: none;
+                border-radius: 4px;
+                background: none;
+                color: var(--automation-badge-color);
+                --mdc-icon-size: 14px;
+            }
+
+            .automation-badge.active {
+                --automation-badge-color: var(--schedule-authorship-automation-color, #2563eb);
+            }
+
+            .automation-badge.disabled_only {
+                --automation-badge-color: var(--schedule-authorship-mixed-color, #ea7a18);
+            }
+
+            .automation-badge.none {
+                --automation-badge-color: var(--schedule-authorship-user-color, #c49012);
+            }
+
+            /* Only the pressable one takes the pointer: on a manual lane the
+               badge says something and does nothing, and the run underneath
+               must stay what a press in the track finds. */
+            button.automation-badge {
+                cursor: pointer;
+                pointer-events: auto;
+            }
+
+            button.automation-badge:hover {
+                background: color-mix(in srgb, var(--automation-badge-color) 18%, transparent);
             }
 
             .lane-name {
@@ -517,6 +578,12 @@ export class SchedulingEntityDayBand extends LitElement {
             .track-label state-badge {
                 --mdc-icon-size: 13px;
                 pointer-events: auto;
+            }
+
+            .track-label .automation-badge {
+                width: 16px;
+                height: 16px;
+                --mdc-icon-size: 13px;
             }
 
             /* The lane under edit, said the same way the label column said it. */
@@ -1035,6 +1102,23 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     @state() private _hoveredLaneKey: string | null = null;
     /**
+     * Which lanes an automation drives, read from the config once per
+     * connection.
+     *
+     * `null` until the first read lands, which the badge draws as nothing at
+     * all: an unanswered question must not be shown as "no automation here".
+     */
+    @state() private _automationCoverage: AutomationCoverageIndex | null = null;
+    /**
+     * The automations a badge press asked to open, or null.
+     *
+     * The dialog is mounted from the band rather than from each host because
+     * the badge is the band's control: the inspector's strip and the day
+     * editor both draw this element, and a dialog per host would be the same
+     * wiring written twice.
+     */
+    @state() private _automationEditIds: readonly string[] | null = null;
+    /**
      * The track's width, measured after each update rather than while
      * rendering: reading it per segment forces a synchronous layout for every
      * block of every lane, and during a drag that happens at pointer rate.
@@ -1096,6 +1180,10 @@ export class SchedulingEntityDayBand extends LitElement {
     private _observedTrack: Element | null = null;
     private _trackResizeObserver: ResizeObserver | null = null;
 
+    /** Dropped on detach and re-taken on the next `hass`; see `_syncAutomationCoverage`. */
+    private _unsubscribeAutomationCoverage: (() => void) | null = null;
+    private _coverageHass: HomeAssistant | null = null;
+
     connectedCallback(): void {
         super.connectedCallback();
         // Re-attaching does not schedule an update, so the observer the
@@ -1103,12 +1191,48 @@ export class SchedulingEntityDayBand extends LitElement {
         if (this.hasUpdated) {
             this._syncTrackResizeObserver();
         }
+        this._syncAutomationCoverage();
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._endDrag();
         this._disconnectTrackResizeObserver();
+        this._unsubscribeAutomationCoverage?.();
+        this._unsubscribeAutomationCoverage = null;
+        this._coverageHass = null;
+    }
+
+    protected willUpdate(changed: PropertyValues<this>): void {
+        if (changed.has("hass")) {
+            this._syncAutomationCoverage();
+        }
+    }
+
+    /**
+     * Follow the shared coverage source, and re-follow it when `hass` changes.
+     *
+     * Re-followed rather than left alone because `hass` is replaced wholesale
+     * on every state update in Home Assistant, and only the connection behind
+     * it is stable -- which is exactly what the shared source is keyed by, so
+     * a resubscribe on a live connection costs nothing but the closure.
+     */
+    private _syncAutomationCoverage(): void {
+        const hass = this.hass;
+        if (!hass || !this.isConnected) {
+            return;
+        }
+        if (this._coverageHass?.connection === hass.connection && this._unsubscribeAutomationCoverage) {
+            return;
+        }
+
+        this._unsubscribeAutomationCoverage?.();
+        this._coverageHass = hass;
+        const source = getSharedAutomationCoverage(hass as unknown as HomeAssistantLike);
+        this._automationCoverage = source.get();
+        this._unsubscribeAutomationCoverage = source.subscribe((index) => {
+            this._automationCoverage = index;
+        });
     }
 
     updated(): void {
@@ -1194,6 +1318,8 @@ export class SchedulingEntityDayBand extends LitElement {
                     </div>
                 ` : nothing}
             </div>
+            <!-- Outside the band, which is a grid: a dialog is not a row of it. -->
+            ${this._renderAutomationEditDialog()}
         `;
     }
 
@@ -1465,6 +1591,14 @@ export class SchedulingEntityDayBand extends LitElement {
             <div class=${classes} data-lane=${lane.key}>
                 ${inTrackLabels ? nothing : html`
                     <div class="row-label lane-label-row">
+                        ${this._renderLaneIcon(lane)}
+                        <!--
+                            Beside the name button rather than inside it: the
+                            coverage badge is a control, and a button inside a
+                            button is not a thing -- the same rule the "why"
+                            button next door already lives by.
+                        -->
+                        ${this._renderAutomationBadge(lane)}
                         <button
                             class="lane-label"
                             type="button"
@@ -1472,7 +1606,6 @@ export class SchedulingEntityDayBand extends LitElement {
                             title=${lane.name}
                             @click=${() => this._emitLaneSelect(lane.key)}
                         >
-                            ${this._renderLaneIcon(lane)}
                             <span class="lane-name">${lane.name}</span>
                             ${this._renderLaneTotal(lane)}
                         </button>
@@ -1661,6 +1794,7 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             <span class="track-label">
                 ${this._renderLaneIcon(lane)}
+                ${this._renderAutomationBadge(lane)}
                 <span class="lane-name">${lane.name}</span>
                 ${this._renderLaneTotal(lane)}
             </span>
@@ -1678,7 +1812,17 @@ export class SchedulingEntityDayBand extends LitElement {
     private _renderLaneIcon(lane: EntityDayBandLane) {
         const stateObj = this.hass?.states?.[lane.entityId];
         if (stateObj === undefined) {
-            return html`<ha-icon .icon=${lane.icon}></ha-icon>`;
+            // The flat icon has no entity to ask about, so it keeps the meaning
+            // the label around it has: pressing it names the lane. It used to
+            // get that for free by sitting inside the name button, which it no
+            // longer does -- and a dead icon in the label row is a target that
+            // looks pressable and is not.
+            return html`
+                <ha-icon
+                    .icon=${lane.icon}
+                    @click=${() => this._emitLaneSelect(lane.key)}
+                ></ha-icon>
+            `;
         }
 
         return html`
@@ -1694,6 +1838,83 @@ export class SchedulingEntityDayBand extends LitElement {
                 title=${lane.name}
                 @click=${(event: Event) => this._handleLaneIconClick(event, lane)}
             ></state-badge>
+        `;
+    }
+
+    /**
+     * Whether an automation is driving this lane, right of the lane's own icon.
+     *
+     * One glyph in three colours rather than three glyphs: the question is
+     * "who is driving this", and a colour is the fastest possible answer to it
+     * across a stack of lanes. The `title` carries the same answer in words, so
+     * the distinction is never colour alone.
+     *
+     * Nothing at all until the config has been read: a lane whose coverage is
+     * simply not known yet must not be drawn as a lane nothing automates.
+     *
+     * `disabled_only` says the automation is not running and offers to show it,
+     * rather than offering to switch it on: the state is also what the
+     * automation's *master* switch produces, and that switch lives in the
+     * config panel, not in the dialog this opens. Promising a fix the
+     * destination cannot perform would be worse than saying less.
+     */
+    private _renderAutomationBadge(lane: EntityDayBandLane) {
+        if (this._automationCoverage === null) {
+            return nothing;
+        }
+
+        const coverage = getLaneAutomationCoverage(this._automationCoverage, lane.target);
+        const title = this.localize(`scheduling.automation_coverage.${coverage.state}`);
+        const icon = html`<ha-icon icon="mdi:robot"></ha-icon>`;
+        if (coverage.optimizerIds.length === 0) {
+            // Nothing to open. An inert span rather than a disabled button:
+            // there is no action here to be temporarily unavailable.
+            return html`
+                <span class=${`automation-badge ${coverage.state}`} title=${title}>${icon}</span>
+            `;
+        }
+
+        return html`
+            <button
+                class=${`automation-badge ${coverage.state}`}
+                type="button"
+                title=${title}
+                @click=${(event: Event) => this._handleAutomationBadgeClick(event, coverage.optimizerIds)}
+            >${icon}</button>
+        `;
+    }
+
+    /**
+     * The badge means "show me what drives this lane", not "select this lane",
+     * so it swallows the press the row around it would otherwise act on.
+     */
+    private _handleAutomationBadgeClick(event: Event, optimizerIds: readonly string[]): void {
+        event.preventDefault();
+        event.stopPropagation();
+        this._automationEditIds = optimizerIds;
+    }
+
+    /**
+     * The optimizer editor, mounted only once a badge has asked for it.
+     *
+     * Remounted per request, as the explanation panel's copy is: the dialog
+     * reads the config when it connects, and a fresh element per press is what
+     * keeps that a load rather than a reload path nobody exercises.
+     */
+    private _renderAutomationEditDialog() {
+        const optimizerIds = this._automationEditIds;
+        if (optimizerIds === null) {
+            return nothing;
+        }
+
+        return html`
+            <helman-optimizer-edit-dialog
+                .hass=${this.hass as unknown as HomeAssistantLike}
+                .localize=${this.localize}
+                .open=${true}
+                .optimizerIds=${optimizerIds}
+                @closed=${() => { this._automationEditIds = null; }}
+            ></helman-optimizer-edit-dialog>
         `;
     }
 

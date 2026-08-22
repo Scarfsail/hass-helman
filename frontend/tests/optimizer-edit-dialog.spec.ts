@@ -317,10 +317,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await mountPanel(page);
         await openDialog(page);
 
-        // Move/remove/enable belong to the document, and the dialog is not
-        // editing the document — it passes no list actions.
-        await expect(dialog(page).locator(".optimizer-card > summary .list-actions"))
-            .toHaveCount(0);
+        // Move and remove are *pipeline* operations — they change which
+        // optimizers exist and in what order they run, which is the document's
+        // business and not something to do from a dialog opened on one slot.
+        // The on/off switch is the exception, and it is about this optimizer
+        // alone.
+        const actions = dialog(page).locator(".optimizer-card > summary .list-actions");
+        await expect(actions.locator("button")).toHaveCount(0);
+        await expect(actions.locator(".summary-toggle ha-switch")).toHaveCount(1);
     });
 
     test("the target picker offers only controllables the kind can drive", async ({

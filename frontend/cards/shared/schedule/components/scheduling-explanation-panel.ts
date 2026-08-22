@@ -305,7 +305,7 @@ export class SchedulingExplanationPanel extends LitElement {
                 .hass=${this.hass as unknown as HomeAssistantLike}
                 .localize=${this.localize}
                 .open=${true}
-                .optimizerId=${request.optimizerId}
+                .optimizerIds=${[request.optimizerId]}
                 @closed=${() => { this._editRequest = null; }}
             ></helman-optimizer-edit-dialog>
         `;
