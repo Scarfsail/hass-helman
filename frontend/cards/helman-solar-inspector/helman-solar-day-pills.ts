@@ -22,8 +22,10 @@ import type {
 } from "../shared/schedule/schedule-types";
 import { dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
 import {
+    buildDayPillCalendarCells,
     buildDayPillKeys,
     buildSolarInspectorDayPills,
+    resolveFirstWeekdayIndex,
     EMPTY_DAY_PILL_MODEL,
     type SolarInspectorDayPill,
     type SolarInspectorDayPillModel,
@@ -84,6 +86,31 @@ export class HelmanSolarDayPills extends LitElement {
             gap: 6px;
             overflow-x: auto;
             scrollbar-width: thin;
+        }
+
+        /* A whole month reads as a month only in seven fixed columns, so the
+           row stops being a row: the columns are equal fractions rather than
+           the pills' own width, which is what keeps the 1st under the same
+           weekday heading as the 8th. The horizontal scroll goes with the flex
+           layout — a grid this wide wraps by construction and has nothing to
+           scroll past. */
+        .pill-row.calendar {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            overflow-x: visible;
+        }
+
+        /* The fixed width is what a scrolling row needs and what a grid column
+           must not have: 74px in a seven-column grid overflows every card
+           narrower than about 560px. */
+        .pill-row.calendar .pill {
+            width: auto;
+        }
+
+        /* The days before the 1st. Inert and invisible, present only so the
+           grid's auto-placement puts the first pill in the right column. */
+        .pill-blank {
+            visibility: hidden;
         }
 
         /* 74px is the comfortable width, not a floor: when the row runs out of
@@ -169,6 +196,13 @@ export class HelmanSolarDayPills extends LitElement {
      * until the week buttons are used.
      */
     @property({ attribute: false }) public historyDays: readonly SolarInspectorHistoryDay[] = [];
+    /**
+     * How the pills are arranged. `"row"` is the scrolling strip the card shows
+     * while its window is a rolling week; `"calendar"` is the seven-column grid
+     * a whole month is read in. The window itself is the card's decision — this
+     * only says how to lay out whatever days arrive.
+     */
+    @property({ type: String }) public layout: "row" | "calendar" = "row";
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _forecast: ForecastPayload | null = null;
@@ -254,9 +288,20 @@ export class HelmanSolarDayPills extends LitElement {
             return nothing;
         }
 
+        const calendar = this.layout === "calendar";
+        const cells = calendar
+            ? buildDayPillCalendarCells(pills, resolveFirstWeekdayIndex(this.hass?.locale))
+            : pills;
+
         return html`
-            <div class="pill-row" role="group" aria-label=${this._localize("bias_correction.inspector.day_pills")}>
-                ${pills.map((pill) => this._renderPill(pill))}
+            <div
+                class=${`pill-row${calendar ? " calendar" : ""}`}
+                role="group"
+                aria-label=${this._localize("bias_correction.inspector.day_pills")}
+            >
+                ${cells.map((cell) => (cell === null
+                    ? html`<span class="pill-blank" aria-hidden="true"></span>`
+                    : this._renderPill(cell)))}
             </div>
         `;
     }

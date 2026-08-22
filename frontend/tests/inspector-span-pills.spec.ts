@@ -12,7 +12,10 @@ import {
     loadCardBundle,
     mountInspector,
     selectColumn,
+    clickDayPill,
+    dayPillDates,
     spanStarts,
+    toggleMore,
     waitForAggregateChart,
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
@@ -433,37 +436,110 @@ test.describe("solar inspector span pills", () => {
         expect(innards.gauges).toBe(0);
     });
 
-    test("the day view keeps its own row and never grows a span one", async ({ page }) => {
+    /**
+     * Collapsed, each view shows only the rows it navigates by: the day view its
+     * days, the aggregate views their spans. The rows no longer replace each
+     * other — the toggle decides how many are up — so what is pinned here is
+     * that the *closed* picker is still the minimal one.
+     */
+    test("the closed picker shows only the row its view navigates by", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 1}-06-15`);
+        await waitForDayChart(page);
+        expect(await visibleRows(page)).toEqual({ day: true, span: false });
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        expect(await visibleRows(page)).toEqual({ day: false, span: true });
+    });
+
+    /**
+     * The point of the unification: one control, and past it both rows are on
+     * screen together whichever view is showing. Before, zooming out lost the
+     * day pills outright.
+     */
+    test("the toggle puts both rows on screen in either view", async ({ page }) => {
         await mountInspector(page, false, "", `${THIS_YEAR - 1}-06-15`);
         await waitForDayChart(page);
 
-        const rows = await page.evaluate(() => {
-            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
-            return {
-                day: !!root.querySelector("helman-solar-day-pills"),
-                span: !!root.querySelector("helman-solar-span-pills"),
-            };
-        });
+        await toggleMore(page);
+        expect(await visibleRows(page)).toEqual({ day: true, span: true });
 
-        expect(rows.day).toBe(true);
-        expect(rows.span).toBe(false);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        expect(await visibleRows(page)).toEqual({ day: true, span: true });
+
+        await toggleMore(page);
+        expect(await visibleRows(page)).toEqual({ day: false, span: true });
+    });
+});
+
+/**
+ * The day pills at an aggregate granularity.
+ *
+ * Once the toggle puts them there, they are a way *back* rather than a
+ * selection: the view is showing a whole month or year, so no single day is on
+ * screen and none is lit. Clicking one is a change of granularity as well as of
+ * day, and it lands on the slot width the reader last used rather than on a
+ * default -- coming back to the day view has always restored it, and now the
+ * pills are one of the ways back.
+ */
+test.describe("day pills inside an aggregate view", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
     });
 
-    test("switching to an aggregate view swaps one row for the other", async ({ page }) => {
+    test("no day is lit while an aggregate view is on screen", async ({ page }) => {
         await mountInspector(page, false, "", `${THIS_YEAR - 1}-06-15`);
         await waitForDayChart(page);
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
+        await toggleMore(page);
 
-        const rows = await page.evaluate(() => {
-            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
-            return {
-                day: !!root.querySelector("helman-solar-day-pills"),
-                span: !!root.querySelector("helman-solar-span-pills"),
-            };
-        });
+        const lit = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")
+            ?.shadowRoot?.querySelectorAll(".pill.selected").length ?? -1);
+        expect(lit).toBe(0);
+    });
 
-        expect(rows.day).toBe(false);
-        expect(rows.span).toBe(true);
+    test("clicking a day pill returns to the day view at the width last used", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 1}-06-15`);
+        await waitForDayChart(page);
+
+        // 60 rather than the default, so "the width last used" is a real answer
+        // and not the one a fresh card would have chosen anyway.
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await toggleMore(page);
+
+        const days = await dayPillDates(page);
+        expect(days.length).toBeGreaterThan(0);
+        const wanted = days[Math.floor(days.length / 2)];
+        await clickDayPill(page, wanted);
+        await waitForDayChart(page);
+
+        const active = await page.evaluate(() => [...(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelectorAll(".slot-size-button")]
+            .filter((button: Element) => button.classList.contains("active"))
+            .map((button: Element) => button.textContent?.trim()));
+        expect(active).toEqual(["60"]);
+        // And it is the clicked day that is drawn, lit in the row it came from.
+        const lit = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")
+            .shadowRoot.querySelector(".pill.selected")?.getAttribute("data-day"));
+        expect(lit).toBe(wanted);
     });
 });
+
+/** Which of the two pill rows the card currently has mounted. */
+async function visibleRows(page: Page): Promise<{ day: boolean; span: boolean }> {
+    return page.evaluate(() => {
+        const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+        return {
+            day: !!root.querySelector("helman-solar-day-pills"),
+            span: !!root.querySelector("helman-solar-span-pills"),
+        };
+    });
+}

@@ -78,12 +78,28 @@ function readCard(page: Page): Promise<CardReadout> {
     });
 }
 
-/** Leave today via the header's back-a-week button, as a user would. */
+/**
+ * Leave today by picking an earlier day out of the row, as a user would.
+ *
+ * The row starts on today and reaches forward, so the day behind it comes from
+ * the picker: opening it turns the row into the whole current month, and the
+ * last pill before today is yesterday.
+ */
 async function pressPreviousWeek(page: Page): Promise<void> {
     await page.evaluate(() => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        const arrows = root?.querySelectorAll(".week-arrow");
-        (arrows?.[0] as HTMLButtonElement | undefined)?.click();
+        (root?.querySelector(".nav-more") as HTMLButtonElement | undefined)?.click();
+    });
+    await page.evaluate(() => {
+        const today = new Date().toISOString().slice(0, 10);
+        const pills = document.querySelector("helman-solar-inspector")?.shadowRoot
+            ?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        const days = [...(pills?.querySelectorAll(".pill") ?? [])];
+        // Behind today by preference; on the 1st the month offers nothing
+        // behind, and what the callers need is only a day that is not today.
+        const other = days.filter((pill) => (pill.getAttribute("data-day") ?? "") < today).pop()
+            ?? days.find((pill) => (pill.getAttribute("data-day") ?? "") > today);
+        (other as HTMLButtonElement | undefined)?.click();
     });
 }
 

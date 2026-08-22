@@ -209,22 +209,118 @@ export async function columns(page: Page): Promise<string[]> {
     });
 }
 
-/** Step the span nav one click back. */
-export async function pageBack(page: Page): Promise<void> {
+/**
+ * Press the picker's "more" toggle: the one control that opens and closes the
+ * span rows and the month of day pills together.
+ */
+export async function toggleMore(page: Page): Promise<void> {
     await page.evaluate(() => {
-        const buttons = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelectorAll(".week-nav .week-arrow");
-        (buttons[0] as HTMLElement).click();
+        const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+        (root.querySelector(".nav-more") as HTMLElement).click();
+        return (document.querySelector("helman-solar-inspector") as any).updateComplete;
     });
 }
 
-/** Whether the backwards span arrow is offering to go anywhere. */
-export async function canPageBack(page: Page): Promise<boolean> {
+/** Whether the picker is expanded, as the toggle reports it. */
+export async function isExpanded(page: Page): Promise<boolean> {
+    return page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".nav-more")?.getAttribute("aria-expanded") === "true");
+}
+
+/** The day pills on screen: their dates, in the order the row draws them. */
+export async function dayPillDates(page: Page): Promise<string[]> {
     return page.evaluate(() => {
-        const button = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".week-nav .week-arrow") as HTMLButtonElement;
-        return !button.disabled;
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(".pill")]
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
     });
+}
+
+/** Click the day pill carrying the given date. */
+export async function clickDayPill(page: Page, day: string): Promise<void> {
+    await page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills").shadowRoot;
+        (root.querySelector(`.pill[data-day="${wanted}"]`) as HTMLElement).click();
+    }, day);
+}
+
+/** One pill to press, named by the row it is in and the span it carries. */
+interface SpanPillRef {
+    row: "years" | "months";
+    key: string;
+}
+
+/**
+ * The presses that step the span picker one span back, in order.
+ *
+ * There are no arrows any more: travel is the year row and the month row, so a
+ * step back is whichever pill sits before the selected one. In the year view
+ * that is one press on the previous year. In the month view it is one press on
+ * the previous month -- except across January, where it is two: the rows split
+ * a span into two independent choices, and picking a year keeps the month it
+ * already had, so reaching the previous December means moving the year and then
+ * the month. Empty when the rows offer nothing further back, which is the
+ * answer the disabled arrow used to give.
+ */
+async function previousSpanPresses(page: Page): Promise<SpanPillRef[]> {
+    const selected = await selectedSpan(page);
+    const match = /^(\d{4})-(\d{2})-01$/.exec(selected);
+    if (match === null) {
+        return [];
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    // Only the month view lights a month pill, and `selectedSpan` prefers it, so
+    // a lit month row is what tells the two views apart here.
+    const inMonthView = await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector("helman-solar-span-pills")
+        ?.shadowRoot?.querySelector(".pill-row.months .pill.selected"));
+
+    const presses: SpanPillRef[] = inMonthView
+        ? (month > 1
+            ? [{ row: "months", key: `${year}-${String(month - 1).padStart(2, "0")}-01` }]
+            : [{ row: "years", key: `${year - 1}-01-01` }, { row: "months", key: `${year - 1}-12-01` }])
+        : [{ row: "years", key: `${year - 1}-01-01` }];
+
+    // Only the first press can be checked up front -- the later ones are in a
+    // row that has not been rendered yet -- and it is the one that decides
+    // whether the step is on offer at all.
+    return (await pillIsTakeable(page, presses[0])) ? presses : [];
+}
+
+/** Whether a span pill is on screen and not disabled. */
+async function pillIsTakeable(page: Page, ref: SpanPillRef): Promise<boolean> {
+    return page.evaluate(({ row, key }) => {
+        const pill = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills")
+            ?.shadowRoot?.querySelector(`.pill-row.${row} .pill[data-span="${key}"]`) as
+            HTMLButtonElement | null;
+        return !!pill && !pill.disabled;
+    }, ref);
+}
+
+/** Step the span picker one span back, however many presses that takes. */
+export async function pageBack(page: Page): Promise<void> {
+    for (const ref of await previousSpanPresses(page)) {
+        await page.evaluate(({ row, key }) => {
+            const host = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-span-pills");
+            (host.shadowRoot.querySelector(
+                `.pill-row.${row} .pill[data-span="${key}"]`,
+            ) as HTMLElement | null)?.click();
+            // The next press is on a row this one re-renders, so it has to be
+            // drawn before it can be found.
+            return host.updateComplete;
+        }, ref);
+    }
+}
+
+/** Whether the span picker is offering anywhere further back. */
+export async function canPageBack(page: Page): Promise<boolean> {
+    return (await previousSpanPresses(page)).length > 0;
 }
 
 /**

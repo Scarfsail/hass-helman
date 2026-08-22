@@ -652,6 +652,18 @@ export class HelmanSolarInspector extends LitElement {
    * :data:`VIEW_STOPS` gives.
    */
   @state() private _viewMode: InspectorViewMode = "day";
+  /**
+   * Whether the picker is showing everything it has.
+   *
+   * One flag for all three views, because it means the same thing in each --
+   * *show more of the picker* -- even though what "more" is differs. In the day
+   * view the span rows are the extra, and the day row widens from a rolling
+   * week to the whole selected month; in the aggregate views the span rows are
+   * always up and the day row itself is the extra. Two flags would let those
+   * disagree, and there is nothing for them to disagree about: the reader
+   * either wants the whole picker or does not.
+   */
+  @state() private _navExpanded = false;
   /** The span the aggregate views draw, or null before the first load. */
   @state() private _span: SpanAggregatePayload | null = null;
   @state() private _spanLoading = false;
@@ -737,6 +749,10 @@ export class HelmanSolarInspector extends LitElement {
        and take every chart under it along. */
     .day-nav {
       display: flex;
+      /* Stacked, because the picker can now show both rows at once: years and
+         months over the days they hold, which is the order they are read in.
+         Collapsed there is only ever one child and the direction is moot. */
+      flex-direction: column;
       /* Only as wide as the days, never growing to fill the line: the controls
          belong against the last pill, where the hand already is, rather than
          out at the card's far edge. */
@@ -754,25 +770,16 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 0;
     }
 
-    /* Side by side at the head of the toolbar, back then forward — the pair
-       reads as one control, and both are as tall as the buttons they sit
-       among. */
-    .week-nav {
-      display: flex;
+    /* At the head of the toolbar, where the week buttons used to be: it is the
+       control that reaches days the row is not showing, so it belongs against
+       the last pill rather than out among the settings. */
+    .nav-more {
       flex: 0 0 auto;
-      align-items: stretch;
-      gap: 4px;
     }
 
-    .week-arrow {
-      min-width: 34px;
-      padding: 0 6px;
-      line-height: 1;
-    }
-
-    /* Takes the rest of the line, so what is inside it can split: the week
-       buttons stay against the days they page, and the settings ride the far
-       edge. On a line with no slack to give they simply sit together. */
+    /* Takes the rest of the line, so what is inside it can split: the picker's
+       own control stays against the days it opens, and the settings ride the
+       far edge. On a line with no slack to give they simply sit together. */
     .nav-actions {
       display: flex;
       flex: 1 1 auto;
@@ -1466,37 +1473,37 @@ export class HelmanSolarInspector extends LitElement {
   };
 
   private _renderNavigation() {
-    // Both computed in `willUpdate`; nothing is derived or assigned here.
+    // Computed in `willUpdate`; nothing is derived or assigned here.
     const today = this._todayKey;
-    const minDate = this._activeRange()?.minDate ?? null;
-    // Spans, not days: the aggregate views step a month or a year at a time, so
-    // a floor that falls mid-span still leaves that span reachable. Comparing
-    // raw dates said otherwise and disagreed with the clamp in `_moveSpan`,
-    // which is what made the year view's arrow go dead on a span it had just
-    // arrived at. In the day view `_spanStart` is the identity, so this is the
-    // comparison it has always made.
-    const canGoBack =
-      minDate === null
-      || this._spanStart(this._selectedDate) > this._spanStart(minDate);
-    // Forward stops at the span that contains today, whatever a span is in the
-    // current view: tomorrow does not exist, and neither does next month. In the
-    // day view a span is a day and this is the comparison it has always made.
-    const canGoForward =
-      this._spanStart(this._selectedDate || today) < this._spanStart(today);
-    // The day and its offset used to head the card in words. The pills say the
-    // same thing and say it about every day at once, so the words went.
+    // What the toggle reveals, per view. The day row is the aggregate views'
+    // extra and the span rows are the day view's, so a single flag drives both
+    // conditions from opposite sides -- see `_navExpanded`.
+    const showSpanRows = this._viewMode !== "day" || this._navExpanded;
+    const showDayPills = this._viewMode === "day" || this._navExpanded;
     return html`
       <div class="nav">
         <div class="day-nav">
-          <!-- The pill row is a day picker and says nothing an aggregate view
-               can use, so the wider views drop it rather than showing a week of
-               days beside a month of columns. The wrapper stays: it is what the
-               toolbar wraps against, and the header's two-line behaviour is
-               pinned by spec. -->
-          ${this._viewMode !== "day" ? "" : html`<helman-solar-day-pills
+          <!-- Years over months, above the days they hold. The aggregate views
+               always show them because a span is what those views browse; the
+               day view shows them once the reader asks for more than the week
+               in front of them. -->
+          ${!showSpanRows ? "" : html`<helman-solar-span-pills
+            class="span-pills"
+            .hass=${this.hass}
+            .viewMode=${this._viewMode === "year" ? "year" : "month"}
+            .selectedDate=${this._selectedDate}
+            .minDate=${this._spanRange?.minDate ?? ""}
+            .todayKey=${today}
+            @span-pill-select=${this._handleSpanPillSelect}
+          ></helman-solar-span-pills>`}
+          <!-- Expanded, the row is a whole month and reads as a calendar; the
+               window itself is derived in _pillWindow, so the layout named here
+               is only ever describing days that have already been chosen. -->
+          ${!showDayPills ? "" : html`<helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
-            .selectedDate=${this._selectedDate}
+            .layout=${this._navExpanded ? "calendar" : "row"}
+            .selectedDate=${this._viewMode === "day" ? this._selectedDate : ""}
             .currentDate=${today}
             .startDate=${this._pillWindowStart}
             .endDate=${this._pillWindowEnd}
@@ -1505,32 +1512,21 @@ export class HelmanSolarInspector extends LitElement {
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
-          <!-- The aggregate views get the same manners the day view has: every
-               neighbouring span one click away, with the arrows there to leave
-               the row. It replaces the label that used to sit here — the pills
-               name the span on screen and name every other one with it. -->
-          ${this._viewMode === "day" ? "" : html`<helman-solar-span-pills
-            class="span-pills"
-            .hass=${this.hass}
-            .viewMode=${this._viewMode}
-            .selectedDate=${this._selectedDate}
-            .minDate=${this._spanRange?.minDate ?? ""}
-            .todayKey=${today}
-            @span-pill-select=${this._handleSpanPillSelect}
-          ></helman-solar-span-pills>`}
         </div>
         <div class="nav-actions">
-          <!-- One week per click rather than one day: the row already offers
-               every day of the week it shows, so what the buttons are for is
-               reaching a *different* week — then the pill picks the day.
+          <!-- The one way through the days that are not on screen, in the place
+               the week arrows held.
 
-               They lead the toolbar rather than standing beside the pills, so
+               It leads the toolbar rather than standing beside the pills, so
                that when the header runs out of width the row keeps a line to
                itself and every control drops to the next one together. -->
-          <div class="week-nav">
-            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("previous"))} ?disabled=${!canGoBack || this._viewLoading()} @click=${() => this._moveSpan(-1)}>&lsaquo;&lsaquo;</button>
-            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("next"))} ?disabled=${!canGoForward || this._viewLoading()} @click=${() => this._moveSpan(1)}>&rsaquo;&rsaquo;</button>
-          </div>
+          <button
+            class="icon-button nav-more ${this._navExpanded ? "active" : ""}"
+            type="button"
+            title=${this._t("bias_correction.inspector.more_days")}
+            aria-expanded=${this._navExpanded ? "true" : "false"}
+            @click=${() => { this._navExpanded = !this._navExpanded; }}
+          >&#9776;</button>
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${VIEW_STOPS.map((stop) => {
               const active = stop.minutes === undefined
@@ -1670,85 +1666,56 @@ export class HelmanSolarInspector extends LitElement {
     return this._viewMode === "day" ? this._loading : this._spanLoading;
   }
 
-  /**
-   * The bounds the view on screen navigates by.
-   *
-   * `null` until that view has loaded once, which the callers read as "no floor
-   * known yet" rather than as a floor of any particular depth.
-   */
-  private _activeRange(): NavigationRange | null {
-    return this._viewMode === "day" ? this._dayRange : this._spanRange;
-  }
-
   /** What one column is in the current view; the day view has no aggregate. */
   private _spanBucket(): "day" | "month" {
     return this._viewMode === "year" ? "month" : "day";
   }
 
   /**
+   * The first and last day of the calendar month a day falls in.
+   *
+   * View-independent on purpose, unlike `_spanStart`/`_spanEnd` below: the
+   * expanded pill row is a month of days whichever view is on screen, and
+   * asking those for a month while the year view is up would answer with a
+   * year. Both callers go through here so a month has one definition.
+   */
+  private _monthBounds(dayKey: string): { start: string; end: string } {
+    const { year, month } = this._parseIsoDate(dayKey);
+    // Day zero of the next month is the last of this one, leap years included.
+    const last = new Date(Date.UTC(year, month, 0));
+    return {
+      start: this._formatDateParts(year, month, 1),
+      end: this._formatDateParts(year, month, last.getUTCDate()),
+    };
+  }
+
+  /**
    * The first day of the span the given day falls in.
    *
    * A day in the day view, the containing month in the month view, the
-   * containing year in the year view. Navigation, the forward stop and the span
-   * request all key off this one definition, so they cannot disagree about
-   * where a span begins.
+   * containing year in the year view. The forward stop and the span request
+   * both key off this one definition, so they cannot disagree about where a
+   * span begins.
    */
   private _spanStart(dayKey: string): string {
-    const { year, month } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") return this._formatDateParts(year, month, 1);
+    const { year } = this._parseIsoDate(dayKey);
+    if (this._viewMode === "month") return this._monthBounds(dayKey).start;
     if (this._viewMode === "year") return this._formatDateParts(year, 1, 1);
     return dayKey;
   }
 
   /** The last day of the span the given day falls in. */
   private _spanEnd(dayKey: string): string {
-    const { year, month } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") {
-      // Day zero of the next month is the last of this one, leap years included.
-      const last = new Date(Date.UTC(year, month, 0));
-      return this._formatDateParts(year, month, last.getUTCDate());
-    }
+    const { year } = this._parseIsoDate(dayKey);
+    if (this._viewMode === "month") return this._monthBounds(dayKey).end;
     if (this._viewMode === "year") return this._formatDateParts(year, 12, 31);
     return dayKey;
   }
 
-  /** The span `delta` steps away, as its first day. */
-  private _addSpans(dayKey: string, delta: number): string {
-    const { year, month } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") {
-      const moved = new Date(Date.UTC(year, month - 1 + delta, 1));
-      return this._formatDateParts(moved.getUTCFullYear(), moved.getUTCMonth() + 1, 1);
-    }
-    if (this._viewMode === "year") return this._formatDateParts(year + delta, 1, 1);
-    return this._addDays(dayKey, delta * 7);
-  }
-
   /**
-   * Travel one span at a time.
+   * Put a span on screen, whichever pill asked for it.
    *
-   * A week in the day view -- unchanged, including the reason forward stops at
-   * today rather than at `maxDate` -- a month in the month view, a year in the
-   * year view. The clamp is the same in all three: never past the span that
-   * holds today, never before the day the recorder's history starts.
-   */
-  private _moveSpan(delta: number) {
-    if (this._viewMode === "day") {
-      this._moveWeek(delta);
-      return;
-    }
-    const today = this._todayIso();
-    const target = this._addSpans(this._selectedDate || today, delta);
-    const minDate = this._spanRange?.minDate ?? null;
-    const clamped = delta < 0
-      ? (minDate !== null && target < minDate ? this._spanStart(minDate) : target)
-      : (target > today ? this._spanStart(today) : target);
-    this._showSpan(clamped);
-  }
-
-  /**
-   * Put a span on screen, whether an arrow or a pill asked for it.
-   *
-   * The two ways in must agree on what changing span means -- the date moves,
+   * The ways in must agree on what changing span means -- the date moves,
    * the bucket the panel was describing is no longer in view, and the new span
    * has to be fetched -- so they share this rather than each doing it. Landing
    * on the span already shown is a no-op, which is what keeps a pill click on
@@ -1779,12 +1746,6 @@ export class HelmanSolarInspector extends LitElement {
     event.stopPropagation();
     this._showSpan(event.detail.date, event.detail.viewMode);
   };
-
-  /** The nav arrows say what a step actually is in the current view. */
-  private _spanNavKey(direction: "previous" | "next"): string {
-    const span = this._viewMode === "day" ? "week" : this._viewMode === "month" ? "month" : "year";
-    return `bias_correction.inspector.${direction}_${span}`;
-  }
 
   /**
    * One bucket in words -- a date in the month view, a month in the year view.
@@ -2139,16 +2100,36 @@ export class HelmanSolarInspector extends LitElement {
    * view first would briefly draw the wrong day.
    */
   private _drillInto(bucketKey: string) {
-    this._selectedBucket = null;
     if (this._viewMode === "month") {
-      this._viewMode = "day";
-      this._selectedDate = bucketKey;
-      this._ensureDayLoaded();
+      this._showDay(bucketKey);
       return;
     }
+    this._selectedBucket = null;
     this._viewMode = "month";
     this._selectedDate = bucketKey;
     this._loadSpan();
+  }
+
+  /**
+   * Put one day on screen in the day view, from wherever the card was.
+   *
+   * The three ways in -- drilling into a day column, clicking a day pill while
+   * an aggregate view is up, and picking a minutes stop -- all mean the same
+   * thing and must do the same three things: drop the bucket the panel was
+   * describing, move the view and the date together, and let
+   * `_ensureDayLoaded` decide whether a fetch is owed. Moving the view before
+   * the date would draw the wrong day for a frame, which is why they are
+   * assigned here rather than at each call site.
+   *
+   * The slot width is deliberately not touched: `_selectViewStop` leaves
+   * `_slotMinutes` alone for the two aggregate stops, so it still holds
+   * whatever the reader last chose and arriving here restores it.
+   */
+  private _showDay(dayKey: string) {
+    this._selectedBucket = null;
+    this._viewMode = "day";
+    this._selectedDate = dayKey;
+    this._ensureDayLoaded();
   }
 
   /**
@@ -4579,38 +4560,24 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Travel a week at a time, and let the pill row follow.
-   *
-   * Forward stops at today rather than at `maxDate`: today is where the row
-   * turns back into the forward-looking one, and the days beyond it are already
-   * on screen there, so stepping past would only skip over them.
-   */
-  private _moveWeek(delta: number) {
-    const today = this._todayIso();
-    const target = this._addDays(this._selectedDate || today, delta * 7);
-    const minDate = this._dayRange?.minDate ?? null;
-    const clamped = delta < 0
-      ? (minDate !== null && target < minDate ? minDate : target)
-      : (target > today ? today : target);
-    if (clamped === this._selectedDate) {
-      return;
-    }
-    this._selectedDate = clamped;
-    this._load();
-  }
-
-  /**
    * The days the pill row offers, derived from the selected one.
    *
-   * Forward, the row is what it has always been: today to the end of the
-   * forecast. Backward it becomes a fixed seven-day block, so every day of a
-   * week is one click away and paging lands on whole weeks. The block is a
-   * function of the selection alone — no offset to keep in step with it — and
-   * every day inside one block maps back to that same block, so clicking a pill
-   * never moves the row out from under the click.
+   * Expanded, the row is the calendar month around the selection, whichever
+   * view is on screen — that is what makes the grid a calendar rather than an
+   * arbitrary run of days, and it is why the bounds come from `_monthBounds`
+   * rather than from the view-dependent span helpers.
+   *
+   * Collapsed, the row is what it has always been: today to the end of the
+   * forecast when the selection is not behind, and otherwise a fixed seven-day
+   * block. The block is a function of the selection alone — no offset to keep
+   * in step with it — and every day inside one block maps back to that same
+   * block, so clicking a pill never moves the row out from under the click.
    */
   private _pillWindow(today: string): { start: string; end: string } {
     const selected = this._selectedDate || today;
+    if (this._navExpanded) {
+      return this._monthBounds(selected);
+    }
     if (selected >= today) {
       return { start: today, end: this._dayRange?.maxDate ?? today };
     }
@@ -4690,6 +4657,14 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
     event.stopPropagation();
+    // From an aggregate view the click is a change of granularity as well as of
+    // day -- the same move drilling into a day column makes -- so it goes
+    // through the one path that owns it. `_selectedDate` is a span start there,
+    // so the day is genuinely new even when the guard below would say otherwise.
+    if (this._viewMode !== "day") {
+      this._showDay(event.detail.date);
+      return;
+    }
     if (event.detail.date === this._selectedDate) {
       return;
     }
