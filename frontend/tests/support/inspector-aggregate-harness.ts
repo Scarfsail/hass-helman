@@ -251,10 +251,15 @@ export async function spanStarts(page: Page, bucket: "day" | "month"): Promise<s
  */
 export async function selectedSpan(page: Page): Promise<string> {
     return page.evaluate(() => {
-        const pills = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-span-pills");
-        return pills?.shadowRoot?.querySelector(".pill.selected")
-            ?.getAttribute("data-span") ?? "";
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills")?.shadowRoot;
+        // Both rows light up in the month view -- the year *and* the month
+        // inside it -- so the month is the narrower answer and the one that
+        // says which span is really on screen. The year view lights no month,
+        // and there the year is the whole answer.
+        const pill = root?.querySelector(".pill-row.months .pill.selected")
+            ?? root?.querySelector(".pill-row.years .pill.selected");
+        return pill?.getAttribute("data-span") ?? "";
     });
 }
 

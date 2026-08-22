@@ -1761,8 +1761,15 @@ export class HelmanSolarInspector extends LitElement {
    * rewriting the date, so that returning to the day view landed on the 1st
    * rather than the day the reader came from.
    */
-  private _showSpan(spanKey: string) {
-    if (spanKey === this._spanStart(this._selectedDate || this._todayIso())) return;
+  private _showSpan(spanKey: string, mode: InspectorViewMode = this._viewMode) {
+    // The mode is checked first and separately: picking a month from the year
+    // view lands on a span the year view would call unchanged, and it is still
+    // a move -- to a different view of it.
+    if (mode === this._viewMode
+      && spanKey === this._spanStart(this._selectedDate || this._todayIso())) {
+      return;
+    }
+    this._viewMode = mode;
     this._selectedDate = spanKey;
     this._selectedBucket = null;
     this._loadSpan();
@@ -1770,7 +1777,7 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleSpanPillSelect = (event: CustomEvent<SpanPillSelectDetail>): void => {
     event.stopPropagation();
-    this._showSpan(event.detail.date);
+    this._showSpan(event.detail.date, event.detail.viewMode);
   };
 
   /** The nav arrows say what a step actually is in the current view. */

@@ -1,37 +1,59 @@
 /**
- * The months or years the aggregate views offer, as a list of pills.
+ * The two rows of pills the aggregate views pick a span with: years, then
+ * months.
  *
- * The day view has always had a pill row: every day of its window one click
+ * The day view has always had a pill row — every day of its window one click
  * away, with the arrows there to reach a *different* window. The month and year
- * views had a label — words, not a control — and once the history floor became
- * the recorder's own answer rather than a training window, reaching two years
- * back meant twenty-four clicks of `‹‹`. This is what the row offers instead.
+ * views had a label instead: words, not a control. Once the history floor
+ * became the recorder's own answer rather than a training window, reaching two
+ * years back meant twenty-four clicks of `‹‹`.
+ *
+ * Two rows rather than one long one, because a span is two independent choices.
+ * The year row holds every year there is data for; the month row holds all
+ * twelve, always, with the ones outside the data *disabled rather than hidden*
+ * so the row never changes shape under the reader and a gap is visible as a
+ * gap. Keeping the months in fixed positions is also what lets a month stay
+ * picked while the year changes — the whole point of the second row.
  *
  * The list is derived here, away from the element, because everything about it
- * is arithmetic on two dates: where the data starts and where today is. The
- * module imports only types, so a spec exercises it directly rather than
- * through the card bundle.
+ * is arithmetic on three dates: where the data starts, where today is, and
+ * what is being browsed. The module imports only types, so a spec exercises it
+ * directly rather than through the card bundle.
  */
 
-/** Which span one pill stands for. The day view has its own, richer, row. */
+/**
+ * Which span one *view* is made of, which is not what the rows offer.
+ *
+ * `"month"` is the view whose columns are days — a month of them — so both a
+ * year and a month are being browsed and both rows have a lit pill.
+ * `"year"` is the view whose columns are months, so only a year is being
+ * browsed and the month row has nothing lit.
+ */
 export type SpanPillMode = "month" | "year";
 
 export interface SpanPill {
     /** The span's first day, `YYYY-MM-DD`. What selecting it asks the card for. */
     key: string;
-    /** "Mar", "Jan 2025", "2024" — what the pill says. */
+    /** "Mar", "2024" — what the pill says. Months never carry their year. */
     label: string;
-    /** Whether the browsed date falls inside this pill's span. */
+    /** Whether this pill is the one being browsed. */
     selected: boolean;
+    /** Whether there is no data for it, so it is shown but cannot be picked. */
+    disabled: boolean;
+}
+
+export interface SpanPillRows {
+    years: SpanPill[];
+    months: SpanPill[];
 }
 
 export interface SpanPillOptions {
     viewMode: SpanPillMode;
     /** The oldest date the aggregate views may reach, `YYYY-MM-DD`. */
     minDate: string;
-    /** Today in the house's time zone, `YYYY-MM-DD`. The row's far end. */
+    /** Today in the house's time zone, `YYYY-MM-DD`. The far end of both rows. */
     todayKey: string;
-    /** The date the card is browsing; the pill containing it reads selected. */
+    /** The date the card is browsing; its year and month are the lit ones. */
     selectedDate: string;
     /** Locale for the month names. Defaults to the runtime's. */
     locale?: string;
@@ -59,78 +81,125 @@ function isoFirstOfMonth(year: number, month: number): string {
     return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
 }
 
-function isoFirstOfYear(year: number): string {
-    return `${String(year).padStart(4, "0")}-01-01`;
-}
-
-/**
- * The pills, oldest first, from the floor's span through the one holding today.
- *
- * Both ends are real: the floor is where the recorder's statistics begin and
- * today is where they stop, so no pill in the row is unreachable and none needs
- * a disabled state. A floor the card has not learned yet — or one that is not a
- * date, or one later than today because a clock moved — collapses to the single
- * span holding today rather than to nothing, so the row never disappears out
- * from under the reader.
- */
-export function buildSpanPills(options: SpanPillOptions): SpanPill[] {
-    const { viewMode, minDate, todayKey, selectedDate, locale } = options;
-    const today = parseIsoDate(todayKey);
-    if (today === null) {
-        return [];
-    }
-    const floor = parseIsoDate(minDate) ?? today;
-    // The browsed date decides which pill is lit. Falling back to today rather
-    // than to nothing keeps exactly one pill selected while the card settles.
-    const selected = parseIsoDate(selectedDate) ?? today;
-
-    return viewMode === "year"
-        ? buildYearPills(floor, today, selected)
-        : buildMonthPills(floor, today, selected, locale);
-}
-
-function buildYearPills(floor: DateParts, today: DateParts, selected: DateParts): SpanPill[] {
-    const first = Math.min(floor.year, today.year);
-    const pills: SpanPill[] = [];
-    for (let year = first; year <= today.year; year += 1) {
-        pills.push({
-            key: isoFirstOfYear(year),
-            label: String(year),
-            selected: year === selected.year,
-        });
-    }
-    return pills;
-}
-
-function buildMonthPills(
-    floor: DateParts,
-    today: DateParts,
-    selected: DateParts,
-    locale: string | undefined,
-): SpanPill[] {
-    const firstIndex = Math.min(monthIndex(floor), monthIndex(today));
-    const lastIndex = monthIndex(today);
-    const selectedIndex = monthIndex(selected);
-    const pills: SpanPill[] = [];
-    for (let index = firstIndex; index <= lastIndex; index += 1) {
-        const year = Math.floor(index / 12);
-        const month = (index % 12) + 1;
-        // January carries its year, and so does the first pill whatever month it
-        // is: a row scrolled to its middle must never leave the reader working
-        // out which year they are looking at.
-        const withYear = month === 1 || index === firstIndex;
-        pills.push({
-            key: isoFirstOfMonth(year, month),
-            label: monthLabel(year, month, withYear, locale),
-            selected: index === selectedIndex,
-        });
-    }
-    return pills;
-}
-
 /** Months since year zero, so a range spanning a new year is one subtraction. */
 function monthIndex(parts: DateParts): number {
     return parts.year * 12 + (parts.month - 1);
+}
+
+/** The three dates every answer here is arithmetic on, once each. */
+interface Bounds {
+    floor: DateParts;
+    today: DateParts;
+    selected: DateParts;
+}
+
+/**
+ * Read the options into dates, or `null` if today is unreadable.
+ *
+ * A floor the card has not learned yet — the state on the first render, before
+ * the span load has answered — collapses to today's span rather than to
+ * nothing, so the rows never disappear out from under the reader. Same for a
+ * browsed date that is not one: something has to be lit.
+ */
+function readBounds(options: SpanPillOptions): Bounds | null {
+    const today = parseIsoDate(options.todayKey);
+    if (today === null) {
+        return null;
+    }
+    const floor = parseIsoDate(options.minDate) ?? today;
+    return {
+        today,
+        floor: monthIndex(floor) > monthIndex(today) ? today : floor,
+        selected: parseIsoDate(options.selectedDate) ?? today,
+    };
+}
+
+/** Both rows, ready to draw. Empty rows where the options say nothing. */
+export function buildSpanPillRows(options: SpanPillOptions): SpanPillRows {
+    const bounds = readBounds(options);
+    if (bounds === null) {
+        return { years: [], months: [] };
+    }
+    return {
+        years: buildYearPills(bounds),
+        months: buildMonthPills(bounds, options.viewMode, options.locale),
+    };
+}
+
+/**
+ * One pill per year with data, oldest first.
+ *
+ * The lit one is the browsed year in *both* view modes: a year view is browsing
+ * that year, and a month view is browsing a month inside it.
+ */
+function buildYearPills(bounds: Bounds): SpanPill[] {
+    const pills: SpanPill[] = [];
+    for (let year = bounds.floor.year; year <= bounds.today.year; year += 1) {
+        pills.push({
+            key: isoFirstOfMonth(year, 1),
+            label: String(year),
+            selected: year === bounds.selected.year,
+            // Every year in the range has at least the month that put it there.
+            disabled: false,
+        });
+    }
+    return pills;
+}
+
+/**
+ * All twelve months of the browsed year, in fixed positions.
+ *
+ * Disabled rather than omitted outside the data: a row that changed length as
+ * the year changed would move the months around under the pointer, and the
+ * whole reason the months sit in their own row is that one stays picked while
+ * the year moves beneath it. A disabled pill also says something a missing one
+ * cannot — that the month exists and the recorder has nothing for it.
+ *
+ * Nothing is lit in the year view. Its columns *are* the months, so lighting
+ * one would claim a narrower span than the view is showing.
+ */
+function buildMonthPills(
+    bounds: Bounds,
+    viewMode: SpanPillMode,
+    locale: string | undefined,
+): SpanPill[] {
+    const year = bounds.selected.year;
+    const pills: SpanPill[] = [];
+    for (let month = 1; month <= 12; month += 1) {
+        const index = monthIndex({ year, month });
+        pills.push({
+            key: isoFirstOfMonth(year, month),
+            label: monthLabel(year, month, locale),
+            selected: viewMode === "month" && month === bounds.selected.month,
+            disabled: index < monthIndex(bounds.floor) || index > monthIndex(bounds.today),
+        });
+    }
+    return pills;
+}
+
+/**
+ * Where clicking a year lands, given what is already being browsed.
+ *
+ * In the year view it is simply that year. In the month view the month is kept
+ * — switching year is meant to show the same month elsewhere in time, not to
+ * throw the choice away — and clamped into what that year actually has, so
+ * jumping to the current year from a December lands on the newest month rather
+ * than on one that has not happened.
+ */
+export function spanKeyForYear(options: SpanPillOptions, year: number): string | null {
+    const bounds = readBounds(options);
+    if (bounds === null) {
+        return null;
+    }
+    if (options.viewMode === "year") {
+        return isoFirstOfMonth(year, 1);
+    }
+    const wanted = monthIndex({ year, month: bounds.selected.month });
+    const clamped = Math.min(
+        Math.max(wanted, monthIndex(bounds.floor)),
+        monthIndex(bounds.today),
+    );
+    return isoFirstOfMonth(Math.floor(clamped / 12), (clamped % 12) + 1);
 }
 
 /**
@@ -139,15 +208,9 @@ function monthIndex(parts: DateParts): number {
  * Month names are one of the few things every locale already knows, and the
  * card names them this way everywhere else it prints a span.
  */
-function monthLabel(
-    year: number,
-    month: number,
-    withYear: boolean,
-    locale: string | undefined,
-): string {
+function monthLabel(year: number, month: number, locale: string | undefined): string {
     return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(locale, {
         timeZone: "UTC",
         month: "short",
-        ...(withYear ? { year: "numeric" } : {}),
     });
 }
