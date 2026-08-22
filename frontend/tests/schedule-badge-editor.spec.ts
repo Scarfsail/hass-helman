@@ -313,6 +313,80 @@ test.describe("opening the day editor from a scheduling badge", () => {
         expect(opened.target).toBe("boiler");
     });
 
+    /**
+     * A refused write keeps the day on screen -- correctly, since the draft is
+     * the only copy of it. Without the reason on screen too that reads as a
+     * dead Save: nothing closes, nothing is written, and why is in the console.
+     */
+    test("a refused save says why and keeps the draft on screen", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
+            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+        ]);
+        await pressBadge(page, "Boiler");
+
+        // The backend refuses the batch the way its slot validator does.
+        await page.evaluate(() => {
+            const hass = window.__fakeHass as any;
+            const inner = hass.callWS;
+            hass.callWS = async (msg: { type: string }) => {
+                if (msg.type === "helman/set_schedule") {
+                    throw {
+                        code: "invalid_slots",
+                        message: "Schedule slot must be within the rolling 48-hour horizon",
+                    };
+                }
+                return inner(msg);
+            };
+        });
+
+        // Clear the boiler's run, so there is a draft worth writing.
+        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        await expect(page.locator(".save-error")).toContainText(
+            "Schedule slot must be within the rolling 48-hour horizon",
+        );
+        expect((await editorState(page)).open).toBe(true);
+    });
+
+    /**
+     * The reload after a write can fail on its own -- and sets the same shared
+     * error the write would. Reporting that one here would tell the user their
+     * save failed over a day that was written, and leave them holding a draft
+     * whose only exit reads as throwing the edit away.
+     */
+    test("a write that lands is not reported as failed when the reload after it fails", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
+            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+        ]);
+        await pressBadge(page, "Boiler");
+
+        await page.evaluate(() => {
+            const hass = window.__fakeHass as any;
+            const inner = hass.callWS;
+            let written = false;
+            hass.callWS = async (msg: { type: string }) => {
+                if (msg.type === "helman/set_schedule") {
+                    written = true;
+                    return { success: true };
+                }
+                // The connection drops right after the write lands.
+                if (msg.type === "helman/get_schedule" && written) {
+                    throw { code: "timeout", message: "connection lost" };
+                }
+                return inner(msg);
+            };
+        });
+
+        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        expect(await page.locator(".save-error").count()).toBe(0);
+        expect((await editorState(page)).open).toBe(false);
+    });
+
     test("nothing is open until a badge is pressed", async ({ page }) => {
         await mount(page, [
             { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },

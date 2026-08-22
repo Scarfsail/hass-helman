@@ -35,7 +35,17 @@ export interface SharedScheduleOwner {
     getSnapshot(): ScheduleOwnerSnapshot;
     subscribe(listener: ScheduleOwnerListener): () => void;
     refresh(): Promise<void>;
-    applySchedulePatches(patches: readonly ScheduleSlotPatch[]): Promise<void>;
+    /**
+     * Write the batch, then reload. Resolves with the *write's* error, or null.
+     *
+     * The reload afterwards can fail on its own -- and does set the shared
+     * `error` on the snapshot when it does -- but that is a stale view of a
+     * schedule that was written, not a write that was refused. A caller
+     * reporting "your save failed" has to be able to tell the two apart.
+     */
+    applySchedulePatches(
+        patches: readonly ScheduleSlotPatch[],
+    ): Promise<ScheduleOwnerError | null>;
     setExecutionEnabled(enabled: boolean): Promise<void>;
 }
 
@@ -127,9 +137,11 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         await this._refreshSchedule();
     }
 
-    public async applySchedulePatches(patches: readonly ScheduleSlotPatch[]): Promise<void> {
+    public async applySchedulePatches(
+        patches: readonly ScheduleSlotPatch[],
+    ): Promise<ScheduleOwnerError | null> {
         if (patches.length === 0) {
-            return;
+            return null;
         }
 
         if (this._mutationRequest !== null) {
@@ -147,6 +159,9 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         this._error = null;
         this._emit();
 
+        // A holder rather than a plain local: it is written inside the closure
+        // below and read after it, which narrowing does not follow.
+        const outcome: { writeError: ScheduleOwnerError | null } = { writeError: null };
         const mutation = (async () => {
             try {
                 await this._helmanStore.applySchedulePatches(patches);
@@ -154,10 +169,15 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
                     return;
                 }
 
+                // Only the write above reaches `outcome`. `_refreshSchedule`
+                // handles its own failure and does not rethrow, so a reload
+                // that fails after a write that did not leaves this null --
+                // which is the whole point of reporting the two apart.
                 await this._refreshSchedule();
             } catch (error) {
                 if (this._hass.connection === connection) {
-                    this._error = _normalizeOwnerError(error);
+                    outcome.writeError = _normalizeOwnerError(error);
+                    this._error = outcome.writeError;
                     console.error("schedule: failed to update schedule", error);
                 }
             } finally {
@@ -176,6 +196,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         this._mutationRequest = trackedMutation;
 
         await trackedMutation;
+        return outcome.writeError;
     }
 
     public async setExecutionEnabled(enabled: boolean): Promise<void> {

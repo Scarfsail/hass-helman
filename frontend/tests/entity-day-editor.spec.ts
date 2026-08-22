@@ -22,6 +22,11 @@ const DAY_TWO = "2026-07-25";
 const NOW_MS = Date.parse(`${DAY_ONE}T10:30:00Z`);
 
 async function loadCardBundle(page: Page): Promise<void> {
+    // Save reads the wall clock, not the injected `nowMs`, because that is the
+    // clock the backend validates the patch against. Pin it to the same
+    // fictional morning the fixture is built around, or every drafted slot is
+    // long elapsed by the time the press lands.
+    await page.clock.setFixedTime(NOW_MS);
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-editor"));
@@ -485,6 +490,53 @@ test.describe("entity day editor", () => {
         expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
             `${DAY_ONE}T10:00:00.000Z`,
         ]);
+    });
+
+    /**
+     * The render clock lags the wall clock by up to 30s, and the backend
+     * agrees with neither: it floors its *own* clock to the slot and refuses
+     * anything starting before that. A press just after a boundary therefore
+     * used to carry the slot that had just elapsed, and because the request is
+     * validated as a whole, the day's entire edit was refused over one slot
+     * that was never savable -- silently, with the dialog left open.
+     */
+    test("a slot that elapsed since the last clock tick is dropped, not sent", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // A block from the slot running now (10:00) through 13:00.
+        await page.locator(".block-list .link-button").click();
+        await page.locator(".edit-panel select").nth(1).selectOption(
+            String(Date.parse(`${DAY_ONE}T13:00:00Z`)),
+        );
+
+        // The wall clock crosses into the next slot. `nowMs` is untouched --
+        // that is exactly the window this guards: the card has not ticked yet.
+        await page.clock.setFixedTime(Date.parse(`${DAY_ONE}T11:30:00Z`));
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        const [patches] = await savedPatches(page);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
+            `${DAY_ONE}T11:00:00.000Z`,
+            `${DAY_ONE}T12:00:00.000Z`,
+        ]);
+    });
+
+    /** Nothing writable left is still an answer, not a dead button. */
+    test("a draft that elapsed entirely says so rather than doing nothing", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await page.locator(".block-list .link-button").click();
+        await page.clock.setFixedTime(Date.parse(`${DAY_ONE}T11:30:00Z`));
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        expect(await savedPatches(page)).toEqual([]);
+        await expect(page.locator(".save-error")).toContainText(
+            "scheduling.entity_editor.save_elapsed",
+        );
     });
 
     test("clicking a block on the band opens the panel and keeps it open", async ({ page }) => {

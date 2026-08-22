@@ -54,7 +54,12 @@ import { getScheduleApplianceActionPresentation } from "../model/schedule-applia
 import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
-import type { ScheduleApplianceAction, ScheduleSlot, ScheduleSlotPatch } from "../schedule-types";
+import type {
+    ScheduleApplianceAction,
+    ScheduleOwnerError,
+    ScheduleSlot,
+    ScheduleSlotPatch,
+} from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-action-editor";
 
@@ -225,6 +230,16 @@ export class SchedulingEntityDayEditor extends LitElement {
                 font-size: 0.82rem;
             }
 
+            .save-error {
+                display: flex;
+                gap: 8px;
+                padding: 8px 10px;
+                border: 1px solid color-mix(in srgb, var(--error-color, #db4437) 40%, var(--divider-color));
+                border-radius: 10px;
+                background: color-mix(in srgb, var(--error-color, #db4437) 10%, var(--card-background-color));
+                font-size: 0.82rem;
+            }
+
             .block-list {
                 display: flex;
                 flex-direction: column;
@@ -368,6 +383,14 @@ export class SchedulingEntityDayEditor extends LitElement {
     @property({ type: Boolean }) public busy = false;
     /** The schedule changed under the draft; Save will overwrite what arrived. */
     @property({ type: Boolean }) public scheduleChanged = false;
+    /**
+     * Why the last Save did not land, as the backend put it.
+     *
+     * A rejected write leaves the dialog open over the draft that caused it,
+     * which without this reads as a dead button: nothing closes, nothing
+     * changes, and the reason is only in the console.
+     */
+    @property({ attribute: false }) public saveError: ScheduleOwnerError | null = null;
 
     /**
      * The slots as they were when the dialog opened.
@@ -387,6 +410,14 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The block the pointer is over, in either the list or the band. */
     @state() private _hoveredBlockKey: string | null = null;
     @state() private _mode: EntityDayEditorMode = "edit";
+    /**
+     * The press found nothing left to write: every drafted slot had elapsed.
+     *
+     * Rare, and cleared by the next edit or the next press, but it is the one
+     * other way Save can decline to do anything -- and a Save that declines
+     * silently is what made this dialog look broken in the first place.
+     */
+    @state() private _elapsedDraftNotice = false;
     /** The slot Explain mode is accounting for, and the lane it belongs to. */
     @state() private _explainSelection: { laneKey: string; slotId: string } | null = null;
     /**
@@ -501,6 +532,14 @@ export class SchedulingEntityDayEditor extends LitElement {
         if (this.open && !this._historyEntryActive && changedProperties.has("open")) {
             this._pushHistoryEntry();
         }
+
+        // The banner sits at the end of the scrolling body while Save sits in
+        // the pinned footer, so on a tall day it can appear below the fold --
+        // leaving the press looking as unanswered as it did before there was a
+        // banner at all. `nearest` scrolls only as far as it has to.
+        if (changedProperties.has("saveError") || changedProperties.has("_elapsedDraftNotice")) {
+            this.shadowRoot?.querySelector(".save-error")?.scrollIntoView({ block: "nearest" });
+        }
     }
 
     render() {
@@ -601,6 +640,12 @@ export class SchedulingEntityDayEditor extends LitElement {
                         ${this._renderBlockList(day, selectedLane, blocks, editingBlock?.key ?? null)}
                         ${this._renderEditPanel(day, selectedLane, blocks, editingBlock)}
                     `}
+
+                    <!--
+                        Last in the content, so a refused Save is next to the
+                        button that refused rather than scrolled off the top.
+                    -->
+                    ${this._renderSaveError()}
                 </div>
 
                 <ha-dialog-footer slot="footer">
@@ -612,6 +657,34 @@ export class SchedulingEntityDayEditor extends LitElement {
                     </ha-button>
                 </ha-dialog-footer>
             </ha-dialog>
+        `;
+    }
+
+    /**
+     * Why the day is still on screen after a Save.
+     *
+     * The backend's own message is carried through rather than folded into one
+     * generic line: "slot must be within the rolling 48-hour horizon" and
+     * "targetSoc must be between 20 and 90" ask for different fixes, and only
+     * the writer of the draft can make either of them.
+     */
+    private _renderSaveError() {
+        // The local notice first: it is set by the press happening now, while
+        // `saveError` is the backend's answer to the press before it.
+        const message = this._elapsedDraftNotice
+            ? this.localize("scheduling.entity_editor.save_elapsed")
+            : this.saveError === null
+                ? null
+                : `${this.localize("scheduling.entity_editor.save_failed")} ${this.saveError.message}`;
+        if (message === null) {
+            return nothing;
+        }
+
+        return html`
+            <div class="save-error" role="alert">
+                <ha-icon icon="mdi:alert-circle-outline"></ha-icon>
+                <span>${message}</span>
+            </div>
         `;
     }
 
@@ -946,6 +1019,9 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
+        // The draft it was about is being changed, so the answer it gave is
+        // no longer about anything on screen.
+        this._elapsedDraftNotice = false;
         this._drafts = { ...this._drafts, [this._selectedLaneKey]: draft };
     }
 
@@ -961,6 +1037,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._drafts = {};
         this._draftBeforeEdit = {};
         this._editing = null;
+        this._elapsedDraftNotice = false;
         // Every opening is an opening to edit: the dialog is reached by
         // pressing something the user means to change far more often than
         // something they mean to have explained.
@@ -1606,18 +1683,31 @@ export class SchedulingEntityDayEditor extends LitElement {
             : this.localize("scheduling.authorship.mixed");
     }
 
-    private _isDirty(): boolean {
-        return areEntityScheduleLanesDirty(this._baselineSlots, this._laneDrafts(), this.nowMs);
+    private _isDirty(nowMs: number = this.nowMs): boolean {
+        return areEntityScheduleLanesDirty(this._baselineSlots, this._laneDrafts(), nowMs);
     }
 
-    private _canSave(): boolean {
+    private _canSave(nowMs: number = this.nowMs): boolean {
         return !this.busy
-            && this._isDirty()
+            && this._isDirty(nowMs)
             && (this._editing === null || this._editing.valid);
     }
 
     private _handleSave(): void {
-        if (!this._canSave()) {
+        // The render clock, not the write clock: `nowMs` is sampled every 30s,
+        // so for up to that long after a slot boundary it still reports the
+        // elapsed slot as writable. Sending it takes the *whole* batch down --
+        // the backend validates the request up front and rejects a patch that
+        // starts before its own current slot -- so the day's edit is lost over
+        // one slot that was never savable. Read the clock here instead, and
+        // let the elapsed slot drop out the same way the UI will on its next
+        // tick.
+        const nowMs = Date.now();
+        this._elapsedDraftNotice = false;
+        if (!this._canSave(nowMs)) {
+            // Enabled against the render clock, declined against this one: the
+            // whole draft elapsed in the last tick.
+            this._elapsedDraftNotice = this._canSave();
             return;
         }
 
@@ -1627,12 +1717,13 @@ export class SchedulingEntityDayEditor extends LitElement {
         const patches = buildEntityScheduleLanePatches({
             slots: this._baselineSlots,
             lanes: this._laneDrafts(),
-            nowMs: this.nowMs,
+            nowMs,
         });
         // Nothing writable left -- the drafted slots elapsed between the press
         // and here. Stay open rather than close as if the day had been saved;
         // Save disables itself as soon as the next tick re-reads the drafts.
         if (patches.length === 0) {
+            this._elapsedDraftNotice = true;
             return;
         }
 

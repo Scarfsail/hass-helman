@@ -49,6 +49,7 @@ import {
 } from "../model/slot-forecast-model";
 import type {
     NormalizedScheduleModel,
+    ScheduleOwnerError,
     ScheduleOwnerSnapshot,
 } from "../schedule-types";
 
@@ -144,6 +145,14 @@ export class SchedulingDayEditorHost extends LitElement {
     @state() private _editorDayKey: string | null = null;
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
+    /**
+     * Why the open draft's last Save was rejected, or null if none was.
+     *
+     * Held here rather than read from the owner snapshot at render time: the
+     * owner's error is shared by every view of the schedule and outlives this
+     * dialog, while this is about the draft on screen and dies with it.
+     */
+    @state() private _editorSaveError: ScheduleOwnerError | null = null;
 
     private _nowTimer?: number;
     private _localizeFn?: LocalizeFunction;
@@ -158,6 +167,8 @@ export class SchedulingDayEditorHost extends LitElement {
     private _opened = false;
     /** The schedule the open draft was seeded from, to notice a refresh under it. */
     private _editorScheduleAtOpen: unknown = null;
+    /** Bumped per opening, so a write can tell whether its draft is still up. */
+    private _editorOpening = 0;
 
     private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
@@ -224,7 +235,9 @@ export class SchedulingDayEditorHost extends LitElement {
         void this._loadActualHistory();
         void this._loadForecast();
         void this._loadProjections();
+        this._editorOpening += 1;
         this._editorScheduleChanged = false;
+        this._editorSaveError = null;
         this._editorScheduleAtOpen = this._ownerSnapshot.schedule;
         this._editorLane = target === null
             ? null
@@ -305,6 +318,7 @@ export class SchedulingDayEditorHost extends LitElement {
                 .nowMs=${this._nowMs}
                 .busy=${this._ownerSnapshot.writing}
                 .scheduleChanged=${this._editorScheduleChanged}
+                .saveError=${this._editorSaveError}
                 @closed=${this._handleEditorClosed}
                 @entity-schedule-save=${this._handleEditorSave}
             ></scheduling-entity-day-editor>
@@ -318,6 +332,7 @@ export class SchedulingDayEditorHost extends LitElement {
         this._editorLane = null;
         this._editorDayKey = null;
         this._editorScheduleChanged = false;
+        this._editorSaveError = null;
         this._editorScheduleAtOpen = null;
     };
 
@@ -330,10 +345,32 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     private _handleEditorSave = async (event: CustomEvent<EntityScheduleSaveDetail>): Promise<void> => {
         event.stopPropagation();
+        // Cleared per attempt, so the banner is never the previous press's
+        // answer to a draft the user has since changed.
+        this._editorSaveError = null;
+        const opening = this._editorOpening;
         const patches = event.detail.patches;
         if (patches.length > 0) {
-            await this._scheduleOwner?.applySchedulePatches(patches);
-            if (this._ownerSnapshot.error !== null) {
+            const writeError = await this._scheduleOwner?.applySchedulePatches(patches) ?? null;
+            // The dialog was closed and opened again while the write was in
+            // flight: whatever it answered is about a draft that is no longer
+            // on screen, and pinning it to the fresh one would accuse an edit
+            // nobody has tried to save yet.
+            if (opening !== this._editorOpening) {
+                return;
+            }
+
+            if (writeError !== null) {
+                // Kept open over the draft that was refused -- and now saying
+                // so. Without the message this is a dead button: nothing
+                // closes, nothing is written, and the reason reaches only the
+                // console.
+                //
+                // The write's own error, not the owner's: the reload that runs
+                // after a successful write sets that one too, and reporting it
+                // here would tell the user their save failed over a day that
+                // was written.
+                this._editorSaveError = writeError;
                 return;
             }
         }

@@ -297,6 +297,8 @@
       "previous_day": "Předchozí den",
       "next_day": "Další den",
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
+      "save_failed": "Uložení se nezdařilo:",
+      "save_elapsed": "Upravené sloty už mezitím proběhly, takže není co uložit.",
       "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte.",
       "title": "Plán zařízení",
       "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok.",
