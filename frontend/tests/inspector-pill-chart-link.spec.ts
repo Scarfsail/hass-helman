@@ -1,0 +1,190 @@
+import { test, expect, type Page } from "@playwright/test";
+import {
+    STOP_MONTH_VIEW,
+    STOP_YEAR_VIEW,
+    clickStop,
+    columns,
+    clickColumn,
+    columnsWithClass,
+    dayPillDates,
+    dayPillsWithClass,
+    hoverColumn,
+    hoverDayPill,
+    loadCardBundle,
+    mountInspector,
+    toggleMore,
+    waitForAggregateChart,
+    waitForDayChart,
+} from "./support/inspector-aggregate-harness";
+
+/**
+ * The day pills and the aggregate chart, as one surface.
+ *
+ * At D a column *is* a day, and once the picker puts the day pills on screen
+ * the same day is drawn twice, a few pixels apart. Two elements each working
+ * out its own highlight would be two answers to one question — so the card
+ * holds the hovered day and both are handed it back, which is what lets a
+ * hover on either light the other.
+ *
+ * The colours are the ones already in the card, and the distinction they draw
+ * is the one it already draws: blue `--primary-color` is the day the card has
+ * loaded, amber `--helman-selection` is the column the reader clicked to read
+ * its numbers. They mean different things and can land on one pill.
+ */
+
+const THIS_YEAR = new Date().getUTCFullYear();
+
+/** The D view with the picker open: columns and pills showing the same month. */
+async function openDayColumnsWithPills(page: Page): Promise<void> {
+    await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+    await waitForDayChart(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+    await toggleMore(page);
+}
+
+test.describe("the day pills and the chart highlight together", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("hovering a column lights its pill", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        const keys = await columns(page);
+        const index = Math.floor(keys.length / 2);
+        const wanted = keys[index];
+        // The pill has to exist for the assertion to mean anything: the row is
+        // the whole month, the columns are the month's days.
+        expect(await dayPillDates(page)).toContain(wanted);
+
+        await hoverColumn(page, index);
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([wanted]);
+    });
+
+    test("hovering a pill lights its column", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        const keys = await columns(page);
+        const wanted = keys[Math.floor(keys.length / 2)];
+
+        await hoverDayPill(page, wanted);
+        expect(await columnsWithClass(page, "hovered")).toEqual([wanted]);
+        // And the pill wears the same class it would have from a chart hover:
+        // one rule, so the two directions are indistinguishable.
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([wanted]);
+    });
+
+    test("leaving a pill clears both", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        const wanted = (await columns(page))[2];
+        await hoverDayPill(page, wanted);
+        expect(await columnsWithClass(page, "hovered")).toEqual([wanted]);
+
+        await hoverDayPill(page, null);
+        expect(await columnsWithClass(page, "hovered")).toEqual([]);
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
+    });
+
+    test("the clicked column's day wears the chart's amber in the row", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        const keys = await columns(page);
+        const index = Math.floor(keys.length / 2);
+        await clickColumn(page, index);
+        expect(await dayPillsWithClass(page, "bucket-selected")).toEqual([keys[index]]);
+        // The column it came from is still the selected one, so the two sides
+        // are saying the same thing rather than the row having its own idea.
+        expect(await columnsWithClass(page, "selected")).toEqual([keys[index]]);
+
+        // Clicking it again clears the selection, on both sides.
+        await clickColumn(page, index);
+        expect(await dayPillsWithClass(page, "bucket-selected")).toEqual([]);
+        expect(await columnsWithClass(page, "selected")).toEqual([]);
+    });
+
+    test("the browsed day and the selected column can be one pill", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        // A theme background, because both fills are a `color-mix` against it
+        // and a page without one computes them transparent -- which would make
+        // "the amber took the fill" vacuously true.
+        await page.evaluate(() => {
+            (document.querySelector("helman-solar-inspector") as HTMLElement)
+                .style.setProperty("--card-background-color", "#ffffff");
+        });
+
+        const keys = await columns(page);
+        const wanted = keys[Math.floor(keys.length / 2)];
+        await clickColumn(page, keys.indexOf(wanted));
+
+        // The card never lights both itself -- it clears the bucket on the way
+        // into the day view -- so the coincidence is staged on the element.
+        // What is under test is the styling contract, not that route.
+        //
+        // Read through a poll rather than once: the pill transitions its border
+        // and background over 120ms, so a single read lands mid-animation and
+        // compares against a colour that is on its way somewhere.
+        const look = (day: string) => page.evaluate((wanted) => {
+            const pill = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-day-pills")
+                .shadowRoot.querySelector(`.pill[data-day="${wanted}"]`) as HTMLElement;
+            const style = getComputedStyle(pill);
+            return {
+                classes: [...pill.classList].sort().join(" "),
+                background: style.backgroundColor,
+                borderColor: style.borderTopColor,
+                boxShadow: style.boxShadow,
+            };
+        }, day);
+
+        // Amber takes the border and the fill on the chart's selected day.
+        await expect.poll(() => look(wanted).then((seen) => seen.borderColor))
+            .toBe("rgb(245, 158, 11)");
+        const bucketOnly = await look(wanted);
+        expect(bucketOnly.classes.split(" ")).toContain("bucket-selected");
+        expect(bucketOnly.classes.split(" ")).not.toContain("selected");
+        expect(bucketOnly.background).not.toBe("rgba(0, 0, 0, 0)");
+        // Nothing else is claiming this pill yet, so there is no ring.
+        expect(bucketOnly.boxShadow).toBe("none");
+
+        // Now let the card's browsed day land on the same pill.
+        await page.evaluate((day) => {
+            const pills = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-day-pills") as any;
+            pills.selectedDate = day;
+            return pills.updateComplete;
+        }, wanted);
+
+        await expect.poll(() => look(wanted).then((seen) => seen.classes))
+            .toBe("bucket-selected history pill selected");
+        const both = await look(wanted);
+        // The amber is unchanged -- it still says "this is the column being
+        // read" exactly as it did before the other state arrived.
+        expect(both.borderColor).toBe("rgb(245, 158, 11)");
+        expect(both.background).toBe(bucketOnly.background);
+        // And the blue ring survives underneath it, which is the whole reason
+        // the two can coexist: neither claim is lost.
+        expect(both.boxShadow).toContain("inset");
+        expect(both.boxShadow).toContain("37, 99, 235");
+    });
+
+    test("a month column lights no pill", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+        await toggleMore(page);
+
+        // The row is on screen and full of days, so "nothing lit" is a real
+        // answer rather than an empty row's.
+        expect((await dayPillDates(page)).length).toBeGreaterThan(20);
+
+        await hoverColumn(page, 3);
+        expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
+        // The chart still highlights its own column — only the correspondence
+        // to a day is missing at M, not the hover.
+        expect((await columnsWithClass(page, "hovered")).length).toBe(1);
+    });
+});

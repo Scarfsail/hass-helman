@@ -61,6 +61,17 @@ export interface DayPillSelectDetail {
 }
 
 /**
+ * The day under the pointer, or null as it leaves.
+ *
+ * Raised rather than acted on, because the row is not the only thing drawing
+ * this day: at D the aggregate chart's columns are these same days, and the
+ * card is what holds the one answer both of them highlight from.
+ */
+export interface DayPillHoverDetail {
+    date: string | null;
+}
+
+/**
  * The forecast payload's health, handed up to the inspector.
  *
  * The pills are the only always-mounted part of the inspector that fetches the
@@ -133,10 +144,6 @@ export class HelmanSolarDayPills extends LitElement {
             transition: border-color 120ms ease, background-color 120ms ease;
         }
 
-        .pill:hover {
-            border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
-        }
-
         /* Dimmed, not dropped: a calendar that hid the days it cannot open
            would change shape as the reader moved between months, and the gap
            at the far end of the history is worth seeing as a gap. Same
@@ -156,6 +163,30 @@ export class HelmanSolarDayPills extends LitElement {
             border-color: var(--primary-color, #2563eb);
             background: color-mix(in srgb, var(--primary-color, #2563eb) 14%, var(--card-background-color));
             box-shadow: inset 0 0 0 1px var(--primary-color, #2563eb);
+        }
+
+        /* The column the reader clicked in the aggregate chart, in the amber
+           that column is already filled with -- same token, same 18 %, because
+           it is the same fact drawn twice.
+
+           After the .selected rule on purpose. The two can land on one pill:
+           the day
+           the card has loaded is blue, the column being read is amber, and when
+           they coincide the amber takes the fill while the blue keeps its inner
+           ring, so neither claim is lost. */
+        .pill.bucket-selected {
+            border-color: var(--helman-selection);
+            background: color-mix(in srgb, var(--helman-selection) 18%, var(--card-background-color));
+        }
+
+        /* One rule for both directions, and last so it reads over either
+           selected state -- the pointer is about the pill under it, whatever is
+           already picked. The .hovered class is set from the card, so a hover
+           that
+           started on a chart column looks exactly like one that started here. */
+        .pill:hover,
+        .pill.hovered {
+            border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
         }
 
         /* The label sets the pill's floor, so it is never clipped: a day nobody
@@ -208,6 +239,22 @@ export class HelmanSolarDayPills extends LitElement {
      */
     @property({ type: String }) public reachableFrom = "";
     @property({ type: String }) public reachableTo = "";
+    /**
+     * The day the card says is hovered, from this row's pointer or the chart's.
+     *
+     * Not derived from `:hover` even for this row's own pointer: the highlight
+     * has to look the same whichever side it came from, and one class driven
+     * from one place is what guarantees that.
+     */
+    @property({ type: String }) public hoveredDate: string | null = null;
+    /**
+     * The bucket selected in the aggregate chart, when a bucket is a day.
+     *
+     * A different thing from `selectedDate` and drawn differently: this is the
+     * column the reader clicked to read its numbers, `selectedDate` is the day
+     * the card has loaded. Both can land on one pill.
+     */
+    @property({ type: String }) public selectedBucket: string | null = null;
     /**
      * Today, in the house's time zone. Named separately from `startDate`
      * because the window can sit entirely in the past, and it is today that
@@ -340,15 +387,20 @@ export class HelmanSolarDayPills extends LitElement {
         // whether it can be clicked.
         const unreachable = (this.reachableFrom !== "" && pill.dayKey < this.reachableFrom)
             || (this.reachableTo !== "" && pill.dayKey > this.reachableTo);
+        const hovered = pill.dayKey === this.hoveredDate;
+        const bucketSelected = pill.dayKey === this.selectedBucket;
         return html`
             <button
-                class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`}
+                class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`
+                    + `${hovered ? " hovered" : ""}${bucketSelected ? " bucket-selected" : ""}`}
                 type="button"
                 data-day=${pill.dayKey}
                 data-history=${pill.isHistory ? "true" : "false"}
                 ?disabled=${unreachable}
                 aria-pressed=${selected ? "true" : "false"}
                 @click=${() => this._select(pill.dayKey)}
+                @mouseenter=${() => this._hover(pill.dayKey)}
+                @mouseleave=${() => this._hover(null)}
             >
                 <span class="pill-label">${pill.label}</span>
                 ${renderDayAggregateGauge({
@@ -379,6 +431,25 @@ export class HelmanSolarDayPills extends LitElement {
     }
 
     /** Re-selecting the shown day would reload it for nothing. */
+    /**
+     * Report the day under the pointer.
+     *
+     * No guard on the value being unchanged: `mouseenter` and `mouseleave` fire
+     * once per pill crossed, not per pointer move, so there is nothing to
+     * debounce -- and the card skips its own redundant writes anyway. A
+     * disabled pill sends nothing, because the browser dispatches no mouse
+     * events on one; the chart can still light it through `hoveredDate`, which
+     * is right, since naming a day the row cannot open is not a claim that it
+     * can be.
+     */
+    private _hover(dayKey: string | null): void {
+        this.dispatchEvent(new CustomEvent<DayPillHoverDetail>("day-pill-hover", {
+            bubbles: true,
+            composed: true,
+            detail: { date: dayKey },
+        }));
+    }
+
     private _select(dayKey: string): void {
         if (dayKey === this.selectedDate) {
             return;

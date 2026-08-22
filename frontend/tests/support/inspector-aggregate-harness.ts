@@ -451,6 +451,88 @@ export async function sectionMetrics(page: Page, index: number): Promise<Record<
     }, index);
 }
 
+/**
+ * Move the pointer onto one aggregate column.
+ *
+ * `mousemove` rather than `mouseenter`, because that is what the chart listens
+ * for -- its popup follows the cursor within a column as well as between them.
+ */
+export async function hoverColumn(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
+            .dispatchEvent(new MouseEvent("mousemove", {
+                bubbles: true,
+                composed: true,
+                clientX: 10,
+                clientY: 10,
+            }));
+        return host.updateComplete;
+    }, index);
+}
+
+/** Move the pointer onto one day pill, or off it when `day` is null. */
+export async function hoverDayPill(page: Page, day: string | null): Promise<void> {
+    await page.evaluate((wanted) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        const root = host.shadowRoot.querySelector("helman-solar-day-pills").shadowRoot;
+        const selector = wanted === null ? ".pill" : `.pill[data-day="${wanted}"]`;
+        (root.querySelector(selector) as HTMLElement)
+            .dispatchEvent(new MouseEvent(wanted === null ? "mouseleave" : "mouseenter", {
+                bubbles: true,
+                composed: true,
+            }));
+        return host.updateComplete;
+    }, day);
+}
+
+/** The days whose pill carries the given class, in row order. */
+export async function dayPillsWithClass(page: Page, cls: string): Promise<string[]> {
+    return page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(`.pill.${wanted}`)]
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
+    }, cls);
+}
+
+/**
+ * The buckets whose column tint carries the given class, in chart order.
+ *
+ * Deduped, because a bucket gets one tint rect per hit row -- the SoC row and
+ * the money row each carry the pointer as well as the chart does -- and a test
+ * about *which* bucket is lit should not have to know how many rows there are.
+ */
+export async function columnsWithClass(page: Page, cls: string): Promise<string[]> {
+    return page.evaluate((wanted) => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")?.shadowRoot;
+        if (!root) return [];
+        return [...new Set([...root.querySelectorAll(`.bucket-tint.${wanted}`)]
+            .map((rect: Element) => rect.getAttribute("data-bucket") ?? ""))];
+    }, cls);
+}
+
+/**
+ * Click a column and wait only for the card to re-render.
+ *
+ * The difference from `selectColumn` is what is *not* waited for: the drill
+ * button belongs to a bucket the card can open, and a future day of the current
+ * month has no such button. A test about the selection itself must not require
+ * one.
+ */
+export async function clickColumn(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
+            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        return host.updateComplete;
+    }, index);
+}
+
 /** Click a column, and wait for the selected-bucket panel it opens. */
 export async function selectColumn(page: Page, index: number): Promise<void> {
     await page.evaluate((i) => {

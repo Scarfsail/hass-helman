@@ -1,5 +1,5 @@
 import { LitElement, css, html, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { helmanColorVars } from "../color-vars";
@@ -229,8 +229,16 @@ export class HelmanSolarAggregateChart extends LitElement {
      */
     @property({ type: String }) public currency = "";
 
-    /** The column under the pointer, as an index into {@link rows}. */
-    @state() private _hoveredIndex: number | null = null;
+    /**
+     * The bucket the card says is hovered, or null.
+     *
+     * Owned there rather than here, and this element draws what comes back
+     * rather than what its own pointer did. That round trip is the point: at D
+     * the day pills are showing the same days as these columns, and a hover
+     * either of them kept to itself could not light the other. The pointer
+     * handlers below still *report* -- they just no longer decide.
+     */
+    @property({ type: String }) public hoveredKey: string | null = null;
 
     private _t(key: string): string {
         const localize: LocalizeFunction = this.hass
@@ -685,7 +693,7 @@ export class HelmanSolarAggregateChart extends LitElement {
     ) {
         return rows.map((row, index) => {
             const selected = row.date === this.selectedKey;
-            const hovered = this._hoveredIndex === index;
+            const hovered = row.date === this.hoveredKey;
             // Hover reads over selection, as it does on the chart: the pointer
             // is about the column under it, whatever is already picked.
             const style = hovered
@@ -763,12 +771,13 @@ export class HelmanSolarAggregateChart extends LitElement {
         xFor: (index: number) => number,
         columnWidth: number,
     ) {
-        if (this._hoveredIndex === null) return nothing;
+        const index = this._hoveredIndex();
+        if (index === null) return nothing;
         const height = CHART.height - CHART.marginTop - CHART.marginBottom;
         return svg`
             <rect
                 class="bucket-hover"
-                x=${xFor(this._hoveredIndex)} y=${CHART.marginTop}
+                x=${xFor(index)} y=${CHART.marginTop}
                 width=${columnWidth} height=${height}
                 style="fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection);"
                 stroke-width="1" pointer-events="none"
@@ -834,6 +843,19 @@ export class HelmanSolarAggregateChart extends LitElement {
     }
 
     /**
+     * Where {@link hoveredKey} falls in {@link rows}, or null if nowhere.
+     *
+     * Only the full-height overlay needs this -- it is positioned by index --
+     * and a key naming a bucket this span does not have is a miss, not a zero:
+     * the card's key can outlive a span change by a frame.
+     */
+    private _hoveredIndex(): number | null {
+        if (this.hoveredKey === null) return null;
+        const index = this.rows.findIndex((row) => row.date === this.hoveredKey);
+        return index === -1 ? null : index;
+    }
+
+    /**
      * Track the hovered column and tell the inspector where the pointer is.
      *
      * The popup itself is the inspector's, not this element's: the day view
@@ -846,7 +868,6 @@ export class HelmanSolarAggregateChart extends LitElement {
      * cursor within a column as well as between columns.
      */
     private _hoverBucket(index: number, event: MouseEvent) {
-        this._hoveredIndex = index;
         const row = this.rows[index];
         if (!row) return;
         this.dispatchEvent(new CustomEvent<AggregateBucketHoverDetail>("aggregate-bucket-hover", {
@@ -857,8 +878,7 @@ export class HelmanSolarAggregateChart extends LitElement {
     }
 
     private _clearHover = () => {
-        if (this._hoveredIndex === null) return;
-        this._hoveredIndex = null;
+        if (this.hoveredKey === null) return;
         this.dispatchEvent(new CustomEvent<AggregateBucketHoverDetail>("aggregate-bucket-hover", {
             detail: { key: null, x: 0, y: 0 },
             bubbles: true,

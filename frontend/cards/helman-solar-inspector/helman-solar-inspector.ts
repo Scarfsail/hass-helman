@@ -48,7 +48,11 @@ import type {
   SchedulingDayEditorHost,
 } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-solar-day-pills";
-import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
+import type {
+  DayPillForecastHealthDetail,
+  DayPillHoverDetail,
+  DayPillSelectDetail,
+} from "./helman-solar-day-pills";
 import "./helman-solar-span-pills";
 import type { SpanPillSelectDetail } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
@@ -670,6 +674,20 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _spanError = "";
   /** The bucket key clicked in the aggregate chart, or null for none. */
   @state() private _selectedBucket: string | null = null;
+  /**
+   * The day under the pointer, wherever the pointer is.
+   *
+   * The card owns it rather than either element, because two elements are
+   * drawing the same day: at D the chart's columns *are* the pill row's days,
+   * and a highlight that each worked out for itself would be two answers to one
+   * question -- pointing at a column could not light its pill, and the two
+   * could disagree about which day is hot. So both report into this and both
+   * are handed it back.
+   *
+   * A bucket key, so at M it holds a month rather than a day. The chart wants
+   * that; the pill row is handed null there instead -- see `_dayShapedKey`.
+   */
+  @state() private _hoveredDayKey: string | null = null;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
@@ -1509,9 +1527,12 @@ export class HelmanSolarInspector extends LitElement {
             .endDate=${this._pillWindowEnd}
             .reachableFrom=${this._dayRange?.minDate ?? ""}
             .reachableTo=${this._dayRange?.maxDate ?? ""}
+            .hoveredDate=${this._dayShapedKey(this._hoveredDayKey)}
+            .selectedBucket=${this._dayShapedKey(this._selectedBucket)}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
+            @day-pill-hover=${this._handleDayPillHover}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
         </div>
@@ -1917,6 +1938,7 @@ export class HelmanSolarInspector extends LitElement {
           .rows=${rows}
           .bucket=${this._spanBucket()}
           .selectedKey=${this._selectedBucket}
+          .hoveredKey=${this._hoveredDayKey}
           .currency=${this._span?.currency ?? ""}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
@@ -1927,6 +1949,37 @@ export class HelmanSolarInspector extends LitElement {
       ${this._renderSpanTotals(rows)}
     `;
   }
+
+  /**
+   * A bucket key the day pills can act on, or null.
+   *
+   * The two rows only line up where a column is a day. At M the chart's buckets
+   * are months, and handing the row a month key would either light nothing --
+   * the pills are keyed by day -- or, worse, light the 1st, claiming a
+   * correspondence that is not there. The chart keeps the raw key; the pill row
+   * is told there is nothing to show.
+   */
+  private _dayShapedKey(key: string | null): string | null {
+    return this._spanBucket() === "day" ? key : null;
+  }
+
+  /** Store the hovered day, skipping redundant updates. */
+  private _setHoveredDay(key: string | null) {
+    if (this._hoveredDayKey === key) return;
+    this._hoveredDayKey = key;
+  }
+
+  /**
+   * The pill row's own hover, which is the other half of the correlation.
+   *
+   * It carries no pointer position and raises no popup. The popup belongs to
+   * the thing being pointed *at* -- a column has numbers behind it, a pill is
+   * already showing its own -- so a pill hover sets the key and stops there.
+   */
+  private _handleDayPillHover = (event: CustomEvent<DayPillHoverDetail>) => {
+    event.stopPropagation();
+    this._setHoveredDay(event.detail.date);
+  };
 
   private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
     event.stopPropagation();
@@ -1990,6 +2043,10 @@ export class HelmanSolarInspector extends LitElement {
   private _handleBucketHover = (event: CustomEvent<AggregateBucketHoverDetail>) => {
     event.stopPropagation();
     const { key, x, y } = event.detail;
+    // Before either bail: the highlight is about which column the pointer is
+    // over, and a bucket the span has no row for is still a column. Only the
+    // popup needs the numbers.
+    this._setHoveredDay(key);
     if (key === null) {
       this._clearTooltip();
       return;
