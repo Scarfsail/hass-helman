@@ -1753,9 +1753,16 @@ export class HelmanSolarInspector extends LitElement {
    * has to be fetched -- so they share this rather than each doing it. Landing
    * on the span already shown is a no-op, which is what keeps a pill click on
    * the current span from reloading it.
+   *
+   * The comparison is between *spans*, not dates. `_selectedDate` is a span
+   * start only after span navigation put it there; arriving from the day view
+   * on the 14th leaves it on the 14th, and comparing raw dates would treat a
+   * click on the already-lit pill as a move -- dropping the selected column and
+   * rewriting the date, so that returning to the day view landed on the 1st
+   * rather than the day the reader came from.
    */
   private _showSpan(spanKey: string) {
-    if (spanKey === this._selectedDate) return;
+    if (spanKey === this._spanStart(this._selectedDate || this._todayIso())) return;
     this._selectedDate = spanKey;
     this._selectedBucket = null;
     this._loadSpan();

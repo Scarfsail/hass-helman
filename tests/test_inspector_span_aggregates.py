@@ -1100,15 +1100,19 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["range"]["minDate"], "2026-05-13")
 
-    async def test_a_failed_probe_is_retried_rather_than_cached(self):
-        # A stamp written for a probe that raised would pin the shallow fallback
-        # for the whole TTL over what may have been a moment's unavailability.
+    async def test_a_failed_probe_is_retried_soon_but_not_at_once(self):
+        # Two costs to sit between. Caching a failure for the whole TTL would pin
+        # the shallow fallback over a moment's unavailability; not caching it at
+        # all would put the probe's full-history scan in front of every request
+        # for as long as the recorder stayed unwell -- on the one executor thread
+        # the day view's own reads queue behind.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 12)
 
         def _explode(*args, **kwargs):
             raise RuntimeError("recorder is down")
 
+        original_now = DT_STUB.now
         original = span_mod.statistics_during_period
         span_mod.statistics_during_period = _explode
         try:
@@ -1116,11 +1120,46 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         finally:
             span_mod.statistics_during_period = original
         self.assertEqual(first["range"]["minDate"], "2026-05-13")
+        failed_probes = len(_calls("month"))
 
-        # Same instant, so nothing but the failure could have expired: the
-        # recorder is asked again and its answer lands.
-        second = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
-        self.assertEqual(second["range"]["minDate"], "2024-03-01")
+        try:
+            # Inside the retry window the failure stands, and costs nothing.
+            during = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+            self.assertEqual(during["range"]["minDate"], "2026-05-13")
+            self.assertEqual(len(_calls("month")), failed_probes)
+
+            # Past it the recorder is asked again, and its answer lands -- well
+            # inside the six hours a successful probe would have been trusted for.
+            DT_STUB.now = lambda: NOW + service_mod._HISTORY_FLOOR_RETRY
+            after = await service.async_get_span_aggregates("2026-05-23", "2026-05-23")
+            self.assertEqual(after["range"]["minDate"], "2024-03-01")
+        finally:
+            DT_STUB.now = original_now
+
+    async def test_a_failure_does_not_narrow_a_floor_already_learned(self):
+        # A recorder that has stopped answering is no reason to pull the range in
+        # under a reader mid-session: the floor already learned is still the best
+        # answer available.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        good = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        self.assertEqual(good["range"]["minDate"], "2024-03-01")
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("recorder is down")
+
+        original_now = DT_STUB.now
+        original = span_mod.statistics_during_period
+        span_mod.statistics_during_period = _explode
+        DT_STUB.now = lambda: NOW + service_mod._HISTORY_FLOOR_TTL
+        try:
+            after = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+        finally:
+            span_mod.statistics_during_period = original
+            DT_STUB.now = original_now
+
+        self.assertEqual(after["range"]["minDate"], "2024-03-01")
 
     async def test_a_caller_arriving_mid_probe_waits_for_its_answer(self):
         # What a card mounting into an aggregate view really does: both websocket

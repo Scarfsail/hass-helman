@@ -170,8 +170,15 @@ export class HelmanSolarSpanPills extends LitElement {
             return;
         }
 
-        this._scrolledTo = this._scrollKey();
         const rowBox = row.getBoundingClientRect();
+        // A row with no width yet cannot be scrolled meaningfully, and stamping
+        // the key here would spend the one reveal this span gets on a
+        // measurement of nothing. Leave it unstamped and catch the next render.
+        if (rowBox.width === 0) {
+            return;
+        }
+
+        this._scrolledTo = this._scrollKey();
         const pillBox = pill.getBoundingClientRect();
         // A pill's own margin of daylight, so a revealed pill does not sit flush
         // against the edge looking like it is the last one.
@@ -191,9 +198,17 @@ export class HelmanSolarSpanPills extends LitElement {
      * The view mode is part of it: switching from months to years rebuilds the
      * row into an entirely different set of pills, and the same date then means
      * a different pill.
+     *
+     * So is the floor, and that one is not hypothetical. The card switches into
+     * an aggregate view before the span load has told it where history begins,
+     * so the row's first render is the single pill an unknown floor collapses
+     * to. Keying on the date alone, that render would spend the reveal, and the
+     * rebuild into two years of months a moment later would find the key
+     * unchanged and leave the row parked at its far end with the lit pill off
+     * screen -- the exact thing this method exists to prevent.
      */
     private _scrollKey(): string {
-        return `${this.viewMode}:${this.selectedDate}`;
+        return `${this.viewMode}:${this.minDate}:${this.selectedDate}`;
     }
 
     private get _localize(): LocalizeFunction {

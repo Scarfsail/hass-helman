@@ -69,6 +69,18 @@ _MAX_AGGREGATE_BUCKETS = {"day": 366, "month": 13}
 #: the reads the views themselves issue.
 _HISTORY_FLOOR_TTL = timedelta(hours=6)
 
+#: How long a *failed* probe is left alone before it is tried again.
+#:
+#: Not the full TTL, because a failure is not an answer and pinning the shallow
+#: fallback for six hours over a moment's unavailability is the wrong trade. Not
+#: zero either, which is what "retry immediately" amounts to: the probe scans
+#: every hourly row the meters own, so a recorder failing *after* that scan --
+#: a lock, a timeout, executor pressure -- would have every inspector request
+#: re-run it, on the one executor thread the day view's own reads queue behind.
+#: Five minutes bounds that to something the reader will not notice and the
+#: recorder can carry.
+_HISTORY_FLOOR_RETRY = timedelta(minutes=5)
+
 #: The price rails' own grid, matching the schedule's canonical slot.
 PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
@@ -151,6 +163,9 @@ class SolarBiasCorrectionService:
         #: is why the timestamp is what decides whether to re-ask, not the value.
         self._history_floor: date | None = None
         self._history_floor_probed_at: datetime | None = None
+        #: How long the last attempt's outcome is trusted for -- the full TTL
+        #: after an answer, a short retry window after a failure.
+        self._history_floor_lifetime = _HISTORY_FLOOR_TTL
         #: Held across the probe so concurrent callers await one read rather than
         #: racing it. A card mounting into an aggregate view dispatches the day
         #: and span commands together, and both ask for the floor.
@@ -630,21 +645,34 @@ class SolarBiasCorrectionService:
 
     def _history_floor_is_stale(self, local_now: datetime) -> bool:
         cached_at = self._history_floor_probed_at
-        return cached_at is None or local_now - cached_at >= _HISTORY_FLOOR_TTL
+        if cached_at is None:
+            return True
+        return local_now - cached_at >= self._history_floor_lifetime
 
     async def _async_refresh_history_floor(self, local_now: datetime) -> None:
-        """Ask the recorder again, and stamp the cache only if it answered.
+        """Ask the recorder again, and remember how the asking went.
 
         A probe that came back empty *is* an answer -- a fresh install with no
-        compiled statistics -- and is cached like any other. A probe that raised
-        is not, and stamping it would pin the shallow fallback for the whole TTL
-        over what may have been a moment's unavailability.
+        compiled statistics -- and is trusted for the full TTL like any other. A
+        probe that raised is not an answer, and is trusted only until
+        :data:`_HISTORY_FLOOR_RETRY` has passed. Both halves matter: caching a
+        failure for six hours would pin the shallow fallback over a moment's
+        unavailability, and not caching it at all would put the probe's
+        full-history scan in front of every inspector request for as long as the
+        recorder stayed unwell.
+
+        Note that a failure leaves ``_history_floor`` alone rather than clearing
+        it. A floor already learned is still the best answer available, and a
+        recorder that has stopped answering is no reason to narrow the range
+        under a reader mid-session.
         """
         try:
             self._history_floor = await self._async_probe_history_floor()
         except Exception:
             _LOGGER.exception("Failed to probe the recorder for the history floor")
-            return
+            self._history_floor_lifetime = _HISTORY_FLOOR_RETRY
+        else:
+            self._history_floor_lifetime = _HISTORY_FLOOR_TTL
         self._history_floor_probed_at = local_now
 
     async def _async_probe_history_floor(self) -> date | None:

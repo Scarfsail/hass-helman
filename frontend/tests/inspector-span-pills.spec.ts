@@ -5,12 +5,15 @@ import {
 } from "../cards/helman-solar-inspector/span-pill-model";
 import {
     STOP_MONTH_VIEW,
+    STOP_SLOT_60,
     STOP_YEAR_VIEW,
     clickStop,
     loadCardBundle,
     mountInspector,
+    selectColumn,
     spanStarts,
     waitForAggregateChart,
+    waitForDayChart,
 } from "./support/inspector-aggregate-harness";
 
 /**
@@ -217,6 +220,96 @@ test.describe("solar inspector span pills", () => {
         await page.waitForTimeout(150);
 
         expect(await spanStarts(page, "month")).toEqual(before);
+    });
+
+    test("clicking the lit month pill keeps the day the reader came from", async ({ page }) => {
+        // `_selectedDate` is a span start only after span navigation put it
+        // there. Arriving from the day view on the 14th leaves it on the 14th,
+        // so a no-op guard that compared raw dates would treat a click on the
+        // already-lit pill as a move: it would drop the selected column and
+        // rewrite the date, and returning to the day view would land on the 1st
+        // rather than the day the reader came from.
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 1}-06-15`);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        // Select a column, so there is something a stray reload would drop.
+        await selectColumn(page, 3);
+        const today = new Date().toISOString().slice(0, 10);
+        const thisMonth = `${today.slice(0, 7)}-01`;
+
+        const before = await spanStarts(page, "month");
+        await clickPill(page, thisMonth);
+        await page.waitForTimeout(150);
+
+        const state = await page.evaluate(() => {
+            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+            return {
+                stillSelected: !!root.querySelector(".metrics-section"),
+                requests: ((window as any).__dayRequests as string[]).length,
+            };
+        });
+
+        expect(await spanStarts(page, "month")).toEqual(before);
+        // The panel the column opened is still there, so nothing was reset.
+        expect(state.stillSelected).toBe(true);
+
+        // And back in the day view it is still the day the card arrived on.
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+        const landed = await page.evaluate(() => {
+            const requests = (window as any).__dayRequests as string[];
+            return requests[requests.length - 1];
+        });
+        expect(landed).toBe(today);
+    });
+
+    test("the row scrolls to the lit pill once the floor arrives", async ({ page }) => {
+        // The card switches into an aggregate view before the span load has told
+        // it where history begins, so the row's first render is the single pill
+        // an unknown floor collapses to. If the reveal spends itself on that
+        // render, the rebuild into years of months a moment later leaves the row
+        // parked at its far end with the lit pill off screen.
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        // The row scrolls smoothly; wait for it to settle rather than racing it.
+        // The lit pill is the newest month, so it is the *last* in the row and
+        // comes to rest against the far edge — asking for it to sit wholly
+        // inside would be asking the row to scroll past its own end. Its centre
+        // being in view is the real claim: it is on screen rather than parked
+        // three years away.
+        await page.waitForFunction(() => {
+            const pills = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-span-pills");
+            const row = pills?.shadowRoot?.querySelector(".pill-row") as HTMLElement | null;
+            const pill = pills?.shadowRoot?.querySelector(".pill.selected") as HTMLElement | null;
+            if (!row || !pill) return false;
+            const rowBox = row.getBoundingClientRect();
+            const pillBox = pill.getBoundingClientRect();
+            const centre = pillBox.left + pillBox.width / 2;
+            return centre >= rowBox.left && centre <= rowBox.right;
+        }, undefined, { timeout: 3000 });
+
+        const geometry = await page.evaluate(() => {
+            const pills = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-span-pills");
+            const row = pills.shadowRoot.querySelector(".pill-row") as HTMLElement;
+            return {
+                count: pills.shadowRoot.querySelectorAll(".pill").length,
+                scrollLeft: row.scrollLeft,
+                overflows: row.scrollWidth > row.clientWidth,
+            };
+        });
+
+        // The premise: the row really is too narrow to hold three years of
+        // months, so being scrolled is the only way the lit pill is visible.
+        expect(geometry.count).toBeGreaterThan(30);
+        expect(geometry.overflows).toBe(true);
+        expect(geometry.scrollLeft).toBeGreaterThan(0);
     });
 
     test("a span pill is its label and carries no day gauge", async ({ page }) => {
