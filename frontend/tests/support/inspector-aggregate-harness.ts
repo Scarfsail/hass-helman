@@ -302,20 +302,62 @@ async function pillIsTakeable(page: Page, ref: SpanPillRef): Promise<boolean> {
     }, ref);
 }
 
+/**
+ * Press one span pill, named by its row and the span it carries.
+ *
+ * Awaits the element rather than the page, because a press re-renders the row
+ * the next one is in: a caller pressing twice has to have the first render
+ * before it can find the second pill.
+ */
+export async function clickSpanPill(
+    page: Page,
+    row: "years" | "months",
+    key: string,
+): Promise<void> {
+    await page.evaluate(({ row, key }) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        (host.shadowRoot.querySelector(
+            `.pill-row.${row} .pill[data-span="${key}"]`,
+        ) as HTMLElement | null)?.click();
+        return host.updateComplete;
+    }, { row, key });
+}
+
 /** Step the span picker one span back, however many presses that takes. */
 export async function pageBack(page: Page): Promise<void> {
     for (const ref of await previousSpanPresses(page)) {
-        await page.evaluate(({ row, key }) => {
-            const host = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-span-pills");
-            (host.shadowRoot.querySelector(
-                `.pill-row.${row} .pill[data-span="${key}"]`,
-            ) as HTMLElement | null)?.click();
-            // The next press is on a row this one re-renders, so it has to be
-            // drawn before it can be found.
-            return host.updateComplete;
-        }, ref);
+        await clickSpanPill(page, ref.row, ref.key);
     }
+}
+
+/** The spans one row of the picker is offering, and whether each is takeable. */
+export async function spanPillRow(
+    page: Page,
+    row: "years" | "months",
+): Promise<Array<{ key: string; disabled: boolean }>> {
+    return page.evaluate((wanted) => {
+        const host = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-span-pills");
+        if (!host?.shadowRoot) return [];
+        return [...host.shadowRoot.querySelectorAll(`.pill-row.${wanted} .pill`)]
+            .map((pill: Element) => ({
+                key: pill.getAttribute("data-span") ?? "",
+                disabled: (pill as HTMLButtonElement).disabled,
+            }));
+    }, row);
+}
+
+/** The day pills that cannot be clicked, by date. */
+export async function unreachableDayPills(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const root = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
+        if (!root) return [];
+        return [...root.querySelectorAll(".pill")]
+            .filter((pill: Element) => (pill as HTMLButtonElement).disabled)
+            .map((pill: Element) => pill.getAttribute("data-day") ?? "");
+    });
 }
 
 /** Whether the span picker is offering anywhere further back. */

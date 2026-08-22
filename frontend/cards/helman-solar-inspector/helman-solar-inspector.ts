@@ -1492,7 +1492,7 @@ export class HelmanSolarInspector extends LitElement {
             .hass=${this.hass}
             .viewMode=${this._viewMode === "year" ? "year" : "month"}
             .selectedDate=${this._selectedDate}
-            .minDate=${this._spanRange?.minDate ?? ""}
+            .minDate=${this._navFloor()}
             .todayKey=${today}
             @span-pill-select=${this._handleSpanPillSelect}
           ></helman-solar-span-pills>`}
@@ -1507,6 +1507,8 @@ export class HelmanSolarInspector extends LitElement {
             .currentDate=${today}
             .startDate=${this._pillWindowStart}
             .endDate=${this._pillWindowEnd}
+            .reachableFrom=${this._dayRange?.minDate ?? ""}
+            .reachableTo=${this._dayRange?.maxDate ?? ""}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
@@ -1742,10 +1744,72 @@ export class HelmanSolarInspector extends LitElement {
     this._loadSpan();
   }
 
+  /**
+   * The oldest date the picker may offer, wherever the card currently is.
+   *
+   * `_spanRange` is the aggregate views' own answer and the better one -- it
+   * reaches back to the oldest month the recorder still aggregates -- but it is
+   * only ever assigned by `_loadSpan`, which never runs while the card sits in
+   * its opening day view. Falling back to the day view's floor is what keeps
+   * the expanded picker from collapsing to the current month on a card nobody
+   * has taken to D or M yet, which since the arrows went is a dead end.
+   */
+  private _navFloor(): string {
+    return this._spanRange?.minDate ?? this._dayRange?.minDate ?? "";
+  }
+
   private _handleSpanPillSelect = (event: CustomEvent<SpanPillSelectDetail>): void => {
     event.stopPropagation();
+    // In the day view the rows are a calendar's header, not a view switch: the
+    // reader opened them to reach a further month and then pick a day out of
+    // it. The element cannot know that -- it emits the mode an aggregate view
+    // would want -- so the card, which already owns the question of whether a
+    // pill click is a move, answers it here.
+    if (this._viewMode === "day") {
+      this._slideDayCalendar(event.detail.date);
+      return;
+    }
     this._showSpan(event.detail.date, event.detail.viewMode);
   };
+
+  /**
+   * Move the expanded calendar to another month without leaving the day view.
+   *
+   * The day of the month is carried across, so paging from the 12th of March
+   * lands on the 12th of April rather than on a month's first day -- reading
+   * the same day across months is what the row is for. Two clamps make that
+   * safe: the 31st has to survive a move into February, and any day can land
+   * outside what the card can actually open, since a calendar month is drawn
+   * whole while the recorder's floor and the forecast's horizon both fall
+   * mid-month.
+   *
+   * There is no separate "browsed month" state. `_pillWindow` derives the
+   * window from `_selectedDate`, so moving the selection *is* moving the
+   * calendar, and a second anchor would be a second thing to keep in step.
+   */
+  private _slideDayCalendar(spanKey: string): void {
+    const { year, month } = this._parseIsoDate(spanKey);
+    const current = this._parseIsoDate(this._selectedDate || this._todayIso());
+    const lastOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const target = this._formatDateParts(year, month, Math.min(current.day, lastOfMonth));
+    const bounds = this._monthBounds(target);
+    const floor = this._dayRange?.minDate ?? "";
+    const horizon = this._dayRange?.maxDate ?? "";
+    // Clamped into the month, not into the whole range: a month entirely out
+    // of reach has no day worth landing on, and pulling the selection into a
+    // neighbouring month would move the calendar somewhere nobody clicked.
+    const low = floor !== "" && floor > bounds.start ? floor : bounds.start;
+    const high = horizon !== "" && horizon < bounds.end ? horizon : bounds.end;
+    if (low > high) {
+      return;
+    }
+    const clamped = target < low ? low : target > high ? high : target;
+    if (clamped === this._selectedDate) {
+      return;
+    }
+    this._selectedDate = clamped;
+    this._load();
+  }
 
   /**
    * One bucket in words -- a date in the month view, a month in the year view.
@@ -4576,7 +4640,14 @@ export class HelmanSolarInspector extends LitElement {
   private _pillWindow(today: string): { start: string; end: string } {
     const selected = this._selectedDate || today;
     if (this._navExpanded) {
-      return this._monthBounds(selected);
+      // Anchored on the bucket the aggregate views have selected, when they
+      // have one, and only otherwise on the date. In the year view
+      // `_selectedDate` is the span start, so anchoring on it alone drew
+      // January under every month of the year -- and dropped the reader into a
+      // January day when they clicked one.
+      return this._monthBounds(
+        this._viewMode === "day" ? selected : (this._selectedBucket ?? selected),
+      );
     }
     if (selected >= today) {
       return { start: today, end: this._dayRange?.maxDate ?? today };

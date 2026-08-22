@@ -137,6 +137,19 @@ export class HelmanSolarDayPills extends LitElement {
             border-color: color-mix(in srgb, var(--primary-color, #2563eb) 45%, var(--divider-color));
         }
 
+        /* Dimmed, not dropped: a calendar that hid the days it cannot open
+           would change shape as the reader moved between months, and the gap
+           at the far end of the history is worth seeing as a gap. Same
+           treatment the month row gives a month outside the data. */
+        .pill:disabled {
+            cursor: not-allowed;
+            opacity: 0.4;
+        }
+
+        .pill:disabled:hover {
+            border-color: var(--divider-color);
+        }
+
         /* The fallback matches the card's other active controls, so a theme
            without --primary-color still shows which day is being shown. */
         .pill.selected {
@@ -183,6 +196,18 @@ export class HelmanSolarDayPills extends LitElement {
     @property({ type: String }) public startDate = "";
     /** Last day of the window: the forecast's end, or the week's last day. */
     @property({ type: String }) public endDate = "";
+    /**
+     * The reachable range, which is not the same thing as the window.
+     *
+     * A calendar month is drawn whole so the grid keeps its shape, but a month
+     * can easily run past both ends of what the card can actually open: below
+     * `reachableFrom` the recorder has purged the raw states a day view needs,
+     * and above `reachableTo` the forecast has not reached yet. Those days keep
+     * their cell and lose their click, the same bargain the month row already
+     * makes with months outside the data. Empty means no limit on that side.
+     */
+    @property({ type: String }) public reachableFrom = "";
+    @property({ type: String }) public reachableTo = "";
     /**
      * Today, in the house's time zone. Named separately from `startDate`
      * because the window can sit entirely in the past, and it is today that
@@ -308,12 +333,20 @@ export class HelmanSolarDayPills extends LitElement {
 
     private _renderPill(pill: SolarInspectorDayPill) {
         const selected = pill.dayKey === this.selectedDate;
+        // Compared here rather than carried on the pill: it is two string
+        // comparisons against props the model does not read, and threading them
+        // through `buildSolarInspectorDayPills` would put them in the memo key
+        // for no gain -- a range change never changes a pill's contents, only
+        // whether it can be clicked.
+        const unreachable = (this.reachableFrom !== "" && pill.dayKey < this.reachableFrom)
+            || (this.reachableTo !== "" && pill.dayKey > this.reachableTo);
         return html`
             <button
                 class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`}
                 type="button"
                 data-day=${pill.dayKey}
                 data-history=${pill.isHistory ? "true" : "false"}
+                ?disabled=${unreachable}
                 aria-pressed=${selected ? "true" : "false"}
                 @click=${() => this._select(pill.dayKey)}
             >

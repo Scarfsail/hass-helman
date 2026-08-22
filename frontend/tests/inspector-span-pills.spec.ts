@@ -13,8 +13,11 @@ import {
     mountInspector,
     selectColumn,
     clickDayPill,
+    clickSpanPill,
     dayPillDates,
+    spanPillRow,
     spanStarts,
+    unreachableDayPills,
     toggleMore,
     waitForAggregateChart,
     waitForDayChart,
@@ -542,4 +545,147 @@ async function visibleRows(page: Page): Promise<{ day: boolean; span: boolean }>
             span: !!root.querySelector("helman-solar-span-pills"),
         };
     });
+}
+
+/**
+ * The expanded picker inside the day view.
+ *
+ * This is the case the unification created and the one with no precedent: the
+ * span rows were built for views that browse a span, and here they are heading
+ * a calendar in a view that browses a day. Two things follow, and neither is
+ * true of the aggregate views.
+ *
+ * The first is where the rows' floor comes from. `_spanRange` is the aggregate
+ * views' own answer and it is only ever assigned by their load, so a card that
+ * has never left the day view does not have one -- and a floor of nothing
+ * collapses both rows to today. Since the arrows went, that is not a cosmetic
+ * loss: the picker is the only way out of the current window.
+ *
+ * The second is what a press means. The element cannot tell these views apart
+ * -- it emits the mode an aggregate view would want -- so the card has to read
+ * a month press here as "slide the calendar", not as "switch to the month
+ * view". Carrying the day of the month across is what makes it a slide.
+ */
+test.describe("the expanded picker in the day view", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("the rows reach back to the floor before any aggregate view loads", async ({ page }) => {
+        // Two years of history and a card that opens, as always, in the day
+        // view. Nothing has asked for a span, so `_spanRange` is null.
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+
+        const years = await spanPillRow(page, "years");
+        expect(years.map((pill) => pill.key)).toEqual([
+            `${THIS_YEAR - 2}-01-01`,
+            `${THIS_YEAR - 1}-01-01`,
+            `${THIS_YEAR}-01-01`,
+        ]);
+        // And the months of a year fully inside the history are all takeable,
+        // which a floor of today would have left disabled to a one.
+        await clickSpanPill(page, "years", `${THIS_YEAR - 1}-01-01`);
+        const months = await spanPillRow(page, "months");
+        expect(months.filter((pill) => pill.disabled)).toEqual([]);
+    });
+
+    test("picking a month slides the calendar instead of leaving the day view", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+
+        const from = await selectedDayPill(page);
+        const dayOfMonth = from.slice(8);
+        const target = `${THIS_YEAR - 1}-03-01`;
+        await clickSpanPill(page, "years", `${THIS_YEAR - 1}-01-01`);
+        await clickSpanPill(page, "months", target);
+        await waitForDayChart(page);
+
+        // Still the day view -- the width toggle is the tell, since only the
+        // day view lights a minutes stop.
+        expect(await activeStops(page)).not.toEqual(["D"]);
+        // The same day of the month, in the month that was picked.
+        expect(await selectedDayPill(page)).toBe(`${THIS_YEAR - 1}-03-${dayOfMonth}`);
+        // And the calendar moved with it.
+        expect(await dayPillDates(page)).toContain(`${THIS_YEAR - 1}-03-01`);
+    });
+
+    test("a day of the month the target month does not have is clamped into it", async ({ page }) => {
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+
+        // The 31st of a long month, then February, which has no 31st.
+        await clickSpanPill(page, "years", `${THIS_YEAR - 1}-01-01`);
+        await clickSpanPill(page, "months", `${THIS_YEAR - 1}-01-01`);
+        await waitForDayChart(page);
+        await clickDayPill(page, `${THIS_YEAR - 1}-01-31`);
+        await waitForDayChart(page);
+
+        await clickSpanPill(page, "months", `${THIS_YEAR - 1}-02-01`);
+        await waitForDayChart(page);
+        const landed = await selectedDayPill(page);
+        expect(landed.startsWith(`${THIS_YEAR - 1}-02-2`)).toBe(true);
+        expect(await dayPillDates(page)).not.toContain(`${THIS_YEAR - 1}-02-30`);
+    });
+});
+
+/**
+ * A calendar month is drawn whole, and a month does not respect either end of
+ * what the card can open: the recorder purges raw states mid-month, and the
+ * forecast stops mid-month at the other end. Those days keep their cell -- a
+ * grid that changed shape month to month would stop reading as a calendar --
+ * and lose their click.
+ */
+test.describe("days the calendar cannot open", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("days below the day view's floor are shown but not takeable", async ({ page }) => {
+        // The aggregates reach back two years; the raw states only to the 10th
+        // of the month two months ago, which is where the day view stops.
+        const floorMonth = monthsBack(2);
+        const dayFloor = `${floorMonth}-10`;
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`, dayFloor);
+        await waitForDayChart(page);
+        await clickDayPill(page, isoDay(0));
+        await toggleMore(page);
+        await clickSpanPill(page, "months", `${floorMonth}-01`);
+        await waitForDayChart(page);
+
+        const unreachable = await unreachableDayPills(page);
+        expect(unreachable).toContain(`${floorMonth}-09`);
+        expect(unreachable).not.toContain(`${floorMonth}-10`);
+        // The cells are still there; only the clicks went.
+        expect(await dayPillDates(page)).toContain(`${floorMonth}-01`);
+    });
+});
+
+/** The lit day pill's date, or "" when the row lights none. */
+async function selectedDayPill(page: Page): Promise<string> {
+    return page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector("helman-solar-day-pills")
+        ?.shadowRoot?.querySelector(".pill.selected")?.getAttribute("data-day") ?? "");
+}
+
+/** The labels of the width toggle's active stops. */
+async function activeStops(page: Page): Promise<string[]> {
+    return page.evaluate(() => [...(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelectorAll(".slot-size-button")]
+        .filter((button: Element) => button.classList.contains("active"))
+        .map((button: Element) => button.textContent?.trim() ?? ""));
+}
+
+/** A date `offset` days from today, as the card keys days. */
+function isoDay(offset: number): string {
+    return new Date(NOW.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** `YYYY-MM` for the month `count` months before this one. */
+function monthsBack(count: number): string {
+    const moved = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth() - count, 1));
+    return moved.toISOString().slice(0, 7);
 }
