@@ -1399,7 +1399,52 @@ export class HelmanSolarInspector extends LitElement {
     const pillWindow = this._pillWindow(this._todayKey);
     this._pillWindowStart = pillWindow.start;
     this._pillWindowEnd = pillWindow.end;
-    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+    // Only for a row that is going to be drawn. At M there is none, and the
+    // window still moves under it -- it is anchored on the selected month --
+    // so fetching here would spend a websocket read per column pressed on a
+    // calendar nobody sees.
+    if (this._dayPillsVisible()) {
+      void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+    }
+  }
+
+  /**
+   * Which days the row may offer, and why the answer differs by view.
+   *
+   * In the day view a press opens the day, so the bound is what the day view
+   * can draw: the recorder's floor and the forecast's horizon.
+   *
+   * At D a press picks a column, so the bound is which columns exist. That is
+   * not the same question -- the backend clamps a span's end to today, so the
+   * back half of the current month has no bucket at all, and a pill pressed
+   * there would light amber while the panel it claims to select vanished.
+   *
+   * Empty on either side means no bound, which is what an unloaded span says.
+   */
+  private _pillReach(): { from: string; to: string } {
+    if (this._viewMode === "day") {
+      return { from: this._dayRange?.minDate ?? "", to: this._dayRange?.maxDate ?? "" };
+    }
+    const rows = this._span?.days ?? [];
+    if (rows.length === 0) {
+      return { from: "", to: "" };
+    }
+    return { from: rows[0].date, to: rows[rows.length - 1].date };
+  }
+
+  /**
+   * Whether the day row is on screen.
+   *
+   * Never at M: the chart there is drawing a whole year a month at a time, so
+   * there is no one month a calendar would be about, and the row would be
+   * offering days at a granularity that has no day in it.
+   *
+   * Asked in `willUpdate` as well as in the render, because what the row costs
+   * is not the drawing -- it is the aggregates read behind it.
+   */
+  private _dayPillsVisible(): boolean {
+    return this._viewMode === "day"
+      || (this._navExpanded && this._viewMode === "month");
   }
 
   protected updated(changed: Map<string, unknown>) {
@@ -1498,11 +1543,7 @@ export class HelmanSolarInspector extends LitElement {
     // extra and the span rows are the day view's, so a single flag drives both
     // conditions from opposite sides -- see `_navExpanded`.
     const showSpanRows = this._viewMode !== "day" || this._navExpanded;
-    // Never at M. The chart there is drawing a whole year a month at a time, so
-    // there is no one month a calendar would be about -- and the row would be
-    // offering days at a granularity that has no day in it.
-    const showDayPills = this._viewMode === "day"
-      || (this._navExpanded && this._viewMode === "month");
+    const showDayPills = this._dayPillsVisible();
     return html`
       <div class="nav">
         <div class="day-nav">
@@ -1534,8 +1575,8 @@ export class HelmanSolarInspector extends LitElement {
             .currentDate=${today}
             .startDate=${this._pillWindowStart}
             .endDate=${this._pillWindowEnd}
-            .reachableFrom=${this._viewMode === "day" ? (this._dayRange?.minDate ?? "") : ""}
-            .reachableTo=${this._viewMode === "day" ? (this._dayRange?.maxDate ?? "") : ""}
+            .reachableFrom=${this._pillReach().from}
+            .reachableTo=${this._pillReach().to}
             .hoveredDate=${this._shapedKey("day", this._hoveredBucketKey)}
             .selectedBucket=${this._shapedKey("day", this._selectedBucket)}
             .selectsSlot=${this._correlatedRow() === "day"}
@@ -4953,10 +4994,8 @@ export class HelmanSolarInspector extends LitElement {
    *
    * At D the columns *are* these days, so the press is the column press: it
    * picks the bucket the panel describes, and toggles like the column does.
-   * Anywhere else there is no column for the day, and the press says which day
-   * is being browsed -- loading it outright in the day view, and at M merely
-   * naming the day a minutes stop would open, since the chart there is drawing
-   * a whole year.
+   * The only other view that draws this row is the day view, where there is no
+   * column for a day and the press simply opens it.
    */
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
     event.stopPropagation();
@@ -4968,9 +5007,7 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._selectedDate = event.detail.date;
-    if (this._viewMode === "day") {
-      this._load();
-    }
+    this._load();
   };
 
   private _selectTrainingDate(date: string) {

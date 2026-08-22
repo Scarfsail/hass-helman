@@ -153,10 +153,6 @@ export class HelmanSolarDayPills extends LitElement {
             opacity: 0.4;
         }
 
-        .pill:disabled:hover {
-            border-color: var(--divider-color);
-        }
-
         /* The fallback matches the card's other active controls, so a theme
            without --primary-color still shows which day is being shown. */
         .pill.selected {
@@ -204,15 +200,20 @@ export class HelmanSolarDayPills extends LitElement {
             background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
         }
 
-        /* Unreachable days are highlighted too, deliberately. The pointer never
-           enters one -- the browser sends no events to a disabled button -- but
-           the chart can still name it, and following the reader's pointer is
-           what the highlight is for. It says "this is the day you are looking
-           at", not "you may click it"; the 0.4 opacity is what says the
-           second. */
-        .pill:disabled.hovered {
-            opacity: 0.4;
+        /* The pointer's own hover, undone for a pill that cannot be pressed.
+           :hover still matches a disabled button, so without this the blue fill
+           lands on a dimmed pill and invites the press it will ignore. Last,
+           and with a pseudo-class more than the rules above, so it outranks
+           both the plain and the selects-slot hover.
+
+           .hovered is deliberately not undone: that one comes from the chart,
+           and following what the reader is pointing at is worth doing whether
+           or not the day can be opened -- the dimming is what says it cannot. */
+        .pill:disabled:hover {
+            border-color: var(--divider-color);
+            background: var(--card-background-color);
         }
+
 
         /* The label sets the pill's floor, so it is never clipped: a day nobody
            can read is not worth a pill. */

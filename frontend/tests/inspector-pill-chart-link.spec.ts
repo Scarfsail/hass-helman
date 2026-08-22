@@ -584,3 +584,63 @@ test.describe("what a change of granularity carries across", () => {
         expect(landed).toBe(wanted);
     });
 });
+
+/**
+ * What the calendar may offer depends on what a press does there.
+ *
+ * In the day view a press opens a day, so the bound is what the day view can
+ * draw. At D a press picks a column, so the bound is which columns exist -- a
+ * different question, and the backend answers it by clamping a span to today.
+ * The back half of the current month therefore has no bucket at all.
+ */
+test.describe("the days the calendar may offer", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("at D the takeable days are exactly the days with a column", async ({ page }) => {
+        // Stated as an equivalence rather than by naming a day past the end,
+        // because whether the month on screen *has* such a day depends on the
+        // backend: the real service clamps a span's end to today, so the back
+        // half of the current month has no bucket, while the test double
+        // answers for the whole month. The rule holds either way -- a pill is
+        // takeable exactly when there is a column for it to pick, which is what
+        // stops a press lighting a pill whose panel does not exist.
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
+        await waitForDayChart(page);
+        await toggleMore(page);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const drawn = await columns(page);
+        const offered = await dayPillDates(page);
+        const unreachable = await unreachableDayPills(page);
+        expect(offered.length).toBeGreaterThan(0);
+        expect(drawn.length).toBeGreaterThan(0);
+
+        const takeable = offered.filter((day) => !unreachable.includes(day));
+        expect(takeable).toEqual(offered.filter((day) => drawn.includes(day)));
+    });
+
+    test("the pointer's hover is withheld from a pill that cannot be pressed", async ({ page }) => {
+        // The day view, where the recorder's floor disables pills.
+        const floorMonth = monthsBack(2);
+        await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`, `${floorMonth}-10`);
+        await waitForDayChart(page);
+        await page.evaluate(() => {
+            (document.querySelector("helman-solar-inspector") as HTMLElement)
+                .style.setProperty("--divider-color", "#d4d4d8");
+        });
+        await toggleMore(page);
+        await clickSpanPill(page, "months", `${floorMonth}-01`);
+        await waitForDayChart(page);
+
+        const unreachable = await unreachableDayPills(page);
+        expect(unreachable.length).toBeGreaterThan(0);
+        // :hover matches a disabled button, so without the guard the blue fill
+        // would land on a dimmed pill and invite a press it will ignore.
+        await expect
+            .poll(() => hoverBorderColor(page, `helman-solar-day-pills .pill[data-day="${unreachable[0]}"]`))
+            .toBe("rgb(212, 212, 216)");
+    });
+});

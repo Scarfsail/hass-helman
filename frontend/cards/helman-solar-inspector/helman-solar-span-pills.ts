@@ -131,6 +131,20 @@ export class HelmanSolarSpanPills extends LitElement {
             background: color-mix(in srgb, var(--helman-selection) 14%, var(--card-background-color));
         }
 
+        /* The pointer's own hover, undone for a pill that cannot be pressed.
+           :hover still matches a disabled button, so without this the blue fill
+           lands on a dimmed pill and invites the press it will ignore. Last,
+           and with a pseudo-class more than the rules above, so it outranks
+           both the plain and the selects-slot hover.
+
+           .hovered is deliberately not undone: that one comes from the chart,
+           and following what the reader is pointing at is worth doing whether
+           or not the day can be opened -- the dimming is what says it cannot. */
+        .pill:disabled:hover {
+            border-color: var(--divider-color);
+            background: var(--card-background-color);
+        }
+
         /* Shown, not hidden: a month the recorder has nothing for is a fact
            worth seeing, and a row that dropped it would move the other eleven
            around every time the year changed. */
@@ -139,13 +153,6 @@ export class HelmanSolarSpanPills extends LitElement {
             opacity: 0.4;
         }
 
-        /* Highlighted like any other, and dimmed like any other: the pointer
-           never enters a disabled pill, but the chart can still name it, and
-           following the reader is what the highlight is for. The opacity is
-           what says it cannot be opened. */
-        .pill:disabled.hovered {
-            opacity: 0.4;
-        }
     `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
