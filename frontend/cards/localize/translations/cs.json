@@ -155,6 +155,11 @@
       "set_by_user": "Nastavil uživatel",
       "set_by_automation": "Nastavila automatizace"
     },
+    "automation_coverage": {
+      "active": "Řídí automatizace — kliknutím ji upravíte",
+      "disabled_only": "Automatizace existuje, ale neběží — kliknutím ji zobrazíte",
+      "none": "Bez automatizace — pouze ruční plánování"
+    },
     "why": {
       "title": "Proč?",
       "no_change": "Tento běh hodnotu nezměnil.",

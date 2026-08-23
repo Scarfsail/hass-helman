@@ -444,3 +444,30 @@ function createUniqueKey(existingKeys: string[], baseKey: string): string {
   }
   return `${baseKey}-${index}`;
 }
+
+/**
+ * A document as one string, with object keys in a stable order.
+ *
+ * `JSON.stringify` preserves insertion order, and two reads of the same stored
+ * config need not agree on it -- the backend rebuilds the dict on every load
+ * and a migration may reinsert a key. Sorting makes the comparison about the
+ * content, which is the only thing a "did this move under me" check should be
+ * about.
+ *
+ * Shared because both surfaces that edit the config ask that question: the
+ * optimizer dialog before it saves, and the config panel when an announcement
+ * arrives. Two spellings of "the same document" would be two answers.
+ */
+export function canonicalJson(value: unknown): string {
+    return JSON.stringify(value, (_key, nested) => {
+        if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+            return nested;
+        }
+        const entry = nested as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(entry).sort()) {
+            sorted[key] = entry[key];
+        }
+        return sorted;
+    });
+}

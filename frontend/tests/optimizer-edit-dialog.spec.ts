@@ -155,6 +155,14 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             const globals = window as unknown as Record<string, unknown>;
             globals.__calls = calls;
 
+            // The dialog closes on a successful save and hands the "restart
+            // started" line to Home Assistant's own toast on the way out.
+            const notifications: string[] = [];
+            globals.__notifications = notifications;
+            document.addEventListener("hass-notification", (event) => {
+                notifications.push((event as CustomEvent).detail?.message ?? "");
+            });
+
             // The shared data-changed feed subscribes through `connection`;
             // holding the listener lets a test play the backend's announcement.
             const listeners: ((event: unknown) => void)[] = [];
@@ -317,10 +325,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await mountPanel(page);
         await openDialog(page);
 
-        // Move/remove/enable belong to the document, and the dialog is not
-        // editing the document — it passes no list actions.
-        await expect(dialog(page).locator(".optimizer-card > summary .list-actions"))
-            .toHaveCount(0);
+        // Move and remove are *pipeline* operations — they change which
+        // optimizers exist and in what order they run, which is the document's
+        // business and not something to do from a dialog opened on one slot.
+        // The on/off switch is the exception, and it is about this optimizer
+        // alone.
+        const actions = dialog(page).locator(".optimizer-card > summary .list-actions");
+        await expect(actions.locator("button")).toHaveCount(0);
+        await expect(actions.locator(".summary-toggle ha-switch")).toHaveCount(1);
     });
 
     test("the target picker offers only controllables the kind can drive", async ({
@@ -453,6 +465,9 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         power_devices: { house: { base_load_w: 900 } },
     };
 
+    /** What the stored document looks like once this dialog's own save landed. */
+    const SAVED_CONFIG = { ...CONFIG, config_version: 5 };
+
     test("a config that changed between open and save blocks the save", async ({ page }) => {
         await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
         await openDialog(page);
@@ -496,7 +511,7 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
     });
 
     test("the notice arrives while the dialog is open, not only at save", async ({ page }) => {
-        await mountPanel(page);
+        await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
         await openDialog(page);
         await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
 
@@ -506,20 +521,70 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
     });
 
-    test("the dialog's own save does not raise its own notice", async ({ page }) => {
+    test("an announcement that moved nothing raises no notice", async ({ page }) => {
+        // `helman_data_changed` is fired for a re-plan and a retrained bias
+        // profile too, neither of which touches the document this dialog is
+        // editing. The event says something moved, never what.
         await mountPanel(page);
         await openDialog(page);
-        await dialog(page).getByText("Save and reload").click();
-        await expect(dialog(page).locator(".message.success")).toHaveCount(1);
 
-        // The backend fires the event *because of* this save; it is not news.
-        await fireDataChanged(page);
+        await fireDataChanged(page, "plan");
         await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
     });
 
-    test("a second save is not blocked by the first one's own write", async ({ page }) => {
-        // Every read after the save returns what the save produced, which is
-        // the sequence's last entry repeating.
+    test("a save that lands closes the dialog, and says so on the way out", async ({ page }) => {
+        // The reads in order: the open, the pre-save guard, the re-baseline.
+        await mountPanel(page, { configSequence: [CONFIG, CONFIG, SAVED_CONFIG] });
+        await openDialog(page);
+        await dialog(page).getByText("Save and reload").click();
+
+        // Saving is finishing. Leaving the dialog open on a green message made
+        // Cancel the only way out of a save that had already succeeded.
+        await expect(dialog(page)).toHaveCount(0);
+        // The restart it started is worth knowing about, and the dialog is no
+        // longer there to say it.
+        await expect
+            .poll(() => page.evaluate(
+                () => (window as unknown as Record<string, string[]>).__notifications,
+            ))
+            .toHaveLength(1);
+    });
+
+    test("a save whose reload failed is not then accused of its own write", async ({ page }) => {
+        // `save_config` stores the document *before* it attempts the reload, so
+        // a failed reload still leaves the stored document ours. The dialog
+        // stays open on the error -- and the announcements the half-done reload
+        // fires must not turn into "somebody else wrote this".
+        await mountPanel(page, {
+            configSequence: [CONFIG, CONFIG, SAVED_CONFIG],
+            saveResponse: {
+                success: false,
+                validation: { valid: true, errors: [], warnings: [] },
+                reloadStarted: true,
+                reloadSucceeded: false,
+                reloadError: "Reload failed",
+            },
+        });
+        await openDialog(page);
+        await dialog(page).getByText("Save and reload").click();
+        await expect(dialog(page).locator(".message.error")).toHaveCount(1);
+
+        // One save fires several announcements -- the entry reload re-plans,
+        // and those land well past the feed's collapse window closing on the
+        // first. A dialog that took "the first is mine, the rest are somebody
+        // else's" accused itself.
+        await fireDataChanged(page, "config");
+        await fireDataChanged(page, "plan");
+        await fireDataChanged(page, "schedule");
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+    });
+
+    test("a retry is not blocked by the first attempt's own write", async ({ page }) => {
+        // A save that succeeds closes the dialog, so the only way to save twice
+        // from one dialog is a first attempt whose *reload* failed -- and that
+        // attempt still wrote the document. Without adopting what it wrote as
+        // the new baseline, the retry compares against the pre-save read, finds
+        // our own write, and refuses: the user is locked out of fixing it.
         const SAVED = {
             ...CONFIG,
             automation: {
@@ -530,11 +595,20 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
                 ],
             },
         };
-        await mountPanel(page, { configSequence: [CONFIG, CONFIG, SAVED] });
+        await mountPanel(page, {
+            configSequence: [CONFIG, CONFIG, SAVED],
+            saveResponse: {
+                success: false,
+                validation: { valid: true, errors: [], warnings: [] },
+                reloadStarted: true,
+                reloadSucceeded: false,
+                reloadError: "Reload failed",
+            },
+        });
         await openDialog(page);
 
         await dialog(page).getByText("Save and reload").click();
-        await expect(dialog(page).locator(".message.success")).toHaveCount(1);
+        await expect(dialog(page).locator(".message.error")).toHaveCount(1);
 
         await dialog(page).getByText("Save and reload").click();
 

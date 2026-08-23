@@ -373,7 +373,7 @@ test.describe("entity day band, read only", () => {
                 pointerEvents: getComputedStyle(badge).pointerEvents,
                 staticIcons: document
                     .querySelector("scheduling-entity-day-band")!
-                    .shadowRoot!.querySelectorAll(".track-label ha-icon").length,
+                    .shadowRoot!.querySelectorAll(".track-label > ha-icon").length,
             };
         });
 
@@ -389,7 +389,7 @@ test.describe("entity day band, read only", () => {
         await mountBand(page);
 
         const shadow = page.locator("scheduling-entity-day-band");
-        expect(await shadow.locator(".track-label ha-icon").count()).toBe(1);
+        expect(await shadow.locator(".track-label > ha-icon").count()).toBe(1);
         expect(await shadow.locator(".track-label state-badge").count()).toBe(0);
     });
 
