@@ -5,7 +5,13 @@ import type { LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm } from "../load-ha-elements";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
-import { asJsonArray, asJsonObject, cloneJson, setValueAtPath } from "../config/config-document";
+import {
+    asJsonArray,
+    asJsonObject,
+    canonicalJson,
+    cloneJson,
+    setValueAtPath,
+} from "../config/config-document";
 import {
     getLocalizeFunction,
     type LocalizeFunction as EditorLocalizeFunction,
@@ -465,26 +471,40 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 type: "helman/save_config",
                 config: view.config,
             });
-            if (response.success) {
+            if (response.validation?.valid !== false) {
                 // The document we just wrote is the new baseline. Without this
-                // a second save would compare against the pre-save read, find
-                // our own write, and refuse. Re-read rather than reuse the
-                // draft: the backend stamps `config_version` on write, and the
-                // baseline has to be what a later read will actually return.
+                // a retry would compare against the pre-save read, find our own
+                // write, and refuse. Re-read rather than reuse the draft: the
+                // backend stamps `config_version` on write, and the baseline
+                // has to be what a later read will actually return.
+                //
+                // Done whenever the *write* landed, which is not the same as
+                // the save succeeding: `save_config` stores the document before
+                // it attempts the entry reload, so a reload that then failed
+                // still leaves the stored document ours. That is exactly the
+                // case where the dialog stays open and the user tries again.
                 await this._rebaseline();
                 // The stored document *is* the baseline again, so whatever the
                 // reload's own announcements arrive to say, they are not news
                 // that somebody else wrote.
                 this._stale = false;
                 this._dirty = false;
-                this._message = {
-                    kind: "success",
-                    text: this._editorText(
-                        response.reloadStarted
-                            ? "editor.messages.config_saved_reload_started"
-                            : "editor.messages.config_saved",
-                    ),
-                };
+            }
+            if (response.success) {
+                // Say what happened on the way out. The restart this started
+                // makes the integration's entities briefly unavailable, which
+                // is worth knowing about, and the dialog is no longer there to
+                // say it -- so it goes to Home Assistant's own toast.
+                this._notify(this._editorText(
+                    response.reloadStarted
+                        ? "editor.messages.config_saved_reload_started"
+                        : "editor.messages.config_saved",
+                ));
+                // Saving is finishing, so the dialog closes. Leaving it open on
+                // a green message made Cancel the way out of a save that had
+                // already succeeded, which reads as though it might undo it.
+                this.open = false;
+                this._notifyClosed();
                 return;
             }
             this._message = {
@@ -591,6 +611,20 @@ export class HelmanOptimizerEditDialog extends LitElement {
         }
     }
 
+    /**
+     * Home Assistant's own toast, for something the dialog closed before it
+     * could show. `hass-notification` is the frontend's standard channel for
+     * this and is handled at the `home-assistant` root, which every surface
+     * mounting this dialog sits inside.
+     */
+    private _notify(message: string): void {
+        this.dispatchEvent(new CustomEvent("hass-notification", {
+            bubbles: true,
+            composed: true,
+            detail: { message },
+        }));
+    }
+
     /** Throw the draft away and read the config again. */
     private _handleReload = (): void => {
         if (this._dirty && !window.confirm(this._editorText("editor.confirm.discard_changes"))) {
@@ -685,28 +719,6 @@ const preventSummaryToggle = (event: Event): void => {
 const stopSummaryToggle = (event: Event): void => {
     event.stopPropagation();
 };
-
-/**
- * A document as one string, with object keys in a stable order.
- *
- * `JSON.stringify` preserves insertion order, and two reads of the same stored
- * config need not agree on it -- the backend rebuilds the dict on every load
- * and a migration may reinsert a key. Sorting makes the comparison about the
- * content, which is the only thing a collision check should be about.
- */
-function canonicalJson(value: unknown): string {
-    return JSON.stringify(value, (_key, nested) => {
-        if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
-            return nested;
-        }
-        const entry = nested as Record<string, unknown>;
-        const sorted: Record<string, unknown> = {};
-        for (const key of Object.keys(entry).sort()) {
-            sorted[key] = entry[key];
-        }
-        return sorted;
-    });
-}
 
 function describeError(error: unknown): string {
     if (typeof error === "object" && error !== null && "message" in error) {

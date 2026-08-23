@@ -19,6 +19,12 @@ import { resolve } from "node:path";
  *   the failure this feature could otherwise create.
  * - **The machine that saved: neither.** It already refreshed everything its
  *   own write touched; re-reading and warning would both be noise.
+ *
+ * Which of the three it is cannot be read off the announcement: the event says
+ * something moved, never what or who moved it, and one `save_config` fires
+ * several as the entry reload it starts re-plans. So the editor reads the
+ * document and compares it. That comparison read is why the call counts below
+ * are one higher than the reloads they describe.
  */
 
 const BUNDLE = resolve(
@@ -169,7 +175,25 @@ test("a clean editor picks up a config saved elsewhere", async ({ page }) => {
     await page.evaluate((config) => window.__setStoredConfig(config), CHANGED_CONFIG);
     await page.evaluate(() => window.__fireDataChanged("config"));
 
+    // Three reads: the first load, the comparison that found the change, and
+    // the reload it triggered.
+    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(3);
+    expect(await readBadges(page)).not.toContain(
+        "The stored config changed elsewhere — reload to see it",
+    );
+});
+
+test("an announcement that moved nothing is not acted on at all", async ({ page }) => {
+    // A re-plan and a retrained bias profile are announced on the same feed and
+    // touch nothing this editor holds. Reloading the page under the user for
+    // those would be the auto-refresh making itself felt for no reason.
+    await mountEditor(page);
+
+    await page.evaluate(() => window.__fireDataChanged("plan"));
+
+    // One comparison read, and no reload behind it.
     await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
+    expect(await readBadges(page)).toContain("Stored config loaded");
     expect(await readBadges(page)).not.toContain(
         "The stored config changed elsewhere — reload to see it",
     );
@@ -186,8 +210,9 @@ test("a dirty editor keeps its draft and says the config moved", async ({ page }
         .poll(() => readBadges(page))
         .toContain("The stored config changed elsewhere — reload to see it");
 
-    // The draft is untouched: nothing was re-read over it.
-    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
+    // Two reads: the first load and the comparison. The comparison never
+    // touches the draft -- only a reload would, and there was none.
+    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(2);
     expect(await readBadges(page)).toContain("Unsaved changes");
 });
 
@@ -208,9 +233,17 @@ test("the machine that saved hears its own write and ignores it", async ({ page 
     await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
     await expect.poll(() => readBadges(page)).toContain("Stored config loaded");
 
-    // The save's own announcement caused neither a re-read nor a warning.
-    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
+    // Past the feed's collapse window, so the announcement has definitely been
+    // delivered rather than merely fired.
+    await page.waitForTimeout(600);
+
+    // The save's own announcements caused neither a reload nor a warning.
+    // Three reads: the first load, the re-baseline the save took of what it
+    // wrote, and the comparison that announcement then triggered -- which
+    // found the document exactly as the save left it, and so did nothing.
+    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(3);
     expect(await readBadges(page)).not.toContain(
         "The stored config changed elsewhere — reload to see it",
     );
+    expect(await readBadges(page)).not.toContain("Unsaved changes");
 });

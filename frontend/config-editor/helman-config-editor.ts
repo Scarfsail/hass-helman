@@ -21,6 +21,7 @@ import {
   createModeKey,
   type RenameObjectKeyResult,
   createUseModeEntry,
+  canonicalJson,
   createVehicleDraft,
   getValueAtPath,
   moveListItem,
@@ -567,7 +568,21 @@ export class HelmanConfigEditorPanel
    * machine that just saved hears about its own write. It has already refreshed
    * everything that write touched, and re-reading would be pure noise.
    */
-  private _expectOwnDataChange = false;
+  /**
+   * The stored document as it was when this editor last agreed with it, as one
+   * canonical string.
+   *
+   * `helman_data_changed` says something moved; it never says what or who. One
+   * `save_config` fires several of them -- the entry reload it starts re-plans,
+   * and those announcements land well after the feed's collapse window closes
+   * on the first -- so a flag that skipped "the next one" recognised its own
+   * write once and read the rest as somebody else's. This is what the question
+   * actually needs: the document itself, to compare against.
+   */
+  private _configBaseline: string | null = null;
+
+  /** A comparison in flight, so an announcement burst costs one read. */
+  private _baselineCheck: Promise<void> | null = null;
   private _hasLoadedOnce = false;
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
@@ -653,17 +668,55 @@ export class HelmanConfigEditorPanel
    * so it is strictly more conservative: it never prompts and never discards.
    */
   private _handleDataChanged(): void {
-    if (this._expectOwnDataChange) {
-      this._expectOwnDataChange = false;
-      return;
+    void this._reactToDataChanged();
+  }
+
+  /**
+   * Look before acting: an announcement is a hint, the document is the answer.
+   *
+   * A re-read that comes back equal to the baseline means nothing this editor
+   * cares about moved -- our own save, or a re-plan, or a retrained bias
+   * profile -- and the right response is to do nothing at all rather than
+   * reload the page under the user or accuse them of a collision with
+   * themselves. A failed re-read is also nothing: a dropped frame is not
+   * evidence that anybody wrote.
+   */
+  private async _reactToDataChanged(): Promise<void> {
+    if (this._saving || this._loading || this._baselineCheck !== null) {
+      return this._baselineCheck ?? undefined;
     }
 
-    if (this._dirty || this._hasBlockingYamlErrors()) {
-      this._staleConfigNotice = true;
-      return;
-    }
+    this._baselineCheck = (async () => {
+      try {
+        if (!(await this._configMovedFromBaseline())) {
+          return;
+        }
+        if (this._dirty || this._hasBlockingYamlErrors()) {
+          this._staleConfigNotice = true;
+          return;
+        }
+        await this._loadConfig({ showMessage: false });
+      } finally {
+        this._baselineCheck = null;
+      }
+    })();
 
-    void this._loadConfig({ showMessage: false });
+    return this._baselineCheck;
+  }
+
+  /** Whether the stored document differs from the one this editor agreed with. */
+  private async _configMovedFromBaseline(): Promise<boolean> {
+    if (!this.hass || this._configBaseline === null) {
+      return false;
+    }
+    try {
+      const current = asJsonObject(
+        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+      );
+      return current !== undefined && canonicalJson(current) !== this._configBaseline;
+    } catch {
+      return false;
+    }
   }
 
   render(): TemplateResult {
@@ -3064,6 +3117,24 @@ export class HelmanConfigEditorPanel
     return counts;
   }
 
+  /** Adopt the stored document as the baseline, without touching the draft. */
+  private async _rebaselineConfig(): Promise<void> {
+    if (!this.hass) {
+      return;
+    }
+    try {
+      const current = asJsonObject(
+        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+      );
+      if (current !== undefined) {
+        this._configBaseline = canonicalJson(current);
+      }
+    } catch {
+      // Leaving the old baseline costs at most one spurious notice, which the
+      // reload button clears. Failing the save over it would cost the write.
+    }
+  }
+
   private async _loadConfig(options: { showMessage: boolean }): Promise<void> {
     if (!this.hass) {
       return;
@@ -3081,6 +3152,9 @@ export class HelmanConfigEditorPanel
       }
       const loadedConfig = asJsonObject(loadedResult.value);
       this._config = loadedConfig ? cloneJson(loadedConfig) : {};
+      // What was read is what this editor now agrees with, so it is what a
+      // later announcement has to be compared against.
+      this._configBaseline = canonicalJson(loadedConfig ?? {});
       // Whatever changed elsewhere is now in hand, however the reload was asked
       // for -- the button, the announcement, or the first load.
       this._staleConfigNotice = false;
@@ -3165,9 +3239,11 @@ export class HelmanConfigEditorPanel
       });
       this._validation = response.validation;
       if (response.success) {
-        // The backend reloaded the entry and announced it; that announcement is
-        // ours and must not bounce back as a reload or a notice.
-        this._expectOwnDataChange = true;
+        // The document this save wrote is what the editor now agrees with, so
+        // the reload's own announcements compare equal and say nothing. Re-read
+        // rather than reuse the draft: the backend stamps `config_version` on
+        // write, and the baseline has to be what a later read will return.
+        await this._rebaselineConfig();
         this._staleConfigNotice = false;
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
         this._dirty = this._config
