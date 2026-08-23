@@ -556,33 +556,73 @@ export async function columnsWithClass(page: Page, cls: string): Promise<string[
     }, cls);
 }
 
+/** The modifier keys a column click carries, as the selection reads them. */
+export interface ClickModifiers {
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+}
+
 /**
  * Click a column and wait only for the card to re-render.
  *
- * The difference from `selectColumn` is what is *not* waited for: the drill
- * button belongs to a bucket the card can open, and a future day of the current
- * month has no such button. A test about the selection itself must not require
- * one.
+ * The difference from `selectColumn` is what is *not* waited for: a click that
+ * empties the selection opens no panel at all, and a test about the selection
+ * itself must not require one.
  */
-export async function clickColumn(page: Page, index: number): Promise<void> {
-    await page.evaluate((i) => {
+export async function clickColumn(
+    page: Page,
+    index: number,
+    modifiers: ClickModifiers = {},
+): Promise<void> {
+    await page.evaluate(({ i, mods }) => {
         const host = (document.querySelector("helman-solar-inspector") as any);
         (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
             .shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
-            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+            .dispatchEvent(new MouseEvent("click", {
+                bubbles: true,
+                composed: true,
+                ctrlKey: mods.ctrlKey === true,
+                shiftKey: mods.shiftKey === true,
+            }));
         return host.updateComplete;
-    }, index);
+    }, { i: index, mods: modifiers });
 }
 
-/** Click a column, and wait for the selected-bucket panel it opens. */
-export async function selectColumn(page: Page, index: number): Promise<void> {
-    await page.evaluate((i) => {
+/**
+ * Click the chart outside every column: the axis gutter.
+ *
+ * Dispatched on the `<svg>` itself, which is what a press in the left margin
+ * really lands on -- the hit rects start at the plot's left edge.
+ */
+export async function clickGutter(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        (host.shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector("svg.aggregate-chart") as SVGElement)
+            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        return host.updateComplete;
+    });
+}
+
+/** The selected buckets, as the chart's own columns report them. */
+export async function selectedColumns(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
         const chart = (document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector("helman-solar-aggregate-chart");
-        (chart.shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
-            .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-    }, index);
+        if (!chart?.shadowRoot) return [];
+        return [...chart.shadowRoot.querySelectorAll(".bucket-column.selected")]
+            .map((rect: Element) => rect.getAttribute("data-bucket") ?? "");
+    });
+}
+
+/** Click a column, and wait for the selection panel it opens. */
+export async function selectColumn(
+    page: Page,
+    index: number,
+    modifiers: ClickModifiers = {},
+): Promise<void> {
+    await clickColumn(page, index, modifiers);
     await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-        .shadowRoot.querySelector(".drill-button"));
+        .shadowRoot.querySelector(".selection-section"));
 }
 

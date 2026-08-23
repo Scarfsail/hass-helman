@@ -4,14 +4,8 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import {
-    BATT_COLOR,
-    GRID_COLOR,
-    GRID_EXPORT_COLOR,
-    GRID_IMPORT_COLOR,
-    HOUSE_COLOR,
-    SOLAR_COLOR,
-} from "../color-utils";
+import { CHART_COLORS } from "./chart-colors";
+import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-selection";
 import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
@@ -51,9 +45,21 @@ export interface SpanAggregatePayload {
     range?: NavigationRange;
 }
 
-/** A column was clicked; the inspector holds the selection. */
+/**
+ * A column was clicked; the inspector holds the selection.
+ *
+ * `key` is null for a click that landed outside the plot -- the axis gutter or
+ * the margins -- which is the day view's "clear the selection" gesture, read
+ * here from where the click landed rather than from a pointer coordinate.
+ *
+ * The modifier keys travel with it as a {@link SlotSelectionMode}, so the card
+ * can run a bucket click through exactly the semantics a slot click gets. This
+ * element stays a reporter: it says what was pressed and how, and the card
+ * decides what that does to the selection.
+ */
 export interface AggregateBucketSelectDetail {
-    key: string;
+    key: string | null;
+    mode: SlotSelectionMode;
 }
 
 /**
@@ -84,6 +90,20 @@ const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, m
  * colours.
  */
 const BAND_FILL_OPACITY = 0.45;
+
+/**
+ * How a picked column is drawn, and how a pointed-at one is -- the day view's
+ * own two treatments, character for character.
+ *
+ * Selected is the blue `_renderSlotHighlight` paints a selected slot in; hover
+ * is the amber the day chart's hover band uses. Keeping them apart by *hue*
+ * rather than by opacity is the point: a selection that wore the hover colour
+ * left the two tellable apart only by how strong they were.
+ */
+const SELECTED_STYLE = "fill: color-mix(in srgb, var(--helman-grid-import) 13%, transparent);"
+    + " stroke: var(--helman-grid-import); stroke-width: 1; stroke-opacity: 0.5;";
+const HOVER_STYLE = "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent);"
+    + " stroke: var(--helman-selection); stroke-width: 1;";
 
 /** Below this column width a label cannot be written without colliding. */
 const MIN_LABEL_PX = 13;
@@ -218,8 +238,14 @@ export class HelmanSolarAggregateChart extends LitElement {
     @property({ attribute: false }) public rows: readonly SpanAggregateRow[] = [];
     /** What one column is: a day of a month view, or a month of a year view. */
     @property({ type: String }) public bucket: "day" | "month" = "day";
-    /** The bucket key currently selected, or null for none. */
-    @property({ type: String }) public selectedKey: string | null = null;
+    /**
+     * Every selected bucket key, in the order the span draws them.
+     *
+     * A set rather than one key, because a bucket selects exactly as a slot
+     * does at 15/30/60 -- ctrl toggles, shift extends -- and the panel below
+     * describes the whole selection.
+     */
+    @property({ attribute: false }) public selectedKeys: readonly string[] = [];
     /** viewBox width; the SVG scales to its container, so this is only a ratio. */
     @property({ type: Number }) public width = 900;
     /**
@@ -294,14 +320,14 @@ export class HelmanSolarAggregateChart extends LitElement {
         const kwh = (wh: number | null) => (wh === null ? null : wh / 1000);
         return {
             positive: [
-                layer(SOLAR_COLOR, 1, (row) => kwh(row.solarWh)),
-                layer(BATT_COLOR, 1, (row) => kwh(row.batteryDischargeWh)),
-                layer(GRID_COLOR, 1, (row) => row.gridImportKwh),
+                layer(CHART_COLORS.corrected, 1, (row) => kwh(row.solarWh)),
+                layer(CHART_COLORS.battery, 1, (row) => kwh(row.batteryDischargeWh)),
+                layer(CHART_COLORS.grid, 1, (row) => row.gridImportKwh),
             ],
             negative: [
-                layer(HOUSE_COLOR, -1, (row) => kwh(row.houseWh)),
-                layer(BATT_COLOR, -1, (row) => kwh(row.batteryChargeWh)),
-                layer(GRID_COLOR, -1, (row) => row.gridExportKwh),
+                layer(CHART_COLORS.house, -1, (row) => kwh(row.houseWh)),
+                layer(CHART_COLORS.battery, -1, (row) => kwh(row.batteryChargeWh)),
+                layer(CHART_COLORS.grid, -1, (row) => row.gridExportKwh),
             ],
         };
     }
@@ -336,6 +362,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     class="aggregate-chart"
                     aria-label=${this._t("bias_correction.inspector.aggregate_chart")}
                     style="cursor: pointer;"
+                    @click=${this._clickOutside}
                     @mouseleave=${this._clearHover}
                 >
                     ${this._renderAxis(yTicks, yFor, plotWidth)}
@@ -411,6 +438,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     class="soc-row"
                     aria-label=${this._t("bias_correction.inspector.aggregate_soc_row")}
                     style="cursor: pointer;"
+                    @click=${this._clickOutside}
                     @mouseleave=${this._clearHover}
                 >
                     ${this._renderRowGuides(SOC_TICKS, yFor, plotWidth, (tick) => String(tick))}
@@ -424,8 +452,8 @@ export class HelmanSolarAggregateChart extends LitElement {
                                 () => yFor(0),
                                 xFor,
                             )}
-                            fill=${BATT_COLOR} fill-opacity=${BAND_FILL_OPACITY}
-                            stroke=${BATT_COLOR} stroke-width="0.75" stroke-opacity="0.6"
+                            fill=${CHART_COLORS.battery} fill-opacity=${BAND_FILL_OPACITY}
+                            stroke=${CHART_COLORS.battery} stroke-width="0.75" stroke-opacity="0.6"
                             pointer-events="none"
                         ></path>
                         <path
@@ -436,8 +464,8 @@ export class HelmanSolarAggregateChart extends LitElement {
                                 () => yFor(0),
                                 xFor,
                             )}
-                            fill=${BATT_COLOR} fill-opacity=${SOC_MIN_FILL_OPACITY}
-                            stroke=${BATT_COLOR} stroke-width="0.75" stroke-opacity="0.6"
+                            fill=${CHART_COLORS.battery} fill-opacity=${SOC_MIN_FILL_OPACITY}
+                            stroke=${CHART_COLORS.battery} stroke-width="0.75" stroke-opacity="0.6"
                             pointer-events="none"
                         ></path>
                     `)}
@@ -580,12 +608,13 @@ export class HelmanSolarAggregateChart extends LitElement {
                     class="money-row"
                     aria-label=${caption}
                     style="cursor: pointer;"
+                    @click=${this._clickOutside}
                     @mouseleave=${this._clearHover}
                 >
                     ${this._renderRowGuides(ticks, yFor, plotWidth, formatMoneyTick)}
                     ${this._renderRowColumns(rows, xFor, columnWidth, MONEY_ROW.marginTop, plotHeight)}
-                    ${cell("money-band cost", GRID_IMPORT_COLOR, cost)}
-                    ${cell("money-band gain", GRID_EXPORT_COLOR, gain)}
+                    ${cell("money-band cost", CHART_COLORS.gridImport, cost)}
+                    ${cell("money-band gain", CHART_COLORS.gridExport, gain)}
                     ${this._renderMoneyLabels(rows, xFor, columnWidth, yFor, zeroY)}
                     ${this._renderRowCaption(caption)}
                 </svg>
@@ -692,14 +721,14 @@ export class HelmanSolarAggregateChart extends LitElement {
         height: number,
     ) {
         return rows.map((row, index) => {
-            const selected = row.date === this.selectedKey;
+            const selected = this._isSelected(row.date);
             const hovered = row.date === this.hoveredKey;
             // Hover reads over selection, as it does on the chart: the pointer
             // is about the column under it, whatever is already picked.
             const style = hovered
-                ? "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection); stroke-width: 1;"
+                ? HOVER_STYLE
                 : selected
-                    ? "fill: var(--helman-selection); fill-opacity: 0.18;"
+                    ? SELECTED_STYLE
                     // Transparent rather than `none`: a fill of `none` is not
                     // hit-tested, and this rect exists to be pointed at.
                     : "fill: transparent;";
@@ -710,7 +739,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     x=${xFor(index)} y=${top}
                     width=${columnWidth} height=${height}
                     style=${style}
-                    @click=${() => this._selectBucket(row.date)}
+                    @click=${(event: MouseEvent) => this._selectBucket(row.date, event)}
                     @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
                 ></rect>
             `;
@@ -779,8 +808,8 @@ export class HelmanSolarAggregateChart extends LitElement {
                 class="bucket-hover"
                 x=${xFor(index)} y=${CHART.marginTop}
                 width=${columnWidth} height=${height}
-                style="fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection);"
-                stroke-width="1" pointer-events="none"
+                style=${HOVER_STYLE}
+                pointer-events="none"
             ></rect>
         `;
     }
@@ -826,16 +855,15 @@ export class HelmanSolarAggregateChart extends LitElement {
     ) {
         const height = CHART.height - CHART.marginTop - CHART.marginBottom;
         return rows.map((row, index) => {
-            const selected = row.date === this.selectedKey;
+            const selected = this._isSelected(row.date);
             return svg`
                 <rect
                     class="bucket-column ${selected ? "selected" : ""}"
                     data-bucket=${row.date}
                     x=${xFor(index)} y=${CHART.marginTop}
                     width=${columnWidth} height=${height}
-                    fill=${selected ? "var(--helman-selection)" : "transparent"}
-                    fill-opacity=${selected ? 0.18 : 1}
-                    @click=${() => this._selectBucket(row.date)}
+                    style=${selected ? SELECTED_STYLE : "fill: transparent;"}
+                    @click=${(event: MouseEvent) => this._selectBucket(row.date, event)}
                     @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
                 ></rect>
             `;
@@ -886,12 +914,39 @@ export class HelmanSolarAggregateChart extends LitElement {
         }));
     };
 
-    private _selectBucket(key: string) {
+    /**
+     * A column was pressed: report which one, and with which modifiers.
+     *
+     * The click is stopped here so it never reaches {@link _clickOutside} on the
+     * SVG above -- that handler is the gutter, and a press that landed on a
+     * column is by definition not one. The select event is a separate,
+     * still-bubbling `CustomEvent`, so the card hears it either way.
+     */
+    private _selectBucket(key: string, event: MouseEvent) {
+        event.stopPropagation();
+        this._dispatchSelect(key, slotSelectionModeForEvent(event));
+    }
+
+    /**
+     * A press that missed every column: the axis gutter, the margins, the
+     * caption strip. It clears the selection, exactly as a gutter click does in
+     * the day view.
+     */
+    private _clickOutside = (event: MouseEvent) => {
+        this._dispatchSelect(null, slotSelectionModeForEvent(event));
+    };
+
+    private _dispatchSelect(key: string | null, mode: SlotSelectionMode) {
         this.dispatchEvent(new CustomEvent<AggregateBucketSelectDetail>("aggregate-bucket-select", {
-            detail: { key },
+            detail: { key, mode },
             bubbles: true,
             composed: true,
         }));
+    }
+
+    /** Whether a bucket is in the card's selection. */
+    private _isSelected(key: string): boolean {
+        return this.selectedKeys.includes(key);
     }
 
     /**

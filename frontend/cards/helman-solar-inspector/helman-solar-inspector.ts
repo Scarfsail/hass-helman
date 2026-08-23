@@ -25,19 +25,12 @@ import {
 } from "./chart-soc";
 import { SOC_COLUMN_OPACITY, SOC_DIRECTION_COLOR } from "../shared/soc-columns";
 import {
-  BATT_COLOR,
-  CHARGE_COLOR,
-  DEFERRABLE_HOUSE_COLOR,
-  DISCHARGE_COLOR,
-  FORECAST_RAW_COLOR,
-  GRID_COLOR,
   GRID_EXPORT_COLOR,
   GRID_IMPORT_COLOR,
-  HOUSE_COLOR,
   NEUTRAL_COLOR,
-  SOLAR_COLOR,
   nodeAccentColor,
 } from "../color-utils";
+import { CHART_COLORS } from "./chart-colors";
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
@@ -200,18 +193,6 @@ function defaultSlotMinutesForViewport(): number {
   const width = typeof window !== "undefined" ? window.innerWidth : 0;
   return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
 }
-
-const CHART_COLORS = {
-  raw:             FORECAST_RAW_COLOR,
-  corrected:       SOLAR_COLOR,
-  actual:          SOLAR_COLOR,
-  house:           HOUSE_COLOR,
-  houseDeferrable: DEFERRABLE_HOUSE_COLOR,
-  battery:         BATT_COLOR,
-  grid:            GRID_COLOR,
-  impactPositive:  CHARGE_COLOR,
-  impactNegative:  DISCHARGE_COLOR,
-} as const;
 
 type SeriesKey =
   | "raw"
@@ -580,9 +561,9 @@ export class HelmanSolarInspector extends LitElement {
    * statistics, which the recorder keeps indefinitely; the day view is bounded
    * by the raw states behind its actuals, which the recorder purges. One field
    * would mean whichever view loaded last decided the other's floor — and
-   * drilling from a month into an already-loaded day skips the day's own load,
-   * so the day view would keep the deep floor and offer a back arrow full of
-   * days it cannot draw.
+   * arriving from a month on an already-loaded day skips the day's own load,
+   * so the day view would keep the deep floor and offer a picker full of days
+   * it cannot draw.
    *
    * Kept apart from the payload so the day pills stay put while the next day
    * loads — the payload is cleared for the duration, and a header that emptied
@@ -672,8 +653,16 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _span: SpanAggregatePayload | null = null;
   @state() private _spanLoading = false;
   @state() private _spanError = "";
-  /** The bucket key clicked in the aggregate chart, or null for none. */
-  @state() private _selectedBucket: string | null = null;
+  /**
+   * The buckets picked in the aggregate views, as one selection.
+   *
+   * The same {@link SlotSelectionState} the day view keeps over its slots, over
+   * bucket keys instead: `slot-selection.ts` only ever compares and orders
+   * strings against an ordered universe, and a span's buckets are exactly that.
+   * So a column at D or M selects with the modifiers a column at 15/30/60 does,
+   * and there is one implementation of what a click means rather than two.
+   */
+  @state() private _bucketSelection: SlotSelectionState = EMPTY_SLOT_SELECTION;
   /**
    * The day under the pointer, wherever the pointer is.
    *
@@ -852,22 +841,6 @@ export class HelmanSolarInspector extends LitElement {
     .span-pills {
       flex: 1 1 auto;
       min-width: 0;
-    }
-
-    .drill-button {
-      margin-top: 8px;
-      padding: 6px 12px;
-      border: 1px solid var(--divider-color);
-      border-radius: 6px;
-      background: var(--card-background-color);
-      color: var(--primary-text-color);
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .drill-button:disabled {
-      cursor: not-allowed;
-      opacity: 0.5;
     }
 
     .icon-button {
@@ -1559,7 +1532,7 @@ export class HelmanSolarInspector extends LitElement {
             .minDate=${this._navFloor()}
             .todayKey=${today}
             .hoveredKey=${this._shapedKey("month", this._hoveredBucketKey)}
-            .selectedBucket=${this._shapedKey("month", this._selectedBucket)}
+            .selectedBucket=${this._shapedKey("month", this._focusBucket())}
             .selectsSlot=${this._correlatedRow() === "month"}
             @span-pill-select=${this._handleSpanPillSelect}
             @span-pill-hover=${this._handleSpanPillHover}
@@ -1578,7 +1551,7 @@ export class HelmanSolarInspector extends LitElement {
             .reachableFrom=${this._pillReach().from}
             .reachableTo=${this._pillReach().to}
             .hoveredDate=${this._shapedKey("day", this._hoveredBucketKey)}
-            .selectedBucket=${this._shapedKey("day", this._selectedBucket)}
+            .selectedBucket=${this._shapedKey("day", this._focusBucket())}
             .selectsSlot=${this._correlatedRow() === "day"}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -1737,7 +1710,9 @@ export class HelmanSolarInspector extends LitElement {
     const carried = this._spanForViewStop(stop.mode);
     this._viewMode = stop.mode;
     this._selectedDate = carried.date;
-    this._selectedBucket = carried.bucket;
+    this._bucketSelection = carried.bucket === null
+      ? EMPTY_SLOT_SELECTION
+      : { selectedSlots: [carried.bucket], focusSlot: carried.bucket, anchorSlot: carried.bucket };
     this._hoveredBucketKey = null;
     this._loadSpan();
   }
@@ -1758,7 +1733,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _spanForViewStop(mode: InspectorViewMode): { date: string; bucket: string | null } {
     const today = this._todayIso();
-    const anchor = this._selectedBucket ?? (this._selectedDate || today);
+    const anchor = this._focusBucket() ?? (this._selectedDate || today);
     if (mode === "month") {
       // Into D, whose columns are days. A month picked at M names the month to
       // draw and leaves no day picked inside it; a day carries as itself.
@@ -1790,8 +1765,8 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _dayForMinutesStop(): string {
     const today = this._todayIso();
-    const column = this._shapedKey("day", this._selectedBucket);
-    const month = this._correlatedRow() === "month" ? this._selectedBucket : null;
+    const column = this._shapedKey("day", this._focusBucket());
+    const month = this._correlatedRow() === "month" ? this._focusBucket() : null;
     const selected = this._selectedDate || today;
     let day = column ?? selected;
     if (column === null && month !== null) {
@@ -1919,11 +1894,11 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     // At M the month row *is* the chart's columns, so pressing one picks the
-    // bucket rather than opening it -- the same press the column takes, and the
-    // same toggle. Every other press moves the span the view is showing, and
-    // the view it is showing in stays what it was.
+    // bucket rather than opening it -- the same press the column takes. Every
+    // other press moves the span the view is showing, and the view it is
+    // showing in stays what it was.
     if (event.detail.row === "months" && this._correlatedRow() === "month") {
-      this._toggleBucket(event.detail.date);
+      this._pickBucket(event.detail.date);
       return;
     }
     this._showSpan(event.detail.date, this._viewMode);
@@ -2037,6 +2012,10 @@ export class HelmanSolarInspector extends LitElement {
       });
       if (this._spanRequestKey !== key) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
+      // Drop anything the new span has no column for, exactly as the day load
+      // re-grids its slot selection: a selection the chart cannot draw is a
+      // panel describing buckets that are not on screen.
+      this._bucketSelection = reconcileSlotSelection(this._orderedBuckets(), this._bucketSelection);
       // Same stale-request guard as the payload above: a span view is a way into
       // the card, so this is where the floor arrives when no day was ever loaded.
       if (result?.range) this._spanRange = result.range;
@@ -2073,7 +2052,7 @@ export class HelmanSolarInspector extends LitElement {
           .hass=${this.hass}
           .rows=${rows}
           .bucket=${this._spanBucket()}
-          .selectedKey=${this._selectedBucket}
+          .selectedKeys=${this._bucketSelection.selectedSlots}
           .hoveredKey=${this._hoveredBucketKey}
           .currency=${this._span?.currency ?? ""}
           .width=${this._chartWidth}
@@ -2124,7 +2103,7 @@ export class HelmanSolarInspector extends LitElement {
 
   /** Drop whatever the chart was focused on; nothing survives a change of view. */
   private _clearChartFocus() {
-    this._selectedBucket = null;
+    this._bucketSelection = EMPTY_SLOT_SELECTION;
     // The hovered key has no `mouseleave` to rely on here: a node removed from
     // under the pointer never fires one, so a view change that unmounts the
     // chart or the row would otherwise leave a phantom amber column waiting on
@@ -2164,64 +2143,114 @@ export class HelmanSolarInspector extends LitElement {
     this._setHoveredBucket(event.detail.date);
   };
 
+  /**
+   * A column was pressed, or the gutter beside them was.
+   *
+   * The chart reports which and with which modifiers; what that does to the
+   * selection is decided here and only here, by the same two calls the day
+   * view's `_handleChartClick` makes -- `applySlotSelection` for a column,
+   * an empty selection for a press that missed them all.
+   */
   private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
     event.stopPropagation();
-    this._toggleBucket(event.detail.key);
+    if (event.detail.key === null) {
+      this._bucketSelection = EMPTY_SLOT_SELECTION;
+      return;
+    }
+    this._selectBucket(event.detail.key, event.detail.mode);
   };
 
-  /**
-   * Pick a bucket, or drop it if it was already the one.
-   *
-   * Toggling rather than latching is the day chart's own slot behaviour, and
-   * the column and its pill are two hit targets for one act -- so they share
-   * this rather than each deciding what a second press means.
-   */
-  private _toggleBucket(key: string) {
-    this._selectedBucket = this._selectedBucket === key ? null : key;
+  /** The bucket the pill rows light and the width toggle carries across. */
+  private _focusBucket(): string | null {
+    return this._bucketSelection.focusSlot;
+  }
+
+  /** The span's buckets in the order they are drawn -- the selection's universe. */
+  private _orderedBuckets(): string[] {
+    return this._span?.days.map((row) => row.date) ?? [];
+  }
+
+  /** Run one bucket press through the day view's own selection semantics. */
+  private _selectBucket(key: string, mode: SlotSelectionMode) {
+    this._bucketSelection = applySlotSelection({
+      orderedSlots: this._orderedBuckets(),
+      selection: this._bucketSelection,
+      target: key,
+      mode,
+    });
   }
 
   /**
-   * The clicked bucket's own numbers, and the control that opens it.
+   * Pick a bucket from its pill.
    *
-   * Drilling is one level finer and no further: a month view opens a day, a year
-   * view opens that month. It moves the selected date as well as the view, so
-   * the day the user pointed at is the day that loads.
+   * The column and its pill are two hit targets for one act, so a pill press is
+   * a plain column press: it replaces the selection. A pill carries no modifier
+   * keys of its own -- the chart is where a selection is built up and the
+   * gutter is where it is emptied.
+   */
+  private _pickBucket(key: string) {
+    this._selectBucket(key, "replace");
+  }
+
+  /**
+   * What the selected buckets came to, headed by the buckets themselves.
    *
-   * A month reaches further back than a day can, because the two views read two
-   * different stores — so the day this offers to open may be one the recorder
-   * purged the raw states for. Opening it would draw an empty chart under a
-   * back arrow that is dead on arrival, the day being older than the day view's
-   * own floor. The control says so instead. Only the month view can produce
-   * this: a year view opens a month, and the month view's floor is the deep one.
+   * The day view's panel over a coarser grid: every figure is summed across the
+   * selection, exactly as `_renderSelectedSlotDetails` sums its series, and the
+   * heading names the whole selection rather than one column. There is no
+   * control to open a bucket -- the width toggle carries the focus bucket into
+   * the finer view in both directions, so a second path to the same place would
+   * be a second thing to keep in step.
    */
   private _renderSelectedBucket(rows: readonly SpanAggregateRow[]) {
-    const row = rows.find((candidate) => candidate.date === this._selectedBucket);
-    if (!row) return "";
-    const dayFloor = this._dayRange?.minDate ?? null;
-    const beyondDayHistory = this._viewMode === "month"
-      && dayFloor !== null
-      && row.date < dayFloor;
-    const drillKey = this._viewMode === "month"
-      ? "bias_correction.inspector.open_day"
-      : "bias_correction.inspector.open_month";
+    const selected = this._selectedBucketRows(rows);
+    if (selected.length === 0) return "";
     return html`
-      <div class="metrics-section">
-        <strong>${this._formatBucket(row.date)}</strong>
-        <div class="metric-grid">${this._renderBucketMetrics(row)}</div>
-        <button
-          class="drill-button"
-          type="button"
-          ?disabled=${beyondDayHistory}
-          title=${beyondDayHistory ? this._t("bias_correction.inspector.day_beyond_history") : ""}
-          @click=${() => this._drillInto(row.date)}
-        >
-          ${this._t(drillKey)}
-        </button>
+      <div class="metrics-section selection-section">
+        <strong>${this._formatBucketRange(selected.map((row) => row.date))}</strong>
+        <div class="metric-grid">${this._renderBucketMetrics(selected)}</div>
       </div>
     `;
   }
 
-  /** One bucket's six meters, in the chart's own order and colours. */
+  /** The selected buckets, in the order the span draws them. */
+  private _selectedBucketRows(rows: readonly SpanAggregateRow[]): SpanAggregateRow[] {
+    const wanted = new Set(this._bucketSelection.selectedSlots);
+    return rows.filter((row) => wanted.has(row.date));
+  }
+
+  /**
+   * The selection in words: the bucket-key analogue of `_formatSelectionRange`.
+   *
+   * Adjacent buckets merge into one run, because a selection that reads
+   * "3 Mar – 7 Mar" says what its sums are for where a list of five dates makes
+   * the reader do the merging. A gap breaks the run and the runs are listed, so
+   * the heading can never imply a bucket that is not selected. One bucket keeps
+   * `_formatBucket`'s own wording -- a month is named as a month, not as its
+   * first day.
+   */
+  private _formatBucketRange(keys: readonly string[]): string {
+    if (keys.length === 1) return this._formatBucket(keys[0]);
+    const ordered = this._orderedBuckets();
+    const runs: Array<[string, string]> = [];
+    let previousIndex: number | null = null;
+    for (const key of keys) {
+      const index = ordered.indexOf(key);
+      const last = runs[runs.length - 1];
+      if (last && previousIndex !== null && index !== -1 && index === previousIndex + 1) {
+        last[1] = key;
+      } else {
+        runs.push([key, key]);
+      }
+      previousIndex = index === -1 ? null : index;
+    }
+    return runs
+      .map(([start, end]) => (start === end
+        ? this._formatBucket(start)
+        : `${this._formatBucket(start)} – ${this._formatBucket(end)}`))
+      .join(", ");
+  }
+
   /**
    * Draw the card's one hover popup for an aggregate bucket.
    *
@@ -2259,8 +2288,8 @@ export class HelmanSolarInspector extends LitElement {
     const rows: TooltipRow[] = [
       measured(this._t("bias_correction.inspector.merged.solar"), row.solarWh, CHART_COLORS.corrected),
       measured(this._t("bias_correction.inspector.merged.house"), row.houseWh, CHART_COLORS.house),
-      measured(this._t("bias_correction.inspector.grid_import"), kwhToWh(row.gridImportKwh), CHART_COLORS.grid),
-      measured(this._t("bias_correction.inspector.grid_export"), kwhToWh(row.gridExportKwh), CHART_COLORS.grid),
+      measured(this._t("bias_correction.inspector.grid_import"), kwhToWh(row.gridImportKwh), CHART_COLORS.gridImport),
+      measured(this._t("bias_correction.inspector.grid_export"), kwhToWh(row.gridExportKwh), CHART_COLORS.gridExport),
       measured(this._t("bias_correction.inspector.battery_charge"), row.batteryChargeWh, CHART_COLORS.battery),
       measured(this._t("bias_correction.inspector.battery_discharge"), row.batteryDischargeWh, CHART_COLORS.battery),
     ].filter((candidate) => candidate.forecast !== null);
@@ -2268,7 +2297,7 @@ export class HelmanSolarInspector extends LitElement {
     // column would answer half the question and leave the reader to click for
     // the rest. The SoC range and the money are formatted rather than passed
     // through `_formatWh`, so each carries its own unit.
-    const socRange = this._formatSocRange(row);
+    const socRange = this._formatSocRange([row]);
     if (socRange !== null) {
       rows.push({
         label: this._t("bias_correction.inspector.soc_range"),
@@ -2283,11 +2312,11 @@ export class HelmanSolarInspector extends LitElement {
         actual: null,
         forecast: { value: this._formatSpanMoney(value), color },
       });
-      amount("import_cost", money.cost, GRID_IMPORT_COLOR);
-      amount("export_gain", money.gain, GRID_EXPORT_COLOR);
+      amount("import_cost", money.cost, CHART_COLORS.gridImport);
+      amount("export_gain", money.gain, CHART_COLORS.gridExport);
       // The net too, or the popup stops one row short of the panel it claims to
       // repeat -- and the net is the figure a reader is usually after.
-      amount("net_cost", money.net, GRID_COLOR);
+      amount("net_cost", money.net, CHART_COLORS.grid);
     }
     this._tooltip = {
       x,
@@ -2371,86 +2400,87 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * How low the battery got and how high it came back, over one bucket.
+   * How low the battery got and how high it came back, over a set of buckets.
    *
-   * Both bounds or nothing: half a range is not a range, and writing the known
-   * end alone would read as a battery that sat still. Same rule the chart's SoC
-   * row draws by.
+   * Both bounds or nothing, per bucket: half a range is not a range, and writing
+   * the known end alone would read as a battery that sat still. Same rule the
+   * chart's SoC row draws by.
    */
-  private _formatSocRange(row: SpanAggregateRow): string | null {
-    const min = row.batteryMinSocPct;
-    const max = row.batteryMaxSocPct;
-    if (min === null || max === null) return null;
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-    return `${Math.min(min, max).toFixed(0)}–${Math.max(min, max).toFixed(0)} %`;
+  private _formatSocRange(rows: readonly SpanAggregateRow[]): string | null {
+    let low: number | null = null;
+    let high: number | null = null;
+    for (const row of rows) {
+      const min = row.batteryMinSocPct;
+      const max = row.batteryMaxSocPct;
+      if (min === null || max === null) continue;
+      if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
+      // The lowest low and the highest high, which is what a range over several
+      // buckets is: how low the battery got at all, and how high it came back.
+      // Averaging the bounds would invent a range no day actually had.
+      const bottom = Math.min(min, max);
+      const top = Math.max(min, max);
+      low = low === null ? bottom : Math.min(low, bottom);
+      high = high === null ? top : Math.max(high, top);
+    }
+    if (low === null || high === null) return null;
+    return `${low.toFixed(0)}–${high.toFixed(0)} %`;
   }
 
-  private _renderBucketMetrics(row: SpanAggregateRow) {
-    const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
-    const money = this._spanMoney([row], [row.date]);
-    const socRange = this._formatSocRange(row);
+  /** The selection's six meters, in the chart's own order and colours. */
+  private _renderBucketMetrics(rows: readonly SpanAggregateRow[]) {
+    const money = this._spanMoney(rows, rows.map((row) => row.date));
+    const socRange = this._formatSocRange(rows);
     return html`
-      ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(row.solarWh), CHART_COLORS.corrected)}
-      ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(row.houseWh), CHART_COLORS.house)}
-      ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhToWh(row.gridImportKwh)), CHART_COLORS.grid)}
-      ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhToWh(row.gridExportKwh)), CHART_COLORS.grid)}
-      ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(row.batteryChargeWh), CHART_COLORS.battery)}
-      ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(row.batteryDischargeWh), CHART_COLORS.battery)}
+      ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(this._sumBuckets(rows, (row) => row.solarWh)), CHART_COLORS.corrected)}
+      ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(this._sumBuckets(rows, (row) => row.houseWh)), CHART_COLORS.house)}
+      ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(this._sumBucketsKwh(rows, (row) => row.gridImportKwh)), CHART_COLORS.gridImport)}
+      ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(this._sumBucketsKwh(rows, (row) => row.gridExportKwh)), CHART_COLORS.gridExport)}
+      ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(this._sumBuckets(rows, (row) => row.batteryChargeWh)), CHART_COLORS.battery)}
+      ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(this._sumBuckets(rows, (row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
       ${socRange === null
         ? ""
         : this._renderMetric(this._t("bias_correction.inspector.soc_range"), socRange, CHART_COLORS.battery)}
-      ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), GRID_IMPORT_COLOR)}
-      ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), GRID_EXPORT_COLOR)}
+      ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), CHART_COLORS.gridImport)}
+      ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), CHART_COLORS.gridExport)}
       ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
     `;
   }
 
   /**
-   * One level finer, on the bucket that was clicked.
+   * One meter summed over a set of buckets.
    *
-   * The finer view's own load is what fills the screen, so both the view and the
-   * date move before it is asked for -- a month view that dropped to the day
-   * view first would briefly draw the wrong day.
+   * Null unless some bucket in the set actually measured it: a set of buckets
+   * the meter has no reading for totals to "nothing known", not to zero. The
+   * same rule every panel here follows, which is why both of them sum through
+   * this rather than through a local copy each.
    */
-  private _drillInto(bucketKey: string) {
-    if (this._viewMode === "month") {
-      this._showDay(bucketKey);
-      return;
+  private _sumBuckets(
+    rows: readonly SpanAggregateRow[],
+    read: (row: SpanAggregateRow) => number | null,
+  ): number | null {
+    let total: number | null = null;
+    for (const row of rows) {
+      const value = read(row);
+      if (value === null || !Number.isFinite(value)) continue;
+      total = (total ?? 0) + value;
     }
-    this._clearChartFocus();
-    this._viewMode = "month";
-    this._selectedDate = bucketKey;
-    this._loadSpan();
+    return total;
   }
 
-  /**
-   * Put one day on screen in the day view, from wherever the card was.
-   *
-   * The three ways in -- drilling into a day column, clicking a day pill while
-   * an aggregate view is up, and picking a minutes stop -- all mean the same
-   * thing and must do the same three things: drop the bucket the panel was
-   * describing, move the view and the date together, and let
-   * `_ensureDayLoaded` decide whether a fetch is owed. Moving the view before
-   * the date would draw the wrong day for a frame, which is why they are
-   * assigned here rather than at each call site.
-   *
-   * The slot width is deliberately not touched: `_selectViewStop` leaves
-   * `_slotMinutes` alone for the two aggregate stops, so it still holds
-   * whatever the reader last chose and arriving here restores it.
-   */
-  private _showDay(dayKey: string) {
-    this._clearChartFocus();
-    this._viewMode = "day";
-    this._selectedDate = dayKey;
-    this._ensureDayLoaded();
+  /** The same, for a meter the payload carries in kWh where the panel wants Wh. */
+  private _sumBucketsKwh(
+    rows: readonly SpanAggregateRow[],
+    read: (row: SpanAggregateRow) => number | null,
+  ): number | null {
+    const total = this._sumBuckets(rows, read);
+    return total === null ? null : total * 1000;
   }
 
   /**
    * Fetch the day view's payload unless it already holds the selected day.
    *
-   * Both ways into the day view -- picking a minutes stop, and drilling into a
-   * bucket -- can arrive with `_selectedDate` already equal to the day they
-   * want, because span navigation moves it to a span start. Guarding on
+   * A minutes stop can arrive with `_selectedDate` already equal to the day it
+   * wants, because span navigation moves it to a span start. Guarding on
    * `_selectedDate` therefore skips the load in exactly the case that needs it,
    * and `_renderBody` nulls out a payload stamped with any other date, so the
    * card draws a header over an empty body and issues no request to fix it.
@@ -2465,19 +2495,8 @@ export class HelmanSolarInspector extends LitElement {
 
   /** What the whole span came to, summed from the buckets already on screen. */
   private _renderSpanTotals(rows: readonly SpanAggregateRow[]) {
-    const sum = (read: (row: SpanAggregateRow) => number | null) => {
-      let total: number | null = null;
-      for (const row of rows) {
-        const value = read(row);
-        if (value === null || !Number.isFinite(value)) continue;
-        total = (total ?? 0) + value;
-      }
-      return total;
-    };
-    const kwhSum = (read: (row: SpanAggregateRow) => number | null) => {
-      const total = sum(read);
-      return total === null ? null : total * 1000;
-    };
+    const sum = (read: (row: SpanAggregateRow) => number | null) => this._sumBuckets(rows, read);
+    const kwhSum = (read: (row: SpanAggregateRow) => number | null) => this._sumBucketsKwh(rows, read);
     // Summed through `sumMoney` over every bucket on screen, so the span's
     // money and a single bucket's follow one rule -- the same one the day view's
     // selection follows.
@@ -2488,12 +2507,12 @@ export class HelmanSolarInspector extends LitElement {
         <div class="metric-grid">
           ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(sum((row) => row.solarWh)), CHART_COLORS.corrected)}
           ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(sum((row) => row.houseWh)), CHART_COLORS.house)}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhSum((row) => row.gridImportKwh)), CHART_COLORS.grid)}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhSum((row) => row.gridExportKwh)), CHART_COLORS.grid)}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhSum((row) => row.gridImportKwh)), CHART_COLORS.gridImport)}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhSum((row) => row.gridExportKwh)), CHART_COLORS.gridExport)}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(sum((row) => row.batteryChargeWh)), CHART_COLORS.battery)}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(sum((row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
-          ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), GRID_IMPORT_COLOR)}
-          ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), GRID_EXPORT_COLOR)}
+          ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), CHART_COLORS.gridImport)}
+          ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), CHART_COLORS.gridExport)}
           ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
         </div>
       </div>
@@ -4895,7 +4914,7 @@ export class HelmanSolarInspector extends LitElement {
       // January under every month of the year -- and dropped the reader into a
       // January day when they clicked one.
       return this._monthBounds(
-        this._viewMode === "day" ? selected : (this._selectedBucket ?? selected),
+        this._viewMode === "day" ? selected : (this._focusBucket() ?? selected),
       );
     }
     if (selected >= today) {
@@ -4993,14 +5012,14 @@ export class HelmanSolarInspector extends LitElement {
    * drawing, and in no case is it a change of granularity.
    *
    * At D the columns *are* these days, so the press is the column press: it
-   * picks the bucket the panel describes, and toggles like the column does.
+   * picks the bucket the panel describes, exactly as clicking the column does.
    * The only other view that draws this row is the day view, where there is no
    * column for a day and the press simply opens it.
    */
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
     event.stopPropagation();
     if (this._correlatedRow() === "day") {
-      this._toggleBucket(event.detail.date);
+      this._pickBucket(event.detail.date);
       return;
     }
     if (event.detail.date === this._selectedDate) {

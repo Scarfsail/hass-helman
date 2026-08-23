@@ -6,6 +6,7 @@ import {
     clickStop,
     columns,
     clickColumn,
+    clickGutter,
     columnsWithClass,
     dayPillDates,
     dayPillsWithClass,
@@ -110,8 +111,13 @@ test.describe("the day pills and the chart highlight together", () => {
         // are saying the same thing rather than the row having its own idea.
         expect(await columnsWithClass(page, "selected")).toEqual([keys[index]]);
 
-        // Clicking it again clears the selection, on both sides.
+        // A plain click replaces rather than toggles -- the day view's own
+        // semantics -- so pressing the same column again leaves it picked, and
+        // it is a press in the gutter that clears both sides.
         await clickColumn(page, index);
+        expect(await columnsWithClass(page, "selected")).toEqual([keys[index]]);
+
+        await clickGutter(page);
         expect(await dayPillsWithClass(page, "bucket-selected")).toEqual([]);
         expect(await columnsWithClass(page, "selected")).toEqual([]);
     });
