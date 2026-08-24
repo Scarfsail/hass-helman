@@ -62,6 +62,18 @@ export async function mountInspector(
 
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const price: Array<{ slot: string; value: number }> = [];
+        // Today's own composition, spread flat across the day so that its
+        // per-slot parts sum to exactly the figures the span row for today
+        // carries. That equality is the point: a day column at D and the whole
+        // of that day at 60 are two readings of one measurement, and a test can
+        // only hold them to that if the fixture makes them the same.
+        const SLOTS_PER_DAY = 96;
+        const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
+        const houseActualBreakdown: Array<Record<string, unknown>> = [];
+        // The day chart resolves a click to the nearest slot the impact series
+        // knows, so without these a press in the day view selects nothing at
+        // all -- which is not what a bare day payload should mean here.
+        const impact: Array<Record<string, unknown>> = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -70,6 +82,41 @@ export async function mountInspector(
                 valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
             });
             price.push({ slot: `${hh}:${mm}`, value: 3.5 });
+            houseActual.push({
+                timestamp: `${date}T${hh}:${mm}:00`,
+                valueWh: 18000 / SLOTS_PER_DAY,
+            });
+            impact.push({
+                slot: `${hh}:${mm}`,
+                rawWh: null,
+                correctedWh: null,
+                impactWh: null,
+                factor: null,
+            });
+            houseActualBreakdown.push({
+                slot: `${hh}:${mm}`,
+                unmeasuredWh: 12000 / SLOTS_PER_DAY,
+                appliances: [
+                    {
+                        entityId: "sensor.washer_energy",
+                        label: "Washer",
+                        wh: 4000 / SLOTS_PER_DAY,
+                        switchEntityId: "switch.washer",
+                        powerEntityId: "sensor.washer_power",
+                        deferrable: true,
+                        controllableId: "washer",
+                    },
+                    {
+                        entityId: "sensor.fridge_energy",
+                        label: "Fridge",
+                        wh: 2000 / SLOTS_PER_DAY,
+                        switchEntityId: null,
+                        powerEntityId: null,
+                        deferrable: false,
+                        controllableId: null,
+                    },
+                ],
+            });
         }
 
         const dayPayload = {
@@ -84,8 +131,9 @@ export async function mountInspector(
                 isToday: true, isFuture: false,
             },
             series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact: [],
-                houseForecast: [], houseActual: [],
+                raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
+                houseForecast: [], houseActual,
+                houseActualBreakdown, houseForecastBreakdown: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
                 importPrice: price, exportPrice: [],
@@ -99,7 +147,8 @@ export async function mountInspector(
             availability: {
                 hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
+                hasHouseActual: true, hasHouseActualBreakdown: true,
+                hasBatterySocForecast: false, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
                 hasBatteryActual: false,
             },
@@ -141,6 +190,34 @@ export async function mountInspector(
                     batteryDischargeWh: missing || noEnergy ? null : 6000,
                     moneyCost: missing ? null : 40,
                     moneyGain: missing || noGain ? null : 12,
+                    // What the house was doing that bucket, in the shape the day
+                    // slot's breakdown has. The three parts add up to houseWh,
+                    // which is what lets a bucket panel be compared against the
+                    // same day's slots at 60. Absent where the house meter
+                    // reported nothing -- there is no total to split there.
+                    houseBreakdown: missing || noEnergy ? null : {
+                        unmeasuredWh: 12000,
+                        appliances: [
+                            {
+                                entityId: "sensor.washer_energy",
+                                label: "Washer",
+                                wh: 4000,
+                                switchEntityId: "switch.washer",
+                                powerEntityId: "sensor.washer_power",
+                                deferrable: true,
+                                controllableId: "washer",
+                            },
+                            {
+                                entityId: "sensor.fridge_energy",
+                                label: "Fridge",
+                                wh: 2000,
+                                switchEntityId: null,
+                                powerEntityId: null,
+                                deferrable: false,
+                                controllableId: null,
+                            },
+                        ],
+                    },
                 });
                 index += 1;
                 if (bucket === "month") {
@@ -648,3 +725,138 @@ export async function selectColumn(
         .shadowRoot.querySelector(".selection-section"));
 }
 
+/* ---------------------------------------------------------------------------
+ * The house-composition panel
+ *
+ * Read through the power card's own shadow roots, as `house-breakdown.spec.ts`
+ * reads it in the day view -- the same panel, so the same route to it.
+ * ------------------------------------------------------------------------- */
+
+/** The panel's two group rows: base and shiftable, as it lists them shut. */
+export async function breakdownGroups(
+    page: Page,
+): Promise<Array<{ label: string; power: string; collapsed: boolean }>> {
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const container = el.shadowRoot
+            .querySelector(".house-breakdown")
+            ?.querySelector("power-devices-container");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+        return groups.map((group: any) => {
+            const content = group.shadowRoot.querySelector(".deviceContent");
+            const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
+            const display = content.querySelector("power-device-power-display");
+            return {
+                label: name.replace(/[\u25ba\u25bc]\s*$/, "").trim(),
+                power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                collapsed: name.endsWith("\u25ba"),
+            };
+        });
+    });
+}
+
+/** Open every group that is shut, since a shut one renders no children. */
+export async function expandBreakdownGroups(page: Page): Promise<void> {
+    const groups = await breakdownGroups(page);
+    for (const [index, group] of groups.entries()) {
+        if (!group.collapsed) continue;
+        await page.evaluate((i) => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const container = el.shadowRoot
+                .querySelector(".house-breakdown")
+                .querySelector("power-devices-container");
+            const group = container.shadowRoot.querySelectorAll("power-device")[i] as any;
+            (group.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
+            return el.updateComplete;
+        }, index);
+    }
+}
+
+/** Every consumer box in the panel: its label, its figure, and its bar count. */
+export async function breakdownBoxes(
+    page: Page,
+): Promise<Array<{ label: string; power: string; bars: number }>> {
+    await expandBreakdownGroups(page);
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const container = el.shadowRoot
+            .querySelector(".house-breakdown")
+            ?.querySelector("power-devices-container");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+        const devices = groups.flatMap((group: any) => [
+            ...(group.shadowRoot
+                ?.querySelector("power-devices-container")
+                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+        ]);
+        return devices.map((device: any) => {
+            const content = device.shadowRoot.querySelector(".deviceContent");
+            const display = content.querySelector("power-device-power-display");
+            const bars = content.querySelector("helman-power-history-bars") as any;
+            return {
+                label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),
+                power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                // One bar per selected bucket in an aggregate view, one per
+                // native sample in the day view. Counted off the values the
+                // element was handed rather than off its paths, since a zero
+                // bar paints nothing.
+                bars: (bars?.historyToRender ?? []).length,
+            };
+        });
+    });
+}
+
+/** Whether the panel is on screen at all. */
+export async function hasBreakdownPanel(page: Page): Promise<boolean> {
+    return page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".house-breakdown"));
+}
+
+/**
+ * Select a run of day-view slots by pointer, the way a reader does.
+ *
+ * The day chart has no per-slot hit rects to dispatch on -- it reads the
+ * pointer's x against its own layout -- so the click has to land on a real
+ * coordinate, computed from the layout the card exposes for its strips.
+ */
+export async function selectDaySlots(
+    page: Page,
+    fromMinutes: number,
+    toMinutes: number | null,
+    widthMinutes = 60,
+): Promise<void> {
+    const geom = await page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const r = svg.getBoundingClientRect();
+        const layout = el._lastLayoutForStrip;
+        return {
+            rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+            viewWidth: layout.width,
+            marginLeft: layout.margin.left,
+            plotWidth: layout.plotWidth,
+            dayStartMinutes: layout.dayStartMinutes,
+            dayEndMinutes: layout.dayEndMinutes,
+        };
+    });
+    const point = (minutes: number) => {
+        const span = geom.dayEndMinutes - geom.dayStartMinutes;
+        const viewX = geom.marginLeft
+            + ((minutes + widthMinutes / 2 - geom.dayStartMinutes) / span) * geom.plotWidth;
+        return {
+            x: geom.rect.left + (viewX / geom.viewWidth) * geom.rect.width,
+            y: geom.rect.top + geom.rect.height / 2,
+        };
+    };
+    const first = point(fromMinutes);
+    await page.mouse.click(first.x, first.y);
+    if (toMinutes === null) return;
+    const last = point(toMinutes);
+    await page.keyboard.down("Shift");
+    await page.mouse.click(last.x, last.y);
+    await page.keyboard.up("Shift");
+    await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any).updateComplete);
+}

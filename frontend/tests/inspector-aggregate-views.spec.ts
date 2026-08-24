@@ -8,6 +8,10 @@ import {
     clickColumn,
     clickGutter,
     clickUnderColumn,
+    breakdownBoxes,
+    breakdownGroups,
+    hasBreakdownPanel,
+    selectDaySlots,
     clickStop,
     columns,
     loadCardBundle,
@@ -53,18 +57,20 @@ test.describe("solar inspector aggregate views", () => {
         expect(keys).toHaveLength(daysInMonth);
         expect(keys).toEqual([...keys].sort());
 
-        // And it draws them: six stacked bands, supply above the zero line and
-        // demand below it, so the columns are not just hit targets. One path per
-        // band per contiguous run, as the day chart draws them -- with data in
-        // every bucket that is one run each, so six. Counted by class rather
-        // than as every path in the element, because the SoC and money rows
-        // below draw their own.
+        // And it draws them: seven stacked bands, supply above the zero line and
+        // demand below it, so the columns are not just hit targets. Three
+        // supply layers and four demand ones -- the house is two, base and
+        // shiftable, as the day chart splits it. One path per band per
+        // contiguous run, as the day chart draws them, and with data in every
+        // bucket that is one run each. Counted by class rather than as every
+        // path in the element, because the SoC and money rows below draw their
+        // own.
         const bands = await page.evaluate(() => {
             const chart = (document.querySelector("helman-solar-inspector") as any)
                 .shadowRoot.querySelector("helman-solar-aggregate-chart");
             return chart.shadowRoot.querySelectorAll("svg path.energy-band").length;
         });
-        expect(bands).toBe(6);
+        expect(bands).toBe(7);
 
         // The span is one read, for whole months, at day resolution. Filtered to
         // the bucketed reads: the day pills share this endpoint and ask for
@@ -591,8 +597,9 @@ test.describe("solar inspector aggregate views", () => {
         // leaving the first three days and everything from the sixth on.
         expect(await bandRuns(page, "path.soc-band.max")).toEqual([4 * 3, 4 * (days - 5)]);
         expect(await bandRuns(page, "path.soc-band.min")).toEqual([4 * 3, 4 * (days - 5)]);
-        // The energy bands see only the empty bucket, so they break once.
-        expect(await bandRuns(page, "path.energy-band")).toHaveLength(12);
+        // The energy bands see only the empty bucket, so they break once: seven
+        // layers in two runs apiece.
+        expect(await bandRuns(page, "path.energy-band")).toHaveLength(14);
     });
 
     test("the money row draws a cell per bucket, cost above the line and gain below", async ({ page }) => {
@@ -905,3 +912,131 @@ async function spanReads(page: Page): Promise<Array<Record<string, string>>> {
     return page.evaluate(() => ((window as any).__spanRequests as Array<Record<string, string>>)
         .filter((request) => request.bucket !== undefined));
 }
+
+
+/**
+ * The house composition, at every granularity.
+ *
+ * The panel is the day view's, over the same boxes and the same base/shiftable
+ * groups -- what changes at D and M is only how wide a bar is. A day column and
+ * that whole day at 60 are two readings of one measurement, so the figures have
+ * to agree; anything else would mean the card told the reader two different
+ * stories about one day depending on which stop of the toggle they were on.
+ */
+/** `HOUSE_COLOR` and `DEFERRABLE_HOUSE_COLOR`, as the browser resolves them. */
+const HOUSE_RGB = "rgb(168, 85, 247)";
+const HOUSE_DEFERRABLE_RGB = "rgb(192, 132, 252)";
+
+/** Every fill painted by the aggregate chart's stacked bands. */
+async function bandFills(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const chart = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart");
+        const painted = new Set<string>();
+        for (const node of chart.shadowRoot.querySelectorAll("svg.aggregate-chart path, svg.aggregate-chart rect")) {
+            painted.add(getComputedStyle(node as SVGElement).fill);
+        }
+        return [...painted];
+    });
+}
+
+test.describe("the house composition at D and M", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+        await waitForDayChart(page);
+    });
+
+    test("a day column itemises what that day's slots itemise", async ({ page }) => {
+        // The whole of today at the width the card opened at: the same
+        // measurement the span row for today carries, read one granularity down.
+        await selectDaySlots(page, 0, 1410, 30);
+        const atSixty = await breakdownBoxes(page);
+        // Base first with its two members ranked by size, then the shiftable
+        // appliance -- the panel's own order, which the bucket panel has to
+        // reproduce rather than merely contain.
+        expect(atSixty.map((box) => box.label))
+            .toEqual(["Unmeasured consumption", "Fridge", "Washer"]);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        const keys = await columns(page);
+        const today = new Date().toISOString().slice(0, 10);
+        await clickColumn(page, keys.indexOf(today));
+
+        const atD = await breakdownBoxes(page);
+        // Same boxes, same figures, same order -- only the bars differ, one per
+        // selected bucket where the day view draws one per native sample.
+        expect(atD.map((box) => ({ label: box.label, power: box.power })))
+            .toEqual(atSixty.map((box) => ({ label: box.label, power: box.power })));
+        expect(atD.every((box) => box.bars === 1)).toBe(true);
+    });
+
+    test("the groups are the day view's, and the shiftable one is the appliance", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await clickColumn(page, 2);
+
+        const groups = await breakdownGroups(page);
+        expect(groups.map((group) => group.label)).toEqual(["Base consumption", "Deferrable consumption"]);
+        const boxes = await breakdownBoxes(page);
+        const washer = boxes.find((box) => box.label === "Washer");
+        expect(washer).toBeTruthy();
+        // 4 kWh of washer against 18 kWh of house.
+        expect(washer!.power).toContain("4");
+    });
+
+    test("several buckets sum their consumers, one bar apiece", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        await clickColumn(page, 1);
+        const single = await breakdownBoxes(page);
+        const oneWasher = single.find((box) => box.label === "Washer")!;
+        expect(oneWasher.bars).toBe(1);
+
+        await clickColumn(page, 2, { ctrlKey: true });
+        await clickColumn(page, 3, { ctrlKey: true });
+        const three = await breakdownBoxes(page);
+        const threeWasher = three.find((box) => box.label === "Washer")!;
+        // Three buckets picked: three bars, and a figure three times the one.
+        expect(threeWasher.bars).toBe(3);
+        expect(parseFloat(threeWasher.power)).toBeCloseTo(parseFloat(oneWasher.power) * 3, 5);
+    });
+
+    test("a bucket the house meter missed shows no panel", async ({ page }) => {
+        // The fifth bucket of a holed span has no readings at all, so there is
+        // no house total to split and nothing honest to draw.
+        await mountInspector(page, true);
+        await waitForDayChart(page);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        await clickColumn(page, 4);
+        expect(await hasBreakdownPanel(page)).toBe(false);
+
+        // And a bucket beside it, which does have one, still draws.
+        await clickColumn(page, 2);
+        expect(await hasBreakdownPanel(page)).toBe(true);
+    });
+
+    test("the house band draws its shiftable part apart from its base", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        // The day chart's two house colours, both painted: the band is split at
+        // D exactly as it is at 15/30/60, so the shiftable share reads off the
+        // band's own edge rather than being hidden inside one flat house layer.
+        const fills = await bandFills(page);
+        expect(fills).toContain(HOUSE_RGB);
+        expect(fills).toContain(HOUSE_DEFERRABLE_RGB);
+
+        // And the same one granularity up, the year's months carrying the same
+        // rosters.
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+        const monthFills = await bandFills(page);
+        expect(monthFills).toContain(HOUSE_RGB);
+        expect(monthFills).toContain(HOUSE_DEFERRABLE_RGB);
+    });
+});

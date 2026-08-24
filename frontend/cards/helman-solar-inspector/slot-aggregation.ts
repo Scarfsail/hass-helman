@@ -475,24 +475,44 @@ export function houseSourceMixBySlot(
 
   const mixes = new Map<string, BucketSourceMix>();
   for (const slot of slots) {
-    const houseWh = house.get(slot);
-    if (houseWh === undefined || houseWh <= 0) continue;
-    // Positive grid is export and positive battery is charge, so the flows that
-    // reach the house are the negated sides. Clamped, and capped at the house
-    // total so a meter that over-reports cannot push solar negative.
-    const fromGrid = Math.min(houseWh, Math.max(0, -(grid.get(slot) ?? 0)));
-    const fromBattery = Math.min(houseWh - fromGrid, Math.max(0, -(battery.get(slot) ?? 0)));
-    const fromSolar = Math.max(0, houseWh - fromGrid - fromBattery);
-    const mix: BucketSourceMix = {};
-    // nodeAccentColor, not the raw palette value: these are backgrounds drawn
-    // behind text, and it is what the power card's own bars are painted with, so
-    // both views read at the same strength.
-    if (fromSolar > 0) mix.solar = { power: fromSolar, color: nodeAccentColor("solar") };
-    if (fromBattery > 0) mix.battery = { power: fromBattery, color: nodeAccentColor("battery") };
-    if (fromGrid > 0) mix.grid = { power: fromGrid, color: nodeAccentColor("grid") };
-    if (Object.keys(mix).length > 0) mixes.set(slot, mix);
+    const mix = sourceMixFromTotals(house.get(slot), grid.get(slot) ?? 0, battery.get(slot) ?? 0);
+    if (mix !== null) mixes.set(slot, mix);
   }
   return mixes;
+}
+
+/**
+ * The mix rule itself, over one bucket's totals -- a slot's or a whole day's.
+ *
+ * Both granularities call this so the bars are coloured by one rule rather than
+ * by two implementations that agree until one is edited. `gridWh` and
+ * `batteryWh` arrive in the project's consumption-positive convention: positive
+ * grid is export and positive battery is charge, so the flows that reach the
+ * house are the negated sides. Each is clamped at zero and capped at what the
+ * house has left, so a meter that over-reports cannot push solar negative.
+ *
+ * Returns null where there is nothing to colour: no house total, a house total
+ * that is not positive, or three parts that all came out zero.
+ */
+export function sourceMixFromTotals(
+  houseWh: number | undefined | null,
+  gridWh: number,
+  batteryWh: number,
+): BucketSourceMix | null {
+  if (houseWh === undefined || houseWh === null || !Number.isFinite(houseWh) || houseWh <= 0) {
+    return null;
+  }
+  const fromGrid = Math.min(houseWh, Math.max(0, -gridWh));
+  const fromBattery = Math.min(houseWh - fromGrid, Math.max(0, -batteryWh));
+  const fromSolar = Math.max(0, houseWh - fromGrid - fromBattery);
+  const mix: BucketSourceMix = {};
+  // nodeAccentColor, not the raw palette value: these are backgrounds drawn
+  // behind text, and it is what the power card's own bars are painted with, so
+  // both views read at the same strength.
+  if (fromSolar > 0) mix.solar = { power: fromSolar, color: nodeAccentColor("solar") };
+  if (fromBattery > 0) mix.battery = { power: fromBattery, color: nodeAccentColor("battery") };
+  if (fromGrid > 0) mix.grid = { power: fromGrid, color: nodeAccentColor("grid") };
+  return Object.keys(mix).length > 0 ? mix : null;
 }
 
 /**

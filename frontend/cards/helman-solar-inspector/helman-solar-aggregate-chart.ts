@@ -8,6 +8,7 @@ import { CHART_COLORS } from "./chart-colors";
 import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-selection";
 import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
+import type { ApplianceComponent } from "./solar-inspector-model.js";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 
 /** One bucket of the span read: a local day, or a local month. */
@@ -24,6 +25,20 @@ export interface SpanAggregateRow {
     batteryDischargeWh: number | null;
     moneyCost: number | null;
     moneyGain: number | null;
+    /**
+     * What the house was doing this bucket: every metered consumer's energy plus
+     * the remainder no individual meter accounted for.
+     *
+     * The appliance shape is the day slot's, field for field, so the panel and
+     * the chart parse a bucket's composition with the types they already have.
+     * Null where there is nothing to split by -- no consumers configured -- or
+     * nothing to split, the house meter having reported no energy for the
+     * bucket.
+     */
+    houseBreakdown?: {
+        unmeasuredWh: number;
+        appliances: ApplianceComponent[];
+    } | null;
 }
 
 /**
@@ -318,6 +333,31 @@ export class HelmanSolarAggregateChart extends LitElement {
             return { color, values };
         };
         const kwh = (wh: number | null) => (wh === null ? null : wh / 1000);
+        /**
+         * The shiftable part of a bucket's house, and what is left under it.
+         *
+         * Capped at the house total and floored at zero the way
+         * `splitHouseByDeferrable` caps a slot's, so a consumer meter that
+         * over-reports can never draw a band wider than the house it is inside.
+         * A bucket with no breakdown has no shiftable part to claim -- null, so
+         * the layer simply has no band there rather than a zero that would read
+         * as "measured nothing shiftable".
+         */
+        const deferrableWh = (row: SpanAggregateRow): number | null => {
+            const breakdown = row.houseBreakdown;
+            if (!breakdown || row.houseWh === null || !Number.isFinite(row.houseWh)) return null;
+            const shiftable = breakdown.appliances.reduce(
+                (sum, appliance) => (appliance.deferrable && Number.isFinite(appliance.wh)
+                    ? sum + appliance.wh
+                    : sum),
+                0,
+            );
+            return Math.min(Math.max(0, shiftable), Math.max(0, row.houseWh));
+        };
+        const baseWh = (row: SpanAggregateRow): number | null => {
+            if (row.houseWh === null || !Number.isFinite(row.houseWh)) return null;
+            return row.houseWh - (deferrableWh(row) ?? 0);
+        };
         return {
             positive: [
                 layer(CHART_COLORS.corrected, 1, (row) => kwh(row.solarWh)),
@@ -325,7 +365,14 @@ export class HelmanSolarAggregateChart extends LitElement {
                 layer(CHART_COLORS.grid, 1, (row) => row.gridImportKwh),
             ],
             negative: [
-                layer(CHART_COLORS.house, -1, (row) => kwh(row.houseWh)),
+                // The house in two layers where the bucket says what was
+                // shiftable, exactly as the day chart splits it: base first,
+                // then the shiftable part stacked outside it, so the shiftable
+                // share reads off the band's own edge. A bucket carrying no
+                // breakdown contributes its whole house to the base layer and
+                // nothing to the other, which is the one honest split there.
+                layer(CHART_COLORS.house, -1, (row) => kwh(baseWh(row))),
+                layer(CHART_COLORS.houseDeferrable, -1, (row) => kwh(deferrableWh(row))),
                 layer(CHART_COLORS.battery, -1, (row) => kwh(row.batteryChargeWh)),
                 layer(CHART_COLORS.grid, -1, (row) => row.gridExportKwh),
             ],

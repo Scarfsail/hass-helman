@@ -462,6 +462,22 @@ class SolarBiasCorrectionService:
         # ``state_class``, and the configured entity itself, which has its own
         # statistics only where the user's setup happens to produce them.
         export_price_entity = self._grid_export_price_entity_id()
+        # The same roster the day view splits its house actual by, so a day
+        # column and that day's slots itemise the same appliances under the same
+        # labels. Resolved before the read because its meters join the one query
+        # rather than adding a second: the discipline this docstring commits to
+        # is one statistics read however wide the span, and a per-consumer read
+        # would be one per appliance per span.
+        try:
+            breakdown_consumers = await self._house_breakdown_consumers()
+        except Exception:
+            _LOGGER.exception("Failed to resolve house consumers for span aggregates")
+            breakdown_consumers = []
+        consumer_entities = [
+            consumer["energy_entity_id"]
+            for consumer in breakdown_consumers
+            if consumer.get("energy_entity_id")
+        ]
 
         from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
 
@@ -479,6 +495,7 @@ class SolarBiasCorrectionService:
                     GRID_IMPORT_PRICE_ENTITY_ID,
                     GRID_EXPORT_PRICE_ENTITY_ID,
                     export_price_entity,
+                    *consumer_entities,
                 ],
                 local_start=local_start,
                 local_end=local_end,
@@ -497,6 +514,13 @@ class SolarBiasCorrectionService:
             span.energy_for(discharge_entity), bucket, local_tz
         )
         soc_by_bucket = _soc_bounds_by_bucket(span.rows_for(soc_entity), bucket, local_tz)
+        # One fold per consumer through the same helper the six meters use, so a
+        # consumer's bucket total is arrived at exactly as the house total it is
+        # subtracted from.
+        consumer_kwh_by_entity = {
+            entity: _energy_by_bucket(span.energy_for(entity), bucket, local_tz)
+            for entity in consumer_entities
+        }
 
         import_price_config = self._grid_import_price_config()
         money_by_bucket = _money_by_bucket(
@@ -531,6 +555,12 @@ class SolarBiasCorrectionService:
                     "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
                     "moneyCost": None if cost is None else round(cost, 3),
                     "moneyGain": None if gain is None else round(gain, 3),
+                    "houseBreakdown": _bucket_house_breakdown(
+                        breakdown_consumers,
+                        consumer_kwh_by_entity,
+                        key,
+                        _round_wh(house_kwh.get(key)),
+                    ),
                 }
             )
 
@@ -3161,6 +3191,52 @@ def _drop_running_slot(points: list, *, running_slot: str | None) -> list:
         for point in points
         if (slot := _slot_of(point)) is None or slot < running_slot
     ]
+
+
+def _bucket_house_breakdown(
+    consumers: list[dict],
+    consumer_kwh_by_entity: dict[str, dict[str, float]],
+    key: str,
+    house_wh: float | None,
+) -> dict[str, Any] | None:
+    """One bucket's house split into per-consumer parts and the remainder.
+
+    The bucket-level twin of :func:`_build_house_actual_breakdown`, and
+    deliberately the same arithmetic: each consumer's energy over the bucket,
+    clamped at zero, and a remainder that is the house total minus their sum,
+    clamped at zero so a meter that momentarily over-reports never reads
+    negative. The payload keys match ``_house_breakdown_payload``'s appliance
+    shape exactly, so the frontend parses a bucket's breakdown with the types it
+    already has for a slot's.
+
+    ``None`` -- and so no panel at all -- where there is nothing to split by or
+    nothing to split: no consumers configured, or a bucket the house meter
+    reported no energy for.
+    """
+    if not consumers or house_wh is None:
+        return None
+    appliances: list[dict[str, Any]] = []
+    measured_sum = 0.0
+    for consumer in consumers:
+        entity_id = consumer.get("energy_entity_id")
+        by_bucket = consumer_kwh_by_entity.get(entity_id) or {}
+        wh = max(0.0, float(by_bucket.get(key, 0.0)) * 1000.0)
+        measured_sum += wh
+        appliances.append(
+            {
+                "entityId": entity_id,
+                "label": consumer["label"],
+                "wh": round(wh, 4),
+                "switchEntityId": consumer.get("switch_entity_id"),
+                "powerEntityId": consumer.get("power_entity_id"),
+                "deferrable": bool(consumer.get("deferrable")),
+                "controllableId": consumer.get("id"),
+            }
+        )
+    return {
+        "unmeasuredWh": round(max(0.0, float(house_wh) - measured_sum), 4),
+        "appliances": appliances,
+    }
 
 
 def _build_house_actual_breakdown(
