@@ -6,6 +6,7 @@ import {
     clickStop,
     columns,
     clickColumn,
+    clickGutter,
     columnsWithClass,
     dayPillDates,
     dayPillsWithClass,
@@ -33,9 +34,12 @@ import {
  * hover on either light the other.
  *
  * The colours are the ones already in the card, and the distinction they draw
- * is the one it already draws: blue `--primary-color` is the day the card has
- * loaded, amber `--helman-selection` is the column the reader clicked to read
- * its numbers. They mean different things and can land on one pill.
+ * is the one it already draws: `--primary-color` is the day the card has
+ * loaded, `--helman-grid-import` is a column the reader picked to read its
+ * numbers -- the same blue the chart fills that column with, because picked
+ * has to look the same on both sides. Amber `--helman-selection` is hover,
+ * here as in the chart. The two selections mean different things and can land
+ * on one pill.
  */
 
 const THIS_YEAR = new Date().getUTCFullYear();
@@ -45,6 +49,20 @@ const AMBER = "rgb(245, 158, 11)";
 
 /** The card's navigation blue: the --primary-color fallback, resolved. */
 const BLUE = "rgb(37, 99, 235)";
+
+/** `GRID_IMPORT_COLOR`, the selection blue the chart fills a picked column with. */
+const SELECTED_BLUE = "rgb(37, 99, 235)";
+
+/**
+ * A `--primary-color` the harness sets to something that is not the selection
+ * blue.
+ *
+ * Both default to `#2563eb`, so on a bare page the "loaded day" border and the
+ * "picked column" border resolve to one string, and an assertion about either
+ * would pass with the other rule deleted. A theme colour separates them.
+ */
+const THEME_PRIMARY = "#7c3aed";
+const THEME_PRIMARY_RGB = "rgb(124, 58, 237)";
 
 /** The D view with the picker open: columns and pills showing the same month. */
 async function openDayColumnsWithPills(page: Page): Promise<void> {
@@ -99,7 +117,7 @@ test.describe("the day pills and the chart highlight together", () => {
         expect(await dayPillsWithClass(page, "hovered")).toEqual([]);
     });
 
-    test("the clicked column's day wears the chart's amber in the row", async ({ page }) => {
+    test("the clicked column's day wears the chart's selection blue in the row", async ({ page }) => {
         await openDayColumnsWithPills(page);
 
         const keys = await columns(page);
@@ -110,10 +128,41 @@ test.describe("the day pills and the chart highlight together", () => {
         // are saying the same thing rather than the row having its own idea.
         expect(await columnsWithClass(page, "selected")).toEqual([keys[index]]);
 
-        // Clicking it again clears the selection, on both sides.
+        // A plain click replaces rather than toggles -- the day view's own
+        // semantics -- so pressing the same column again leaves it picked, and
+        // it is a press in the gutter that clears both sides.
         await clickColumn(page, index);
+        expect(await columnsWithClass(page, "selected")).toEqual([keys[index]]);
+
+        await clickGutter(page);
         expect(await dayPillsWithClass(page, "bucket-selected")).toEqual([]);
         expect(await columnsWithClass(page, "selected")).toEqual([]);
+    });
+
+    test("every column of a multi-column selection lights its pill", async ({ page }) => {
+        await openDayColumnsWithPills(page);
+
+        // Three columns picked with ctrl, the day view's own add-to-selection
+        // gesture. The row has to light all three: one pill lit under a chart
+        // showing three would be the two halves disagreeing about what is
+        // picked, which is the whole thing this phase is closing.
+        const keys = await columns(page);
+        await clickColumn(page, 2);
+        await clickColumn(page, 4, { ctrlKey: true });
+        await clickColumn(page, 6, { ctrlKey: true });
+
+        const wanted = [keys[2], keys[4], keys[6]];
+        expect(await columnsWithClass(page, "selected")).toEqual(wanted);
+        expect(await dayPillsWithClass(page, "bucket-selected")).toEqual(wanted);
+
+        // And a shift-extend, whose run has to reach the row the same way.
+        await clickColumn(page, 2);
+        await clickColumn(page, 5, { shiftKey: true });
+        const run = keys.slice(2, 6);
+        expect(await dayPillsWithClass(page, "bucket-selected")).toEqual(run);
+
+        await clickGutter(page);
+        expect(await dayPillsWithClass(page, "bucket-selected")).toEqual([]);
     });
 
     test("the browsed day and the selected column can be one pill", async ({ page }) => {
@@ -121,11 +170,17 @@ test.describe("the day pills and the chart highlight together", () => {
 
         // A theme background, because both fills are a `color-mix` against it
         // and a page without one computes them transparent -- which would make
-        // "the amber took the fill" vacuously true.
-        await page.evaluate(() => {
-            (document.querySelector("helman-solar-inspector") as HTMLElement)
-                .style.setProperty("--card-background-color", "#ffffff");
-        });
+        // "the picked column took the fill" vacuously true.
+        //
+        // And a theme --primary-color, because its fallback is the very colour
+        // the selection blue is: unset, the loaded day and the picked column
+        // resolve to one string and every assertion below would pass with the
+        // .bucket-selected rule deleted.
+        await page.evaluate((primary) => {
+            const card = document.querySelector("helman-solar-inspector") as HTMLElement;
+            card.style.setProperty("--card-background-color", "#ffffff");
+            card.style.setProperty("--primary-color", primary);
+        }, THEME_PRIMARY);
 
         const keys = await columns(page);
         const wanted = keys[Math.floor(keys.length / 2)];
@@ -151,9 +206,9 @@ test.describe("the day pills and the chart highlight together", () => {
             };
         }, day);
 
-        // Amber takes the border and the fill on the chart's selected day.
+        // The selection blue takes the border and the fill on the picked day.
         await expect.poll(() => look(wanted).then((seen) => seen.borderColor))
-            .toBe(AMBER);
+            .toBe(SELECTED_BLUE);
         const bucketOnly = await look(wanted);
         expect(bucketOnly.classes.split(" ")).toContain("bucket-selected");
         expect(bucketOnly.classes.split(" ")).not.toContain("selected");
@@ -172,14 +227,19 @@ test.describe("the day pills and the chart highlight together", () => {
         await expect.poll(() => look(wanted).then((seen) => seen.classes))
             .toBe("bucket-selected history pill selected");
         const both = await look(wanted);
-        // The amber is unchanged -- it still says "this is the column being
-        // read" exactly as it did before the other state arrived.
-        expect(both.borderColor).toBe(AMBER);
+        // The selection fill is unchanged -- it still says "this is a column
+        // being read" exactly as it did before the other state arrived.
+        expect(both.borderColor).toBe(SELECTED_BLUE);
         expect(both.background).toBe(bucketOnly.background);
         // And the blue ring survives underneath it, which is the whole reason
         // the two can coexist: neither claim is lost.
         expect(both.boxShadow).toContain("inset");
-        expect(both.boxShadow).toContain("37, 99, 235");
+        expect(both.boxShadow).toContain(THEME_PRIMARY_RGB.slice(4, -1));
+        // The two are separable, which is the whole point: the ring is the
+        // theme's colour and the fill is the chart's, and neither has taken
+        // the other's.
+        expect(THEME_PRIMARY_RGB).not.toBe(SELECTED_BLUE);
+        expect(both.borderColor).not.toBe(THEME_PRIMARY_RGB);
     });
 
     test("a month column lights no pill", async ({ page }) => {
@@ -338,12 +398,29 @@ test.describe("the month row and the month columns", () => {
         expect(await columnsWithClass(page, "hovered")).toEqual([]);
     });
 
-    test("the clicked column's month wears the chart's amber in the row", async ({ page }) => {
+    test("the clicked column's month wears the chart's selection blue in the row", async ({ page }) => {
         await openMonthColumns(page);
         const wanted = (await columns(page))[4];
 
         await clickColumn(page, 4);
         expect(await spanPillsWithClass(page, "months", "bucket-selected")).toEqual([wanted]);
+    });
+
+    test("every month of a multi-column selection lights its pill", async ({ page }) => {
+        await openMonthColumns(page);
+        const all = await columns(page);
+
+        await clickColumn(page, 1);
+        await clickColumn(page, 3, { ctrlKey: true });
+        const wanted = [all[1], all[3]];
+        expect(await columnsWithClass(page, "selected")).toEqual(wanted);
+        expect(await spanPillsWithClass(page, "months", "bucket-selected")).toEqual(wanted);
+        // The year row is never a bucket, so it stays out of it however many
+        // months are picked.
+        expect(await spanPillsWithClass(page, "years", "bucket-selected")).toEqual([]);
+
+        await clickGutter(page);
+        expect(await spanPillsWithClass(page, "months", "bucket-selected")).toEqual([]);
     });
 
     test("a day column never lights a month pill", async ({ page }) => {

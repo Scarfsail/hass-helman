@@ -99,14 +99,15 @@ export class HelmanSolarSpanPills extends LitElement {
             color: var(--primary-color, #2563eb);
         }
 
-        /* The column the reader clicked in the chart, in the amber that column
-           is already filled with -- same token, same 18 %, because it is the
-           same fact drawn twice. After .selected on purpose: when both land on
-           one pill the amber takes the fill and the blue keeps its inner ring,
-           so neither claim is lost. */
+        /* A column the reader picked in the chart, in the same blue that column
+           is filled with -- --helman-grid-import, the day view's selection
+           token, because it is the same fact drawn twice. Amber stays with
+           hover here as it does in the chart. After .selected on purpose: when
+           both land on one pill the picked column takes the fill and the loaded
+           span keeps its inner ring, so neither claim is lost. */
         .pill.bucket-selected {
-            border-color: var(--helman-selection);
-            background: color-mix(in srgb, var(--helman-selection) 18%, var(--card-background-color));
+            border-color: var(--helman-grid-import);
+            background: color-mix(in srgb, var(--helman-grid-import) 18%, var(--card-background-color));
         }
 
         /* The chart's own hover treatment, and last so it reads over either
@@ -173,7 +174,11 @@ export class HelmanSolarSpanPills extends LitElement {
      * to be the single answer to "which month is hot".
      */
     @property({ type: String }) public hoveredKey: string | null = null;
-    @property({ type: String }) public selectedBucket: string | null = null;
+    /**
+     * The month columns selected in the chart. A list, not one key: the chart's
+     * selection is a set and the row has to light all of it.
+     */
+    @property({ attribute: false }) public selectedBuckets: readonly string[] = [];
     /**
      * Whether pressing a month picks a chart column rather than moving the span.
      *
@@ -233,7 +238,7 @@ export class HelmanSolarSpanPills extends LitElement {
         const classes = [
             "pill",
             pill.selected ? "selected" : "",
-            correlated && pill.key === this.selectedBucket ? "bucket-selected" : "",
+            correlated && this.selectedBuckets.includes(pill.key) ? "bucket-selected" : "",
             correlated && pill.key === this.hoveredKey ? "hovered" : "",
         ].filter((name) => name !== "").join(" ");
         return html`

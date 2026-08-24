@@ -161,17 +161,19 @@ export class HelmanSolarDayPills extends LitElement {
             box-shadow: inset 0 0 0 1px var(--primary-color, #2563eb);
         }
 
-        /* The column the reader clicked in the aggregate chart, in the amber
-           that column is already filled with -- same token, same 18 %, because
-           it is the same fact drawn twice.
+        /* A column the reader picked in the aggregate chart, in the same blue
+           that column is filled with -- --helman-grid-import, the day view's
+           selection token, because it is the same fact drawn twice and the two
+           halves of the card must not disagree about what picked looks like.
+           Amber stays with hover here as it does there.
 
            After the .selected rule on purpose. The two can land on one pill:
-           the day the card has loaded is blue, the column being read is amber,
-           and when they coincide the amber takes the fill while the blue keeps
+           the day the card has loaded and a column being read. When they
+           coincide the picked column takes the fill while the loaded day keeps
            its inner ring, so neither claim is lost. */
         .pill.bucket-selected {
-            border-color: var(--helman-selection);
-            background: color-mix(in srgb, var(--helman-selection) 18%, var(--card-background-color));
+            border-color: var(--helman-grid-import);
+            background: color-mix(in srgb, var(--helman-grid-import) 18%, var(--card-background-color));
         }
 
         /* One rule for both directions, and last so it reads over either
@@ -278,13 +280,15 @@ export class HelmanSolarDayPills extends LitElement {
      */
     @property({ type: String }) public hoveredDate: string | null = null;
     /**
-     * The bucket selected in the aggregate chart, when a bucket is a day.
+     * The buckets selected in the aggregate chart, when a bucket is a day.
      *
-     * A different thing from `selectedDate` and drawn differently: this is the
-     * column the reader clicked to read its numbers, `selectedDate` is the day
-     * the card has loaded. Both can land on one pill.
+     * A different thing from `selectedDate` and drawn differently: these are the
+     * columns the reader clicked to read their numbers, `selectedDate` is the day
+     * the card has loaded. Both can land on one pill. A list rather than one key
+     * because the chart's selection is a set -- every column the reader picked
+     * has to light here too, or the row contradicts the chart it sits under.
      */
-    @property({ type: String }) public selectedBucket: string | null = null;
+    @property({ attribute: false }) public selectedBuckets: readonly string[] = [];
     /**
      * Today, in the house's time zone. Named separately from `startDate`
      * because the window can sit entirely in the past, and it is today that
@@ -424,7 +428,7 @@ export class HelmanSolarDayPills extends LitElement {
         const unreachable = (this.reachableFrom !== "" && pill.dayKey < this.reachableFrom)
             || (this.reachableTo !== "" && pill.dayKey > this.reachableTo);
         const hovered = pill.dayKey === this.hoveredDate;
-        const bucketSelected = pill.dayKey === this.selectedBucket;
+        const bucketSelected = this.selectedBuckets.includes(pill.dayKey);
         return html`
             <button
                 class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`

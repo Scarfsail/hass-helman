@@ -6,6 +6,8 @@ import {
     bandRuns,
     canPageBack,
     clickColumn,
+    clickGutter,
+    clickUnderColumn,
     clickStop,
     columns,
     loadCardBundle,
@@ -14,6 +16,7 @@ import {
     pageBackAndWait,
     sectionMetrics,
     selectColumn,
+    selectedColumns,
     selectedSpan,
     spanStarts,
     waitForAggregateChart,
@@ -145,24 +148,20 @@ test.describe("solar inspector aggregate views", () => {
      * The two views are bounded by two different stores, so the card keeps two
      * floors rather than one field whichever view loaded last overwrote.
      *
-     * The day view used to catch this with its back arrow, which clamped to the
-     * day floor; there is no arrow now, and the day view's pills do not clamp --
-     * they offer the month they are showing. What still separates the two
-     * floors is the drill control below, which reads the day floor while the
-     * month view's own floor is what put the column on screen.
+     * The drill button used to say so, with a disabled state and a tooltip. It
+     * is gone -- the width toggle is the one way into a day now -- so what is
+     * left to assert is the quieter answer the toggle gives: it clamps into what
+     * the day view can actually open rather than drawing an empty chart.
      */
-    test("a day the recorder has purged is named but not drillable", async ({ page }) => {
-        // The month view reaches further back than the day view can, because the
-        // two read two different stores. Opening such a day would draw an empty
-        // chart under a back arrow already dead on arrival -- the day being
-        // older than the day view's own floor -- so the control says so instead.
+    test("a day the recorder has purged opens the day view at its floor", async ({ page }) => {
         const iso = (daysBack: number) => {
             const day = new Date();
             day.setUTCDate(day.getUTCDate() - daysBack);
             return day.toISOString().slice(0, 10);
         };
         const thisYear = new Date().getUTCFullYear();
-        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+        const dayFloor = iso(3);
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, dayFloor);
 
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
@@ -172,18 +171,14 @@ test.describe("solar inspector aggregate views", () => {
 
         const keys = await columns(page);
         await selectColumn(page, 0);
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
 
-        const drill = await page.evaluate(() => {
-            const button = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector(".drill-button") as HTMLButtonElement;
-            return { disabled: button.disabled, title: button.getAttribute("title") };
-        });
-        expect(drill.disabled).toBe(true);
-        expect(drill.title).toBeTruthy();
-
-        // And no day was asked for behind the reader's back.
         const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
+        // The day itself was never asked for -- it is older than the day view's
+        // own floor -- and the floor day is what landed instead.
         expect(requests).not.toContain(keys[0]);
+        expect(requests[requests.length - 1]).toBe(dayFloor);
     });
 
     test("the year view draws one column per month", async ({ page }) => {
@@ -226,65 +221,134 @@ test.describe("solar inspector aggregate views", () => {
         expect(present.daylight).toBe(false);
     });
 
-    test("clicking a column selects it, and clicking it again clears it", async ({ page }) => {
+    test("clicking a column selects it, and a gutter click clears it", async ({ page }) => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
 
-        const clickColumn = (index: number) => page.evaluate((i) => {
-            const chart = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            (chart.shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement)
-                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-        }, index);
-        const selected = () => page.evaluate(() => {
-            const chart = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            return [...chart.shadowRoot.querySelectorAll(".bucket-column.selected")]
-                .map((rect: Element) => rect.getAttribute("data-bucket"));
-        });
-
         const keys = await columns(page);
-        await clickColumn(2);
-        await page.waitForFunction(() => {
+        await clickColumn(page, 2);
+        await page.waitForFunction((key) => {
             const chart = (document.querySelector("helman-solar-inspector") as any)
                 .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            return !!chart.shadowRoot.querySelector(".bucket-column.selected");
-        });
-        expect(await selected()).toEqual([keys[2]]);
+            return chart.shadowRoot.querySelector(".bucket-column.selected")
+                ?.getAttribute("data-bucket") === key;
+        }, keys[2]);
+        expect(await selectedColumns(page)).toEqual([keys[2]]);
 
-        await clickColumn(2);
-        await page.waitForFunction(() => {
-            const chart = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            return !chart.shadowRoot.querySelector(".bucket-column.selected");
-        });
-        expect(await selected()).toEqual([]);
+        // A plain click replaces rather than toggles, exactly as it does at
+        // 15/30/60: pressing the picked column again leaves it picked.
+        await clickColumn(page, 2);
+        expect(await selectedColumns(page)).toEqual([keys[2]]);
+
+        // A press that missed the columns is what empties the selection.
+        await clickGutter(page);
+        await page.waitForFunction(() => !(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector("helman-solar-aggregate-chart")
+            .shadowRoot.querySelector(".bucket-column.selected"));
+        expect(await selectedColumns(page)).toEqual([]);
+        // And the panel that described it goes with it.
+        expect(await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".selection-section"))).toBe(false);
     });
 
-    test("the drill control opens the selected day in the day view", async ({ page }) => {
+    test("a press under a column is not the gutter", async ({ page }) => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
 
         const keys = await columns(page);
-        await page.evaluate(() => {
-            const chart = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            (chart.shadowRoot.querySelectorAll(".bucket-column")[1] as SVGElement)
-                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-        });
-        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".drill-button"));
+        await clickColumn(page, 2);
+        await clickColumn(page, 4, { ctrlKey: true });
+        expect(await selectedColumns(page)).toEqual([keys[2], keys[4]]);
 
-        await page.evaluate(() => {
-            ((document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector(".drill-button") as HTMLElement).click();
-        });
+        // The date labels live below the columns' hit rects but inside the
+        // plot's x-range. The gutter is left and right of the plot, as it is in
+        // the day view -- so aiming a few pixels under a column must not cost
+        // the reader the selection they were adding to.
+        await clickUnderColumn(page, 3);
+        expect(await selectedColumns(page)).toEqual([keys[2], keys[4]]);
+    });
+
+    /**
+     * The modifiers, which is the whole point of P1: a bucket selects exactly as
+     * a slot does, through the same `applySlotSelection`.
+     */
+    test("ctrl-click picks several columns and shift-click extends across a run", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const keys = await columns(page);
+        await selectColumn(page, 1);
+        await selectColumn(page, 4, { ctrlKey: true });
+        await selectColumn(page, 6, { ctrlKey: true });
+        expect(await selectedColumns(page)).toEqual([keys[1], keys[4], keys[6]]);
+
+        // Ctrl-clicking a picked column takes it back out again.
+        await selectColumn(page, 4, { ctrlKey: true });
+        expect(await selectedColumns(page)).toEqual([keys[1], keys[6]]);
+
+        // And a shift-click measures from the anchor, filling the run between.
+        await selectColumn(page, 1);
+        await selectColumn(page, 5, { shiftKey: true });
+        expect(await selectedColumns(page)).toEqual(keys.slice(1, 6));
+    });
+
+    /** The panel heads and sums over the selection rather than over one column. */
+    test("the selection panel sums its buckets and names the run", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        await selectColumn(page, 1);
+        const first = await sectionMetrics(page, 0);
+        await selectColumn(page, 2);
+        const second = await sectionMetrics(page, 0);
+
+        await selectColumn(page, 1);
+        await selectColumn(page, 2, { shiftKey: true });
+        const both = await sectionMetrics(page, 0);
+
+        const wh = (value: string) => Number(value.replace(/[^0-9.,-]/g, "").replace(",", "."));
+        // Solar rises with the bucket index in the harness, so this is a real
+        // sum rather than one bucket doubled.
+        expect(wh(both["Solar production"]))
+            .toBeCloseTo(wh(first["Solar production"]) + wh(second["Solar production"]), 1);
+        expect(both["Import cost"]).toBe(`${(40 * 2).toFixed(2)} CZK`);
+        expect(both["Export gain"]).toBe(`${(12 * 2).toFixed(2)} CZK`);
+        // Two adjacent buckets are one run, so the heading is a range spanning
+        // both rather than one bucket's own name.
+        const heading = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".selection-section strong").textContent.trim());
+        expect(heading).toContain(" – ");
+    });
+
+    /** The two paths the drill button used to serve, now the width toggle's own. */
+    test("a minutes stop opens the day picked at D", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const keys = await columns(page);
+        await selectColumn(page, 1);
+        await clickStop(page, STOP_SLOT_60);
 
         await page.waitForFunction((day) => ((window as any).__dayRequests as string[]).includes(day), keys[1]);
         // Back in the day view, on the day that was pointed at.
         await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector("helman-solar-day-pills"));
         expect(await columns(page)).toEqual([]);
+    });
+
+    test("D opens the month picked at M", async ({ page }) => {
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        const months = await columns(page);
+        await selectColumn(page, 2);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        // D is drawing the days of the month that was picked.
+        expect((await columns(page))[0]).toBe(months[2]);
+        // And nothing inside it is picked, because no day was.
+        expect(await selectedColumns(page)).toEqual([]);
     });
 
     test("switching back to a minutes stop restores the day view intact", async ({ page }) => {
@@ -348,25 +412,15 @@ test.describe("solar inspector aggregate views", () => {
         expect(state.lastRequest.endsWith("-01")).toBe(true);
     });
 
-    test("drilling into the span's first day loads it even though it is already selected", async ({ page }) => {
+    test("opening the span's first day loads it even though it is already selected", async ({ page }) => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
         await pageBack(page);
         await waitForAggregateChart(page);
 
         // The 1st -- the very day span navigation parked the selection on.
-        await page.evaluate(() => {
-            const chart = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector("helman-solar-aggregate-chart");
-            (chart.shadowRoot.querySelectorAll(".bucket-column")[0] as SVGElement)
-                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-        });
-        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".drill-button"));
-        await page.evaluate(() => {
-            ((document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector(".drill-button") as HTMLElement).click();
-        });
+        await selectColumn(page, 0);
+        await clickStop(page, STOP_SLOT_60);
         await waitForDayChart(page);
 
         expect(await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
@@ -581,12 +635,11 @@ test.describe("solar inspector aggregate views", () => {
 
         // Arriving from the day view carries that day across as the selected
         // column, so the span's own totals are what shows once it is dropped.
-        // Pressing the selected column again is what drops it.
-        const carried = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector("helman-solar-aggregate-chart")
-            .shadowRoot.querySelector(".bucket-column.selected")?.getAttribute("data-bucket"));
-        expect(carried).not.toBeNull();
-        await clickColumn(page, (await columns(page)).indexOf(carried as string));
+        // A gutter click is what drops it.
+        expect((await selectedColumns(page)).length).toBe(1);
+        await clickGutter(page);
+        await page.waitForFunction(() => !(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".selection-section"));
 
         const days = (await columns(page)).length;
         const totals = await sectionMetrics(page, 0);

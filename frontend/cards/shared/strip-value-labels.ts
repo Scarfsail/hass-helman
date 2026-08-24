@@ -53,6 +53,7 @@ export function stripValueLabel(options: {
             font-size=${STRIP_LABEL_FONT_SIZE}
             font-weight=${bold ? "600" : "normal"}
             fill=${ink}
+            pointer-events="none"
         >${text}</text>
     `;
 }
