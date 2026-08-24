@@ -27,6 +27,23 @@ from .energy_units import normalize_energy_to_kwh
 _TRANSIENT_REBOUND_WINDOW = timedelta(minutes=30)
 _ENERGY_TOLERANCE_KWH = 1e-6
 
+#: How far a reading has to fall below the segment's maximum to be called a
+#: counter reset rather than a dip.
+#:
+#: The same fraction Home Assistant's own ``total_increasing`` handling uses
+#: (``sensor.recorder.reset_detected``): a reset takes the counter back to
+#: roughly zero, so a genuine one is nowhere near the old value, while a drop
+#: inside the last tenth is the meter wobbling.
+#:
+#: Without it, a lifetime meter is a trap. A charger reporting 9143.2 kWh to one
+#: decimal ticks back to 9143.1, never returns -- so no rebound window of any
+#: length suppresses it -- and the reset branch lifts every later reading by the
+#: whole 9143.2, handing the slot the drop falls in the meter's entire lifetime
+#: reading as if it were a quarter-hour's energy. The magnitude of that error is
+#: the meter's own value, which is why the threshold has to be relative to it
+#: rather than an absolute number of kWh.
+_RESET_FRACTION = 0.9
+
 
 @dataclass(frozen=True)
 class _EnergyObservation:
@@ -1174,10 +1191,11 @@ def unwrap_cumulative_energy_series(
     hold plain ``(instant, kWh)`` pairs rather than recorder ``State`` rows --
     hourly long-term statistics, in particular. There is exactly one reset
     convention in this integration and it lives here: a genuine reset lifts
-    every later reading by the segment's maximum, while a dip that climbs back
-    within ``rebound_window`` is discarded as a glitch rather than treated as a
-    reset. Long-term statistics apply their own, different convention, which is
-    why anything reading them comes back through this function.
+    every later reading by the segment's maximum, while a drop that stays
+    within :data:`_RESET_FRACTION` of that maximum, or that climbs back within
+    ``rebound_window``, is discarded as a glitch rather than treated as a reset.
+    Long-term statistics apply their own, different convention, which is why
+    anything reading them comes back through this function.
 
     **Pass a ``rebound_window`` of at least one sample interval.** A rebound is
     only visible in a later sample, so the default -- sized for raw states,
@@ -1246,6 +1264,11 @@ def _unwrap_energy_observations(
                     value_kwh=offset_kwh + segment_value_kwh,
                 )
             )
+        elif observation.value_kwh >= _RESET_FRACTION * segment_value_kwh:
+            # Too shallow to be a reset, whatever it does next: drop the
+            # reading, keep the segment. A counter that restarted would be
+            # near zero, not a hair below where it was.
+            pass
         elif _is_transient_drop(
             observations,
             drop_index=index,
