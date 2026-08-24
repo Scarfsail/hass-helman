@@ -61,6 +61,17 @@ export interface DayPillSelectDetail {
 }
 
 /**
+ * The day a pill was double-clicked for: the reader is asking to open it.
+ *
+ * Only raised at D, where these pills are the aggregate chart's columns and
+ * there is a day view below them to open. In the day view the pill's single
+ * press already opens the day, so a second one would mean nothing.
+ */
+export interface DayPillOpenDetail {
+    date: string;
+}
+
+/**
  * The day under the pointer, or null as it leaves.
  *
  * Raised rather than acted on, because the row is not the only thing drawing
@@ -439,6 +450,9 @@ export class HelmanSolarDayPills extends LitElement {
                 ?disabled=${unreachable}
                 aria-pressed=${selected ? "true" : "false"}
                 @click=${() => this._select(pill.dayKey)}
+                @dblclick=${this.selectsSlot
+                    ? (event: MouseEvent) => this._open(pill.dayKey, event)
+                    : nothing}
                 @mouseenter=${() => this._hover(pill.dayKey)}
                 @mouseleave=${() => this._hover(null)}
             >
@@ -483,6 +497,24 @@ export class HelmanSolarDayPills extends LitElement {
      */
     private _hover(dayKey: string | null): void {
         this.dispatchEvent(new CustomEvent<DayPillHoverDetail>("day-pill-hover", {
+            bubbles: true,
+            composed: true,
+            detail: { date: dayKey },
+        }));
+    }
+
+    /**
+     * Report a double-click on a column pill as an open.
+     *
+     * Bound on `selectsSlot`, which is the row saying its pills *are* the
+     * chart's columns -- the same condition the span row's month pills open on,
+     * so the two rows cannot drift on what a double-click means. Modified
+     * double-clicks are dropped: a reader holding shift or ctrl is addressing
+     * the chart's selection, not this row.
+     */
+    private _open(dayKey: string, event: MouseEvent): void {
+        if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+        this.dispatchEvent(new CustomEvent<DayPillOpenDetail>("day-pill-open", {
             bubbles: true,
             composed: true,
             detail: { date: dayKey },

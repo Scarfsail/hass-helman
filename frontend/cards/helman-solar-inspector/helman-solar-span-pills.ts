@@ -38,6 +38,18 @@ export interface SpanPillSelectDetail {
 }
 
 /**
+ * A month pill was double-clicked: the reader is asking to open that month.
+ *
+ * Only ever raised by the correlated row -- the one whose pills are the chart's
+ * columns -- because opening is what a column does, and a pill that is not one
+ * has nothing below it to open. No row field for the same reason: there is only
+ * one row this can come from.
+ */
+export interface SpanPillOpenDetail {
+    date: string;
+}
+
+/**
  * The month under the pointer, or null on leaving one.
  *
  * Only the month row raises it. A year is not a bucket in either view, so
@@ -241,6 +253,12 @@ export class HelmanSolarSpanPills extends LitElement {
             correlated && this.selectedBuckets.includes(pill.key) ? "bucket-selected" : "",
             correlated && pill.key === this.hoveredKey ? "hovered" : "",
         ].filter((name) => name !== "").join(" ");
+        // The open gesture is bound where the row is the chart's columns and
+        // nowhere else. `selectsSlot` is exactly that question already asked --
+        // it is what makes a press pick a bucket rather than move the span --
+        // so binding on it keeps the two halves of "this pill is a column" from
+        // ever disagreeing.
+        const opens = correlated && this.selectsSlot;
         return html`
             <button
                 class=${classes}
@@ -249,10 +267,27 @@ export class HelmanSolarSpanPills extends LitElement {
                 ?disabled=${pill.disabled}
                 aria-pressed=${pill.selected ? "true" : "false"}
                 @click=${select}
+                @dblclick=${opens ? (event: MouseEvent) => this._open(pill.key, event) : nothing}
                 @mouseenter=${correlated ? () => this._hover(pill.key) : nothing}
                 @mouseleave=${correlated ? () => this._hover(null) : nothing}
             >${pill.label}</button>
         `;
+    }
+
+    /**
+     * Report a double-click on a column pill as an open.
+     *
+     * Modified double-clicks are dropped, as they are on the chart's columns:
+     * a pill press carries no modifiers into the selection, so a reader holding
+     * one is not addressing this row.
+     */
+    private _open(key: string, event: MouseEvent): void {
+        if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+        this.dispatchEvent(new CustomEvent<SpanPillOpenDetail>("span-pill-open", {
+            bubbles: true,
+            composed: true,
+            detail: { date: key },
+        }));
     }
 
     /**

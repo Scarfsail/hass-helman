@@ -78,6 +78,19 @@ export interface AggregateBucketSelectDetail {
 }
 
 /**
+ * A column was double-clicked: the reader is asking to open it.
+ *
+ * Separate from {@link AggregateBucketSelectDetail} because it means something
+ * else -- not "this is the column I am reading" but "take me into it" -- and
+ * because it carries no modifiers. A modified double-click is not one: shift
+ * and ctrl are how a multi-column selection is built, and this element drops
+ * those rather than reporting a drill the reader did not ask for.
+ */
+export interface AggregateBucketOpenDetail {
+    key: string;
+}
+
+/**
  * The pointer moved onto a column, or off the chart entirely (`key: null`).
  *
  * The coordinates are the pointer's own, in client space, because the popup the
@@ -787,6 +800,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     width=${columnWidth} height=${height}
                     style=${style}
                     @click=${(event: MouseEvent) => this._selectBucket(row.date, event)}
+                    @dblclick=${(event: MouseEvent) => this._openBucket(row.date, event)}
                     @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
                 ></rect>
             `;
@@ -911,6 +925,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                     width=${columnWidth} height=${height}
                     style=${selected ? SELECTED_STYLE : "fill: transparent;"}
                     @click=${(event: MouseEvent) => this._selectBucket(row.date, event)}
+                    @dblclick=${(event: MouseEvent) => this._openBucket(row.date, event)}
                     @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
                 ></rect>
             `;
@@ -972,6 +987,28 @@ export class HelmanSolarAggregateChart extends LitElement {
     private _selectBucket(key: string, event: MouseEvent) {
         event.stopPropagation();
         this._dispatchSelect(key, slotSelectionModeForEvent(event));
+    }
+
+    /**
+     * A column was double-clicked: report it as an open.
+     *
+     * Only the plain gesture. A modified double-click is two modified clicks --
+     * the reader toggling or extending the selection, possibly by pressing the
+     * same column twice -- and drilling out from under a half-built range would
+     * take the chart away mid-gesture.
+     *
+     * The two `click`s that precede it have already landed and already replaced
+     * the selection with this column, which is what the card leans on to know
+     * which day to open. That is idempotent, so nothing here has to undo them.
+     */
+    private _openBucket(key: string, event: MouseEvent) {
+        event.stopPropagation();
+        if (slotSelectionModeForEvent(event) !== "replace") return;
+        this.dispatchEvent(new CustomEvent<AggregateBucketOpenDetail>("aggregate-bucket-open", {
+            detail: { key },
+            bubbles: true,
+            composed: true,
+        }));
     }
 
     /**

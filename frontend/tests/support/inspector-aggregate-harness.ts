@@ -674,6 +674,111 @@ export async function clickColumn(
 }
 
 /**
+ * Where an element inside the card's shadow trees is, in page coordinates.
+ *
+ * `walk` is handed the inspector's shadow root and returns the node to measure,
+ * so a caller can cross as many shadow boundaries as its target sits behind.
+ */
+async function centreOf(
+    page: Page,
+    walk: string,
+): Promise<{ x: number; y: number }> {
+    return page.evaluate((source) => {
+        const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+        const node = (new Function("root", `return (${source})(root);`))(root) as Element;
+        const box = node.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }, walk);
+}
+
+/**
+ * Double-click where an element is, with a real pointer.
+ *
+ * Deliberately *not* a synthesised `dblclick` on the node. The gesture is three
+ * events the browser decides to emit -- two clicks and then the double -- and
+ * it only emits the third if the same element is still under the pointer after
+ * the first two. A re-render that replaces the node, or a row that scrolls the
+ * pill out from under the cursor, breaks the drill for a reader while leaving a
+ * dispatched event passing happily. Driving the mouse is what makes these tests
+ * about the gesture rather than about the handler.
+ *
+ * The box is measured immediately before the press for the same reason: the
+ * card re-renders as the tests set the view up, and a stale coordinate would
+ * aim at wherever the target used to be.
+ */
+async function dblClickAt(
+    page: Page,
+    walk: string,
+    modifiers: ClickModifiers = {},
+): Promise<void> {
+    const keys: string[] = [];
+    if (modifiers.ctrlKey === true) keys.push("Control");
+    if (modifiers.shiftKey === true) keys.push("Shift");
+
+    const { x, y } = await centreOf(page, walk);
+    for (const key of keys) await page.keyboard.down(key);
+    await page.mouse.dblclick(x, y);
+    for (const key of keys.reverse()) await page.keyboard.up(key);
+
+    await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any).updateComplete);
+}
+
+/** Double-click the chart column at `index`. */
+export async function dblClickColumn(
+    page: Page,
+    index: number,
+    modifiers: ClickModifiers = {},
+): Promise<void> {
+    await dblClickAt(
+        page,
+        `(root) => root.querySelector("helman-solar-aggregate-chart")`
+        + `.shadowRoot.querySelectorAll(".bucket-column")[${index}]`,
+        modifiers,
+    );
+}
+
+/** Double-click a span pill: at M the month row is the chart's columns. */
+export async function dblClickSpanPill(
+    page: Page,
+    row: "years" | "months",
+    key: string,
+): Promise<void> {
+    await dblClickAt(
+        page,
+        `(root) => root.querySelector("helman-solar-span-pills")`
+        + `.shadowRoot.querySelector('.pill-row.${row} .pill[data-span="${key}"]')`,
+    );
+}
+
+/** Double-click a day pill: at D the day row is the chart's columns. */
+export async function dblClickDayPill(page: Page, day: string): Promise<void> {
+    await dblClickAt(
+        page,
+        `(root) => root.querySelector("helman-solar-day-pills")`
+        + `.shadowRoot.querySelector('.pill[data-day="${day}"]')`,
+    );
+}
+
+/** The width toggle's stops, grouped as it draws them. */
+export async function stopGroups(page: Page): Promise<string[][]> {
+    return page.evaluate(() => {
+        const toggle = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".slot-size-toggle");
+        return [...toggle.querySelectorAll(".stop-group")].map((group: Element) =>
+            [...group.querySelectorAll(".slot-size-button")]
+                .map((button: Element) => button.textContent?.trim() ?? ""));
+    });
+}
+
+/** The labels of the stops currently pressed. */
+export async function activeStops(page: Page): Promise<string[]> {
+    return page.evaluate(() =>
+        [...(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelectorAll(".slot-size-toggle .slot-size-button.active")]
+            .map((button: Element) => button.textContent?.trim() ?? ""));
+}
+
+/**
  * Click the chart outside every column: the axis gutter.
  *
  * Dispatched on the `<svg>` itself, which is what a press in the left margin
