@@ -298,6 +298,16 @@ const STACK_HATCH_COLORS = [
  */
 const EMPTY_HISTORY_DAYS: readonly SolarInspectorHistoryDay[] = Object.freeze([]);
 
+/**
+ * The empty chart selection, for a pill row whose pills are not the columns.
+ *
+ * Same reason as `EMPTY_HISTORY_DAYS`: `selectedBuckets` is a property Lit
+ * compares by identity, and a fresh `[]` per render would re-render both pill
+ * rows on every pointer move over the day chart -- where the answer is always
+ * "no buckets", the columns being slots there rather than days.
+ */
+const EMPTY_BUCKET_KEYS: readonly string[] = Object.freeze([]);
+
 const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
   schedule: null,
   loading: false,
@@ -1532,7 +1542,7 @@ export class HelmanSolarInspector extends LitElement {
             .minDate=${this._navFloor()}
             .todayKey=${today}
             .hoveredKey=${this._shapedKey("month", this._hoveredBucketKey)}
-            .selectedBucket=${this._shapedKey("month", this._focusBucket())}
+            .selectedBuckets=${this._shapedKeys("month")}
             .selectsSlot=${this._correlatedRow() === "month"}
             @span-pill-select=${this._handleSpanPillSelect}
             @span-pill-hover=${this._handleSpanPillHover}
@@ -1551,7 +1561,7 @@ export class HelmanSolarInspector extends LitElement {
             .reachableFrom=${this._pillReach().from}
             .reachableTo=${this._pillReach().to}
             .hoveredDate=${this._shapedKey("day", this._hoveredBucketKey)}
-            .selectedBucket=${this._shapedKey("day", this._focusBucket())}
+            .selectedBuckets=${this._shapedKeys("day")}
             .selectsSlot=${this._correlatedRow() === "day"}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -2075,6 +2085,18 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _shapedKey(row: "day" | "month", key: string | null): string | null {
     return this._correlatedRow() === row ? key : null;
+  }
+
+  /**
+   * The whole chart selection, for the pill row whose pills are its columns.
+   *
+   * The plural of `_shapedKey` and shaped by the same rule: a row only lights
+   * keys it is keyed by. The rows take the set rather than the focus bucket
+   * because a multi-column selection that lit one pill would read as the chart
+   * and the row disagreeing about what is picked.
+   */
+  private _shapedKeys(row: "day" | "month"): readonly string[] {
+    return this._correlatedRow() === row ? this._bucketSelection.selectedSlots : EMPTY_BUCKET_KEYS;
   }
 
   /**

@@ -604,6 +604,28 @@ export async function clickGutter(page: Page): Promise<void> {
     });
 }
 
+/**
+ * Click the label strip under a column: inside the plot's x-range, below every
+ * hit rect. Not the gutter, so it must leave the selection alone.
+ */
+export async function clickUnderColumn(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const host = (document.querySelector("helman-solar-inspector") as any);
+        const chart = host.shadowRoot.querySelector("helman-solar-aggregate-chart");
+        const svg = chart.shadowRoot.querySelector("svg.aggregate-chart") as SVGSVGElement;
+        const column = chart.shadowRoot.querySelectorAll(".bucket-column")[i] as SVGElement;
+        const box = column.getBoundingClientRect();
+        const svgBox = svg.getBoundingClientRect();
+        svg.dispatchEvent(new MouseEvent("click", {
+            bubbles: true,
+            composed: true,
+            clientX: box.left + box.width / 2,
+            clientY: svgBox.bottom - 2,
+        }));
+        return host.updateComplete;
+    }, index);
+}
+
 /** The selected buckets, as the chart's own columns report them. */
 export async function selectedColumns(page: Page): Promise<string[]> {
     return page.evaluate(() => {

@@ -928,13 +928,32 @@ export class HelmanSolarAggregateChart extends LitElement {
     }
 
     /**
-     * A press that missed every column: the axis gutter, the margins, the
-     * caption strip. It clears the selection, exactly as a gutter click does in
-     * the day view.
+     * A press in the axis gutter: left of the plot or right of it. It clears the
+     * selection, exactly as a gutter click does in the day view -- and it is
+     * bounded the same way, on x alone, so that the strip above the plot and the
+     * label strip below it are dead space rather than a way to lose a selection
+     * by aiming a few pixels under the column meant to join it.
      */
     private _clickOutside = (event: MouseEvent) => {
+        if (this._insidePlot(event)) return;
         this._dispatchSelect(null, slotSelectionModeForEvent(event));
     };
+
+    /**
+     * Whether a press landed between the plot's left and right edges.
+     *
+     * Measured through the element's own box because the SVG is scaled to its
+     * container while the geometry above is written in viewBox units; a click
+     * synthesised without coordinates reads as x = 0, which is the gutter, and
+     * that is the right answer for it.
+     */
+    private _insidePlot(event: MouseEvent): boolean {
+        const svg = event.currentTarget as SVGSVGElement | null;
+        const box = svg?.getBoundingClientRect();
+        if (!box || box.width === 0) return false;
+        const x = (event.clientX - box.left) * (this.width / box.width);
+        return x >= CHART.marginLeft && x <= this.width - CHART.marginRight;
+    }
 
     private _dispatchSelect(key: string | null, mode: SlotSelectionMode) {
         this.dispatchEvent(new CustomEvent<AggregateBucketSelectDetail>("aggregate-bucket-select", {

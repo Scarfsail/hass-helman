@@ -7,6 +7,7 @@ import {
     canPageBack,
     clickColumn,
     clickGutter,
+    clickUnderColumn,
     clickStop,
     columns,
     loadCardBundle,
@@ -248,6 +249,23 @@ test.describe("solar inspector aggregate views", () => {
         // And the panel that described it goes with it.
         expect(await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector(".selection-section"))).toBe(false);
+    });
+
+    test("a press under a column is not the gutter", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const keys = await columns(page);
+        await clickColumn(page, 2);
+        await clickColumn(page, 4, { ctrlKey: true });
+        expect(await selectedColumns(page)).toEqual([keys[2], keys[4]]);
+
+        // The date labels live below the columns' hit rects but inside the
+        // plot's x-range. The gutter is left and right of the plot, as it is in
+        // the day view -- so aiming a few pixels under a column must not cost
+        // the reader the selection they were adding to.
+        await clickUnderColumn(page, 3);
+        expect(await selectedColumns(page)).toEqual([keys[2], keys[4]]);
     });
 
     /**
