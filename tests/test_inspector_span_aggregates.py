@@ -602,7 +602,9 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         )
         service = _make_service_with_consumers()
 
-        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
 
         (row,) = payload["days"]
         self.assertEqual(row["houseWh"], 10000.0)
@@ -666,7 +668,7 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         service = _make_service_with_consumers()
 
         payload = await service.async_get_span_aggregates(
-            "2026-04-01", "2026-04-30", bucket="month"
+            "2026-04-01", "2026-04-30", bucket="month", house_breakdown=True
         )
 
         (row,) = payload["days"]
@@ -696,7 +698,9 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         )
         service = _make_service_with_consumers()
 
-        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
 
         (row,) = payload["days"]
         self.assertIsNone(row["houseWh"])
@@ -712,12 +716,14 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
             ],
         }
         _set_rows(rows)
-        bare = await _make_service().async_get_span_aggregates("2026-04-23", "2026-04-23")
+        bare = await _make_service().async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
         bare_ids = set(_calls("hour")[0]["statistic_ids"])
 
         _set_rows(rows)
         with_roster = await _make_service_with_consumers().async_get_span_aggregates(
-            "2026-04-23", "2026-04-23"
+            "2026-04-23", "2026-04-23", house_breakdown=True
         )
 
         (bare_row,) = bare["days"]
@@ -731,6 +737,39 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
             {k: v for k, v in roster_row.items() if k != "houseBreakdown"},
         )
         self.assertNotIn(WASHER_METER, bare_ids)
+
+
+class TestBreakdownIsAskedFor(unittest.IsolatedAsyncioTestCase):
+    """The day pills share this endpoint, and must not pay for the composition.
+
+    They read six scalars a bucket over a month-wide window. Resolving the
+    roster for them would widen that read by a meter per configured consumer,
+    every time the window moves, for a field they never look at.
+    """
+
+    async def test_without_the_flag_no_consumer_meter_is_read(self):
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.5),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        (row,) = payload["days"]
+        # The house is still measured; only its composition is not asked for.
+        self.assertEqual(row["houseWh"], 10000.0)
+        self.assertIsNone(row["houseBreakdown"])
+        self.assertNotIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
+        self.assertNotIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
 
 
 class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):

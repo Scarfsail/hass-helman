@@ -81,6 +81,7 @@ import {
   resolveSelectedImpactSlot,
   type BatterySocPoint,
   type FactorPoint,
+  type ApplianceComponent,
   type HouseBreakdownPoint,
   type ImpactPoint,
   type InspectorPoint,
@@ -2010,7 +2011,17 @@ export class HelmanSolarInspector extends LitElement {
     const start = this._spanStart(this._selectedDate);
     const end = this._spanEnd(this._selectedDate);
     const key = `${bucket}:${start}..${end}`;
-    if (this._spanRequestKey === key) return;
+    if (this._spanRequestKey === key) {
+      // The span already on screen is the right one, but the selection may not
+      // be: a stop change carries a focus bucket in, and one that this span has
+      // no column for -- a future day the backend clamped away -- would light a
+      // pill the chart cannot draw and head a panel with no rows behind it.
+      this._bucketSelection = reconcileSlotSelection(
+        this._orderedBuckets(),
+        this._bucketSelection,
+      );
+      return;
+    }
     this._spanRequestKey = key;
     this._spanLoading = true;
     this._spanError = "";
@@ -2021,6 +2032,11 @@ export class HelmanSolarInspector extends LitElement {
         start_date: start,
         end_date: end,
         bucket,
+        // The composition panel is this view's alone. The day pills call the
+        // same command for six scalars a bucket, and asking there would widen a
+        // month-wide read by a meter per configured consumer for a field they
+        // never read.
+        house_breakdown: true,
       });
       if (this._spanRequestKey !== key) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
@@ -4355,8 +4371,8 @@ export class HelmanSolarInspector extends LitElement {
     const forecast = variant === "forecast";
     // Every box reads the same series over the same samples; only which part it
     // asks for differs.
-    const barsFor = (entityId: string | null | undefined) =>
-      consumerBarsOverSlots(breakdownSeries, barSlots, entityId, mixes);
+    const barsFor = (part: ApplianceComponent | null | undefined) =>
+      consumerBarsOverSlots(breakdownSeries, barSlots, part, mixes);
 
     const consumers = breakdown.appliances.filter(
       (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
@@ -4382,7 +4398,7 @@ export class HelmanSolarInspector extends LitElement {
         appliance.switchEntityId ?? null,
         appliance.powerEntityId ?? null,
         false,
-        barsFor(appliance.entityId),
+        barsFor(appliance),
         appliance.deferrable,
         appliance.controllableId ?? null,
       ),

@@ -151,6 +151,7 @@ async def ws_get_solar_bias_inspector(
         vol.Required("start_date"): str,
         vol.Required("end_date"): str,
         vol.Optional("bucket", default="day"): vol.In(("day", "month")),
+        vol.Optional("house_breakdown", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -165,6 +166,12 @@ async def ws_get_solar_bias_day_aggregates(
     always asked for, and the reason this command keeps its name. ``"month"``
     snaps the requested dates outward to whole local months and returns one row
     per month; the dates themselves stay plain ISO dates either way.
+
+    ``house_breakdown`` asks for each bucket's consumer roster as well, which
+    widens the one statistics read by a meter per configured consumer. Off by
+    default because the two callers want different things from the same
+    endpoint: the aggregate views draw the composition, the day pills read six
+    scalars a day and would pay for a field they never look at.
     """
     raw_start = msg.get("start_date")
     raw_end = msg.get("end_date")
@@ -182,7 +189,10 @@ async def ws_get_solar_bias_day_aggregates(
 
     try:
         payload = await service.async_get_span_aggregates(
-            raw_start, raw_end, msg.get("bucket", "day")
+            raw_start,
+            raw_end,
+            msg.get("bucket", "day"),
+            house_breakdown=bool(msg.get("house_breakdown", False)),
         )
     except Exception:
         _LOGGER.exception("Unexpected solar bias day aggregates failure")

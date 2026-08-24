@@ -947,6 +947,21 @@ test.describe("the house composition at D and M", () => {
         await waitForDayChart(page);
     });
 
+    test("only the view that draws the composition asks for it", async ({ page }) => {
+        // The day pills call the same command for six scalars a bucket. Asking
+        // there would widen a month-wide read by a meter per configured
+        // consumer for a field they never look at.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const asked = await page.evaluate(() => ((window as any).__spanRequests as any[])
+            .map((msg) => ({ bucket: msg.bucket ?? null, breakdown: msg.house_breakdown === true })));
+        expect(asked.some((msg) => msg.bucket !== null && msg.breakdown)).toBe(true);
+        // Every pill fetch -- the ones with no bucket of their own -- asks
+        // without it.
+        expect(asked.filter((msg) => msg.bucket === null).every((msg) => !msg.breakdown)).toBe(true);
+    });
+
     test("a day column itemises what that day's slots itemise", async ({ page }) => {
         // The whole of today at the width the card opened at: the same
         // measurement the span row for today carries, read one granularity down.

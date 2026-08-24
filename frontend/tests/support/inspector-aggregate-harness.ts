@@ -160,7 +160,7 @@ export async function mountInspector(
         (window as any).__dayRequests = [];
 
         /** Every bucket of the requested window, with plausible numbers. */
-        const spanDays = (start: string, end: string, bucket: string) => {
+        const spanDays = (start: string, end: string, bucket: string, withBreakdown: boolean) => {
             const rows: Array<Record<string, unknown>> = [];
             const cursor = new Date(`${start}T00:00:00Z`);
             const last = new Date(`${end}T00:00:00Z`);
@@ -195,7 +195,7 @@ export async function mountInspector(
                     // which is what lets a bucket panel be compared against the
                     // same day's slots at 60. Absent where the house meter
                     // reported nothing -- there is no total to split there.
-                    houseBreakdown: missing || noEnergy ? null : {
+                    houseBreakdown: !withBreakdown || missing || noEnergy ? null : {
                         unmeasuredWh: 12000,
                         appliances: [
                             {
@@ -243,7 +243,15 @@ export async function mountInspector(
                     return {
                         bucket: msg.bucket ?? "day",
                         currency: "CZK",
-                        days: spanDays(msg.start_date, msg.end_date, msg.bucket ?? "day"),
+                        days: spanDays(
+                            msg.start_date,
+                            msg.end_date,
+                            msg.bucket ?? "day",
+                            // The composition is served only to a caller that
+                            // asked, as the backend serves it -- so a card that
+                            // stopped asking would lose the panel here too.
+                            msg.house_breakdown === true,
+                        ),
                         // The span payload carries its own bounds, which is
                         // what lets the aggregate views navigate without a day
                         // load having happened first -- and what keeps the day

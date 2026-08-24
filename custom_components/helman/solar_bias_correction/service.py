@@ -358,6 +358,8 @@ class SolarBiasCorrectionService:
         raw_start_date: str,
         raw_end_date: str,
         bucket: str = "day",
+        *,
+        house_breakdown: bool = False,
     ) -> dict[str, Any]:
         """Measured figures for a span of history, bucketed into local days or months.
 
@@ -468,11 +470,18 @@ class SolarBiasCorrectionService:
         # rather than adding a second: the discipline this docstring commits to
         # is one statistics read however wide the span, and a per-consumer read
         # would be one per appliance per span.
-        try:
-            breakdown_consumers = await self._house_breakdown_consumers()
-        except Exception:
-            _LOGGER.exception("Failed to resolve house consumers for span aggregates")
-            breakdown_consumers = []
+        #
+        # Only where the caller asked for it. The day pills share this endpoint
+        # and read six scalars a bucket, so resolving the roster for them would
+        # widen a 31-day read by a meter per consumer for a field they never
+        # look at.
+        breakdown_consumers: list[dict] = []
+        if house_breakdown:
+            try:
+                breakdown_consumers = await self._house_breakdown_consumers()
+            except Exception:
+                _LOGGER.exception("Failed to resolve house consumers for span aggregates")
+                breakdown_consumers = []
         consumer_entities = [
             consumer["energy_entity_id"]
             for consumer in breakdown_consumers
