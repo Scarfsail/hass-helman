@@ -243,6 +243,39 @@ def _make_service(*, import_price_config=None):
     )
 
 
+#: Two metered consumers, one shiftable and one the device tree alone knows.
+WASHER_METER = "sensor.washer_energy"
+FRIDGE_METER = "sensor.fridge_energy"
+
+
+def _make_service_with_consumers():
+    """A service whose house actual is split by a washer and a fridge.
+
+    The rosters are the two the day view's breakdown is built from, wired the
+    same way round: the washer is a deferrable appliance that the device tree
+    also meters (so it is where the switch and power sensor come from), the
+    fridge is a tree node alone.
+    """
+    service = _make_service()
+
+    async def _device_consumers():
+        return [
+            {
+                "energy_entity_id": WASHER_METER,
+                "label": "Washer",
+                "switch_entity_id": "switch.washer",
+                "power_entity_id": "sensor.washer_power",
+            },
+            {"energy_entity_id": FRIDGE_METER, "label": "Fridge"},
+        ]
+
+    service._house_deferrable_consumers_provider = lambda: [
+        {"energy_entity_id": WASHER_METER, "label": "Washer", "id": "washer"}
+    ]
+    service._house_device_consumers_provider = _device_consumers
+    return service
+
+
 def _five_minute_row(local_instant: datetime, **fields) -> dict:
     """One short-term ``StatisticsRow``, five minutes wide."""
     start = local_instant.timestamp()
@@ -330,6 +363,9 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     "batteryDischargeWh": None,
                     "moneyCost": None,
                     "moneyGain": None,
+                    # No consumers configured here, so there is nothing to split
+                    # the house by and the panel is simply absent.
+                    "houseBreakdown": None,
                 },
                 {
                     "date": "2026-04-24",
@@ -343,6 +379,9 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     "batteryDischargeWh": 1000.0,
                     "moneyCost": None,
                     "moneyGain": None,
+                    # No consumers configured here, so there is nothing to split
+                    # the house by and the panel is simply absent.
+                    "houseBreakdown": None,
                 },
             ],
         )
@@ -530,6 +569,207 @@ class TestResetArtefacts(unittest.IsolatedAsyncioTestCase):
 
         # The 09:00 reading opens a new segment, so the day is 4.0 + 2.5 + 2.5.
         self.assertEqual(payload["days"][0]["solarWh"], 9000.0)
+
+
+class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
+    """Every bucket says what the house was doing, not just how much it used.
+
+    The figures come from the same one read as the six meters -- the consumers'
+    energy entities simply join the entity list -- and are folded through the
+    same ``_energy_by_bucket``, so a consumer's bucket total is arrived at
+    exactly as the house total it is subtracted from. What matters here is that
+    the parts reconcile: itemised plus unmeasured is the house, at both
+    granularities, or the panel is claiming a composition the chart above it
+    does not draw.
+    """
+
+    async def test_a_day_bucket_itemises_its_consumers_against_the_house(self):
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.5),
+                ],
+                FRIDGE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=2.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=2.5),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+
+        (row,) = payload["days"]
+        self.assertEqual(row["houseWh"], 10000.0)
+        breakdown = row["houseBreakdown"]
+        # The appliance shape is the day slot's, field for field, so the card
+        # parses a bucket's breakdown with the types it already has.
+        self.assertEqual(
+            breakdown["appliances"],
+            [
+                {
+                    "entityId": WASHER_METER,
+                    "label": "Washer",
+                    "wh": 1500.0,
+                    # The deferrable roster knows no switch or power sensor; the
+                    # tree does, and the merge is where they come from.
+                    "switchEntityId": "switch.washer",
+                    "powerEntityId": "sensor.washer_power",
+                    "deferrable": True,
+                    "controllableId": "washer",
+                },
+                {
+                    "entityId": FRIDGE_METER,
+                    "label": "Fridge",
+                    "wh": 500.0,
+                    "switchEntityId": None,
+                    "powerEntityId": None,
+                    "deferrable": False,
+                    "controllableId": None,
+                },
+            ],
+        )
+        # The remainder is what no individual meter accounted for, so the parts
+        # add back up to the house the chart drew.
+        self.assertEqual(breakdown["unmeasuredWh"], 8000.0)
+        itemised = sum(a["wh"] for a in breakdown["appliances"])
+        self.assertEqual(itemised + breakdown["unmeasuredWh"], row["houseWh"])
+
+        # And still one read: the consumers' meters joined the entity list
+        # rather than adding a query apiece.
+        self.assertEqual(len(_calls("hour")), 1)
+        self.assertIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
+        self.assertIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
+
+    async def test_the_same_fold_one_granularity_up(self):
+        # Two days of washer energy inside one month, so the month's figure has
+        # to be their sum and not either day's.
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-03-31T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-03T08:00:00+02:00"), state=104.0),
+                    _row(_hour("2026-04-20T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-03-31T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-03T08:00:00+02:00"), state=6.0),
+                    _row(_hour("2026-04-20T08:00:00+02:00"), state=6.25),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-01", "2026-04-30", bucket="month", house_breakdown=True
+        )
+
+        (row,) = payload["days"]
+        self.assertEqual(row["date"], "2026-04-01")
+        self.assertEqual(row["houseWh"], 10000.0)
+        breakdown = row["houseBreakdown"]
+        washer = next(a for a in breakdown["appliances"] if a["entityId"] == WASHER_METER)
+        self.assertEqual(washer["wh"], 1250.0)
+        # The fridge is configured but read nothing this month: a zero row
+        # rather than an absent one, because the roster is what the panel's
+        # boxes are, and a box that vanished would read as a lost appliance.
+        fridge = next(a for a in breakdown["appliances"] if a["entityId"] == FRIDGE_METER)
+        self.assertEqual(fridge["wh"], 0.0)
+        itemised = sum(a["wh"] for a in breakdown["appliances"])
+        self.assertEqual(itemised + breakdown["unmeasuredWh"], row["houseWh"])
+
+    async def test_a_bucket_the_house_meter_missed_carries_no_breakdown(self):
+        # Nothing to split: the remainder would have to be invented from a house
+        # total that does not exist, and a panel drawn from it would be fiction.
+        _set_rows(
+            {
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.5),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+
+        (row,) = payload["days"]
+        self.assertIsNone(row["houseWh"])
+        self.assertIsNone(row["houseBreakdown"])
+
+    async def test_no_consumers_configured_changes_nothing_else(self):
+        # The house column, the meters and the entity list are all as they were
+        # before there was a breakdown to carry; only the new key is null.
+        rows = {
+            HOUSE_METER: [
+                _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+            ],
+        }
+        _set_rows(rows)
+        bare = await _make_service().async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+        bare_ids = set(_calls("hour")[0]["statistic_ids"])
+
+        _set_rows(rows)
+        with_roster = await _make_service_with_consumers().async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+
+        (bare_row,) = bare["days"]
+        self.assertIsNone(bare_row["houseBreakdown"])
+        self.assertEqual(bare_row["houseWh"], 10000.0)
+        # Every other field of the row is the same either way -- the roster adds
+        # a key and reads two more meters, and touches nothing else.
+        (roster_row,) = with_roster["days"]
+        self.assertEqual(
+            {k: v for k, v in bare_row.items() if k != "houseBreakdown"},
+            {k: v for k, v in roster_row.items() if k != "houseBreakdown"},
+        )
+        self.assertNotIn(WASHER_METER, bare_ids)
+
+
+class TestBreakdownIsAskedFor(unittest.IsolatedAsyncioTestCase):
+    """The day pills share this endpoint, and must not pay for the composition.
+
+    They read six scalars a bucket over a month-wide window. Resolving the
+    roster for them would widen that read by a meter per configured consumer,
+    every time the window moves, for a field they never look at.
+    """
+
+    async def test_without_the_flag_no_consumer_meter_is_read(self):
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.5),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        (row,) = payload["days"]
+        # The house is still measured; only its composition is not asked for.
+        self.assertEqual(row["houseWh"], 10000.0)
+        self.assertIsNone(row["houseBreakdown"])
+        self.assertNotIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
+        self.assertNotIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
 
 
 class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):

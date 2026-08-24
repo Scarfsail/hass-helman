@@ -81,6 +81,7 @@ import {
   resolveSelectedImpactSlot,
   type BatterySocPoint,
   type FactorPoint,
+  type ApplianceComponent,
   type HouseBreakdownPoint,
   type ImpactPoint,
   type InspectorPoint,
@@ -88,6 +89,7 @@ import {
   type TrainingSlotExplainability,
   type ContributionRow,
 } from "./solar-inspector-model.js";
+import type { BucketSourceMix } from "../shared/power-history-bars";
 import {
   actualsCoverUntil,
   aggregateBreakdownOverSlots,
@@ -97,6 +99,7 @@ import {
   partBarsOverSlots,
   expandSlotsToNative,
   houseSourceMixBySlot,
+  sourceMixFromTotals,
   dropPartialBuckets,
   timestampMinutes,
   aggregateImpactOverSlots,
@@ -2008,7 +2011,17 @@ export class HelmanSolarInspector extends LitElement {
     const start = this._spanStart(this._selectedDate);
     const end = this._spanEnd(this._selectedDate);
     const key = `${bucket}:${start}..${end}`;
-    if (this._spanRequestKey === key) return;
+    if (this._spanRequestKey === key) {
+      // The span already on screen is the right one, but the selection may not
+      // be: a stop change carries a focus bucket in, and one that this span has
+      // no column for -- a future day the backend clamped away -- would light a
+      // pill the chart cannot draw and head a panel with no rows behind it.
+      this._bucketSelection = reconcileSlotSelection(
+        this._orderedBuckets(),
+        this._bucketSelection,
+      );
+      return;
+    }
     this._spanRequestKey = key;
     this._spanLoading = true;
     this._spanError = "";
@@ -2019,6 +2032,11 @@ export class HelmanSolarInspector extends LitElement {
         start_date: start,
         end_date: end,
         bucket,
+        // The composition panel is this view's alone. The day pills call the
+        // same command for six scalars a bucket, and asking there would widen a
+        // month-wide read by a meter per configured consumer for a field they
+        // never read.
+        house_breakdown: true,
       });
       if (this._spanRequestKey !== key) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
@@ -2232,7 +2250,69 @@ export class HelmanSolarInspector extends LitElement {
         <strong>${this._formatBucketRange(selected.map((row) => row.date))}</strong>
         <div class="metric-grid">${this._renderBucketMetrics(selected)}</div>
       </div>
+      ${this._renderBucketHouseBreakdown(selected)}
     `;
+  }
+
+  /**
+   * What the house was doing over the selected buckets.
+   *
+   * The same panel the day view opens for a slot selection, over the same boxes
+   * and the same base/shiftable groups -- a day column at D itemises the
+   * appliances that day's slots itemise at 60, and to the same total. Only the
+   * bars are coarser: one per selected bucket rather than one per native sample,
+   * because hourly statistics are the finest grain the span read has and a bar
+   * per hour of a day column would be a far heavier read for a shape the next
+   * stop of the toggle already draws.
+   *
+   * Actual only. The panel's forecast variant compares scheduled appliances
+   * against a house forecast, and a span payload is measured history end to end.
+   */
+  private _renderBucketHouseBreakdown(rows: readonly SpanAggregateRow[]) {
+    // The selection in draw order, which is the order the bars are read in.
+    const keys = rows.map((row) => row.date);
+    // Bucket-keyed breakdown points, in the shape the day view's own helpers
+    // parse: `slot` is an opaque key to all of them, so a bucket date does the
+    // job a "HH:MM" does there.
+    const series: HouseBreakdownPoint[] = [];
+    const mixes = new Map<string, BucketSourceMix>();
+    for (const row of rows) {
+      const breakdown = row.houseBreakdown;
+      if (!breakdown) continue;
+      series.push({
+        slot: row.date,
+        unmeasuredWh: breakdown.unmeasuredWh,
+        appliances: breakdown.appliances,
+      });
+      // One mix rule for both granularities. The payload's energy is
+      // consumption-positive the other way round from a slot's -- it reports
+      // what each meter measured, not a signed flow -- so the nets are formed
+      // here to match: positive grid is export, positive battery is charge.
+      const mix = sourceMixFromTotals(
+        row.houseWh,
+        ((row.gridExportKwh ?? 0) - (row.gridImportKwh ?? 0)) * 1000,
+        (row.batteryChargeWh ?? 0) - (row.batteryDischargeWh ?? 0),
+      );
+      if (mix !== null) mixes.set(row.date, mix);
+    }
+    const breakdown = aggregateBreakdownOverSlots(series, keys);
+    if (!breakdown) return "";
+    return this._renderBreakdownPanel({
+      breakdown,
+      barSlots: keys,
+      breakdownSeries: series,
+      mixes,
+      variant: "actual",
+      // The power card's own title for unmetered load, from whichever day the
+      // card last loaded -- it is config, not a per-day figure, so the day the
+      // reader arrived from names the concept the same way here.
+      unmeasuredLabel: this._payload?.houseUnmeasuredLabel ?? null,
+      // A bar is a whole bucket wide. A month is not a fixed number of days, so
+      // this is the nominal width the power card labels its bars with rather
+      // than a claim about any particular month.
+      barSeconds: (this._spanBucket() === "month" ? 30 : 1) * MINUTES_PER_DAY * 60,
+      unmeasuredFor: null,
+    });
   }
 
   /** The selected buckets, in the order the span draws them. */
@@ -4233,10 +4313,66 @@ export class HelmanSolarInspector extends LitElement {
     const breakdownSeries = forecast
       ? native.houseForecastBreakdown
       : native.houseActualBreakdown;
+    return this._renderBreakdownPanel({
+      breakdown,
+      barSlots,
+      breakdownSeries,
+      mixes,
+      variant,
+      unmeasuredLabel,
+      barSeconds: SLOT_MINUTES * 60,
+      // The forecast's remainder is the residual against the house forecast the
+      // panel sits under, not the composed base alone. At the native width the
+      // two are the same number — every slot the forecast covers now carries a
+      // composition summing to it — but a wide bucket straddling elapsed slots
+      // is only partly covered, and the residual is what keeps the parts summing
+      // to the figure printed above them there.
+      unmeasuredFor: forecast
+        ? (itemised) =>
+            Math.max(0, (sumWhOverSlots(native.houseForecast, barSlots) ?? 0) - itemised)
+        : null,
+    });
+  }
+
+  /**
+   * The panel itself, over whatever buckets its caller keys the breakdown by.
+   *
+   * Everything above this is granularity-specific — which slots the bars are
+   * drawn over, which series they come from, and how the house was fed in each —
+   * and everything below is not, which is why the aggregate views reuse it
+   * rather than growing a second panel that would drift from this one. `slot` is
+   * an opaque key throughout: a native `"HH:MM"` in the day view, a bucket date
+   * at D and M.
+   *
+   * `unmeasuredFor` overrides the remainder for a caller whose composed base
+   * does not already reconcile with the figure printed above the boxes; a null
+   * override takes the breakdown's own.
+   */
+  private _renderBreakdownPanel(options: {
+    breakdown: HouseBreakdownPoint;
+    barSlots: readonly string[];
+    breakdownSeries: readonly HouseBreakdownPoint[];
+    mixes: Map<string, BucketSourceMix>;
+    variant: "actual" | "forecast";
+    unmeasuredLabel: string | null;
+    barSeconds: number;
+    unmeasuredFor: ((itemisedWh: number) => number) | null;
+  }) {
+    const {
+      breakdown,
+      barSlots,
+      breakdownSeries,
+      mixes,
+      variant,
+      unmeasuredLabel,
+      barSeconds,
+      unmeasuredFor,
+    } = options;
+    const forecast = variant === "forecast";
     // Every box reads the same series over the same samples; only which part it
     // asks for differs.
-    const barsFor = (entityId: string | null | undefined) =>
-      consumerBarsOverSlots(breakdownSeries, barSlots, entityId, mixes);
+    const barsFor = (part: ApplianceComponent | null | undefined) =>
+      consumerBarsOverSlots(breakdownSeries, barSlots, part, mixes);
 
     const consumers = breakdown.appliances.filter(
       (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
@@ -4247,21 +4383,9 @@ export class HelmanSolarInspector extends LitElement {
     // consumer boxes it is dropped when it carries nothing, so an empty slot — or
     // one whose whole demand is metered — shows no dead box.
     //
-    // The forecast's remainder is the residual against the house forecast the
-    // panel sits under, not the composed base alone. At the native width the two
-    // are the same number — every slot the forecast covers now carries a
-    // composition summing to it — but a wide bucket straddling elapsed slots is
-    // only partly covered, and the residual is what keeps the parts summing to
-    // the figure printed above them there.
     const composedBase = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
-    const unmeasuredWh = forecast
-      ? Math.max(
-          0,
-          // Over the native samples the selection expands to, since that is the
-          // grid the series is served on and the bars are drawn from.
-          (sumWhOverSlots(native.houseForecast, barSlots) ?? 0) -
-            consumers.reduce((sum, c) => sum + c.wh, 0),
-        )
+    const unmeasuredWh = unmeasuredFor
+      ? unmeasuredFor(consumers.reduce((sum, c) => sum + c.wh, 0))
       : composedBase;
     const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
     if (total <= 0) return "";
@@ -4274,7 +4398,7 @@ export class HelmanSolarInspector extends LitElement {
         appliance.switchEntityId ?? null,
         appliance.powerEntityId ?? null,
         false,
-        barsFor(appliance.entityId),
+        barsFor(appliance),
         appliance.deferrable,
         appliance.controllableId ?? null,
       ),
@@ -4351,7 +4475,7 @@ export class HelmanSolarInspector extends LitElement {
           .currentParentPower=${total}
           .parentPowerHistory=${houseBars.values}
           .historyBuckets=${barSlots.length}
-          .historyBucketDuration=${SLOT_MINUTES * 60}
+          .historyBucketDuration=${barSeconds}
           .devices_full_width=${true}
         ></power-devices-container>
       </div>
