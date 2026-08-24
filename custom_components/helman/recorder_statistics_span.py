@@ -491,9 +491,9 @@ def _hourly_energy_kwh(
     has served as the first delta's left-hand side.
 
     The readings are unwrapped first, so a counter that resets mid-span lifts the
-    rest of the series instead of producing one enormous negative step, and a
-    single dipped reading that recovers an hour later is discarded as the glitch
-    it is rather than counted as a reset. A gap in
+    rest of the series instead of producing one enormous negative step, while a
+    drop too shallow to be a reset -- or one that recovers an hour later -- is
+    discarded as the glitch it is rather than counted as a reset. A gap in
     the statistics -- Home Assistant down for a day -- leaves the energy that
     accumulated across it attributed to the first hour that reports again, which
     is what a cumulative meter genuinely tells us and what the raw state path
