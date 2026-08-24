@@ -306,6 +306,41 @@ async def query_hourly_statistics(
     return SpanStatistics(rows=rows, energy_kwh=energy)
 
 
+def prefer_rows(
+    preferred: dict[datetime, dict[str, Any]],
+    fallback: dict[datetime, dict[str, Any]],
+) -> dict[datetime, dict[str, Any]]:
+    """Two hourly series of the same quantity, merged hour by hour.
+
+    Per hour rather than per series, for the reason the import rail already
+    merges per hour: the seam between the two falls mid-span. Helman's export
+    price mirror covers every hour from the moment it started publishing plus
+    whatever its back-fill reached, and the configured sell-price entity covers
+    whatever hours its own statistics happen to hold -- usually none, since such
+    an entity typically declares no ``state_class``. Choosing one series for the
+    whole span would either blank the hours only the other one covers or discard
+    Helman's own record in favour of a third party's.
+
+    Helman's own series wins where both have the hour *and its row carries a
+    rate*. They mirror the same number, so they agree; where they somehow do
+    not, the one Helman archived is the one it can account for. But a row is not
+    the same as a reading: the span read folds five-minute tail rows onto their
+    containing hour and emits a row whether or not any of them carried a mean,
+    so the hour in progress can arrive present-but-empty -- and preferring it on
+    presence alone would blank an hour the fallback could have priced.
+    """
+    if not fallback:
+        return preferred
+    if not preferred:
+        return fallback
+    merged = dict(fallback)
+    for hour, row in preferred.items():
+        if row.get("mean") is None and merged.get(hour, {}).get("mean") is not None:
+            continue
+        merged[hour] = row
+    return merged
+
+
 async def query_oldest_statistics_date(
     hass: HomeAssistant,
     statistic_ids: Sequence[str | None],
