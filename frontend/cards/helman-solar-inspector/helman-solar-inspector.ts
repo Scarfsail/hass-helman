@@ -901,6 +901,16 @@ export class HelmanSolarInspector extends LitElement {
       font-weight: 600;
     }
 
+    /* A width the loaded day has no data for. The stop stays in the row -- the
+       toggle must not change length between days -- so the dimming and the
+       pointer are the whole of what says it cannot be pressed. Last, so it
+       outranks .active: a coarser day can leave the active stop disabled, and
+       the reader has to see that before wondering why pressing does nothing. */
+    .slot-size-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+
     /* The aggregate views' pill row, on the line the day row occupies so the
        toolbar wraps the same way whichever view is on screen. */
     .span-pills {
