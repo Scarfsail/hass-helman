@@ -14,6 +14,12 @@ import {
     selectDaySlots,
     clickStop,
     columns,
+    activeStops,
+    dblClickColumn,
+    dblClickDayPill,
+    dblClickSpanPill,
+    stopGroups,
+    toggleMore,
     loadCardBundle,
     mountInspector,
     pageBack,
@@ -1053,5 +1059,129 @@ test.describe("the house composition at D and M", () => {
         const monthFills = await bandFills(page);
         expect(monthFills).toContain(HOUSE_RGB);
         expect(monthFills).toContain(HOUSE_DEFERRABLE_RGB);
+    });
+});
+
+/**
+ * Drilling in by double-clicking the thing you are reading.
+ *
+ * The width toggle already reaches every level, and these tests are not about
+ * reaching them -- they are about the column in front of the reader being a way
+ * in. So each one asserts the arrival, and one asserts the gesture the drill
+ * must *not* take over: a modified double-click, which is two modified clicks a
+ * reader is spending on the selection.
+ */
+test.describe("solar inspector drill-down", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+    });
+
+    test("the width toggle groups its stops by what they read", async ({ page }) => {
+        // Three groups, and the flat order across them unchanged -- the day
+        // view's three widths, a month of days, a year of months.
+        expect(await stopGroups(page)).toEqual([["15", "30", "60"], ["D"], ["M"]]);
+    });
+
+    test("double-clicking a month column at M opens it at D", async ({ page }) => {
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        const months = await columns(page);
+        await dblClickColumn(page, 2);
+        await waitForAggregateChart(page);
+
+        // D, drawing the days of the month that was double-clicked.
+        expect((await columns(page))[0]).toBe(months[2]);
+        // Nothing inside it is picked: a month was opened, not a day chosen.
+        expect(await selectedColumns(page)).toEqual([]);
+    });
+
+    test("double-clicking a day column at D opens the day at the width last used", async ({ page }) => {
+        // The width the reader was last on in the day view. The aggregate stops
+        // leave it alone, so it is what the drill has to come back to.
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        const days = await columns(page);
+        await dblClickColumn(page, 1);
+
+        await page.waitForFunction((day) => ((window as any).__dayRequests as string[]).includes(day), days[1]);
+        await waitForDayChart(page);
+        expect(await columns(page)).toEqual([]);
+        expect(await activeStops(page)).toEqual(["60"]);
+    });
+
+    test("a modified double-click builds the selection instead of drilling", async ({ page }) => {
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        await selectColumn(page, 0);
+        // Ctrl-clicking the same column twice adds it and takes it away again,
+        // which is exactly right and exactly not the point: what matters is
+        // that the view did not move out from under the gesture.
+        await dblClickColumn(page, 2, { ctrlKey: true });
+
+        expect(await columns(page)).toHaveLength(12);
+        expect(await selectedColumns(page)).toEqual([(await columns(page))[0]]);
+    });
+
+    test("a column the day view cannot draw is not opened at all", async ({ page }) => {
+        // The two views are bounded by two different stores, so at D there are
+        // real columns below the day view's own floor. The width toggle clamps
+        // into that floor, which is right for a control that names no column;
+        // a drill names exactly the one it was pointed at, so landing on some
+        // other day would be the card answering a question nobody asked.
+        const iso = (daysBack: number) => {
+            const day = new Date();
+            day.setUTCDate(day.getUTCDate() - daysBack);
+            return day.toISOString().slice(0, 10);
+        };
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await pageBackAndWait(page);
+        await pageBackAndWait(page);
+
+        const days = await columns(page);
+        const before = await page.evaluate(() => ((window as any).__dayRequests as string[]).length);
+        await dblClickColumn(page, 0);
+
+        // Still at D, and no day was fetched -- least of all a different one.
+        expect(await columns(page)).toEqual(days);
+        expect(await page.evaluate(() => ((window as any).__dayRequests as string[]).length)).toBe(before);
+        // The press still landed: the column is picked and its panel is open,
+        // which is everything the card can honestly offer for that day.
+        expect(await selectedColumns(page)).toEqual([days[0]]);
+    });
+
+    test("double-clicking the correlated month pill opens the month", async ({ page }) => {
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        const months = await columns(page);
+        await dblClickSpanPill(page, "months", months[2]);
+        await waitForAggregateChart(page);
+
+        expect((await columns(page))[0]).toBe(months[2]);
+    });
+
+    test("double-clicking a day pill at D opens the day", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        // The day row is the chart's columns at D, but only once the picker is
+        // showing it.
+        await toggleMore(page);
+
+        const days = await columns(page);
+        await dblClickDayPill(page, days[1]);
+
+        await page.waitForFunction((day) => ((window as any).__dayRequests as string[]).includes(day), days[1]);
+        await waitForDayChart(page);
+        expect(await columns(page)).toEqual([]);
     });
 });

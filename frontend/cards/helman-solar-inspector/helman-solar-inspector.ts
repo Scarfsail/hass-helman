@@ -44,10 +44,15 @@ import "./helman-solar-day-pills";
 import type {
   DayPillForecastHealthDetail,
   DayPillHoverDetail,
+  DayPillOpenDetail,
   DayPillSelectDetail,
 } from "./helman-solar-day-pills";
 import "./helman-solar-span-pills";
-import type { SpanPillHoverDetail, SpanPillSelectDetail } from "./helman-solar-span-pills";
+import type {
+  SpanPillHoverDetail,
+  SpanPillOpenDetail,
+  SpanPillSelectDetail,
+} from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
@@ -60,6 +65,7 @@ import "./helman-solar-price-strip";
 import "./helman-solar-money-strip";
 import "./helman-solar-aggregate-chart";
 import type {
+  AggregateBucketOpenDetail,
   AggregateBucketSelectDetail,
   AggregateBucketHoverDetail,
   NavigationRange,
@@ -137,8 +143,15 @@ const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
 /** Day view, or one of the two history-only aggregate widths. */
 type InspectorViewMode = "day" | "month" | "year";
 
+/** One stop of the width toggle: a view to be in, and how wide its slots are. */
+interface ViewStop {
+  label: string;
+  mode: InspectorViewMode;
+  minutes?: 15 | 30 | 60;
+}
+
 /**
- * The five stops the width toggle offers, narrowest first.
+ * The five stops the width toggle offers, narrowest first, in three groups.
  *
  * One control, because widening the axis is one idea to a reader: quarter hour,
  * half hour, hour, day, month. It is deliberately *not* five slot widths.
@@ -147,13 +160,23 @@ type InspectorViewMode = "day" | "month" | "year";
  * fixed minute count, so the two wider stops carry a view mode instead and the
  * minutes field simply stops applying. Keeping them in one list is what makes
  * the toggle read as one axis while the states behind it stay honest.
+ *
+ * The grouping says which stops are the same thing. A group is one read of one
+ * subject: the day view's slots drawn at three resolutions, a month of days, a
+ * year of months. Moving within a group re-draws what is already on screen;
+ * moving between groups fetches something else and swaps the chart under the
+ * reader. The five stops looked identical while meaning those two very
+ * different things, so the frame around each group is the toggle saying which
+ * presses are which.
  */
-const VIEW_STOPS: readonly { label: string; mode: InspectorViewMode; minutes?: 15 | 30 | 60 }[] = [
-  { label: "15", mode: "day", minutes: 15 },
-  { label: "30", mode: "day", minutes: 30 },
-  { label: "60", mode: "day", minutes: 60 },
-  { label: "D", mode: "month" },
-  { label: "M", mode: "year" },
+const VIEW_STOP_GROUPS: readonly (readonly ViewStop[])[] = [
+  [
+    { label: "15", mode: "day", minutes: 15 },
+    { label: "30", mode: "day", minutes: 30 },
+    { label: "60", mode: "day", minutes: 60 },
+  ],
+  [{ label: "D", mode: "month" }],
+  [{ label: "M", mode: "year" }],
 ];
 
 /** How far the clock has to move before the "now" line is worth redrawing. */
@@ -657,7 +680,7 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * Which width the toggle is on: the day view, or one of the two aggregate
    * ones. Its own state rather than a wider `_slotMinutes`, for the reason
-   * :data:`VIEW_STOPS` gives.
+   * :data:`VIEW_STOP_GROUPS` gives.
    */
   @state() private _viewMode: InspectorViewMode = "day";
   /**
@@ -827,18 +850,37 @@ export class HelmanSolarInspector extends LitElement {
 
     /* Everything from here on is a setting rather than a way through the days,
        so it goes to the opposite end of the header. */
+    /* The outer frame is the toggle as one control; the gap inside it is what
+       separates the three groups. Kept as one bordered box rather than three
+       loose ones so the reader reads "one axis, three levels" rather than
+       three unrelated controls that happen to sit together. */
     .slot-size-toggle {
       margin-inline-start: auto;
       display: inline-flex;
       align-items: stretch;
+      gap: 4px;
+      /* A stop is 32 and this padding adds 4, which is the 36 the toolbar's
+         icon buttons stand at: grouping the stops must not make the toggle the
+         tallest thing on the row. */
+      padding: 2px;
       border: 1px solid var(--divider-color);
-      border-radius: 6px;
+      border-radius: 8px;
+    }
+
+    /* One read of one subject: the day view's three widths, a month of days, a
+       year of months. The border and the clip the outer box used to carry live
+       here now, so the group is the thing that looks like a segmented control. */
+    .stop-group {
+      display: inline-flex;
+      align-items: stretch;
+      border: 1px solid var(--divider-color);
+      border-radius: 5px;
       overflow: hidden;
     }
 
     .slot-size-button {
       min-width: 30px;
-      min-height: 36px;
+      min-height: 32px;
       padding: 0 6px;
       border: none;
       border-left: 1px solid var(--divider-color);
@@ -849,7 +891,7 @@ export class HelmanSolarInspector extends LitElement {
       cursor: pointer;
     }
 
-    .slot-size-button:first-child {
+    .stop-group .slot-size-button:first-child {
       border-left: none;
     }
 
@@ -1558,6 +1600,7 @@ export class HelmanSolarInspector extends LitElement {
             .selectedBuckets=${this._shapedKeys("month")}
             .selectsSlot=${this._correlatedRow() === "month"}
             @span-pill-select=${this._handleSpanPillSelect}
+            @span-pill-open=${this._handleSpanPillOpen}
             @span-pill-hover=${this._handleSpanPillHover}
           ></helman-solar-span-pills>`}
           <!-- Expanded, the row is a whole month and reads as a calendar; the
@@ -1579,6 +1622,7 @@ export class HelmanSolarInspector extends LitElement {
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
+            @day-pill-open=${this._handleDayPillOpen}
             @day-pill-hover=${this._handleDayPillHover}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
@@ -1602,28 +1646,30 @@ export class HelmanSolarInspector extends LitElement {
             @click=${() => { this._navExpanded = !this._navExpanded; }}
           >&#9776;</button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
-            ${VIEW_STOPS.map((stop) => {
-              const active = stop.minutes === undefined
-                ? this._viewMode === stop.mode
-                : this._viewMode === "day" && this._slotMinutes === stop.minutes;
-              // A width the loaded day has no data for is offered disabled
-              // rather than hidden: the toggle would otherwise change length
-              // between days, and the reader could not tell a missing stop from
-              // one that is simply unavailable here. The aggregate stops are
-              // never affected -- they read their own statistics.
-              const tooCoarse =
-                stop.minutes !== undefined && stop.minutes < this._slotMinutesFloor();
-              return html`
-              <button
-                class="slot-size-button ${active ? "active" : ""}"
-                type="button"
-                aria-pressed=${active ? "true" : "false"}
-                ?disabled=${tooCoarse}
-                title=${tooCoarse ? this._t("bias_correction.inspector.hourly_only_stop") : ""}
-                @click=${() => this._selectViewStop(stop)}
-              >${stop.label}</button>
-            `;
-            })}
+            ${VIEW_STOP_GROUPS.map((group) => html`
+              <div class="stop-group">${group.map((stop) => {
+                const active = stop.minutes === undefined
+                  ? this._viewMode === stop.mode
+                  : this._viewMode === "day" && this._slotMinutes === stop.minutes;
+                // A width the loaded day has no data for is offered disabled
+                // rather than hidden: the toggle would otherwise change length
+                // between days, and the reader could not tell a missing stop from
+                // one that is simply unavailable here. The aggregate stops are
+                // never affected -- they read their own statistics.
+                const tooCoarse =
+                  stop.minutes !== undefined && stop.minutes < this._slotMinutesFloor();
+                return html`
+                <button
+                  class="slot-size-button ${active ? "active" : ""}"
+                  type="button"
+                  aria-pressed=${active ? "true" : "false"}
+                  ?disabled=${tooCoarse}
+                  title=${tooCoarse ? this._t("bias_correction.inspector.hourly_only_stop") : ""}
+                  @click=${() => this._selectViewStop(stop)}
+                >${stop.label}</button>
+              `;
+              })}</div>
+            `)}
           </div>
           ${this._viewMode !== "day" ? "" : html`<button
             class="icon-button ${this._daylightOnly ? "active" : ""}"
@@ -1744,8 +1790,13 @@ export class HelmanSolarInspector extends LitElement {
    * assigning the field. The two wider stops leave `_slotMinutes` alone, so
    * coming back to a minutes stop restores the day view as it was rather than
    * rebuilding it from a default.
+   *
+   * `minutes` is a plain number rather than the toggle's three literals because
+   * {@link _openBucket} arrives here with `_slotMinutes` -- the width last used
+   * -- and that field is a number everywhere else too. The toggle's own stops
+   * still only ever hand over one of the three.
    */
-  private _selectViewStop(stop: { mode: InspectorViewMode; minutes?: 15 | 30 | 60 }) {
+  private _selectViewStop(stop: { mode: InspectorViewMode; minutes?: number }) {
     if (stop.minutes !== undefined) {
       // The day the aggregate views left selected, not whatever `_selectedDate`
       // happens to hold: span navigation parks it on a span start, so arriving
@@ -2125,6 +2176,7 @@ export class HelmanSolarInspector extends LitElement {
           .currency=${this._span?.currency ?? ""}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
+          @aggregate-bucket-open=${this._handleBucketOpen}
           @aggregate-bucket-hover=${this._handleBucketHover}
         ></helman-solar-aggregate-chart>
       </div>
@@ -2240,6 +2292,26 @@ export class HelmanSolarInspector extends LitElement {
     this._selectBucket(event.detail.key, event.detail.mode);
   };
 
+  /* The three ways to ask for a drill -- the chart (its columns and the row
+     strips' hit rects alike), the month row at M, the day row at D -- all
+     landing on the one place that decides what one is. Which of them the
+     reader double-clicked says nothing about what they want, so none of them
+     is allowed its own answer. */
+  private _handleBucketOpen = (event: CustomEvent<AggregateBucketOpenDetail>) => {
+    event.stopPropagation();
+    this._openBucket(event.detail.key);
+  };
+
+  private _handleSpanPillOpen = (event: CustomEvent<SpanPillOpenDetail>): void => {
+    event.stopPropagation();
+    this._openBucket(event.detail.date);
+  };
+
+  private _handleDayPillOpen = (event: CustomEvent<DayPillOpenDetail>): void => {
+    event.stopPropagation();
+    this._openBucket(event.detail.date);
+  };
+
   /** The bucket the pill rows light and the width toggle carries across. */
   private _focusBucket(): string | null {
     return this._bucketSelection.focusSlot;
@@ -2270,6 +2342,49 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _pickBucket(key: string) {
     this._selectBucket(key, "replace");
+  }
+
+  /**
+   * Open a bucket: the view one level finer, showing the bucket that was
+   * double-clicked.
+   *
+   * At M a column is a month, and the level below it is that month drawn as
+   * days: exactly the span `D` would load, so `_showSpan` does it. At D a
+   * column is a day, and the level below it is the day view at whatever width
+   * the reader last had it -- `_slotMinutes` is untouched by the aggregate
+   * stops, so it still holds that. Picking the bucket first is what makes the
+   * arrival land on the double-clicked day: `_selectViewStop` reads the focus
+   * bucket to decide which day a minutes stop opens, and clamps it into what
+   * the day view can actually draw.
+   *
+   * The day view has no level below a slot, so a double-click there means
+   * nothing and is never routed here.
+   */
+  private _openBucket(key: string) {
+    if (this._viewMode === "year") {
+      this._showSpan(key, "month");
+      return;
+    }
+    if (this._viewMode === "month") {
+      this._pickBucket(key);
+      // A day the day view cannot draw is not opened at all. `_selectViewStop`
+      // would clamp it into `_dayRange` and land somewhere else, which is the
+      // right answer for the width toggle -- it names no column, so the nearest
+      // day it can honour is what the reader asked for -- and the wrong one
+      // here, where the reader named this day by pointing at it. The recorder
+      // purges raw states from under the aggregates, so at D there are real
+      // columns below the floor; picking the bucket still stands, and the panel
+      // it opens is what that column has to say.
+      if (!this._dayIsReachable(key)) return;
+      this._selectViewStop({ mode: "day", minutes: this._slotMinutes });
+    }
+  }
+
+  /** Whether the day view can draw a day at all: inside the range it reported. */
+  private _dayIsReachable(dayKey: string): boolean {
+    const floor = this._dayRange?.minDate ?? "";
+    const horizon = this._dayRange?.maxDate ?? "";
+    return (floor === "" || dayKey >= floor) && (horizon === "" || dayKey <= horizon);
   }
 
   /**
