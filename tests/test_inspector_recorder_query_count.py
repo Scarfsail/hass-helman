@@ -199,7 +199,11 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
 
         old_actuals = service_mod.load_actuals_for_day
         try:
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
+            # Non-empty on purpose: an elapsed day whose raw solar read comes
+            # back with nothing, on an instance that states no purge horizon, is
+            # taken as a purged day and served from hourly statistics instead --
+            # which would leave the batched raw read this test counts unissued.
+            service_mod.load_actuals_for_day = AsyncMock(return_value={"08:00": 500.0})
             with _counting_queries(), patch.object(
                 service_mod,
                 "load_house_forecast_points_for_day",

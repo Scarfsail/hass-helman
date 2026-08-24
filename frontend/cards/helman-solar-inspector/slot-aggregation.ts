@@ -91,12 +91,20 @@ export function aggregateWhSeries(
 }
 
 /**
- * How far the actuals reach, as the end minute of their last measured 15-minute
- * slot. Taken across every actual series so one lagging feed cannot pull the
- * others out of alignment.
+ * How far the actuals reach, as the end minute of their last measured sample.
+ * Taken across every actual series so one lagging feed cannot pull the others
+ * out of alignment.
+ *
+ * `sampleMinutes` is how wide one point of those series is, and it has to be
+ * passed rather than assumed: a day the recorder has purged is drawn from hourly
+ * statistics, so its last point sits at 23:00 and covers until midnight. Adding
+ * the 15-minute default there would leave it covering only to 23:15, and every
+ * such day would lose its last hour out of the chart while the daily totals --
+ * which are slot-width independent -- still counted it.
  */
 export function actualsCoverUntil(
   series: readonly (readonly InspectorPoint[])[],
+  sampleMinutes: number = SLOT_MINUTES,
 ): number | null {
   let latest: number | null = null;
   for (const points of series) {
@@ -106,7 +114,7 @@ export function actualsCoverUntil(
       if (latest === null || minutes > latest) latest = minutes;
     }
   }
-  return latest === null ? null : latest + SLOT_MINUTES;
+  return latest === null ? null : latest + sampleMinutes;
 }
 
 /**

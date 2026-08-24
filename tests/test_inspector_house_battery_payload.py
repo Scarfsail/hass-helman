@@ -34,7 +34,14 @@ def _install_import_stubs() -> None:
     sys.modules["homeassistant.components"] = components_mod
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
+    # A stated purge horizon, wide enough to hold the target day. Without one the
+    # inspector cannot tell "this instance keeps everything" from "the recorder
+    # will not say", and an elapsed day whose every meter reads empty -- which is
+    # exactly what these stubs produce before a test fills one in -- is taken as
+    # purged and served from hourly statistics instead of raw states.
+    recorder_mod.get_instance = lambda hass: SimpleNamespace(
+        keep_days=30, auto_purge=True
+    )
     sys.modules["homeassistant.components.recorder"] = recorder_mod
 
     history_mod = types.ModuleType("homeassistant.components.recorder.history")

@@ -7,7 +7,7 @@ from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
@@ -45,6 +45,7 @@ from .models import (
     navigation_range_payload,
     training_explainability_to_payload,
 )
+from .statistics_day import HOUR_MINUTES, StatisticsDay, load_statistics_day
 from .trainer import compute_fingerprint, train
 
 if TYPE_CHECKING:
@@ -412,9 +413,7 @@ class SolarBiasCorrectionService:
         # The range travels with every answer, empty ones included: it is what
         # the card navigates by, and a span with no rows is exactly when the
         # reader is about to press an arrow.
-        span_min_date, span_max_date = await self._async_navigation_range(
-            local_now, view="span"
-        )
+        span_min_date, span_max_date = await self._async_navigation_range(local_now)
         navigation_range = navigation_range_payload(
             span_min_date.isoformat(), span_max_date.isoformat()
         )
@@ -488,7 +487,11 @@ class SolarBiasCorrectionService:
             if consumer.get("energy_entity_id")
         ]
 
-        from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
+        from ..recorder_statistics_span import (
+            SpanStatistics,
+            prefer_rows,
+            query_hourly_statistics,
+        )
 
         try:
             span = await query_hourly_statistics(
@@ -536,7 +539,7 @@ class SolarBiasCorrectionService:
             span.energy_for(import_entity),
             span.energy_for(export_entity),
             span.rows_for(GRID_IMPORT_PRICE_ENTITY_ID),
-            _prefer_rows(
+            prefer_rows(
                 span.rows_for(GRID_EXPORT_PRICE_ENTITY_ID),
                 span.rows_for(export_price_entity),
             ),
@@ -677,8 +680,7 @@ class SolarBiasCorrectionService:
         this date is evidence about a moment that has passed rather than a claim
         about now. That is enough for the one thing it is used for -- standing in
         as the aggregate floor when the recorder has no statistics to point at,
-        on a fresh install that still has to be browsable -- and not enough for
-        the day view's floor, which :meth:`_day_view_floor` explains.
+        on a fresh install that still has to be browsable.
         """
         return local_now.date() - timedelta(days=max(self._metadata.usable_days, 0))
 
@@ -780,84 +782,197 @@ class SolarBiasCorrectionService:
             return None
         return keep_days if keep_days >= 1 else None
 
-    def _day_view_floor(self, local_now: datetime, aggregate_floor: date) -> date:
-        """The oldest day the *day* view may be browsed back to.
+    def _day_reads_statistics(
+        self, target_date: date, local_now: datetime
+    ) -> bool | None:
+        """Which store this day's measured series come from.
 
-        Shallower than the aggregate floor, and deliberately so. The two views
-        read two different stores: the month and year views read long-term
-        statistics, which the recorder keeps indefinitely, while the day view
-        reads raw states through ``load_actuals_for_day``, which the recorder
-        purges at ``purge_keep_days``. Handing the day view the statistics floor
-        would give it a back arrow offering hundreds of days that can only ever
-        draw empty.
+        ``False`` for raw states at fifteen minutes, ``True`` for long-term
+        statistics at sixty, ``None`` for "no horizon to decide by -- try raw and
+        see". One answer for the whole day, deliberately: the purge cuts through
+        exactly one day, and stitching that day's surviving quarter-hours onto
+        the rest of its hours would buy finer resolution on one day out of the
+        whole history in exchange for a chart carrying two bar widths and a
+        totals path that has to avoid double-counting the boundary hour.
 
-        ``keep_days - 1``, not ``keep_days``: the recorder purges everything
-        older than ``utcnow() - keep_days``, so the day that subtraction names
-        is the one being deleted *through* rather than the oldest one kept. It
-        has already lost its small hours by the time the nightly purge runs and
-        loses the rest at the next one, so offering it means offering a chart
-        that shrinks every night. One day later is the first that is whole.
-
-        The ``max`` with the aggregate floor is the only guard needed: the day
-        view can never usefully reach further back than the statistics do, and a
-        retention setting longer than the recorded history would otherwise offer
-        days that predate the meters entirely.
-
-        The trainer's window is deliberately *not* consulted here, though an
-        earlier draft did. ``usable_days`` counts samples the last training run
-        built; it is evidence that raw states existed when it ran, not that they
-        exist now. Shortening ``purge_keep_days`` after a run leaves that count
-        untouched, and honouring it would hand back the very back arrow full of
-        purged days this method exists to prevent. Where retention and the
-        training window agree -- the ordinary case, since the trainer reads the
-        same purged store -- the guard changed nothing anyway.
+        The recorder purges everything older than ``utcnow() - keep_days``, so
+        ``today - keep_days`` names the day being deleted *through* -- it has
+        already lost its small hours and loses the rest at the next nightly
+        purge. It therefore reads from statistics along with everything older,
+        and ``today - keep_days + 1`` is the oldest day still whole in raw state.
         """
         keep_days = self._purge_horizon_days()
         if keep_days is None:
-            return aggregate_floor
-        purge_horizon = local_now.date() - timedelta(days=keep_days - 1)
-        return max(aggregate_floor, purge_horizon)
+            return None
+        return target_date <= local_now.date() - timedelta(days=keep_days)
 
-    async def _async_navigation_range(
-        self, local_now: datetime, *, view: Literal["day", "span"]
-    ) -> tuple[date, date]:
+    async def _load_statistics_day(
+        self,
+        target_date: date,
+        local_tz: ZoneInfo,
+        meter_entity_ids: list[str],
+    ) -> StatisticsDay:
+        """The day's measured series from long-term statistics, in one read.
+
+        Every id the day needs in one call, for the reason the raw path batches
+        its own: the recorder serves from a single DB executor thread, so a query
+        per series is a serial round-trip per series however the awaits are
+        arranged.
+
+        Every id is resolved behind its own boundary, the way
+        :meth:`_cumulative_meter_entity_ids` resolves the meters': a provider
+        that raises costs its own series and nothing else. Without that, one bad
+        provider would fail the whole day here, where on the raw path the same
+        provider only empties the one series its ``_guarded_points`` wraps.
+        """
+        from .house_forecast_history import HOUSE_FORECAST_CURRENT_ENTITY
+
+        def _entity_id(provider) -> str | None:
+            if provider is None:
+                return None
+            try:
+                return provider()
+            except Exception:
+                _LOGGER.exception("Entity id provider failed for inspector statistics day")
+                return None
+
+        try:
+            solar_entity, *_ = self._energy_meter_entity_ids()
+        except Exception:
+            _LOGGER.exception("Failed to resolve the solar meter for inspector statistics day")
+            solar_entity = None
+        return await load_statistics_day(
+            self._hass,
+            target_date,
+            local_tz=local_tz,
+            solar_entity_id=solar_entity,
+            meter_entity_ids=meter_entity_ids,
+            battery_soc_entity_id=_entity_id(self._battery_soc_entity_id_provider),
+            house_forecast_entity_id=HOUSE_FORECAST_CURRENT_ENTITY,
+            import_price_entity_id=GRID_IMPORT_PRICE_ENTITY_ID,
+            export_price_entity_id=GRID_EXPORT_PRICE_ENTITY_ID,
+            export_price_fallback_entity_id=_entity_id(
+                self._grid_export_price_entity_id_provider
+            ),
+        )
+
+    async def _async_navigation_range(self, local_now: datetime) -> tuple[date, date]:
         """The dates the inspector's navigation may move between, inclusive.
 
-        Forward is one answer for everyone: one day per configured daily-energy
-        entity, which is how far the forecast reaches. Backwards is two, because
-        the views read two different stores and are bounded by two different
-        retention horizons -- see :meth:`_day_view_floor`. ``view`` names which
-        payload is asking, and that is the only distinction that exists here.
-
-        Both floors still come from one place, so neither payload can invent its
-        own: the day floor is derived *from* the aggregate floor and can only be
-        shallower than it, never deeper and never unrelated.
+        One answer for every view, in both directions. Forward is one day per
+        configured daily-energy entity, which is how far the forecast reaches.
+        Backwards is the recorder's statistics floor -- and it is the day view's
+        floor too, since :meth:`_day_reads_statistics` lets a day older than the
+        purge horizon draw its measured series from those same statistics. The
+        day view used to stop shallower, at the purge horizon, because its
+        actuals could only come from raw states; a day the aggregate views can
+        draw as a bar can now be opened, which is the whole point of there being
+        one floor again.
         """
         max_date = local_now.date() + timedelta(
             days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
         )
-        aggregate_floor = await self._async_history_floor(local_now)
-        if view == "span":
-            return aggregate_floor, max_date
-        return self._day_view_floor(local_now, aggregate_floor), max_date
+        return await self._async_history_floor(local_now), max_date
 
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
-        min_date, max_date = await self._async_navigation_range(local_now, view="day")
+        min_date, max_date = await self._async_navigation_range(local_now)
 
         status, effective_variant, _fallback_reason = self._resolve_status()
         timezone = ZoneInfo(str(self._hass.config.time_zone))
 
-        actuals_by_slot = {}
-        if target_date <= today:
-            actuals_by_slot = await load_actuals_for_day(
-                self._hass,
-                self._cfg,
-                target_date,
-                local_now=local_now,
+        need_past = target_date <= today
+        need_future = target_date >= today
+
+        # Which store the day's measured series come from, decided once and for
+        # the whole day. A horizon the recorder can state answers it outright;
+        # ``None`` -- no recorder, purging switched off, the attribute moved --
+        # means trying raw states first and deciding on what they bring back,
+        # which is settled a few lines down once the meters have been read too.
+        actuals_by_slot: dict[str, float] = {}
+        undecided = False
+        reads_statistics = False
+        if need_past:
+            decided = self._day_reads_statistics(target_date, local_now)
+            reads_statistics = decided is True
+            # Only an elapsed day can be judged by an empty read: today reads
+            # empty every night before dawn and has nothing compiled at all just
+            # after midnight, so its emptiness says nothing about a purge.
+            undecided = decided is None and target_date < today
+            if not reads_statistics:
+                actuals_by_slot = await load_actuals_for_day(
+                    self._hass,
+                    self._cfg,
+                    target_date,
+                    local_now=local_now,
+                )
+
+        # Every cumulative meter the day's actual series need — house, both grid
+        # sides, both battery sides and one per house consumer — is read in a
+        # single recorder query up front. The recorder serves from one DB
+        # executor thread, so gathering a read per meter would only queue them;
+        # the batch turns ~18 serial round-trips into one. The consumer roster
+        # has to be resolved first because it decides most of the entity ids.
+        # The two steps degrade apart, the way the per-series loaders they came
+        # from did: a roster that cannot be built costs the breakdown, and a
+        # recorder that cannot be read costs the meter series, neither the other.
+        #
+        # A statistics-backed day reads the same meters from the same one query,
+        # only against the hourly long-term table -- and it brings back four more
+        # series in the bargain (solar, SoC, the house forecast and both price
+        # rails), because they live in that one read rather than in five separate
+        # raw-state ones. What comes back is keyed and shaped exactly as the raw
+        # read's output, which is why nothing below this block branches again.
+        breakdown_consumers_for_day: list[dict] = []
+        slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
+        statistics_day = StatisticsDay()
+        if need_past:
+            try:
+                breakdown_consumers_for_day = await self._house_breakdown_consumers()
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to load house consumer breakdown for inspector"
+                )
+            meter_entity_ids = self._cumulative_meter_entity_ids(
+                breakdown_consumers_for_day
             )
+            if not reads_statistics:
+                meters_answered = True
+                try:
+                    slot_energy_by_entity = await self._load_slot_energy_kwh_for_entities(
+                        meter_entity_ids,
+                        target_date,
+                        timezone,
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to load slot energy meters for inspector")
+                    slot_energy_by_entity = {}
+                    meters_answered = False
+                # Nothing anywhere in raw state on an elapsed day, with no
+                # horizon to have predicted it: the recorder has been trimmed
+                # past this day even though it will not say so. Judged on the
+                # whole raw read rather than on solar alone, because a setup with
+                # no solar meter configured would otherwise send every elapsed
+                # day it has to statistics -- and only on a read that *answered*,
+                # because a recorder that raised has said nothing about what it
+                # holds. Reading a momentary failure as a purge would tell the
+                # user their detailed history is gone and lock the width toggle
+                # to the hour on a day whose raw states are intact.
+                if (
+                    undecided
+                    and meters_answered
+                    and not actuals_by_slot
+                    and not any(slot_energy_by_entity.values())
+                ):
+                    reads_statistics = True
+            if reads_statistics:
+                statistics_day = await self._load_statistics_day(
+                    target_date, timezone, meter_entity_ids
+                )
+                slot_energy_by_entity = statistics_day.energy_kwh_by_entity
+                actuals_by_slot = statistics_day.solar_actuals_by_slot
 
         if target_date >= today:
             provider = self._canonical_solar_forecast_provider
@@ -922,8 +1037,6 @@ class SolarBiasCorrectionService:
         next_slot = (
             None if current_slot_start is None else current_slot_start + timedelta(minutes=15)
         )
-        need_past = target_date <= today
-        need_future = target_date >= today
         # How far the price recorder reads go: to the end of an elapsed day, and
         # on today only as far as the slot in progress, whose start already
         # carries the rate that applies to it. Everything past that is the live
@@ -933,39 +1046,13 @@ class SolarBiasCorrectionService:
             + timedelta(days=1)
         )
 
-        # Every cumulative meter the day's actual series need — house, both grid
-        # sides, both battery sides and one per house consumer — is read in a
-        # single recorder query up front. The recorder serves from one DB
-        # executor thread, so gathering a read per meter would only queue them;
-        # the batch turns ~18 serial round-trips into one. The consumer roster
-        # has to be resolved first because it decides most of the entity ids.
-        # The two steps degrade apart, the way the per-series loaders they came
-        # from did: a roster that cannot be built costs the breakdown, and a
-        # recorder that cannot be read costs the meter series, neither the other.
-        breakdown_consumers_for_day: list[dict] = []
-        slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
-        if need_past:
-            try:
-                breakdown_consumers_for_day = await self._house_breakdown_consumers()
-            except Exception:
-                _LOGGER.exception(
-                    "Failed to load house consumer breakdown for inspector"
-                )
-            try:
-                slot_energy_by_entity = await self._load_slot_energy_kwh_for_entities(
-                    self._cumulative_meter_entity_ids(breakdown_consumers_for_day),
-                    target_date,
-                    timezone,
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load slot energy meters for inspector")
-                slot_energy_by_entity = {}
-
         # Independent recorder/snapshot reads, so overlap them rather than
         # awaiting in turn.
         past_coros = (
             [
-                self._guarded_points(
+                self._already(statistics_day.house_forecast_points)
+                if reads_statistics
+                else self._guarded_points(
                     load_house_forecast_points_for_day(self._hass, target_date),
                     "house forecast history",
                 ),
@@ -973,7 +1060,9 @@ class SolarBiasCorrectionService:
                     self._load_house_actual_for_date(target_date, slot_energy_by_entity),
                     "house actual",
                 ),
-                self._guarded_points(
+                self._already(statistics_day.battery_soc_points)
+                if reads_statistics
+                else self._guarded_points(
                     self._load_battery_soc_actual_for_date(target_date, timezone),
                     "battery SoC actual",
                 ),
@@ -986,7 +1075,14 @@ class SolarBiasCorrectionService:
                     self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
                     "battery actual",
                 ),
-                self._guarded_point_sets(
+                self._already(
+                    (
+                        statistics_day.import_price_points,
+                        statistics_day.export_price_points,
+                    )
+                )
+                if reads_statistics
+                else self._guarded_point_sets(
                     self._load_recorded_price_rails(
                         [
                             GRID_IMPORT_PRICE_ENTITY_ID,
@@ -1332,6 +1428,7 @@ class SolarBiasCorrectionService:
             ),
             house_unmeasured_label=self._house_unmeasured_label(),
             price_unit=price_unit,
+            data_granularity_minutes=HOUR_MINUTES if reads_statistics else 15,
         )
         return inspector_day_to_payload(day)
 
@@ -1487,6 +1584,19 @@ class SolarBiasCorrectionService:
             grid_import_points,
             grid_export_points,
         )
+
+    @staticmethod
+    async def _already(value):
+        """A value that is already in hand, in coroutine shape.
+
+        The day's gather mixes loaders with series a statistics read has already
+        produced. Wrapping the latter keeps the gather one list of six in one
+        order, so the unpacking below it stays a single tuple assignment rather
+        than growing a second shape for the statistics path to be unpacked by.
+        There is no error boundary because there is nothing left to fail:
+        :meth:`_load_statistics_day` has already degraded to empty series.
+        """
+        return value
 
     async def _guarded_points(self, coro, description: str) -> list[dict]:
         """Await a series loader, degrading to an empty series if it fails.
@@ -1893,7 +2003,7 @@ class SolarBiasCorrectionService:
         far as the recorder keeps them. The day view prices elapsed slots from
         raw states, so it would lose every day older than the mirror. The
         aggregate views, which read hourly statistics rather than states, prefer
-        the mirror -- see ``_prefer_rows``. Collapsing the two readers onto one
+        the mirror -- see ``prefer_rows``. Collapsing the two readers onto one
         source is #133.
         """
         if self._grid_export_price_entity_id_provider is None:
@@ -2974,41 +3084,6 @@ def _money_by_bucket(
         gain[key] = gain.get(key, 0.0) + kwh * rate
 
     return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
-
-
-def _prefer_rows(
-    preferred: dict[datetime, dict[str, Any]],
-    fallback: dict[datetime, dict[str, Any]],
-) -> dict[datetime, dict[str, Any]]:
-    """Two hourly series of the same quantity, merged hour by hour.
-
-    Per hour rather than per series, for the reason the import rail already
-    merges per hour: the seam between the two falls mid-span. Helman's export
-    price mirror covers every hour from the moment it started publishing plus
-    whatever its back-fill reached, and the configured sell-price entity covers
-    whatever hours its own statistics happen to hold -- usually none, since such
-    an entity typically declares no ``state_class``. Choosing one series for the
-    whole span would either blank the hours only the other one covers or discard
-    Helman's own record in favour of a third party's.
-
-    Helman's own series wins where both have the hour *and its row carries a
-    rate*. They mirror the same number, so they agree; where they somehow do
-    not, the one Helman archived is the one it can account for. But a row is not
-    the same as a reading: the span read folds five-minute tail rows onto their
-    containing hour and emits a row whether or not any of them carried a mean,
-    so the hour in progress can arrive present-but-empty -- and preferring it on
-    presence alone would blank an hour the fallback could have priced.
-    """
-    if not fallback:
-        return preferred
-    if not preferred:
-        return fallback
-    merged = dict(fallback)
-    for hour, row in preferred.items():
-        if row.get("mean") is None and merged.get(hour, {}).get("mean") is not None:
-            continue
-        merged[hour] = row
-    return merged
 
 
 def _hourly_rate(

@@ -122,6 +122,7 @@ def test_inspector_day_serializes_frontend_contract():
     assert payload == {
         "date": "2026-04-25",
         "timezone": "Europe/Prague",
+        "dataGranularityMinutes": 15,
         "status": "applied",
         "effectiveVariant": "adjusted",
         "trainedAt": "2026-04-25T03:00:04+02:00",

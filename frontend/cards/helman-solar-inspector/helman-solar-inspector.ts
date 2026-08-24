@@ -450,6 +450,15 @@ type SeriesFamily = "solar" | "house" | "battery" | "grid";
 type InspectorPayload = {
   date: string;
   timezone: string;
+  /**
+   * How wide one point of every measured series is: 15 for a day still held in
+   * raw recorder states, 60 for one read back from hourly long-term statistics
+   * after the recorder purged those states.
+   *
+   * Optional only for an older backend that predates the field; absent reads as
+   * 15, which is what every day was before the statistics source existed.
+   */
+  dataGranularityMinutes?: number;
   status: string;
   effectiveVariant: string | null;
   trainedAt: string | null;
@@ -569,14 +578,15 @@ export class HelmanSolarInspector extends LitElement {
    */
   private readonly _breakdownGroups = new Map<string, DeviceNode>();
   /**
-   * How far navigation may travel, kept once per view because the two answers
-   * genuinely differ. The aggregate views are bounded by the long-term
-   * statistics, which the recorder keeps indefinitely; the day view is bounded
-   * by the raw states behind its actuals, which the recorder purges. One field
-   * would mean whichever view loaded last decided the other's floor — and
-   * arriving from a month on an already-loaded day skips the day's own load,
-   * so the day view would keep the deep floor and offer a picker full of days
-   * it cannot draw.
+   * How far navigation may travel, as each view's own payload last stated it.
+   *
+   * The two now agree: the day view used to stop shallower, because its actuals
+   * could only come from raw states and the recorder purges those, but a day
+   * past the purge horizon is drawn back from the same long-term statistics the
+   * aggregate views read — coarser, never absent. Still one field per view
+   * rather than one shared field, because each is assigned by its own load and a
+   * shared one would go stale in whichever direction loaded last: arriving from
+   * a month onto an already-loaded day skips the day's fetch entirely.
    *
    * Kept apart from the payload so the day pills stay put while the next day
    * loads — the payload is cleared for the duration, and a header that emptied
@@ -1596,11 +1606,20 @@ export class HelmanSolarInspector extends LitElement {
               const active = stop.minutes === undefined
                 ? this._viewMode === stop.mode
                 : this._viewMode === "day" && this._slotMinutes === stop.minutes;
+              // A width the loaded day has no data for is offered disabled
+              // rather than hidden: the toggle would otherwise change length
+              // between days, and the reader could not tell a missing stop from
+              // one that is simply unavailable here. The aggregate stops are
+              // never affected -- they read their own statistics.
+              const tooCoarse =
+                stop.minutes !== undefined && stop.minutes < this._slotMinutesFloor();
               return html`
               <button
                 class="slot-size-button ${active ? "active" : ""}"
                 type="button"
                 aria-pressed=${active ? "true" : "false"}
+                ?disabled=${tooCoarse}
+                title=${tooCoarse ? this._t("bias_correction.inspector.hourly_only_stop") : ""}
                 @click=${() => this._selectViewStop(stop)}
               >${stop.label}</button>
             `;
@@ -1649,6 +1668,9 @@ export class HelmanSolarInspector extends LitElement {
     const layout = stacks ? this._computeChartLayout(view, stacks) : null;
 
     return html`
+      ${this._payloadGranularity(payload) > 15
+        ? html`<div class="note">${this._t("bias_correction.inspector.hourly_only")}</div>`
+        : ""}
       ${!view.availability.hasProfile
         ? html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`
         : ""}
@@ -1672,6 +1694,24 @@ export class HelmanSolarInspector extends LitElement {
           `
         : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
+  }
+
+  /**
+   * The narrowest width a payload's data can honestly be drawn at.
+   *
+   * 15 for anything a backend does not say otherwise about, including one that
+   * predates the field: every day was fifteen minutes before the statistics
+   * source existed, and reading an absent field as "coarse" would lock a whole
+   * card to hourly against an older Helman.
+   */
+  private _payloadGranularity(payload: InspectorPayload | null): number {
+    const minutes = payload?.dataGranularityMinutes;
+    return typeof minutes === "number" && minutes > 0 ? minutes : 15;
+  }
+
+  /** The floor the width toggle may not go below on the day currently loaded. */
+  private _slotMinutesFloor(): number {
+    return this._viewMode === "day" ? this._payloadGranularity(this._payload) : 15;
   }
 
   /** The configured opening slot width, or null when the card leaves it to auto. */
@@ -1884,12 +1924,12 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The oldest date the picker may offer, wherever the card currently is.
    *
-   * `_spanRange` is the aggregate views' own answer and the better one -- it
-   * reaches back to the oldest month the recorder still aggregates -- but it is
-   * only ever assigned by `_loadSpan`, which never runs while the card sits in
-   * its opening day view. Falling back to the day view's floor is what keeps
-   * the expanded picker from collapsing to the current month on a card nobody
-   * has taken to D or M yet, which since the arrows went is a dead end.
+   * The two payloads state the same floor, so this is about which one has
+   * *arrived*: `_spanRange` is only ever assigned by `_loadSpan`, which never
+   * runs while the card sits in its opening day view. Falling back to the day
+   * view's floor is what keeps the expanded picker from collapsing to the
+   * current month on a card nobody has taken to D or M yet, which since the
+   * arrows went is a dead end.
    */
   private _navFloor(): string {
     return this._spanRange?.minDate ?? this._dayRange?.minDate ?? "";
@@ -2633,9 +2673,10 @@ export class HelmanSolarInspector extends LitElement {
     // A wider bucket is only history once the measurements span all of it; the
     // slot we are still inside would otherwise sum a part-hour of actuals into a
     // full-hour column and read as a collapse against the forecast.
-    const coverUntil = actualsCoverUntil([
-      s.actual, s.invalidated, s.houseActual, s.gridActual, s.batteryActual,
-    ]);
+    const coverUntil = actualsCoverUntil(
+      [s.actual, s.invalidated, s.houseActual, s.gridActual, s.batteryActual],
+      this._payloadGranularity(payload),
+    );
     const measured = (points: InspectorPoint[]) =>
       dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
         timestampMinutes(p.timestamp));
@@ -5012,6 +5053,15 @@ export class HelmanSolarInspector extends LitElement {
         this._payload = payload;
         this._emitWatchedEntities(payload);
         this._dayRange = payload.range;
+        // A day drawn from hourly statistics has nothing finer to show, so the
+        // width comes down to what the data is. Through `_setSlotMinutes` rather
+        // than by assignment, so the selection is re-gridded onto the coarser
+        // grid the same way a manual press does it -- otherwise a selection
+        // carried in from a 15-minute day would point at slots this day has no
+        // columns for.
+        if (this._payloadGranularity(payload) > this._slotMinutes) {
+          this._setSlotMinutes(this._payloadGranularity(payload));
+        }
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
           this._slotSelection,

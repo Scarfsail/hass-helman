@@ -159,6 +159,20 @@ DT_STUB = sys.modules["homeassistant.util.dt"]
 RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
 
 
+#: ``load_actuals_for_day`` as the service imported it, so a test that stubs the
+#: raw solar read can put it back. The stub is how a test says "raw states are
+#: still there": the fake recorder's ``state_changes_during_period`` returns
+#: nothing, so without it every day would read empty.
+_REAL_LOAD_ACTUALS = None
+
+
+def _actuals_returning(by_slot: dict[str, float]):
+    async def _load(hass, cfg, target_date, *, local_now):
+        return dict(by_slot)
+
+    return _load
+
+
 @contextmanager
 def _purging_after(keep_days: int, *, auto_purge: bool = True):
     """Give the fake recorder a purge horizon for the duration of a test."""
@@ -182,6 +196,7 @@ price_builder = importlib.import_module(
     "custom_components.helman.grid_price_forecast_builder"
 )
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
+_REAL_LOAD_ACTUALS = service_mod.load_actuals_for_day
 
 SOLAR_METER = "sensor.solar_total"
 HOUSE_METER = "sensor.house_energy"
@@ -1446,64 +1461,99 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["days"], [])
         self.assertEqual(payload["range"]["minDate"], "2024-03-01")
 
-    async def test_the_day_view_stops_at_the_purge_horizon_and_the_spans_do_not(self):
-        # The two floors differ on purpose, because the two views read two
-        # different stores. The month and year views read long-term statistics,
-        # which the recorder keeps indefinitely; the day view reads raw states
-        # through load_actuals_for_day, which the recorder purges at
-        # purge_keep_days. One deep floor would give the day view a back arrow
-        # offering hundreds of days that can only ever draw empty.
+    async def test_both_views_share_one_floor_and_the_purge_only_splits_granularity(self):
+        # The two floors used to differ: the day view read raw states, which the
+        # recorder purges at purge_keep_days, so it stopped shallower than the
+        # aggregate views reading long-term statistics. A day past the horizon
+        # now draws its measured series from those same statistics at sixty
+        # minutes, so the floors agree again and the horizon decides only the
+        # width of a bar.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 5)
 
         with _purging_after(10):
             span = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
-            day = await service.async_get_inspector_day("2026-05-25")
+            recent = await service.async_get_inspector_day("2026-05-25")
+            purged = await service.async_get_inspector_day("2024-06-01")
 
         self.assertEqual(span["range"]["minDate"], "2024-03-01")
-        # keep_days - 1: the recorder purges through today-10, so today-9 is the
-        # oldest day it still holds whole.
-        self.assertEqual(day["range"]["minDate"], "2026-05-16")
-        # Forward is one answer for everyone; only the floor is per view.
-        self.assertEqual(day["range"]["maxDate"], span["range"]["maxDate"])
+        self.assertEqual(recent["range"]["minDate"], span["range"]["minDate"])
+        self.assertEqual(recent["range"]["maxDate"], span["range"]["maxDate"])
+        # The split the horizon still owns: raw states inside it, statistics
+        # outside it.
+        self.assertEqual(recent["dataGranularityMinutes"], 15)
+        self.assertEqual(purged["dataGranularityMinutes"], 60)
         # The day payload keeps its own four extra keys; the shared helper only
         # owns the two bounds.
-        self.assertTrue(day["range"]["canGoPrevious"])
+        self.assertTrue(recent["range"]["canGoPrevious"])
 
-    async def test_a_stale_training_window_does_not_reopen_purged_days(self):
-        # usable_days counts samples the *last* training run built, so it is
-        # evidence that raw states existed when it ran and not that they exist
-        # now. Shortening purge_keep_days after a run leaves the count untouched,
-        # and honouring it would hand back the back arrow full of purged days the
-        # floor exists to prevent.
+    async def test_a_stale_training_window_does_not_narrow_the_floor(self):
+        # usable_days counts samples the *last* training run built, and it is
+        # only ever the fallback for a recorder with no statistics at all. A
+        # shortened purge horizon does not enter into the floor any more -- the
+        # days it purged are still openable, from statistics.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 60)
 
         with _purging_after(3):
             day = await service.async_get_inspector_day("2026-05-25")
 
-        self.assertEqual(day["range"]["minDate"], "2026-05-23")
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
 
-    async def test_without_a_purge_horizon_the_day_view_keeps_the_deep_floor(self):
-        # No recorder to ask, so there is no horizon to floor on. Erring towards
-        # offering a day rather than hiding one is the safe direction, and it is
-        # what the day view did before the horizon was consulted at all.
+    async def test_without_a_purge_horizon_a_day_with_raw_states_stays_at_fifteen(self):
+        # No recorder horizon to ask about, so the source is decided by what the
+        # raw read actually brings back rather than by a date. Actuals in hand
+        # means raw states are there and the day is drawn at fifteen minutes.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 5)
+        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
+
+        try:
+            day = await service.async_get_inspector_day("2026-05-24")
+        finally:
+            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
+
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+        self.assertEqual(day["dataGranularityMinutes"], 15)
+
+    async def test_without_a_purge_horizon_an_empty_elapsed_day_falls_back_to_statistics(self):
+        # The fallback that makes an unpurged-but-unrecorded setup browsable:
+        # nothing in raw states for an elapsed day is the same evidence a stated
+        # horizon would have given, so the statistics source is tried.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        day = await service.async_get_inspector_day("2026-05-24")
+
+        self.assertEqual(day["dataGranularityMinutes"], 60)
+
+    async def test_today_never_falls_back_however_empty_it_reads(self):
+        # Today reads empty every night before dawn, and just after midnight it
+        # has no compiled hour at all -- so treating its emptiness as a purge
+        # would swap a live day onto a source that has nothing for it.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _make_service()
 
         day = await service.async_get_inspector_day("2026-05-25")
 
-        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+        self.assertEqual(day["dataGranularityMinutes"], 15)
 
     async def test_purging_switched_off_is_not_a_horizon(self):
         # keep_days keeps its configured value while auto_purge is off, so
-        # flooring on it would hide raw states the recorder is deliberately
-        # still holding.
+        # reading it as a horizon would send days to statistics whose raw states
+        # the recorder is deliberately still holding. With no horizon to go by,
+        # a day whose raw read brings actuals back stays at fifteen minutes --
+        # which is the property that would break if auto_purge were ignored.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 5)
+        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
 
-        with _purging_after(10, auto_purge=False):
-            day = await service.async_get_inspector_day("2026-05-25")
+        try:
+            with _purging_after(10, auto_purge=False):
+                day = await service.async_get_inspector_day("2026-05-01")
+        finally:
+            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
 
         self.assertEqual(day["range"]["minDate"], "2024-03-01")
+        self.assertEqual(day["dataGranularityMinutes"], 15)
 

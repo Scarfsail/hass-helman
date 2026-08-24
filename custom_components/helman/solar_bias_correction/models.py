@@ -370,6 +370,16 @@ class SolarBiasInspectorDay:
     #: it so both views name the concept identically. None leaves the card's own
     #: localized fallback in place.
     house_unmeasured_label: str | None = None
+    #: How wide one point of every measured series is, in minutes: 15 on a day
+    #: still held in raw recorder states, 60 on one read back from hourly
+    #: long-term statistics after the recorder purged those states.
+    #:
+    #: One number for the whole day rather than a map per series, because the
+    #: source is chosen per day: the purge cuts through exactly one day, and
+    #: letting it read part-raw would put two bar widths in one chart and two
+    #: conventions in one total. The chart clamps its width toggle to this, which
+    #: is the only reason the payload has to say it at all.
+    data_granularity_minutes: int = 15
     #: Currency-per-energy unit both price rails are quoted in, e.g. "CZK/kWh".
     #: One field rather than two: import and export are the two sides of the
     #: same meter and share a y-scale in the strip, so a payload that quoted
@@ -393,6 +403,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
     return {
         "date": day.date,
         "timezone": day.timezone,
+        "dataGranularityMinutes": day.data_granularity_minutes,
         "status": day.status,
         "effectiveVariant": day.effective_variant,
         "trainedAt": day.trained_at,
