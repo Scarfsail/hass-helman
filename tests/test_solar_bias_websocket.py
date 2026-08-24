@@ -767,9 +767,11 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        # The day pills send no bucket at all, and must keep getting days.
+        # The day pills send no bucket at all, and must keep getting days --
+        # and no breakdown either, which is what keeps their read from widening
+        # by a meter per configured consumer for a field they never draw.
         service.async_get_span_aggregates.assert_awaited_once_with(
-            "2026-04-19", "2026-04-25", "day"
+            "2026-04-19", "2026-04-25", "day", house_breakdown=False
         )
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
@@ -795,7 +797,37 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
         service.async_get_span_aggregates.assert_awaited_once_with(
-            "2025-06-01", "2026-05-31", "month"
+            "2025-06-01", "2026-05-31", "month", house_breakdown=False
+        )
+        self.assertEqual(connection.results, [(1, payload)])
+
+    async def test_day_aggregates_passes_the_breakdown_request_through(self) -> None:
+        # Both callers share this endpoint and want different things from it:
+        # the aggregate views draw each bucket's composition, the day pills read
+        # six scalars a bucket. The flag is how they say which, so it has to
+        # reach the service rather than being defaulted away here.
+        payload = {"bucket": "month", "currency": None, "days": []}
+        service = SimpleNamespace(
+            async_get_span_aggregates=AsyncMock(return_value=payload)
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+            FakeHass(coordinator),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/solar_bias/day_aggregates",
+                "start_date": "2025-06-01",
+                "end_date": "2026-05-31",
+                "bucket": "month",
+                "house_breakdown": True,
+            },
+        )
+
+        service.async_get_span_aggregates.assert_awaited_once_with(
+            "2025-06-01", "2026-05-31", "month", house_breakdown=True
         )
         self.assertEqual(connection.results, [(1, payload)])
 
