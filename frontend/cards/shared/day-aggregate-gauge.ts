@@ -41,13 +41,6 @@ export interface DayAggregateGaugeOptions {
     scale: ScheduleTableDayAggregateScale;
     /** Whether the metric exists at all — an unconfigured battery has no bar. */
     available: boolean;
-    /**
-     * Whether the figure is written on the bar. The schedule table shows every
-     * number; the inspector's pills keep only solar's, so a pill stays legible
-     * at pill size. Geometry is identical either way, and the title and
-     * aria-label carry the value regardless.
-     */
-    showValue?: boolean;
     priceDisplayUnit?: string | null;
     localize: LocalizeFunction;
 }
@@ -307,14 +300,6 @@ export function renderDayAggregateGauge(options: DayAggregateGaugeOptions) {
     }
 }
 
-/**
- * The value written on a bar, or nothing when the caller suppressed it. Callers
- * pass the finished markup so a suppressed value costs nothing to build.
- */
-function _value(options: DayAggregateGaugeOptions, content: unknown) {
-    return options.showValue === false ? nothing : content;
-}
-
 function _renderBatteryGauge(options: DayAggregateGaugeOptions) {
     const aggregate = options.aggregate;
     if (
@@ -343,11 +328,9 @@ function _renderBatteryGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            ${_value(options, html`
-                <span class="day-aggregate-gauge-value">
-                    ${Math.round(aggregate.batteryMinSocPct)} : ${Math.round(aggregate.batteryMaxSocPct)}
-                </span>
-            `)}
+            <span class="day-aggregate-gauge-value">
+                ${Math.round(aggregate.batteryMinSocPct)} : ${Math.round(aggregate.batteryMaxSocPct)}
+            </span>
         </div>
     `;
 }
@@ -372,9 +355,7 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            ${_value(options, html`
-                <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(aggregate.solarWh)}</span>
-            `)}
+            <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(aggregate.solarWh)}</span>
         </div>
     `;
 }
@@ -426,20 +407,18 @@ function _renderGridGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            ${_value(options, html`
-                <span class="day-aggregate-gauge-pair">
-                    ${hasImport ? html`
-                        <span class="day-aggregate-gauge-value import">
-                            ${formatKwhValue(aggregate.gridImportKwh)}
-                        </span>
-                    ` : nothing}
-                    ${hasPositiveDisplay && positiveDisplay.kind !== null ? html`
-                        <span class=${`day-aggregate-gauge-value ${positiveDisplay.kind}`}>
-                            ${formatPositiveGridDisplayValue(positiveDisplay.valueKwh)}
-                        </span>
-                    ` : nothing}
-                </span>
-            `)}
+            <span class="day-aggregate-gauge-pair">
+                ${hasImport ? html`
+                    <span class="day-aggregate-gauge-value import">
+                        ${formatKwhValue(aggregate.gridImportKwh)}
+                    </span>
+                ` : nothing}
+                ${hasPositiveDisplay && positiveDisplay.kind !== null ? html`
+                    <span class=${`day-aggregate-gauge-value ${positiveDisplay.kind}`}>
+                        ${formatPositiveGridDisplayValue(positiveDisplay.valueKwh)}
+                    </span>
+                ` : nothing}
+            </span>
         </div>
     `;
 }
@@ -494,20 +473,18 @@ function _renderPriceGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            ${_value(options, html`
-                <span class="day-aggregate-price-pair">
-                    ${hasNegative ? html`
-                        <span class="day-aggregate-gauge-value negative">
-                            ${formatVisiblePriceValue(aggregate.priceNegativeMin!)}
-                        </span>
-                    ` : nothing}
-                    ${hasPositive ? html`
-                        <span class="day-aggregate-gauge-value positive">
-                            ${formatVisiblePriceValue(aggregate.pricePositiveMin!)} : ${formatVisiblePriceValue(aggregate.pricePositiveMax!)}
-                        </span>
-                    ` : nothing}
-                </span>
-            `)}
+            <span class="day-aggregate-price-pair">
+                ${hasNegative ? html`
+                    <span class="day-aggregate-gauge-value negative">
+                        ${formatVisiblePriceValue(aggregate.priceNegativeMin!)}
+                    </span>
+                ` : nothing}
+                ${hasPositive ? html`
+                    <span class="day-aggregate-gauge-value positive">
+                        ${formatVisiblePriceValue(aggregate.pricePositiveMin!)} : ${formatVisiblePriceValue(aggregate.pricePositiveMax!)}
+                    </span>
+                ` : nothing}
+            </span>
         </div>
     `;
 }

@@ -38,10 +38,12 @@ import { helmanColorVars } from "../color-vars";
  * forecast, each showing that whole day at a glance.
  *
  * Stepping through days with the arrows told you nothing about where you were
- * going. The three strips — solar with its figure, then SoC and grid as bars —
- * are the schedule card's day gauges, so a day looks the same in both cards.
- * SoC and grid drop their numbers here: at pill width they would crowd out the
- * one figure worth reading, and both still answer on hover.
+ * going. The two strips — solar and SoC — are the schedule card's day gauges,
+ * so a day looks the same in both cards, and each carries its own figures:
+ * solar's total, and the two ends of the SoC band the bar draws. The grid bar
+ * the schedule card also shows is left off: at pill width three bars was one
+ * more than the row could be read at a glance, and the day's import and export
+ * are what the chart below spells out anyway.
  */
 
 const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
@@ -251,16 +253,16 @@ export class HelmanSolarDayPills extends LitElement {
             color: var(--primary-color, #2563eb);
         }
 
-        /* Thin strips: a pill is read as a shape, not as a table of numbers. */
+        /* Thin strips, but tall enough for the figure written on them: the
+           shape is what a pill is read by, and the number is what settles the
+           comparison the shape started. 13px is the line box at this size --
+           any less and the digits are clipped rather than small. */
         .day-aggregate-gauge {
-            min-height: 11px;
+            min-height: 13px;
             padding: 0 3px;
             font-size: 0.58rem;
         }
 
-        .day-aggregate-gauge.solar {
-            min-height: 13px;
-        }
     `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
@@ -469,15 +471,6 @@ export class HelmanSolarDayPills extends LitElement {
                     aggregate: pill.aggregate,
                     scale: this._model.scale,
                     available: pill.availability.battery,
-                    showValue: false,
-                    localize: this._localize,
-                })}
-                ${renderDayAggregateGauge({
-                    kind: "grid",
-                    aggregate: pill.aggregate,
-                    scale: this._model.scale,
-                    available: pill.availability.grid,
-                    showValue: false,
                     localize: this._localize,
                 })}
             </button>

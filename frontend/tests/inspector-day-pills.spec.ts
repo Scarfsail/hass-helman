@@ -9,8 +9,8 @@ import { resolve } from "node:path";
  * schedule card's own gauges. What is worth pinning is exactly what makes it
  * usable — that every offered day gets a pill whether or not the schedule
  * reaches it, that the selected day is the highlighted one, that a click
- * actually loads the day, and that only solar writes its figure (the bars are
- * read as shapes; three numbers at pill width would be noise).
+ * actually loads the day, and that each of its two bars writes the figures it
+ * draws: solar's total, and the SoC band's two ends.
  */
 
 const BUNDLE = resolve(
@@ -465,14 +465,15 @@ test.describe("solar inspector day pills", () => {
         expect(after).toBe(before);
     });
 
-    test("only solar writes its figure; SoC and grid are bars alone", async ({ page }) => {
+    test("a pill draws solar and SoC only, each with its figures", async ({ page }) => {
         const [today] = await readPills(page);
         const byKind = new Map(today.gauges.map((gauge) => [gauge.kind, gauge]));
 
-        expect(today.gauges.map((gauge) => gauge.kind)).toEqual(["solar", "battery", "grid"]);
+        // Grid is the schedule card's third bar and deliberately not here.
+        expect(today.gauges.map((gauge) => gauge.kind)).toEqual(["solar", "battery"]);
         expect(byKind.get("solar")!.text).not.toBe("");
-        expect(byKind.get("battery")!.text).toBe("");
-        expect(byKind.get("grid")!.text).toBe("");
+        // The two ends of the SoC band the bar draws, in that order.
+        expect(byKind.get("battery")!.text).toMatch(/^\d+\s*:\s*\d+$/);
     });
 
     test("the solar bars share one scale across the row", async ({ page }) => {
@@ -589,7 +590,6 @@ test.describe("solar inspector past days", () => {
             const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
             expect(gauges.get("solar")!.text).not.toBe("");
             expect(gauges.get("battery")!.unavailable).toBe(false);
-            expect(gauges.get("grid")!.unavailable).toBe(false);
         }
     });
 
