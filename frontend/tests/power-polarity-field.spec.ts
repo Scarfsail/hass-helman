@@ -13,7 +13,10 @@ import { resolve } from "node:path";
  * look right on screen and be silently ignored by every consumer of it.
  *
  * The selects carry no path attribute, so they are identified here by the
- * vocabulary they offer — which is exactly the per-device wording under test.
+ * vocabulary they offer -- which is exactly the per-device wording under test.
+ *
+ * The last test is not about polarity: it guards the option-label lookup these
+ * fields share with the aggregation-method select, which had the same bug.
  */
 
 const BUNDLE = resolve(
@@ -282,5 +285,24 @@ test("every option states which sign carries the quantity", async ({ page }) => 
     expect(await readOptionLabels(page, "positive_is_production")).toEqual([
         "Positive = production",
         "Negative = production",
+    ]);
+});
+
+test("the aggregation-method select is localized too", async ({ page }) => {
+    // Same root cause, same file: its Czech strings had been written all along
+    // and never rendered, because the lookup went to the backend namespace.
+    await mountEditor(page, "cs");
+    const labels = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const select = Array.from(root?.querySelectorAll("select") ?? []).find((element) =>
+            Array.from(element.options).some((option) => option.value === "ratio_of_sums"),
+        );
+        return Array.from(select?.options ?? [])
+            .filter((option) => option.value !== "")
+            .map((option) => option.textContent?.trim() ?? "");
+    });
+    expect(labels).toEqual([
+        "Poměr součtů (Ratio of Sums)",
+        "Oříznutý průměr (Trimmed Mean)",
     ]);
 });

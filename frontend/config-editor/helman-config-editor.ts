@@ -1454,8 +1454,8 @@ export class HelmanConfigEditorPanel
                           ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
                           "editor.fields.bias_correction_aggregation_method",
                           [
-                            { value: "ratio_of_sums", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
-                            { value: "trimmed_mean", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
+                            { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
+                            { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
                           ],
                           "editor.help.bias_correction_aggregation_method",
                         )}
@@ -2972,7 +2972,7 @@ export class HelmanConfigEditorPanel
   private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
     const options = POWER_POLARITY_OPTIONS[device].map((value) => ({
       value,
-      label: this._polarityLabel(value),
+      label: this._optionLabel(`editor.fields.power_polarity_${value}`, POWER_POLARITY_FALLBACK_LABELS[value]),
     }));
     return renderSelectFieldWithDefault(
       this,
@@ -2985,18 +2985,18 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * One option's label, from the editor's own translation files.
+   * A select option's label, from the editor's own translation files.
    *
    * ``_t`` is what reads those; ``hass.localize`` resolves against the
    * integration's *backend* strings, which carry no editor keys at all, so a
-   * label looked up that way is the English fallback in every locale. A
-   * missing key comes back as the key itself, which is why the fallback is
-   * compared rather than ``||``-ed.
+   * label looked up that way is the English fallback in every locale --
+   * however carefully the editor's own locale files were translated. A missing
+   * key comes back as the key itself, which is why the fallback is compared
+   * rather than ``||``-ed.
    */
-  private _polarityLabel(value: string): string {
-    const key = `editor.fields.power_polarity_${value}`;
+  private _optionLabel(key: string, fallback: string): string {
     const translated = this._t(key);
-    return translated === key ? POWER_POLARITY_FALLBACK_LABELS[value] : translated;
+    return translated === key ? fallback : translated;
   }
 
   private _renderOptionalSelectField(
