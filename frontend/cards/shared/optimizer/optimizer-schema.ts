@@ -55,6 +55,11 @@ export interface OptimizerSchema {
 export interface OptimizerSchemaDocument {
     version: number;
     kinds: OptimizerSchema[];
+    /** Which controllable kinds are appliances, from `CONTROLLABLE_SPECS`.
+     * The `requires_appliance` picker filters by it, and the backend validates
+     * against the same declaration — so the picker cannot offer an id
+     * validation would reject. */
+    applianceKinds?: string[];
 }
 
 interface HassLike {
@@ -126,6 +131,14 @@ export interface OptimizerEditorHost {
     renderHelpIcon(labelKey: string, contentKey: string): TemplateResult;
     renderSvgIcon(path: string, className: string): TemplateResult;
     renderDayClassificationField(
+        path: PathSegment[],
+        labelKey: string,
+        helpKey: string,
+    ): TemplateResult;
+    /** The `requires_appliance` picker: the other appliances in the draft.
+     * A host method for the same reason the target picker is one — the options
+     * come from the draft document, which a static schema cannot carry. */
+    renderApplianceDependencyPicker(
         path: PathSegment[],
         labelKey: string,
         helpKey: string,

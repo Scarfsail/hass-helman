@@ -449,6 +449,56 @@ export class HelmanOptimizerEditor
         `;
     }
 
+    /**
+     * The `requires_appliance` picker: the draft's *other* appliances.
+     *
+     * Built from ``buildControllableSelectionState`` — the target picker's own
+     * helper — so the two read one list and cannot disagree about what exists.
+     * Two differences from the target picker, both deliberate:
+     *
+     * Filtered by ``applianceKinds`` from the schema document rather than by
+     * this optimizer kind's ``controllableKinds``. A provider is anything with
+     * a schedule action that can read as "running", which is every appliance
+     * kind; ``controllableKinds`` answers a narrower question — what this
+     * optimizer may *drive* — and would hide a charger the backend accepts.
+     *
+     * The optimizer's own target is removed. An appliance depending on itself
+     * plans against a lane that is stripped every run, so it would simply never
+     * run; validation rejects it, and the picker does not offer it.
+     */
+    renderApplianceDependencyPicker(
+        path: PathSegment[],
+        labelKey: string,
+        helpKey: string,
+    ): TemplateResult {
+        const ownTargetId = stringValue(
+            this.getValue([...this._basePath, "target", "controllable_id"]),
+        );
+        const selectionState = buildControllableSelectionState(
+            this.config,
+            this.applianceMetadata,
+            stringValue(this.getValue(path)),
+            this.schema?.applianceKinds ?? [],
+        );
+        const options = selectionState.options
+            .filter((option) => option.id !== ownTargetId)
+            .map((option) => ({
+                value: option.id,
+                label: this._targetOptionLabel(option),
+            }));
+        // An id the draft no longer has still has to show, or clearing an
+        // appliance would silently blank a dependency the config still carries.
+        if (selectionState.selectedMissingFromDraft) {
+            options.unshift({
+                value: selectionState.selectedId,
+                label: this._tFormat("editor.dynamic.stale_appliance", {
+                    id: selectionState.selectedId,
+                }),
+            });
+        }
+        return renderOptionalSelectField(this, path, labelKey, options, helpKey);
+    }
+
     // --- Mutation ------------------------------------------------------------
 
     /**

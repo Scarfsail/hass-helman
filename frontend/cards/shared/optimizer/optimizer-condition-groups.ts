@@ -271,6 +271,13 @@ function renderConditionWidget(
     if (condition.field.type === "day_classifications") {
         return host.renderDayClassificationField(path, labelKey, helpKey);
     }
+    // Keyed by condition type, like the day-classification picker above: this
+    // one's options are the *other appliances in the draft*, which no field
+    // facet can express. Without it the string field would fall through to the
+    // number input below and render as a box its value cannot be typed into.
+    if (condition.key === "requires_appliance") {
+        return host.renderApplianceDependencyPicker(path, labelKey, helpKey);
+    }
     // Dispatch on `choices` before type, because a choices field is a picker
     // whatever it is made of — a string-valued condition would otherwise fall
     // through to the number input and render as a box its value cannot be typed

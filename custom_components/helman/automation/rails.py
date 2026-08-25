@@ -12,6 +12,7 @@ Nothing here validates config; see :mod:`.fields` for that.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -309,6 +310,49 @@ def read_when_active_hourly_energy_kwh(
         resolved_hourly_energy_kwh=resolved,
     )
     return None if profile is None else profile.hourly_energy_kwh
+
+
+def read_planned_appliance_slot_ids(
+    snapshot: "OptimizationSnapshot",
+    appliance_id: str,
+) -> frozenset[str]:
+    """The slots where ``appliance_id`` is planned to actually run.
+
+    The one reader that looks at the *plan* rather than at a forecast series.
+    ``snapshot.schedule`` is rebuilt after every optimizer
+    (:func:`..pipeline._build_pending_aware_snapshot`), so this sees the writes
+    of every optimizer before the caller's — and nothing of the ones after it,
+    which is why a dependency on a lane planned later is a config warning.
+
+    Two exclusions, both deliberate:
+
+    * A ``conditionMet: false`` action is a *candidate* — placed, visible, and
+      never executed (:mod:`.conditions.evaluation`). Counting one would plan a
+      dependent appliance against a run that does not happen.
+    * An appliance missing from the registry yields the empty set rather than an
+      error. Fail-closed: a mask built on it then rejects every slot instead of
+      authorising them all.
+
+    ``setBy`` is deliberately *not* consulted. The dependency is on the plan,
+    not on who authored it, so a hand-placed slot counts exactly as an
+    optimizer-placed one does.
+    """
+    from ..appliances.schedule import is_appliance_action_active
+
+    appliance = snapshot.context.appliance_registry.get_appliance(appliance_id)
+    if appliance is None:
+        return frozenset()
+
+    planned: set[str] = set()
+    for slot_id, actions in snapshot.schedule.slots.items():
+        action = actions.get(appliance_id)
+        if not isinstance(action, Mapping):
+            continue
+        if action.get("conditionMet") is False:
+            continue
+        if is_appliance_action_active(action, appliance=appliance):
+            planned.add(slot_id)
+    return frozenset(planned)
 
 
 def slot_solar_coverage_pct(

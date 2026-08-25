@@ -489,6 +489,7 @@
       },
       "condition": {
         "run_when": "Kdy spustit",
+        "requires_appliance": "Vyžaduje spotřebič",
         "when_price_below": "Cena pod limitem",
         "max_run_price": "Maximální cena běhu",
         "min_soc_pct": "Minimální SoC",

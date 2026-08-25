@@ -587,6 +587,131 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertEqual(report.errors[0].code, "unknown_controllable")
 
+    # --- requires_appliance ---------------------------------------------
+
+    @staticmethod
+    def _pool_optimizer(optimizer_id, appliance_id, *, requires=None, enabled=True):
+        group = {} if requires is None else {"requires_appliance": requires}
+        return {
+            "id": optimizer_id,
+            "kind": "appliance_runtime",
+            "enabled": enabled,
+            "target": {"controllable_id": appliance_id},
+            "params": {"window": {"start": "08:00", "end": "18:00"}},
+            "conditions": [group],
+        }
+
+    def _pool_config(self, *optimizers) -> dict:
+        """Two pool appliances, plus whichever optimizers the case needs.
+
+        The default pair is the correct arrangement — filtration planned first,
+        the heat pump depending on it — so a case that wants a fault states only
+        the fault.
+        """
+        config = _valid_config()
+        for appliance_id in ("heatpump", "filtration"):
+            appliance = _generic_appliance()
+            appliance["id"] = appliance_id
+            appliance["name"] = appliance_id.title()
+            appliance["controls"]["switch"]["entity_id"] = f"switch.{appliance_id}"
+            config["controllables"].append(appliance)
+
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": list(optimizers)
+            or [
+                self._pool_optimizer("filter", "filtration"),
+                self._pool_optimizer("heat", "heatpump", requires="filtration"),
+            ],
+        }
+        return config
+
+    def _findings(self, config, code):
+        report = validate_config_document(config)
+        return [
+            issue for issue in [*report.errors, *report.warnings] if issue.code == code
+        ], report
+
+    def test_a_provider_planned_earlier_is_accepted_silently(self) -> None:
+        report = validate_config_document(self._pool_config())
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.warnings, [])
+
+    def test_a_provider_with_no_optimizer_at_all_is_accepted_silently(self) -> None:
+        """The mask reads the plan, not the optimizer: hand-scheduling is valid."""
+        report = validate_config_document(
+            self._pool_config(
+                self._pool_optimizer("heat", "heatpump", requires="filtration")
+            )
+        )
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.warnings, [])
+
+    def test_a_provider_planned_later_warns(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("heat", "heatpump", requires="filtration"),
+            self._pool_optimizer("filter", "filtration"),
+        )
+
+        findings, report = self._findings(config, "required_appliance_planned_later")
+
+        # A warning, not an error: an invisible lane does not prove the
+        # dependent is dead, and the config still saves.
+        self.assertTrue(report.valid)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].path,
+            "automation.optimizers[0].conditions[0].requires_appliance",
+        )
+
+    def test_a_provider_whose_only_optimizer_is_disabled_warns(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("filter", "filtration", enabled=False),
+            self._pool_optimizer("heat", "heatpump", requires="filtration"),
+        )
+
+        findings, report = self._findings(
+            config, "required_appliance_optimizer_disabled"
+        )
+
+        self.assertTrue(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    def test_an_unconfigured_provider_is_rejected(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("filter", "filtration"),
+            self._pool_optimizer("heat", "heatpump", requires="nobody"),
+        )
+
+        findings, report = self._findings(config, "unknown_required_appliance")
+
+        self.assertFalse(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    def test_the_inverter_is_not_an_appliance(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("heat", "heatpump", requires="inverter")
+        )
+
+        findings, report = self._findings(config, "unknown_required_appliance")
+
+        self.assertFalse(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    def test_an_appliance_cannot_depend_on_itself(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("heat", "heatpump", requires="heatpump")
+        )
+
+        findings, report = self._findings(
+            config, "self_referential_required_appliance"
+        )
+
+        self.assertFalse(report.valid)
+        self.assertEqual(len(findings), 1)
+
     def test_the_inverter_must_carry_the_reserved_id(self) -> None:
         """Targeting by id is only total if the inverter has the id to target.
 

@@ -194,6 +194,19 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
 KNOWN_CONTROLLABLE_KINDS: frozenset[str] = frozenset(CONTROLLABLE_SPECS)
 
 
+def appliance_controllable_kinds() -> frozenset[str]:
+    """The kinds that are appliances rather than the inverter.
+
+    Derived from ``affects_consumption`` — the declared marker for "has demand
+    of its own" — rather than from ``kind != inverter``, which is the guess this
+    registry exists to stop. A fifth kind added to the table is classified by
+    its own declaration, not by a list here.
+    """
+    return frozenset(
+        spec.kind for spec in CONTROLLABLE_SPECS.values() if spec.affects_consumption
+    )
+
+
 def controllable_kinds_for_optimizer_kind(optimizer_kind: str) -> tuple[str, ...]:
     """Which controllable kinds an optimizer kind may drive, in registry order.
 

@@ -35,6 +35,7 @@ from ..rails import (
     read_available_surplus_by_bucket_covering_horizon,
     read_export_price_by_bucket,
     read_optional_float,
+    read_planned_appliance_slot_ids,
     read_soc_by_bucket_covering_horizon,
     read_when_active_hourly_energy_kwh,
     slot_bucket_starts,
@@ -405,6 +406,31 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> MaskResult:
     return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
+def _requires_appliance_mask(inputs: MaskInputs) -> frozenset[str]:
+    """Slots where the appliance this one depends on is planned to run.
+
+    A pool heat pump heats nothing while the filtration pump is off, however
+    cheap the slot is. This is the only mask that reads the **plan** rather than
+    a forecast rail, and two things follow from that.
+
+    It is what makes optimizer *order* load-bearing: ``snapshot.schedule``
+    carries the writes of the optimizers before this one and none of the ones
+    after (:mod:`..pipeline`), so a provider planned later is invisible here.
+    Config validation warns about that arrangement rather than this mask
+    pretending it did not happen.
+
+    It does not weaken R1. R1 forbids reading a *group's override*, because
+    resolved params depend on which group matched; the schedule is not a param
+    and does not close that loop.
+
+    No actuals: the only reading this condition has is the boolean the mask
+    already is, and an actual that restates the verdict is noise on every slot.
+    """
+    return inputs.all_slots & read_planned_appliance_slot_ids(
+        inputs.snapshot, str(inputs.value)
+    )
+
+
 def _all_slots_mask(inputs: MaskInputs) -> frozenset[str]:
     return inputs.all_slots
 
@@ -417,6 +443,22 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.DAY,
             field=F.day_classifications("run_when", default=DAY_CLASSIFICATIONS),
             build_mask=_run_when_mask,
+        ),
+        # A structural precondition rather than a threshold, which is why it
+        # sits next to `run_when` and ahead of the numeric conditions: the
+        # editor renders condition fields in this order.
+        #
+        # Optional and without a default. Absent means "depends on nothing" —
+        # a dependency filled in for a group that never asked for one is a
+        # restriction nobody authored, and no id could serve as a default
+        # anyway. Absent is the *only* way to say that: `read_field` rejects an
+        # empty string, so the editor must drop the key when the picker is
+        # cleared rather than write "".
+        ConditionType(
+            key="requires_appliance",
+            scope=Scope.SLOT,
+            field=F.string("requires_appliance", required=False),
+            build_mask=_requires_appliance_mask,
         ),
         # Optional, and deliberately without a default: a threshold of 0 is a
         # *restriction*, not the permissive no-op that `run_when`'s
