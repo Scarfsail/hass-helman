@@ -35,6 +35,7 @@ from .controllables.spec import (
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
 from .const import SOLAR_BIAS_AGGREGATION_METHODS
+from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
 
 #: The config keys config version 7 retired. Named here so the save path can
 #: refuse them by name instead of silently ignoring a user's hand-edited YAML:
@@ -240,6 +241,7 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
                 "power_devices.house.entities.power",
                 entity_map.get("power"),
             )
+            _validate_power_polarity(report, section, "house", entity_map)
 
     _validate_optional_string(
         report,
@@ -327,6 +329,7 @@ def _validate_solar_config(
                 "power_devices.solar.entities.power",
                 entity_map.get("power"),
             )
+            _validate_power_polarity(report, section, "solar", entity_map)
             _validate_optional_entity_id(
                 report,
                 section,
@@ -713,6 +716,7 @@ def _validate_battery_config(
                 "power_devices.battery.entities.power",
                 entity_map.get("power"),
             )
+            _validate_power_polarity(report, section, "battery", entity_map)
             quartet_fields = (
                 "remaining_energy",
                 "capacity",
@@ -821,6 +825,7 @@ def _validate_grid_config(
                     f"power_devices.grid.entities.{key}",
                     entity_map.get(key),
                 )
+            _validate_power_polarity(report, section, "grid", entity_map)
 
     forecast = grid.get("forecast")
     if forecast is None:
@@ -1721,6 +1726,40 @@ def _validate_optional_string(
             path=path,
             code="invalid_type",
             message=f"{path} must be a non-empty string",
+        )
+
+
+def _validate_power_polarity(
+    report: ValidationReport,
+    section: str,
+    device: str,
+    entity_map: Mapping[str, Any],
+) -> None:
+    """Check ``power_polarity`` against the device's own vocabulary.
+
+    Each device offers a different pair, so a value that is perfectly valid on
+    the battery is meaningless on the grid. Rejecting it by name is the point:
+    silently ignoring it would leave the user with a config that reads as
+    configured and behaves as if it were not.
+    """
+    path = f"power_devices.{device}.entities.{POWER_POLARITY_KEY}"
+    value = entity_map.get(POWER_POLARITY_KEY)
+    if value is None:
+        return
+    options = POWER_POLARITY_OPTIONS[device]
+    if not isinstance(value, str):
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be a string",
+        )
+    elif value not in options:
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_choice",
+            message=f"{path} must be one of {', '.join(options)}",
         )
 
 

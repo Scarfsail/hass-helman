@@ -2,6 +2,36 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 
+/**
+ * Which sign a power sensor uses to carry its quantity, per power device.
+ *
+ * Mirrors ``POWER_POLARITY_OPTIONS`` in ``custom_components/helman/power_polarity.py``
+ * -- that module is the authority, and the backend rejects anything not in its
+ * table, so the two must be changed together. First entry of each pair is the
+ * default and reproduces the convention Helman hard-coded before the setting
+ * existed.
+ */
+const POWER_POLARITY_OPTIONS = {
+  solar: ["positive_is_production", "negative_is_production"],
+  house: ["positive_is_consumption", "negative_is_consumption"],
+  battery: ["positive_is_charging", "positive_is_discharging"],
+  grid: ["positive_is_export", "positive_is_import"],
+} as const satisfies Record<string, readonly [string, string]>;
+
+type PowerPolarityDevice = keyof typeof POWER_POLARITY_OPTIONS;
+
+/** Shown when the locale has no string for an option -- never the raw enum value. */
+const POWER_POLARITY_FALLBACK_LABELS: Record<string, string> = {
+  positive_is_production: "Production",
+  negative_is_production: "Production (negative readings)",
+  positive_is_consumption: "Consumption",
+  negative_is_consumption: "Consumption (negative readings)",
+  positive_is_charging: "Charging",
+  positive_is_discharging: "Discharging",
+  positive_is_export: "Export (to the grid)",
+  positive_is_import: "Import (from the grid)",
+};
+
 import {
   appendListItem,
   asJsonArray,
@@ -1264,6 +1294,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.house_power_entity",
             )}
+            ${this._renderPolarityField("house")}
             ${this._renderOptionalTextField(
               ["power_devices", "house", "power_sensor_label"],
               "editor.fields.power_sensor_label",
@@ -1314,6 +1345,7 @@ export class HelmanConfigEditorPanel
                   undefined,
                   "editor.help.solar_power_entity",
                 )}
+                ${this._renderPolarityField("solar")}
                 ${this._renderOptionalEntityField(
                   ["power_devices", "solar", "entities", "today_energy"],
                   "editor.fields.today_energy_entity",
@@ -1561,6 +1593,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.battery_power_entity",
             )}
+            ${this._renderPolarityField("battery")}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
@@ -1631,6 +1664,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.grid_power_entity",
             )}
+            ${this._renderPolarityField("grid")}
             ${this._renderOptionalEntityField(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
@@ -2908,6 +2942,31 @@ export class HelmanConfigEditorPanel
     helpKey?: string,
   ): TemplateResult {
     return renderRequiredNumberField(this, path, labelKey, explicitValue, step, helpKey);
+  }
+
+  /**
+   * The polarity select shown under a power device's power-entity picker.
+   *
+   * One control across all four devices, but the wording is looked up per
+   * device: "positive means Import or Export?" is a question a user can answer
+   * by looking at their inverter, where "is it inverted?" is not. The first
+   * option of each pair is the default, and it is exactly the convention
+   * Helman hard-coded before the setting existed, so leaving the field unset
+   * must keep an existing dashboard byte-identical.
+   */
+  private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
+    const options = POWER_POLARITY_OPTIONS[device].map((value) => ({
+      value,
+      label:
+        this.hass?.localize?.(`component.helman.editor.fields.power_polarity_${value}`) ||
+        POWER_POLARITY_FALLBACK_LABELS[value],
+    }));
+    return this._renderOptionalSelectField(
+      ["power_devices", device, "entities", "power_polarity"],
+      "editor.fields.power_polarity",
+      options,
+      `editor.help.power_polarity_${device}`,
+    );
   }
 
   private _renderOptionalSelectField(

@@ -231,9 +231,53 @@ template:
 ```
 
 Check your inverter first: some `solax_modbus` models already expose a signed grid/measured-power
-sensor, in which case skip this helper and point the config straight at it. Whatever you use, confirm
-the sign convention — an inverted grid sensor makes §1.1 report import as consumption and silently
-doubles the error.
+sensor, in which case skip this helper and point the config straight at it.
+
+**If the signed sensor you find runs the other way round, do not build a helper to negate it.** Set
+the polarity instead — see below. An inverted grid sensor left undeclared makes §1.1 report import as
+consumption and silently doubles the error, so this is worth getting right whichever route you take.
+
+### Declaring the sign convention instead of negating it
+
+Helman's convention is **positive = flowing into the consumer side**: positive grid is export,
+positive battery is charging. The Home Assistant energy convention is the mirror image — positive
+grid is import, positive battery is discharging — and vendor "energy dashboard" sensor sets generally
+follow that one. Neither is wrong; they answer different questions.
+
+Every power device therefore carries a `power_polarity` setting that names what a *positive* reading
+means, so a sensor on the other convention can be adopted as-is:
+
+```yaml
+power_devices:
+  grid:
+    entities:
+      power: sensor.my_signed_grid_power
+      power_polarity: positive_is_import      # default: positive_is_export
+  battery:
+    entities:
+      power: sensor.my_battery_power
+      power_polarity: positive_is_discharging # default: positive_is_charging
+```
+
+| Device | Default | Alternative |
+|---|---|---|
+| grid | `positive_is_export` | `positive_is_import` |
+| battery | `positive_is_charging` | `positive_is_discharging` |
+| house | `positive_is_consumption` | `negative_is_consumption` |
+| solar | `positive_is_production` | `negative_is_production` |
+
+It is settable in the config editor UI as well, as a **Positive value means** select under each
+device's power-entity picker. It is per-device on purpose: adopting one vendor's aggregate grid
+sensor while keeping an inverter-native battery sensor leaves the two on different conventions, which
+is a normal end state.
+
+Leave it unset and nothing changes — every default is the convention helman applied before the
+setting existed.
+
+Two things worth knowing. The battery setting also drives the time-to-full and time-to-empty sensors,
+which are the one place an undeclared inversion fails *silently*: no error, just the two sensors
+reporting each other's value. And a helper whose only job is to negate a sensor that already exists
+is now never the right answer — that is what this setting replaces.
 
 ---
 
