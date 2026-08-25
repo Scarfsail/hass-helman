@@ -454,7 +454,7 @@ export class HelmanOptimizerEditor
      *
      * Built from ``buildControllableSelectionState`` — the target picker's own
      * helper — so the two read one list and cannot disagree about what exists.
-     * Two differences from the target picker, both deliberate:
+     * Three differences from the target picker, all deliberate:
      *
      * Filtered by ``applianceKinds`` from the schema document rather than by
      * this optimizer kind's ``controllableKinds``. A provider is anything with
@@ -462,38 +462,50 @@ export class HelmanOptimizerEditor
      * kind; ``controllableKinds`` answers a narrower question — what this
      * optimizer may *drive* — and would hide a charger the backend accepts.
      *
-     * The optimizer's own target is removed. An appliance depending on itself
-     * plans against a lane that is stripped every run, so it would simply never
-     * run; validation rejects it, and the picker does not offer it.
+     * The optimizer's own target is removed, and a stored value equal to it is
+     * surfaced as an explicit entry rather than dropped. An appliance depending
+     * on itself plans against a lane that is stripped every run, so validation
+     * rejects it — and a picker that rendered blank would show no value to
+     * clear while the draft still carried one.
+     *
+     * ``selectionDisabled`` is not honoured. It means "cannot be a *target*
+     * until the live climate modes load", which has no bearing on being a
+     * provider, so these options carry the plain label and stay selectable.
      */
     renderApplianceDependencyPicker(
         path: PathSegment[],
         labelKey: string,
         helpKey: string,
     ): TemplateResult {
+        const stored = stringValue(this.getValue(path));
         const ownTargetId = stringValue(
             this.getValue([...this._basePath, "target", "controllable_id"]),
         );
         const selectionState = buildControllableSelectionState(
             this.config,
             this.applianceMetadata,
-            stringValue(this.getValue(path)),
+            stored,
             this.schema?.applianceKinds ?? [],
         );
         const options = selectionState.options
             .filter((option) => option.id !== ownTargetId)
             .map((option) => ({
                 value: option.id,
-                label: this._targetOptionLabel(option),
+                label: this._controllableOptionLabel(option),
             }));
-        // An id the draft no longer has still has to show, or clearing an
-        // appliance would silently blank a dependency the config still carries.
-        if (selectionState.selectedMissingFromDraft) {
+        // Whether the stored id survived the *filtered* list, not the raw one:
+        // an id the draft no longer has and an id that is this optimizer's own
+        // target are both values the select could otherwise not render, and
+        // silently blanking either hides a dependency the config still carries.
+        if (stored.length > 0 && !options.some((option) => option.value === stored)) {
             options.unshift({
-                value: selectionState.selectedId,
-                label: this._tFormat("editor.dynamic.stale_appliance", {
-                    id: selectionState.selectedId,
-                }),
+                value: stored,
+                label: this._tFormat(
+                    stored === ownTargetId
+                        ? "editor.dynamic.self_dependency"
+                        : "editor.dynamic.stale_appliance",
+                    { id: stored },
+                ),
             });
         }
         return renderOptionalSelectField(this, path, labelKey, options, helpKey);
@@ -664,14 +676,18 @@ export class HelmanOptimizerEditor
         return this.t("editor.helpers.appliance_runtime_climate_mode");
     }
 
+    /** "Name (id)", or the bare id when the two are the same. */
+    private _controllableOptionLabel(option: ControllableTargetOption): string {
+        return option.name === option.id
+            ? option.id
+            : this._tFormat("editor.dynamic.appliance_option", {
+                  name: option.name,
+                  id: option.id,
+              });
+    }
+
     private _targetOptionLabel(option: ControllableTargetOption): string {
-        const baseLabel =
-            option.name === option.id
-                ? option.id
-                : this._tFormat("editor.dynamic.appliance_option", {
-                      name: option.name,
-                      id: option.id,
-                  });
+        const baseLabel = this._controllableOptionLabel(option);
         if (!option.selectionDisabled) {
             return baseLabel;
         }

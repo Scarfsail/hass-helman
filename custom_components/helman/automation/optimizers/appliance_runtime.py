@@ -29,10 +29,16 @@ holding.
 
 ``max_consecutive_skips`` is the one construct that defeats the whole OR chain:
 after that many consecutive short days the optimizer runs anyway, past every
-group's ``custom`` conditions and past every slot condition, over the full
-window, carrying its own ``consecutive_skip_override`` gate so a forced run
+group's ``custom`` conditions and past every *threshold* condition, over the
+full window, carrying its own ``consecutive_skip_override`` gate so a forced run
 never reads as an unexplained one. It is ``overridable=False`` — it describes
 the chain, not any one day in it, so no single group can own it.
+
+What it does not defeat is a ``structural`` condition — one that says the
+appliance *cannot* work in a slot rather than that it would rather not. Being
+overdue outranks a bad price; it does not make a pool heat pump heat anything
+while the filtration pump is off. A forced day is narrowed to the structurally
+permitted slots, and skipped entirely when none remain.
 
 Explanation-wise this is the richest kind in the pipeline. The conditions decide
 which days run and which of a day's slots are eligible; everything after that is
@@ -130,7 +136,8 @@ GATE_DAILY_MINIMUM_REMAINING = "daily_minimum_remaining"
 #: will under-run", not "nothing was placed".
 GATE_PLACEMENT_CAPACITY = "placement_capacity"
 #: ``max_consecutive_skips`` fired: the day runs past every group and every
-#: condition. Emitted only on a forced day; absence means "not forced".
+#: threshold condition (never past a ``structural`` one). Emitted only on a
+#: forced day; absence means "not forced".
 GATE_CONSECUTIVE_SKIP_OVERRIDE = "consecutive_skip_override"
 #: The slot is writable at all — user-owned slots are dropped before the
 #: ranking, so the writer never sees them and cannot veto them itself.
@@ -151,7 +158,8 @@ class _DayPlan:
     #: Every slot of the daily window, whether or not it is eligible.
     window_slots: list[str]
     #: The subset the matched group actually owns — what ranking may choose
-    #: from. Equal to ``window_slots`` on a forced run, which ignores conditions.
+    #: from. On a forced run it is the window narrowed only by the ``structural``
+    #: conditions, every threshold having been overridden.
     placeable_slots: list[str]
     group_label: str | None
     forced_after_skips: int | None
@@ -632,6 +640,10 @@ class ApplianceRuntimeOptimizer:
         # every group, including their `custom` conditions and their price
         # threshold. Master params, since no group's override governs a run that
         # matched no group.
+        #
+        # Past their *thresholds*, not past their structural preconditions: an
+        # overdue day outranks "prefer not to", never "cannot". See
+        # `ConditionType.structural`.
         master_daily_minimum = config.params["daily_minimum"]
         consecutive_skips = (
             _prior_consecutive_skips(
@@ -645,17 +657,25 @@ class ApplianceRuntimeOptimizer:
             # Not yet due a forced run: place what the group does allow, so a
             # partially-eligible day still delivers what it can.
             return short_plan
-        forced_window = self._window_slots(
+        window_slots = self._window_slots(
             params=config.params,
             local_date=local_date,
             horizon_start=horizon_start,
             horizon_end=horizon_end,
             tzinfo=tzinfo,
         )
+        structural = eligibility.structural_slot_ids()
+        forced_slots = [slot for slot in window_slots if slot in structural]
+        if not forced_slots:
+            # Nothing the forced run may legally take. Fall back to what the
+            # matched group allowed — which is `None` when no group matched, and
+            # is the honest answer: the day cannot run, and forcing it would
+            # place a run that does nothing.
+            return short_plan
         return _DayPlan(
             params=config.params,
-            window_slots=forced_window,
-            placeable_slots=forced_window,
+            window_slots=window_slots,
+            placeable_slots=forced_slots,
             group_label=None,
             forced_after_skips=consecutive_skips,
         )

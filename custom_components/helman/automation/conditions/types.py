@@ -116,6 +116,16 @@ class ConditionType:
     #: on every group that carries the default. It lives among the conditions
     #: because that is where the knob it qualifies lives, not because it gates.
     qualifier: bool = False
+    #: A *physical* precondition rather than a preference, which
+    #: ``appliance_runtime``'s forced run may not override.
+    #:
+    #: That escape hatch exists so an overdue appliance runs anyway, past every
+    #: group's price threshold and ``custom`` conditions — deliberately, because
+    #: those say "prefer not to", and an overdue day outranks a preference. A
+    #: structural condition says "cannot": no amount of overdue-ness makes a
+    #: pool heat pump heat anything while the filtration pump is off, so
+    #: overriding it produces exactly the run the condition exists to prevent.
+    structural: bool = False
     #: Localization key for the condition's human label, used by the explanation
     #: UI. Defaults to ``automation.condition.<key>``; a field rather than a
     #: derived property so a type can point elsewhere without a special case.
@@ -459,6 +469,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.SLOT,
             field=F.string("requires_appliance", required=False),
             build_mask=_requires_appliance_mask,
+            structural=True,
         ),
         # Optional, and deliberately without a default: a threshold of 0 is a
         # *restriction*, not the permissive no-op that `run_when`'s

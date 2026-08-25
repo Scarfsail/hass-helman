@@ -2602,6 +2602,84 @@ class RequiresApplianceTests(unittest.TestCase):
 
         self.assertEqual(set(placed), provider_slots)
 
+    def test_a_forced_run_does_not_override_the_dependency(self) -> None:
+        """Overdue outranks a bad price, never a dead precondition.
+
+        ``max_consecutive_skips`` deliberately places over the whole window past
+        every threshold. A structural condition is not a threshold: forcing the
+        heat pump on with the filtration pump off is exactly the run the
+        condition exists to prevent, so the forced day is skipped instead.
+        """
+        appliance = _generic("pool-heatpump")
+        provider = _generic("pool-filtration")
+        cfg = make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"controllable_id": appliance.id},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": 3,
+                    "max_consecutive_skips": 0,
+                },
+                "window": {"start": "06:00", "end": "18:00"},
+            },
+            conditions=[
+                {"run_when": ["tight"], "requires_appliance": provider.id}
+            ],
+        )
+
+        placed = _placed_slots(
+            build_appliance_runtime_optimizer(
+                cfg,
+                appliance_registry=AppliancesRuntimeRegistry.from_appliances(
+                    (appliance, provider)
+                ),
+            ).optimize(
+                self._snapshot(appliance, provider, provider_slots=()), cfg
+            ),
+            appliance.id,
+        )
+
+        self.assertEqual(placed, {})
+
+    def test_a_forced_run_still_takes_the_slots_the_provider_covers(self) -> None:
+        """The control: forcing is not disabled, only narrowed."""
+        appliance = _generic("pool-heatpump")
+        provider = _generic("pool-filtration")
+        provider_slots = _hour_slots(10)
+        cfg = make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"controllable_id": appliance.id},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": 3,
+                    "max_consecutive_skips": 0,
+                },
+                "window": {"start": "06:00", "end": "18:00"},
+            },
+            # A day classification no group matches, so nothing but the forced
+            # run can place anything at all.
+            conditions=[
+                {"run_when": ["surplus"], "requires_appliance": provider.id}
+            ],
+        )
+
+        placed = _placed_slots(
+            build_appliance_runtime_optimizer(
+                cfg,
+                appliance_registry=AppliancesRuntimeRegistry.from_appliances(
+                    (appliance, provider)
+                ),
+            ).optimize(
+                self._snapshot(appliance, provider, provider_slots=provider_slots),
+                cfg,
+            ),
+            appliance.id,
+        )
+
+        self.assertEqual(set(placed), provider_slots)
+
     def test_nothing_is_placed_when_the_provider_is_planned_nowhere(self) -> None:
         appliance = _generic("pool-heatpump")
         provider = _generic("pool-filtration")

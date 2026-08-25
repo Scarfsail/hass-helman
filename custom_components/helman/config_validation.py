@@ -1241,6 +1241,15 @@ def _validate_automation_config(
     battery_issue = describe_battery_entity_config_issue(config)
     controllable_kinds_by_id = read_controllable_kinds_by_id(config)
     seen_export_price = False
+    # `execution_optimizers` drops the disabled ones, so its index is not the
+    # index the path has to address — and the two differ exactly when a
+    # disabled optimizer exists, which is when
+    # `required_appliance_optimizer_disabled` fires. Ids are unique by then
+    # (`_read_optimizers` rejects duplicates), so they carry the mapping.
+    document_index_by_optimizer_id = {
+        optimizer.id: document_index
+        for document_index, optimizer in enumerate(automation_config.optimizers)
+    }
     earliest_planner_index = _earliest_planner_index_by_controllable(automation_config)
     controllables_planned_by_disabled = _controllables_planned_by_disabled_optimizer(
         automation_config
@@ -1248,7 +1257,10 @@ def _validate_automation_config(
     # Enabled optimizers only, deliberately: a disabled optimizer with a broken
     # group is a config the user parked, not an error to surface.
     for index, optimizer in enumerate(automation_config.execution_optimizers):
-        path = f"automation.optimizers[{index}]"
+        path = (
+            "automation.optimizers"
+            f"[{document_index_by_optimizer_id[optimizer.id]}]"
+        )
         if optimizer.kind in _BATTERY_DEPENDENT_KINDS and battery_issue is not None:
             report.add_error(
                 section="automation",

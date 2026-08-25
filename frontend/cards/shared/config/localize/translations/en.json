@@ -338,6 +338,7 @@
       "generic_appliance": "Generic appliance {index}",
       "vehicle": "Vehicle {index}",
       "stale_appliance": "{id} (no longer in current config)",
+      "self_dependency": "{id} (this optimizer's own appliance — pick another)",
       "stale_climate_mode": "{mode} (no longer supported)",
       "unsupported_optimizer_kind": "Unsupported optimizer kind: {kind}",
       "unsupported_appliance_kind": "Unsupported controllable kind: {kind}",

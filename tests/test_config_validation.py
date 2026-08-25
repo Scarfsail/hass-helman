@@ -678,6 +678,13 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertTrue(report.valid)
         self.assertEqual(len(findings), 1)
+        # The path addresses the *document*, whose index 1 is the heat pump.
+        # Index 0 is the disabled filtration optimizer the warning is about —
+        # pointing the editor there would highlight the wrong card.
+        self.assertEqual(
+            findings[0].path,
+            "automation.optimizers[1].conditions[0].requires_appliance",
+        )
 
     def test_an_unconfigured_provider_is_rejected(self) -> None:
         config = self._pool_config(

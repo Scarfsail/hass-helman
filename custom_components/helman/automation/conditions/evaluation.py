@@ -115,6 +115,30 @@ class Eligibility:
     def condition_met_by_group(self) -> tuple[bool, ...]:
         return tuple(group.custom_met for group in self.groups)
 
+    def structural_slot_ids(self) -> frozenset[str]:
+        """Slots no group is *physically* barred from.
+
+        The masks of the ``structural`` conditions only — the ones that say
+        "cannot" rather than "prefer not to". ``appliance_runtime``'s forced run
+        places past every group's thresholds and ``custom`` conditions, and must
+        still respect these; see :attr:`~.types.ConditionType.structural`.
+
+        Per group it is the AND of that group's structural masks, and across
+        groups a union, mirroring the OR the groups already have: a group that
+        declares no structural condition bars nothing, so it contributes every
+        slot and the answer is unrestricted — which is what an appliance with no
+        dependency configured must get.
+        """
+        all_slots = frozenset(self.horizon_slot_ids)
+        permitted: frozenset[str] = frozenset()
+        for group in self.groups:
+            group_mask = all_slots
+            for key, mask in group.masks_by_key.items():
+                if CONDITION_TYPES[key].structural:
+                    group_mask &= mask
+            permitted |= group_mask
+        return permitted
+
     def at(self, slot_id: str) -> SlotEligibility | None:
         """The slot's matched group, or ``None`` when no group's mask covers it."""
         group = self._matched.get(slot_id)

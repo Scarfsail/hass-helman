@@ -338,6 +338,7 @@
       "generic_appliance": "Obecný spotřebič {index}",
       "vehicle": "Vozidlo {index}",
       "stale_appliance": "{id} (už není v aktuální konfiguraci)",
+      "self_dependency": "{id} (vlastní spotřebič tohoto optimalizátoru — vyberte jiný)",
       "stale_climate_mode": "{mode} (už není podporovaný)",
       "unsupported_optimizer_kind": "Nepodporovaný typ optimalizátoru: {kind}",
       "unsupported_appliance_kind": "Nepodporovaný typ ovládaného prvku: {kind}",
