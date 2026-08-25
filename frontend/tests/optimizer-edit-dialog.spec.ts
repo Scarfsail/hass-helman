@@ -387,6 +387,179 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await expect(picker).toHaveValue("inverter");
     });
 
+    /** The dependency-picker fixture: one heat pump depending on one provider. */
+    const mountDependencyPanel = async (
+        page: import("@playwright/test").Page,
+        {
+            controllables,
+            requires,
+        }: { controllables: unknown[]; requires: string },
+    ) =>
+        mountPanel(page, {
+            payload: {
+                ...PAYLOAD,
+                optimizers: [{
+                    ...PAYLOAD.optimizers[0],
+                    optimizerId: "heat",
+                    kind: "appliance_runtime",
+                    controllableId: "heatpump",
+                }],
+            },
+            schema: {
+                version: 2,
+                applianceKinds: ["climate", "ev_charger", "generic"],
+                kinds: [{
+                    kind: "appliance_runtime",
+                    target: [{ key: "controllable_id", type: "string" }],
+                    params: [],
+                    conditionTypes: [{
+                        key: "requires_appliance",
+                        scope: "slot",
+                        field: {
+                            key: "requires_appliance",
+                            type: "string",
+                            required: false,
+                        },
+                    }],
+                    controllableKinds: ["climate", "generic"],
+                    newDraft: { conditions: [{}] },
+                }],
+            },
+            config: {
+                ...CONFIG,
+                controllables,
+                automation: {
+                    enabled: true,
+                    optimizers: [{
+                        id: "heat",
+                        kind: "appliance_runtime",
+                        enabled: true,
+                        target: { controllable_id: "heatpump" },
+                        conditions: [{ requires_appliance: requires }],
+                    }],
+                },
+            },
+        });
+
+    /** The second select on the card; the first is the target picker. */
+    const dependencyPicker = (page: import("@playwright/test").Page) =>
+        dialog(page).locator("helman-optimizer-editor select").nth(1);
+
+    test("a climate provider whose modes have not loaded is offered plainly", async ({
+        page,
+    }) => {
+        // `selectionDisabled` means "cannot be a *target* until the live modes
+        // load" — it says nothing about being a provider. Labelling this one
+        // "save and reload to enable" would tell the user to do something it
+        // does not need, next to an option that selects fine.
+        await mountDependencyPanel(page, {
+            requires: "filtration",
+            controllables: [
+                { kind: "generic", id: "heatpump", name: "Heat pump" },
+                { kind: "climate", id: "filtration", name: "Filtration" },
+            ],
+        });
+        await openDialog(page);
+
+        await expect(dependencyPicker(page).locator("option")).toHaveText([
+            "",
+            "Filtration (filtration)",
+        ]);
+        await expect(dependencyPicker(page)).toHaveValue("filtration");
+    });
+
+    test("a stored self-reference is shown, not silently blanked", async ({ page }) => {
+        // The own target is filtered out of the options, so a config that names
+        // it has a value no option matches. Rendering blank would show nothing
+        // to clear while the draft still carried the self-reference that
+        // validation is about to reject.
+        await mountDependencyPanel(page, {
+            requires: "heatpump",
+            controllables: [
+                { kind: "generic", id: "heatpump", name: "Heat pump" },
+                { kind: "generic", id: "filtration", name: "Filtration" },
+            ],
+        });
+        await openDialog(page);
+
+        // The blank option comes first — `renderOptionalSelectField` renders it
+        // ahead of the list — so there is always a visible way to clear it.
+        await expect(dependencyPicker(page).locator("option")).toHaveText([
+            "",
+            "heatpump (this optimizer's own appliance — pick another)",
+            "Filtration (filtration)",
+        ]);
+        await expect(dependencyPicker(page)).toHaveValue("heatpump");
+    });
+
+    test("the requires_appliance picker offers the other appliances, not itself", async ({
+        page,
+    }) => {
+        // The dependency is on the plan, so the provider may be any appliance
+        // in the draft — filtered by `applianceKinds`, which the backend serves
+        // from the same declaration its validation reads. The inverter is not
+        // an appliance and the optimizer's own target cannot depend on itself,
+        // so neither is on offer.
+        await mountPanel(page, {
+            payload: {
+                ...PAYLOAD,
+                optimizers: [{
+                    ...PAYLOAD.optimizers[0],
+                    optimizerId: "heat",
+                    kind: "appliance_runtime",
+                    controllableId: "heatpump",
+                }],
+            },
+            schema: {
+                version: 2,
+                applianceKinds: ["climate", "ev_charger", "generic"],
+                kinds: [{
+                    kind: "appliance_runtime",
+                    target: [{ key: "controllable_id", type: "string" }],
+                    params: [],
+                    conditionTypes: [{
+                        key: "requires_appliance",
+                        scope: "slot",
+                        field: {
+                            key: "requires_appliance",
+                            type: "string",
+                            required: false,
+                        },
+                    }],
+                    controllableKinds: ["climate", "generic"],
+                    newDraft: { conditions: [{}] },
+                }],
+            },
+            config: {
+                ...CONFIG,
+                controllables: [
+                    { kind: "inverter", id: "inverter", name: "Inverter" },
+                    { kind: "generic", id: "heatpump", name: "Heat pump" },
+                    { kind: "generic", id: "filtration", name: "Filtration" },
+                ],
+                automation: {
+                    enabled: true,
+                    optimizers: [{
+                        id: "heat",
+                        kind: "appliance_runtime",
+                        enabled: true,
+                        target: { controllable_id: "heatpump" },
+                        conditions: [{ requires_appliance: "filtration" }],
+                    }],
+                },
+            },
+        });
+        await openDialog(page);
+
+        // The second select on the card: the first is the target picker.
+        const picker = dialog(page).locator("helman-optimizer-editor select").nth(1);
+        await expect(picker.locator("option")).toHaveText([
+            "",
+            /Filtration \(filtration\)/,
+        ]);
+        await expect(picker).toHaveValue("filtration");
+    });
+
     test("save sends the whole document, changed only in that optimizer", async ({ page }) => {
         await mountPanel(page);
         await openDialog(page);

@@ -14,6 +14,7 @@ from .const import (
     SCHEDULE_ACTION_KINDS,
 )
 from .automation.spec import OPTIMIZER_SPECS
+from .controllables.spec import appliance_controllable_kinds
 from .config_validation import validate_config_document
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
@@ -239,6 +240,11 @@ def ws_get_optimizer_schema(
         {
             "version": CONFIG_DOCUMENT_VERSION,
             "kinds": [spec.to_dict() for spec in OPTIMIZER_SPECS.values()],
+            # Document-level rather than per-kind: this is "which controllables
+            # are appliances", which the `requires_appliance` picker filters by
+            # and `_validate_requires_appliance` enforces. Served from the one
+            # declaration so the picker cannot offer what validation rejects.
+            "applianceKinds": sorted(appliance_controllable_kinds()),
         },
     )
 

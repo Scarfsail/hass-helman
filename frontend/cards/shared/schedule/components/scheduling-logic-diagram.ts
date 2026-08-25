@@ -260,6 +260,12 @@ const FINAL_ELBOW_X = COL_FINAL_X - 12;
  * classification for *membership* of a configured set, and drawing that as `<`
  * or `>` would be a fabrication. It gets `∈` instead.
  *
+ * `requires_appliance` is in neither table, also on purpose. Its value is an
+ * appliance id and its test is a lookup in the plan (`_requires_appliance_mask`)
+ * — there is no reading to put on the left of an operator, and inventing one
+ * would claim the record holds something it does not. The node still draws, with
+ * its label and its true/false state; only the comparison line is absent.
+ *
  * The self-gating pair (`ensure_self_sustainability`, `reserve_floor_soc`) has
  * no numeric form at all — the optimizer resolves them by simulation — so they
  * get no comparison and keep showing whatever the record recorded.

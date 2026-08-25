@@ -20,7 +20,7 @@ from .generic_schedule import (
     GenericApplianceScheduleActionDict,
     normalize_generic_appliance_schedule_action,
 )
-from .state import AppliancesRuntimeRegistry
+from .state import ApplianceRuntime, AppliancesRuntimeRegistry
 
 ApplianceScheduleActionDict = (
     ClimateApplianceScheduleActionDict
@@ -101,6 +101,33 @@ def normalize_appliance_schedule_actions(
             normalized[appliance_id] = normalized_action
 
     return normalized
+
+
+def is_appliance_action_active(
+    action: Mapping[str, Any],
+    *,
+    appliance: ApplianceRuntime,
+) -> bool:
+    """Whether a scheduled action means "this appliance is running".
+
+    One definition of *running*, per kind, mirroring what each executor already
+    treats as a state that must be stopped at the end of its slot
+    (``execution.py``'s ``_last_scheduled_action_requires_slot_stop``). Callers
+    that plan against another appliance's schedule need exactly that predicate,
+    and a second copy of it would be free to drift.
+
+    ``appliance`` is what resolves the climate branch — "running" there means
+    "not the appliance's own stop mode" — and is the reason this lives beside
+    the action union rather than among the snapshot readers that call it.
+    """
+    if isinstance(appliance, ClimateApplianceRuntime):
+        raw_mode = action.get("mode")
+        return isinstance(raw_mode, str) and raw_mode != appliance.stop_hvac_mode
+    if isinstance(appliance, EvChargerApplianceRuntime):
+        return bool(action.get("charge"))
+    if isinstance(appliance, GenericApplianceRuntime):
+        return bool(action.get("on"))
+    return False
 
 
 def with_appliance_schedule_actions_set_by(

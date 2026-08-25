@@ -79,17 +79,28 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationSnapshot,
 )
 from custom_components.helman.automation.spec import OPTIMIZER_SPECS  # noqa: E402
-from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleDocument,
+    iter_horizon_slot_ids,
+    parse_slot_id,
+)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 
 
-def _snapshot(*, prices: dict[str, float], condition_met=None) -> OptimizationSnapshot:
+def _snapshot(
+    *,
+    prices: dict[str, float],
+    condition_met=None,
+    appliances=(),
+    schedule: ScheduleDocument | None = None,
+    day_contexts=None,
+) -> OptimizationSnapshot:
     """A snapshot whose export price rail is exactly the given per-slot prices."""
     points = [
         {"timestamp": slot_id, "value": value} for slot_id, value in prices.items()
     ]
     return OptimizationSnapshot(
-        schedule=ScheduleDocument(),
+        schedule=ScheduleDocument() if schedule is None else schedule,
         adjusted_house_forecast={"status": "available", "series": []},
         battery_forecast={"status": "available", "series": []},
         grid_forecast={"status": "available", "series": []},
@@ -99,11 +110,39 @@ def _snapshot(*, prices: dict[str, float], condition_met=None) -> OptimizationSn
             solar_forecast={"status": "available", "points": []},
             import_price_forecast={"currentPrice": 7.0, "points": []},
             export_price_forecast={"currentPrice": 9.0, "points": deepcopy(points)},
-            appliance_registry=AppliancesRuntimeRegistry(),
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances(appliances),
             when_active_hourly_energy_kwh_by_appliance_id={},
+            day_contexts=day_contexts or {},
             condition_met_by_optimizer_id=condition_met or {},
         ),
     )
+
+
+def _day_contexts(classification: str = "tight"):
+    """Every horizon day classified, so ``run_when``'s permissive default passes.
+
+    A day with no context matches no classification at all, which would make an
+    `appliance_runtime` fixture fail on `run_when` before reaching the condition
+    under test.
+    """
+    from custom_components.helman.automation.day_context import DayContext
+
+    days = {
+        parse_slot_id(slot_id).date()
+        for slot_id in iter_horizon_slot_ids(REFERENCE_TIME)
+    }
+    return {
+        day: DayContext(
+            local_date=day,
+            classification=classification,
+            predicted_solar_kwh=5.0,
+            predicted_consumption_kwh=5.0,
+            export_price_min=1.0,
+            export_price_max=5.0,
+            import_bands=(),
+        )
+        for day in days
+    }
 
 
 def _config(*groups):
@@ -869,6 +908,94 @@ class GroupExplanationTests(unittest.TestCase):
         self.assertEqual(trace.explanations[SLOT_2][0].conditions[0].actual, 5.0)
 
 
+class RequiresApplianceConditionTests(unittest.TestCase):
+    """The one mask that reads the plan instead of a forecast rail.
+
+    A pool heat pump heats nothing while the filtration pump is off, so its
+    eligible slots are whatever the filtration pump is *planned* to run — by an
+    earlier optimizer or by the user, the mask does not distinguish.
+    """
+
+    def _appliances(self):
+        from custom_components.helman.appliances.generic_appliance import (
+            GenericApplianceRuntime,
+        )
+
+        def generic(appliance_id):
+            return GenericApplianceRuntime(
+                id=appliance_id,
+                name=appliance_id.title(),
+                switch_entity_id=f"switch.{appliance_id}",
+                projection_strategy="fixed",
+                hourly_energy_kwh=0.4,
+                history_energy_entity_id=None,
+            )
+
+        return (generic("pool-heatpump"), generic("pool-filtration"))
+
+    def _eligibility(self, provider_actions: dict, *, provider_id="pool-filtration"):
+        schedule = ScheduleDocument(
+            slots={
+                slot_id: {"pool-filtration": action}
+                for slot_id, action in provider_actions.items()
+            }
+        )
+        config = make_optimizer_config(
+            id="heatpump",
+            kind="appliance_runtime",
+            target={"controllable_id": "pool-heatpump"},
+            params={"window": {"start": "00:00", "end": "23:45"}},
+            conditions=[{"requires_appliance": provider_id}],
+        )
+        return build_eligibility(
+            _snapshot(
+                prices=_PRICES,
+                appliances=self._appliances(),
+                schedule=schedule,
+                day_contexts=_day_contexts(),
+            ),
+            config,
+        )
+
+    def test_only_the_slots_the_provider_is_planned_in_are_eligible(self) -> None:
+        eligibility = self._eligibility(
+            {SLOT_0: {"on": True, "setBy": "automation"}, SLOT_1: {"on": False}}
+        )
+
+        self.assertEqual(
+            [resolved.slot_id for resolved in eligibility.iter_slots()], [SLOT_0]
+        )
+
+    def test_a_hand_placed_provider_slot_counts(self) -> None:
+        """The dependency is on the plan, not on who authored it."""
+        eligibility = self._eligibility({SLOT_1: {"on": True, "setBy": "user"}})
+
+        self.assertEqual(
+            [resolved.slot_id for resolved in eligibility.iter_slots()], [SLOT_1]
+        )
+
+    def test_a_candidate_provider_slot_does_not_count(self) -> None:
+        """``conditionMet: false`` is placed but never executed."""
+        eligibility = self._eligibility(
+            {SLOT_0: {"on": True, "setBy": "automation", "conditionMet": False}}
+        )
+
+        self.assertEqual(list(eligibility.iter_slots()), [])
+
+    def test_an_unconfigured_provider_admits_nothing(self) -> None:
+        """Fail closed: an empty mask, never an unconstrained one."""
+        eligibility = self._eligibility(
+            {SLOT_0: {"on": True}}, provider_id="not-configured"
+        )
+
+        self.assertEqual(list(eligibility.iter_slots()), [])
+
+    def test_the_rejection_names_the_condition(self) -> None:
+        eligibility = self._eligibility({SLOT_0: {"on": True}})
+
+        self.assertEqual(eligibility.rejection(SLOT_1)[0], "requires_appliance")
+
+
 class SpecInvariantTests(unittest.TestCase):
     def test_a_day_scoped_kind_may_accept_a_slot_scoped_condition(self) -> None:
         """R2 is a resolution rule now, not a ban.
@@ -894,6 +1021,7 @@ class SpecInvariantTests(unittest.TestCase):
             OPTIMIZER_SPECS["appliance_runtime"].condition_types,
             (
                 "run_when",
+                "requires_appliance",
                 "max_run_price",
                 "min_soc_pct",
                 "min_solar_coverage_pct",

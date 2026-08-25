@@ -238,6 +238,9 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             ),
             condition_types=(
                 "run_when",
+                # A structural precondition, so it precedes the thresholds: a
+                # slot the provider does not cover is not eligible at any price.
+                "requires_appliance",
                 "max_run_price",
                 "min_soc_pct",
                 "min_solar_coverage_pct",

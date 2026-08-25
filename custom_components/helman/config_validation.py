@@ -31,6 +31,7 @@ from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
     CONTROLLABLE_SPECS,
     KNOWN_CONTROLLABLE_KINDS,
+    appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
 from .const import SOLAR_BIAS_AGGREGATION_METHODS
@@ -1240,10 +1241,26 @@ def _validate_automation_config(
     battery_issue = describe_battery_entity_config_issue(config)
     controllable_kinds_by_id = read_controllable_kinds_by_id(config)
     seen_export_price = False
+    # `execution_optimizers` drops the disabled ones, so its index is not the
+    # index the path has to address — and the two differ exactly when a
+    # disabled optimizer exists, which is when
+    # `required_appliance_optimizer_disabled` fires. Ids are unique by then
+    # (`_read_optimizers` rejects duplicates), so they carry the mapping.
+    document_index_by_optimizer_id = {
+        optimizer.id: document_index
+        for document_index, optimizer in enumerate(automation_config.optimizers)
+    }
+    earliest_planner_index = _earliest_planner_index_by_controllable(automation_config)
+    controllables_planned_by_disabled = _controllables_planned_by_disabled_optimizer(
+        automation_config
+    )
     # Enabled optimizers only, deliberately: a disabled optimizer with a broken
     # group is a config the user parked, not an error to surface.
     for index, optimizer in enumerate(automation_config.execution_optimizers):
-        path = f"automation.optimizers[{index}]"
+        path = (
+            "automation.optimizers"
+            f"[{document_index_by_optimizer_id[optimizer.id]}]"
+        )
         if optimizer.kind in _BATTERY_DEPENDENT_KINDS and battery_issue is not None:
             report.add_error(
                 section="automation",
@@ -1260,6 +1277,16 @@ def _validate_automation_config(
             # Building would fail again on the same id, in the appliance
             # registry's words this time. One finding per fault.
             continue
+
+        _validate_requires_appliance(
+            optimizer,
+            index=index,
+            controllable_kinds_by_id=controllable_kinds_by_id,
+            earliest_planner_index=earliest_planner_index,
+            controllables_planned_by_disabled=controllables_planned_by_disabled,
+            path=path,
+            report=report,
+        )
 
         # Building is the validation: the generic reader has already checked the
         # declared schema, so what is left is the runtime resolution (appliance
@@ -1290,6 +1317,133 @@ def _validate_automation_config(
                     f"charge_hold optimizer {optimizer.id!r} is ordered after an "
                     "export_price optimizer; export_price's stop_export will win "
                     "shared inverter slots. Place charge_hold first."
+                ),
+            )
+
+
+def _earliest_planner_index_by_controllable(
+    automation_config: Any,
+) -> dict[str, int]:
+    """For each controllable, the earliest enabled optimizer that plans it.
+
+    Indices are positions in ``execution_optimizers`` — the order the pipeline
+    actually runs — because that is what decides whether one optimizer can see
+    another's writes.
+    """
+    earliest: dict[str, int] = {}
+    for index, optimizer in enumerate(automation_config.execution_optimizers):
+        earliest.setdefault(optimizer.controllable_id, index)
+    return earliest
+
+
+def _controllables_planned_by_disabled_optimizer(
+    automation_config: Any,
+) -> frozenset[str]:
+    """Controllables whose only optimizer is switched off.
+
+    Reads the *full* optimizer list rather than ``execution_optimizers``, which
+    is enabled-only by design: a disabled optimizer is exactly what this has to
+    see. A controllable that also has an enabled optimizer is not in here — the
+    ordering check owns that case.
+    """
+    enabled_ids = {
+        optimizer.controllable_id
+        for optimizer in automation_config.execution_optimizers
+    }
+    return frozenset(
+        optimizer.controllable_id
+        for optimizer in automation_config.optimizers
+        if not optimizer.enabled and optimizer.controllable_id not in enabled_ids
+    )
+
+
+def _validate_requires_appliance(
+    optimizer: Any,
+    *,
+    index: int,
+    controllable_kinds_by_id: Mapping[str, str],
+    earliest_planner_index: Mapping[str, int],
+    controllables_planned_by_disabled: frozenset[str],
+    path: str,
+    report: ValidationReport,
+) -> None:
+    """Can the ``requires_appliance`` mask see the plan it depends on?
+
+    The mask reads the *schedule* and never looks at ``setBy``, so a provider
+    scheduled by hand works and needs no optimizer at all — that case is silent
+    here on purpose. What it cannot see is an automation-owned lane that does
+    not exist yet when it runs, and there are two ways to arrange that:
+
+    * The provider's optimizer sits *after* this one. Every run strips all
+      automation-owned actions and re-plans in order, so its lane is empty at
+      the moment this mask reads it.
+    * The provider's only optimizer is *disabled*. The strip is blanket, so its
+      lane is wiped and never rewritten.
+
+    Both are warnings, not errors: they do not prove the dependent is dead, only
+    that the automation-owned half of the provider's plan is invisible. A config
+    that hand-schedules the provider and parks its optimizer is working as
+    intended. Naming a controllable that does not exist, is not an appliance, or
+    is this optimizer's own target is an error — none of those can ever plan
+    anything for this mask to read.
+    """
+    appliance_kinds = appliance_controllable_kinds()
+    for group in optimizer.conditions:
+        provider_id = group.condition_values.get("requires_appliance")
+        if not isinstance(provider_id, str):
+            continue
+        group_path = f"{path}.conditions[{group.index}].requires_appliance"
+
+        if provider_id == optimizer.controllable_id:
+            report.add_error(
+                section="automation",
+                path=group_path,
+                code="self_referential_required_appliance",
+                message=(
+                    f"optimizer {optimizer.id!r} requires appliance "
+                    f"{provider_id!r}, which is its own target; an appliance "
+                    "cannot depend on itself"
+                ),
+            )
+            continue
+
+        kind = controllable_kinds_by_id.get(provider_id)
+        if kind is None or kind not in appliance_kinds:
+            report.add_error(
+                section="automation",
+                path=group_path,
+                code="unknown_required_appliance",
+                message=(
+                    f"optimizer {optimizer.id!r} requires appliance "
+                    f"{provider_id!r}, which is not a configured appliance"
+                ),
+            )
+            continue
+
+        planner_index = earliest_planner_index.get(provider_id)
+        if planner_index is not None and planner_index > index:
+            report.add_warning(
+                section="automation",
+                path=group_path,
+                code="required_appliance_planned_later",
+                message=(
+                    f"optimizer {optimizer.id!r} requires appliance "
+                    f"{provider_id!r}, which is planned by a later optimizer; "
+                    "its planned slots are invisible here. Move that optimizer "
+                    "first, or schedule the appliance manually."
+                ),
+            )
+        elif provider_id in controllables_planned_by_disabled:
+            report.add_warning(
+                section="automation",
+                path=group_path,
+                code="required_appliance_optimizer_disabled",
+                message=(
+                    f"optimizer {optimizer.id!r} requires appliance "
+                    f"{provider_id!r}, whose only optimizer is disabled; its "
+                    "planned slots are cleared every run and are invisible "
+                    "here. Enable that optimizer, or schedule the appliance "
+                    "manually."
                 ),
             )
 
