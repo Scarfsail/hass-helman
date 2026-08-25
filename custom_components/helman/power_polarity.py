@@ -22,12 +22,24 @@ which sign carries it. They exist for uniformity rather than for a known sensor:
 a power device that cannot state its own convention is the gap the next vendor's
 sensor set will find.
 
-Everything downstream keeps working on ``value_type``, whose three literals and
-their meanings are unchanged. This module is the only place that knows a
-polarity setting exists; it collapses one into the ``value_type`` the tree
-builder would otherwise have hard-coded. The single exception is the battery ETA
-in the coordinator, which reads the raw history buffer rather than a tree node
-and therefore has to ask :func:`is_power_inverted` directly.
+Everything that reads a power sensor *through a tree node* keeps working on
+``value_type``, whose three literals and their meanings are unchanged: this
+module collapses a polarity into the ``value_type`` the tree builder would
+otherwise have hard-coded, and nothing downstream of that has to change.
+
+The exceptions are the readers that never see a tree node, and each has to ask
+here directly:
+
+* the battery ETA in the coordinator, which splits the raw history buffer by
+  sign, and where a wrong answer is silent -- time-to-full and time-to-empty
+  simply report each other's value;
+* solar bias correction's curtailment filter, which loads grid power straight
+  from the recorder and whose ``InvalidationInputs`` contract is
+  positive-is-export;
+* the simple card, which needs battery power *signed* rather than as the
+  magnitude ``value_type`` yields.
+
+A new reader of a raw power sensor belongs on that list, not outside it.
 """
 
 from __future__ import annotations

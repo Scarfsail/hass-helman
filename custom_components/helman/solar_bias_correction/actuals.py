@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
+from ..power_polarity import is_power_inverted
 from .models import BiasConfig, SolarActualsWindow
 from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
@@ -312,6 +313,20 @@ async def _load_curtailment_invalidations(
         window_start_utc,
         window_end_utc,
     )
+    # ``InvalidationInputs`` is documented as positive-is-export, and the test
+    # downstream only ever looks at the positive side. A grid sensor configured
+    # the other way round would therefore read every export as an import: the
+    # curtailment filter inverts, invalidating exporting slots and keeping
+    # genuinely curtailed ones. Normalise here rather than widening that
+    # contract, which several call sites rely on.
+    if _read_grid_power_inverted_from_runtime_config(hass):
+        grid_power_samples_utc = [
+            StateSample(
+                timestamp=sample.timestamp,
+                value=None if sample.value is None else -sample.value,
+            )
+            for sample in grid_power_samples_utc
+        ]
     return compute_invalidated_slots_for_window(
         InvalidationInputs(
             max_battery_soc_percent=max_battery_soc_percent,
@@ -398,8 +413,28 @@ def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str 
 
 
 def _read_grid_power_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:
-    """The signed grid power sensor — positive is export, negative is import."""
+    """The signed grid power sensor.
+
+    Its own convention is whatever ``power_polarity`` says; callers here
+    normalise to positive-is-export via
+    :func:`_read_grid_power_inverted_from_runtime_config`.
+    """
     return _read_device_entity_id_from_runtime_config(hass, "grid", "power")
+
+
+def _read_grid_power_inverted_from_runtime_config(hass: HomeAssistant) -> bool:
+    """Whether the configured grid sensor reads positive-is-import."""
+    runtime_config = getattr(
+        hass.data.get(DOMAIN, {}).get("coordinator"),
+        "config",
+        None,
+    )
+    if not isinstance(runtime_config, dict):
+        return False
+    power_devices = runtime_config.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return False
+    return is_power_inverted(power_devices.get("grid"), "grid")
 
 
 def _read_device_entity_id_from_runtime_config(

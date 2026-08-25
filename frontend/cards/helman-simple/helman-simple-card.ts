@@ -37,9 +37,20 @@ interface EnergyEntityMap {
     gridPowerEntityId:    string | null;
     gridValueType:        ValueType;
     batteryPowerEntityId: string | null;
+    /**
+     * Whether the battery sensor reads backwards from the house convention.
+     *
+     * Not a ValueType, because this card needs battery power *signed* —
+     * `battCharge`/`battDischarge` read its sign — where `applyValueType`
+     * returns an unsigned magnitude. The battery source node is `negative`
+     * upright and `positive` when `power_polarity` inverts it, which is what
+     * this reads off.
+     */
+    batteryInverted:      boolean;
     batterySocEntityId:   string | null;
     batteryMinSocEntityId:string | null;
     housePowerEntityId:   string | null;
+    houseValueType:       ValueType;
     solarMaxPower:        number;
     gridMaxPower:         number;
     batteryMaxPower:      number;
@@ -512,9 +523,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             gridPowerEntityId:     gridNode?.powerSensorId    ?? null,
             gridValueType:         gridNode?.valueType        ?? "default",
             batteryPowerEntityId:  batteryNode?.powerSensorId ?? null,
+            batteryInverted:       batteryNode?.valueType === "positive",
             batterySocEntityId:    battCfg.capacity           ?? null,
             batteryMinSocEntityId: battCfg.min_soc            ?? null,
             housePowerEntityId:    houseNode?.powerSensorId   ?? null,
+            houseValueType:        houseNode?.valueType       ?? "default",
             solarMaxPower:   Math.max(1, solarNode?.sourceConfig?.max_power   ?? 5000),
             gridMaxPower:    Math.max(1, gridNode?.sourceConfig?.max_power    ?? 11500),
             batteryMaxPower: Math.max(1, batteryNode?.sourceConfig?.max_power ?? 5000),
@@ -581,10 +594,15 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return {
             solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
-            batteryPower: rawPower(map.batteryPowerEntityId),
+            batteryPower: map.batteryInverted
+                ? -rawPower(map.batteryPowerEntityId)
+                : rawPower(map.batteryPowerEntityId),
             batterySoc,
             batteryMinSoc: rawPower(map.batteryMinSocEntityId) || 10,
-            housePower:         Math.max(0, rawPower(map.housePowerEntityId)),
+            // applyValueType("default") passes the raw value through, so the
+            // clamp this card has always applied stays outside it. For an
+            // inverted house sensor the value is already a magnitude.
+            housePower:   Math.max(0, applyValueType(rawPower(map.housePowerEntityId), map.houseValueType)),
         };
     }
 

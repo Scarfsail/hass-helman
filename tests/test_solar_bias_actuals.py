@@ -246,6 +246,86 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 4, 15, 12, 0, tzinfo=TZ),
         )
 
+    async def _run_with_grid_polarity(self, polarity):
+        """Run one window with the grid device on ``polarity``; return the samples passed on."""
+        grid_entities = {"power": "sensor.grid_power"}
+        if polarity is not None:
+            grid_entities["power_polarity"] = polarity
+        hass = SimpleNamespace(
+            data={
+                "helman": {
+                    "coordinator": SimpleNamespace(
+                        config={
+                            "power_devices": {
+                                "battery": {"entities": {"capacity": "sensor.battery_soc"}},
+                                "grid": {"entities": grid_entities},
+                            }
+                        }
+                    )
+                }
+            },
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
+        )
+        grid_samples = [
+            actuals.StateSample(timestamp=datetime(2026, 4, 15, 12, 0, tzinfo=TZ), value=3000.0),
+            actuals.StateSample(timestamp=datetime(2026, 4, 15, 12, 15, tzinfo=TZ), value=-800.0),
+            actuals.StateSample(timestamp=datetime(2026, 4, 15, 12, 30, tzinfo=TZ), value=None),
+        ]
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(side_effect=[{"12:00": 600.0}, {"23:45": 50.0}]),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 900.0}),
+        ), patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(side_effect=[[SimpleNamespace()], grid_samples]),
+        ), patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+            return_value={},
+        ) as compute_invalidated:
+            await actuals.load_actuals_window(hass, cfg, days=2)
+
+        return compute_invalidated.call_args.args[0].grid_power_samples_utc
+
+    async def test_grid_samples_pass_through_on_the_default_polarity(self) -> None:
+        for polarity in (None, "positive_is_export"):
+            with self.subTest(polarity=polarity):
+                samples = await self._run_with_grid_polarity(polarity)
+                self.assertEqual([s.value for s in samples], [3000.0, -800.0, None])
+
+    async def test_inverted_grid_samples_are_normalized_to_positive_is_export(self) -> None:
+        """InvalidationInputs is documented positive-is-export and only reads that side.
+
+        Left unnormalized, an inverted sensor makes the curtailment filter run
+        backwards: exporting slots pass the "nothing went out" test and are
+        invalidated, while genuinely curtailed ones are kept.
+        """
+        samples = await self._run_with_grid_polarity("positive_is_import")
+        self.assertEqual([s.value for s in samples], [-3000.0, 800.0, None])
+        self.assertEqual(
+            [s.timestamp for s in samples],
+            [
+                datetime(2026, 4, 15, 12, 0, tzinfo=TZ),
+                datetime(2026, 4, 15, 12, 15, tzinfo=TZ),
+                datetime(2026, 4, 15, 12, 30, tzinfo=TZ),
+            ],
+        )
+
     async def test_load_actuals_window_skips_invalidation_when_battery_soc_entity_is_missing(self) -> None:
         hass = SimpleNamespace(
             data={"helman": {"coordinator": SimpleNamespace(config={})}},
