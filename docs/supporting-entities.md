@@ -266,8 +266,9 @@ power_devices:
 | house | `positive_is_consumption` | `negative_is_consumption` |
 | solar | `positive_is_production` | `negative_is_production` |
 
-It is settable in the config editor UI as well, as a **Positive value means** select under each
-device's power-entity picker. It is per-device on purpose: adopting one vendor's aggregate grid
+It is settable in the config editor UI as well, as a **Sign convention** select under each device's
+power-entity picker, whose options spell the convention out — `Positive = export (to the grid)`,
+`Positive = charging`, and so on. It is per-device on purpose: adopting one vendor's aggregate grid
 sensor while keeping an inverter-native battery sensor leaves the two on different conventions, which
 is a normal end state.
 

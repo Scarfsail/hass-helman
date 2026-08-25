@@ -20,16 +20,23 @@ const POWER_POLARITY_OPTIONS = {
 
 type PowerPolarityDevice = keyof typeof POWER_POLARITY_OPTIONS;
 
-/** Shown when the locale has no string for an option -- never the raw enum value. */
+/**
+ * Shown when the locale has no string for an option -- never the raw enum value.
+ *
+ * Each option is a complete statement of the convention, not a bare noun. The
+ * field asks which sign convention the sensor follows, so an option has to say
+ * *which* sign carries the quantity: "Consumption" alone reads as an assertion
+ * that the value is positive, which is exactly what half of these deny.
+ */
 const POWER_POLARITY_FALLBACK_LABELS: Record<string, string> = {
-  positive_is_production: "Production",
-  negative_is_production: "Production (negative readings)",
-  positive_is_consumption: "Consumption",
-  negative_is_consumption: "Consumption (negative readings)",
-  positive_is_charging: "Charging",
-  positive_is_discharging: "Discharging",
-  positive_is_export: "Export (to the grid)",
-  positive_is_import: "Import (from the grid)",
+  positive_is_production: "Positive = production",
+  negative_is_production: "Negative = production",
+  positive_is_consumption: "Positive = consumption",
+  negative_is_consumption: "Negative = consumption",
+  positive_is_charging: "Positive = charging",
+  positive_is_discharging: "Positive = discharging",
+  positive_is_export: "Positive = export (to the grid)",
+  positive_is_import: "Positive = import (from the grid)",
 };
 
 import {
@@ -94,6 +101,7 @@ import {
   renderHelpIcon,
   renderOptionalNumberField,
   renderOptionalSelectField,
+  renderSelectFieldWithDefault,
   renderRequiredNumberField,
   renderRequiredTextField,
   renderSvgIcon,
@@ -2948,25 +2956,47 @@ export class HelmanConfigEditorPanel
    * The polarity select shown under a power device's power-entity picker.
    *
    * One control across all four devices, but the wording is looked up per
-   * device: "positive means Import or Export?" is a question a user can answer
-   * by looking at their inverter, where "is it inverted?" is not. The first
-   * option of each pair is the default, and it is exactly the convention
-   * Helman hard-coded before the setting existed, so leaving the field unset
-   * must keep an existing dashboard byte-identical.
+   * device: "positive is import or export?" is a question a user can answer by
+   * looking at their inverter, where "is it inverted?" is not. Grid and
+   * battery name two directions of the same axis; house and solar have only
+   * one quantity each, so theirs name which *sign* carries it. Either way the
+   * option states the whole convention, so it reads as a statement rather than
+   * as a value the field's label has already contradicted.
+   *
+   * The first option of each pair is the default, and it is exactly the
+   * convention Helman hard-coded before the setting existed, so leaving the
+   * field unset must keep an existing dashboard byte-identical. An unset field
+   * therefore renders showing that default rather than blank: something is in
+   * force either way, and a blank select would hide which.
    */
   private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
     const options = POWER_POLARITY_OPTIONS[device].map((value) => ({
       value,
-      label:
-        this.hass?.localize?.(`component.helman.editor.fields.power_polarity_${value}`) ||
-        POWER_POLARITY_FALLBACK_LABELS[value],
+      label: this._polarityLabel(value),
     }));
-    return this._renderOptionalSelectField(
+    return renderSelectFieldWithDefault(
+      this,
       ["power_devices", device, "entities", "power_polarity"],
       "editor.fields.power_polarity",
       options,
+      POWER_POLARITY_OPTIONS[device][0],
       `editor.help.power_polarity_${device}`,
     );
+  }
+
+  /**
+   * One option's label, from the editor's own translation files.
+   *
+   * ``_t`` is what reads those; ``hass.localize`` resolves against the
+   * integration's *backend* strings, which carry no editor keys at all, so a
+   * label looked up that way is the English fallback in every locale. A
+   * missing key comes back as the key itself, which is why the fallback is
+   * compared rather than ``||``-ed.
+   */
+  private _polarityLabel(value: string): string {
+    const key = `editor.fields.power_polarity_${value}`;
+    const translated = this._t(key);
+    return translated === key ? POWER_POLARITY_FALLBACK_LABELS[value] : translated;
   }
 
   private _renderOptionalSelectField(

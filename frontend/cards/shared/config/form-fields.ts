@@ -230,6 +230,45 @@ export function renderOptionalNumberField(
     `;
 }
 
+/**
+ * A select whose blank state *shows* the default rather than showing nothing.
+ *
+ * For a setting that always has an effective value, an empty select is a lie:
+ * the config is unset, but something is still in force, and the reader cannot
+ * see what. So an absent value renders as the default option selected, and
+ * there is no blank option to pick -- the field can be changed, never emptied.
+ *
+ * The config itself stays untouched until the user actually chooses, which is
+ * what keeps "unset" and "set to the default" the same document.
+ */
+export function renderSelectFieldWithDefault(
+    host: FormFieldHost,
+    path: PathSegment[],
+    labelKey: string,
+    options: { value: string; label: string }[],
+    defaultValue: string,
+    helpKey?: string,
+): TemplateResult {
+    const stored = stringValue(host.getValue(path));
+    const shown = stored === "" ? defaultValue : stored;
+    return html`
+        <div class="field">
+            ${renderLabelRow(host, labelKey, helpKey)}
+            <select
+                .value=${shown}
+                @change=${(event: Event) =>
+                    setOptionalString(host, path, (event.currentTarget as HTMLSelectElement).value)}
+            >
+                ${options.map(
+                    (option) => html`
+                        <option value=${option.value} ?selected=${option.value === shown}>${option.label}</option>
+                    `,
+                )}
+            </select>
+        </div>
+    `;
+}
+
 export function renderOptionalSelectField(
     host: FormFieldHost,
     path: PathSegment[],

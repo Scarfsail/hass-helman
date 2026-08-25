@@ -39,18 +39,32 @@ const EXPECTED_OPTIONS: Record<string, string[]> = {
     grid: ["positive_is_export", "positive_is_import"],
 };
 
-async function mountEditor(page: Page): Promise<void> {
+/** The power-devices tab's label per locale -- the tab strip is localized too. */
+const POWER_DEVICES_TAB: Record<string, string> = {
+    en: "Power devices",
+    cs: "Výkonová zařízení",
+};
+
+async function mountEditor(page: Page, language = "en"): Promise<void> {
+    return mountEditorWith(page, STORED_CONFIG, language);
+}
+
+async function mountEditorWith(
+    page: Page,
+    config: unknown,
+    language = "en",
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
-    await page.evaluate((config) => {
+    await page.evaluate(({ config, language }) => {
         const element = document.createElement(
             "helman-config-editor-panel",
         ) as HTMLElement & Record<string, unknown>;
         element.hass = {
-            language: "en",
-            locale: { language: "en" },
+            language,
+            locale: { language },
             user: { is_admin: true },
             connection: { subscribeEvents: async () => () => undefined },
             callWS: async (request: { type: string }) => {
@@ -65,21 +79,21 @@ async function mountEditor(page: Page): Promise<void> {
             },
         };
         document.body.appendChild(element);
-    }, STORED_CONFIG);
+    }, { config, language });
 
     // The power-device sections live behind their own tab, and each ships
     // collapsed; a collapsed <details> renders nothing to query.
     await expect
         .poll(async () =>
-            page.evaluate(() => {
+            page.evaluate((tabLabel) => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Power devices",
+                    (button) => button.textContent?.trim() === tabLabel,
                 );
                 if (!tab) return false;
                 tab.click();
                 return true;
-            }),
+            }, POWER_DEVICES_TAB[language]),
         )
         .toBe(true);
 
@@ -134,19 +148,72 @@ test("the default option is listed first for every device", async ({ page }) => 
     expect(fields.solar[0]).toBe("positive_is_production");
 });
 
-test("nothing is preselected when the config omits the field", async ({ page }) => {
+/** What each polarity select currently shows, keyed by device. */
+function readSelectedValues(page: Page, expected: Record<string, string[]>) {
+    return page.evaluate((options) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const found: Record<string, string> = {};
+        for (const select of Array.from(root?.querySelectorAll("select") ?? [])) {
+            const device = Object.keys(options).find((candidate) =>
+                Array.from(select.options).some(
+                    (option) => option.value === options[candidate][0],
+                ),
+            );
+            if (device) found[device] = select.value;
+        }
+        return found;
+    }, expected);
+}
+
+test("an unset field shows the default rather than blank", async ({ page }) => {
+    // A polarity is always in force, so a blank select would hide which one.
+    // The config stays untouched — this is a display fallback, not a write.
     await mountEditor(page);
-    const selected = await page.evaluate(() => {
+    expect(await readSelectedValues(page, EXPECTED_OPTIONS)).toEqual({
+        solar: "positive_is_production",
+        house: "positive_is_consumption",
+        battery: "positive_is_charging",
+        grid: "positive_is_export",
+    });
+
+    const stored = await page.evaluate(() => {
+        const editor = document.querySelector("helman-config-editor-panel") as
+            | (HTMLElement & { getValue?: (path: unknown[]) => unknown })
+            | null;
+        return editor?.getValue?.(["power_devices", "grid", "entities"]) ?? null;
+    });
+    expect(stored).toEqual({ power: "sensor.grid_power" });
+});
+
+test("there is no blank option to select", async ({ page }) => {
+    await mountEditor(page);
+    const blanks = await page.evaluate((options) => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
         return Array.from(root?.querySelectorAll("select") ?? [])
             .filter((select) =>
-                Array.from(select.options).some((option) =>
-                    option.value.includes("positive_is") || option.value.includes("negative_is"),
+                Array.from(select.options).some(
+                    (option) => option.value === options.grid[0],
                 ),
             )
-            .map((select) => select.value);
+            .map((select) => Array.from(select.options).filter((o) => o.value === "").length);
+    }, EXPECTED_OPTIONS);
+    expect(blanks).toEqual([0]);
+});
+
+test("a configured value still wins over the default", async ({ page }) => {
+    await mountEditorWith(page, {
+        config_version: 6,
+        power_devices: {
+            grid: {
+                entities: {
+                    power: "sensor.grid_power",
+                    power_polarity: "positive_is_import",
+                },
+            },
+        },
     });
-    expect(selected).toEqual(["", "", "", ""]);
+    const root = await readSelectedValues(page, { grid: EXPECTED_OPTIONS.grid });
+    expect(root.grid).toBe("positive_is_import");
 });
 
 test("picking an option writes it under the device's entities map", async ({ page }) => {
@@ -172,4 +239,48 @@ test("picking an option writes it under the device's entities map", async ({ pag
         power: "sensor.grid_power",
         power_polarity: "positive_is_import",
     });
+});
+
+/** The rendered option text of one device's select, in order. */
+function readOptionLabels(page: Page, firstValue: string): Promise<string[]> {
+    return page.evaluate((value) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const select = Array.from(root?.querySelectorAll("select") ?? []).find((element) =>
+            Array.from(element.options).some((option) => option.value === value),
+        );
+        return Array.from(select?.options ?? [])
+            .filter((option) => option.value !== "")
+            .map((option) => option.textContent?.trim() ?? "");
+    }, firstValue);
+}
+
+test("option labels are localized, not left in English", async ({ page }) => {
+    // Regression: these were looked up through hass.localize, which resolves
+    // against the integration's backend strings. Those carry no editor keys, so
+    // every locale silently rendered the English fallback.
+    await mountEditor(page, "cs");
+    expect(await readOptionLabels(page, "positive_is_charging")).toEqual([
+        "Kladná = nabíjení",
+        "Kladná = vybíjení",
+    ]);
+    expect(await readOptionLabels(page, "positive_is_export")).toEqual([
+        "Kladná = dodávka do sítě",
+        "Kladná = odběr ze sítě",
+    ]);
+});
+
+test("every option states which sign carries the quantity", async ({ page }) => {
+    // The field asks which convention the sensor follows, so a bare noun would
+    // contradict it: "Sign convention -> Consumption" says nothing about sign,
+    // and an option reading "Consumption (negative readings)" under a label
+    // asserting the value is positive is a self-contradiction.
+    await mountEditor(page);
+    expect(await readOptionLabels(page, "positive_is_consumption")).toEqual([
+        "Positive = consumption",
+        "Negative = consumption",
+    ]);
+    expect(await readOptionLabels(page, "positive_is_production")).toEqual([
+        "Positive = production",
+        "Negative = production",
+    ]);
 });
