@@ -116,6 +116,16 @@ import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles"
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "./bias-correction-status";
+import "./entity-group";
+import {
+  ENTITY_GROUP_CONNECTED,
+  ENTITY_GROUP_DISCONNECTED,
+  ENTITY_GROUP_REVERT,
+  entityGroupKey,
+  type EntityGroupRegistrationDetail,
+  type EntityGroupRevertDetail,
+  type EntityInspectionResult,
+} from "./entity-group";
 import type {
   HomeAssistantLike,
   JsonObject,
@@ -161,6 +171,17 @@ const INVERTER_ACTION_OPTIONS = [
 ] as const;
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
+/**
+ * How often the editor asks what its picked entities currently read.
+ *
+ * A poll rather than a state subscription: the reading is a hint the reader
+ * glances at while configuring, not a live dashboard, and a couple of seconds
+ * of lag costs nothing. Subscribing would mean tracking which entities the
+ * draft names as it is edited -- and *which* entities a path resolves to is
+ * knowledge this editor deliberately does not have.
+ */
+const ENTITY_INSPECTION_INTERVAL_MS = 2000;
+
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
 } as const;
@@ -205,6 +226,7 @@ export class HelmanConfigEditorPanel
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
+    _entityInspections: { state: true },
   };
 
   static styles = [
@@ -637,6 +659,29 @@ export class HelmanConfigEditorPanel
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
   private _configFragmentRequested = false;
 
+  // --- Entity inspection ---------------------------------------------------
+  //
+  // One owner for the whole editor. Every mounted `helman-entity-group`
+  // announces its config path here, and one `helman/inspect_entities` call per
+  // tick answers for all of them; the appliances tab alone will hold twenty
+  // groups, and a call per group would be twenty round trips every two seconds
+  // for readings that all come out of the same document.
+  //
+  // The draft document is sent whole on every tick. It is a few KB over a local
+  // socket, and any scheme for sending only what changed would be more code
+  // than it saves.
+
+  /** The stored document, as read. What a revert restores from. */
+  private _savedConfig: JsonObject | null = null;
+  /** The last answer, keyed by group. Groups read their own row from here. */
+  private _entityInspections: Record<string, EntityInspectionResult> = {};
+  /** Which groups are on screen right now — a collapsed section renders none. */
+  private readonly _mountedGroups = new Map<string, PathSegment[]>();
+  private _inspectionTimer?: ReturnType<typeof setInterval>;
+  private _inspectionPending?: ReturnType<typeof setTimeout>;
+  /** One request at a time: a slow tick must not queue behind itself. */
+  private _inspectionInFlight = false;
+
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
   }
@@ -663,6 +708,13 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
+    this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
+    this.addEventListener(ENTITY_GROUP_DISCONNECTED, this._handleEntityGroupDisconnected);
+    this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
+    this._inspectionTimer = setInterval(
+      () => void this._pollEntityInspections(),
+      ENTITY_INSPECTION_INTERVAL_MS,
+    );
     void loadHaForm()
       .then(() => {
         this.requestUpdate();
@@ -682,6 +734,18 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
+    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
+    this.removeEventListener(ENTITY_GROUP_DISCONNECTED, this._handleEntityGroupDisconnected);
+    this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
+    if (this._inspectionTimer !== undefined) {
+      clearInterval(this._inspectionTimer);
+      this._inspectionTimer = undefined;
+    }
+    if (this._inspectionPending !== undefined) {
+      clearTimeout(this._inspectionPending);
+      this._inspectionPending = undefined;
+    }
+    this._mountedGroups.clear();
   }
 
   protected updated(changedProperties: PropertyValues<this>): void {
@@ -1294,15 +1358,12 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.power_devices.house,
         html`
           <div class="field-grid">
-            ${this._renderRequiredEntityField(
-              ["power_devices", "house", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "house",
               "editor.fields.house_power_entity",
-              ["sensor"],
-              undefined,
-              undefined,
               "editor.help.house_power_entity",
+              true,
             )}
-            ${this._renderPolarityField("house")}
             ${this._renderOptionalTextField(
               ["power_devices", "house", "power_sensor_label"],
               "editor.fields.power_sensor_label",
@@ -1346,14 +1407,11 @@ export class HelmanConfigEditorPanel
             SECTION_SCOPE_IDS.power_devices.solar_general,
             html`
               <div class="field-grid field-grid--roomy">
-                ${this._renderOptionalEntityField(
-                  ["power_devices", "solar", "entities", "power"],
+                ${this._renderPowerEntityGroup(
+                  "solar",
                   "editor.fields.power_entity",
-                  ["sensor"],
-                  undefined,
                   "editor.help.solar_power_entity",
                 )}
-                ${this._renderPolarityField("solar")}
                 ${this._renderOptionalEntityField(
                   ["power_devices", "solar", "entities", "today_energy"],
                   "editor.fields.today_energy_entity",
@@ -1594,14 +1652,11 @@ export class HelmanConfigEditorPanel
             ${this._t("editor.notes.battery_entities")}
           </p>
           <div class="field-grid field-grid--roomy">
-            ${this._renderOptionalEntityField(
-              ["power_devices", "battery", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "battery",
               "editor.fields.power_entity",
-              ["sensor"],
-              undefined,
               "editor.help.battery_power_entity",
             )}
-            ${this._renderPolarityField("battery")}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
@@ -1665,14 +1720,11 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.power_devices.grid,
         html`
           <div class="field-grid">
-            ${this._renderOptionalEntityField(
-              ["power_devices", "grid", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "grid",
               "editor.fields.power_entity",
-              ["sensor"],
-              undefined,
               "editor.help.grid_power_entity",
             )}
-            ${this._renderPolarityField("grid")}
             ${this._renderOptionalEntityField(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
@@ -3124,6 +3176,167 @@ export class HelmanConfigEditorPanel
     `;
   }
 
+  /**
+   * An entity picker, the settings that qualify it, and what it reads — as one.
+   *
+   * The group is the same markup `_renderEntityField` emits, in a bordered
+   * block, plus a slot: the settings that belong to this entity are passed
+   * *into* it rather than rendered as siblings in the same field grid, which is
+   * what makes a polarity read as part of its sensor instead of as a loose
+   * select that happens to sit next to one.
+   *
+   * `ownedPaths` is the group's own declaration of what it covers — the entity
+   * path plus whatever was slotted in — and it is deliberately a call-site
+   * concern. The backend decides what a path *means*; this is the place that
+   * already writes those fields' labels, types and help keys, so it is the
+   * cheapest place to say they belong together. It is what a revert restores.
+   *
+   * Nothing about the reading is decided here. The group is handed a row of
+   * facts and renders them; if this method ever grows a branch on what an
+   * entity is, the contract in `entity-group.ts` has been broken.
+   */
+  private _renderEntityGroup(
+    path: PathSegment[],
+    labelKey: string,
+    options: {
+      includeDomains?: string[];
+      helperKey?: string;
+      helpKey?: string;
+      required?: boolean;
+      ownedPaths?: PathSegment[][];
+    } = {},
+    slotted: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
+    return html`
+      <helman-entity-group
+        .hass=${this.hass}
+        .fieldHost=${this}
+        .path=${path}
+        .ownedPaths=${[path, ...(options.ownedPaths ?? [])]}
+        .labelKey=${labelKey}
+        .helpKey=${options.helpKey}
+        .helperKey=${options.helperKey}
+        .includeDomains=${options.includeDomains}
+        ?required=${options.required ?? false}
+        .inspection=${this._entityInspections[entityGroupKey(path)] ?? null}
+      >${slotted}</helman-entity-group>
+    `;
+  }
+
+  /**
+   * A power device's power sensor: the picker, its polarity, and its reading.
+   *
+   * The polarity select is unchanged — same options, same path, same wording —
+   * it has only moved from beside the picker to inside it.
+   */
+  private _renderPowerEntityGroup(
+    device: PowerPolarityDevice,
+    labelKey: string,
+    helpKey: string,
+    required = false,
+  ): TemplateResult {
+    const entityPath: PathSegment[] = ["power_devices", device, "entities", "power"];
+    return this._renderEntityGroup(
+      entityPath,
+      labelKey,
+      {
+        includeDomains: ["sensor"],
+        helpKey,
+        required,
+        ownedPaths: [["power_devices", device, "entities", "power_polarity"]],
+      },
+      this._renderPolarityField(device),
+    );
+  }
+
+  private _handleEntityGroupConnected = (event: Event): void => {
+    const detail = (event as CustomEvent<EntityGroupRegistrationDetail>).detail;
+    if (!detail?.key) return;
+    this._mountedGroups.set(detail.key, detail.path);
+    // A section that was just expanded should not wait a whole tick for its
+    // first reading. The pending one-shot collapses the burst of registrations
+    // one expansion produces into a single call.
+    this._scheduleEntityInspection();
+  };
+
+  private _handleEntityGroupDisconnected = (event: Event): void => {
+    const detail = (event as CustomEvent<EntityGroupRegistrationDetail>).detail;
+    if (!detail?.key) return;
+    this._mountedGroups.delete(detail.key);
+  };
+
+  /**
+   * Put this group's owned paths back to what the stored document says.
+   *
+   * The editor does the write because it is what holds both documents; the
+   * group only knows which paths are its own. A path the saved document does
+   * not have is removed rather than blanked, so reverting an entity that was
+   * never saved leaves the same document as never having picked one.
+   */
+  private _handleEntityGroupRevert = (event: Event): void => {
+    const detail = (event as CustomEvent<EntityGroupRevertDetail>).detail;
+    const saved = this._savedConfig;
+    if (!saved || !detail?.paths?.length) return;
+    this._applyMutation((draft) => {
+      for (const path of detail.paths) {
+        const value = getValueAtPath(saved, path);
+        if (value === undefined) {
+          unsetValueAtPath(draft, path);
+        } else {
+          setValueAtPath(draft, path, cloneJson(value as JsonValue));
+        }
+      }
+    });
+    void this._pollEntityInspections();
+  };
+
+  private _scheduleEntityInspection(): void {
+    if (this._inspectionPending !== undefined) return;
+    this._inspectionPending = setTimeout(() => {
+      this._inspectionPending = undefined;
+      void this._pollEntityInspections();
+    }, 0);
+  }
+
+  /**
+   * One call for every mounted group, or none at all.
+   *
+   * Groups whose entity is not picked yet are left out: there is nothing to
+   * read, and the backend would only answer `unset`. A failed tick is
+   * swallowed — the last reading stays on screen rather than the panel growing
+   * an error banner that reappears every two seconds.
+   */
+  private async _pollEntityInspections(): Promise<void> {
+    if (!this.hass || !this._config || this._inspectionInFlight) return;
+    const targets = [...this._mountedGroups.entries()]
+      .filter(([, path]) => stringValue(this._getValue(path)) !== "")
+      .map(([key, path]) => ({ key, path }));
+    if (targets.length === 0) {
+      if (Object.keys(this._entityInspections).length > 0) {
+        this._entityInspections = {};
+      }
+      return;
+    }
+    this._inspectionInFlight = true;
+    try {
+      const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
+        type: "helman/inspect_entities",
+        config: this._config,
+        ...(this._savedConfig ? { saved_config: this._savedConfig } : {}),
+        targets,
+      });
+      const next: Record<string, EntityInspectionResult> = {};
+      for (const row of response?.results ?? []) {
+        next[row.key] = row;
+      }
+      this._entityInspections = next;
+    } catch {
+      // Polled: a dropped tick costs a stale badge, not a message.
+    } finally {
+      this._inspectionInFlight = false;
+    }
+  }
+
   private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
     return renderHelpIcon(this, labelKey, contentKey);
   }
@@ -3217,6 +3430,7 @@ export class HelmanConfigEditorPanel
       );
       if (current !== undefined) {
         this._configBaseline = canonicalJson(current);
+        this._savedConfig = cloneJson(current);
       }
     } catch {
       // Leaving the old baseline costs at most one spurious notice, which the
@@ -3244,6 +3458,9 @@ export class HelmanConfigEditorPanel
       // What was read is what this editor now agrees with, so it is what a
       // later announcement has to be compared against.
       this._configBaseline = canonicalJson(loadedConfig ?? {});
+      // The same document the baseline is taken from, kept whole: it is what a
+      // group's revert restores, and what the backend compares a draft against.
+      this._savedConfig = loadedConfig ? cloneJson(loadedConfig) : {};
       // Whatever changed elsewhere is now in hand, however the reload was asked
       // for -- the button, the announcement, or the first load.
       this._staleConfigNotice = false;

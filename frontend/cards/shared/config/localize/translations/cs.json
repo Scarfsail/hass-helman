@@ -231,6 +231,27 @@
       "power_polarity_positive_is_export": "Kladná = dodávka do sítě",
       "power_polarity_positive_is_import": "Kladná = odběr ze sítě"
     },
+    "entity_status": {
+      "value": "{value} {unit}",
+      "entity_missing": "Entita nenalezena",
+      "state_absent": "Bez hodnoty ({state})",
+      "not_numeric": "Není číslo ({state})",
+      "polarity_inverted": "Čte se proti znaménkové konvenci Helmana",
+      "power_reading": {
+        "producing": "Vyrábí",
+        "consuming": "Spotřebovává",
+        "charging": "Nabíjí se",
+        "discharging": "Vybíjí se",
+        "importing": "Odběr ze sítě",
+        "exporting": "Dodávka do sítě",
+        "idle": "Nečinné"
+      }
+    },
+    "entity_group": {
+      "saved_reading": "Uložená konfigurace čte",
+      "revert": "Vrátit na uloženou",
+      "revert_aria": "Vrátit tuto entitu a její nastavení na uloženou konfiguraci"
+    },
     "helpers": {
       "history_buckets": "Kolik bucketů historie Helman drží pro UI historii.",
       "history_bucket_duration": "Délka jednoho bucketu historie v hodinách.",

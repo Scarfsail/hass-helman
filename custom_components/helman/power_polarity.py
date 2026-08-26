@@ -37,7 +37,9 @@ here directly:
   from the recorder and whose ``InvalidationInputs`` contract is
   positive-is-export;
 * the simple card, which needs battery power *signed* rather than as the
-  magnitude ``value_type`` yields.
+  magnitude ``value_type`` yields;
+* the config editor's entity inspection, which reports what a picked sensor
+  currently reads, through :func:`interpret_power_reading` below.
 
 A new reader of a raw power sensor belongs on that list, not outside it.
 """
@@ -111,3 +113,95 @@ def source_value_type(device_config: Mapping[str, Any] | None, device: str) -> V
 def consumer_value_type(device_config: Mapping[str, Any] | None, device: str) -> ValueType:
     """``value_type`` for ``device``'s consumer node, honouring its polarity."""
     return _CONSUMER_VALUE_TYPES[device][is_power_inverted(device_config, device)]
+
+
+#: The gerund each option's quantity is *reported* as, keyed by the noun the
+#: option names. Options are written as ``<sign>_is_<quantity>``, and the
+#: quantity there is a noun because the option is a statement about the sensor
+#: ("positive is export"); a reading is a statement about the house right now
+#: ("exporting"), so it wants the verb. Adding a device to
+#: ``POWER_POLARITY_OPTIONS`` with a new quantity means adding it here too --
+#: and the absence is not silent, because :func:`interpret_power_reading`
+#: answers ``idle`` rather than inventing a token no locale can translate.
+_DIRECTION_TOKENS: dict[str, str] = {
+    "production": "producing",
+    "consumption": "consuming",
+    "charging": "charging",
+    "discharging": "discharging",
+    "export": "exporting",
+    "import": "importing",
+}
+
+#: What a reading of exactly zero -- or one whose sign the device's vocabulary
+#: has no word for -- is reported as.
+IDLE_DIRECTION = "idle"
+
+
+def _split_option(option: str) -> tuple[str, str]:
+    """``"positive_is_export"`` -> ``("positive", "export")``."""
+    sign, _, quantity = option.partition("_is_")
+    return sign, quantity
+
+
+def interpret_power_reading(
+    device: str,
+    polarity: str | None,
+    value: float,
+) -> dict[str, Any]:
+    """What ``value`` on ``device``'s power sensor means, under ``polarity``.
+
+    The one place a *reading* is put into words, so that the editor's live
+    status and any later consumer agree with the tree by construction rather
+    than by two people remembering the same convention. Everything is derived
+    from :data:`POWER_POLARITY_OPTIONS`: a device added to that table gets a
+    reading for free, without a second table to keep in step.
+
+    Returns ``{"direction": <token>, "inverted": <bool>}``. ``direction`` is a
+    stable token the caller localizes -- never a sentence, and never a value
+    that depends on the reader's locale.
+
+    Two shapes of device vocabulary, and the rule covers both:
+
+    * **Two quantities on one axis** (grid, battery). Both options name the
+      *positive* sign, so the option in force says what a positive reading is
+      and the other option's quantity is what a negative one is. A grid sensor
+      set to ``positive_is_export`` reads ``exporting`` above zero and
+      ``importing`` below it; set to ``positive_is_import`` the two swap.
+    * **One quantity, two signs** (solar, house). The option in force names
+      which sign carries the single quantity, and the *other* sign has no
+      meaning in that vocabulary -- a solar sensor cannot consume. Such a
+      reading answers ``idle``, which is what a small negative overnight
+      figure from an inverter's own draw honestly is.
+
+    Never raises. ``polarity`` may be absent, empty, or a value from another
+    device's vocabulary; anything that is not the device's non-default option
+    reads upright, exactly as :func:`is_power_inverted` resolves it, because
+    that is what the runtime actually does with such a config. An unknown
+    device answers ``idle`` rather than guessing.
+    """
+    options = POWER_POLARITY_OPTIONS.get(device)
+    if options is None:
+        return {"direction": IDLE_DIRECTION, "inverted": False}
+
+    inverted = polarity == options[1]
+    effective_sign, effective_quantity = _split_option(options[inverted])
+
+    if not value:
+        return {"direction": IDLE_DIRECTION, "inverted": inverted}
+
+    reading_sign = "positive" if value > 0 else "negative"
+    if reading_sign == effective_sign:
+        return {
+            "direction": _DIRECTION_TOKENS.get(effective_quantity, IDLE_DIRECTION),
+            "inverted": inverted,
+        }
+
+    quantities = {_split_option(option)[1] for option in options}
+    if len(quantities) == 2:
+        opposite = next(quantity for quantity in quantities if quantity != effective_quantity)
+        return {
+            "direction": _DIRECTION_TOKENS.get(opposite, IDLE_DIRECTION),
+            "inverted": inverted,
+        }
+
+    return {"direction": IDLE_DIRECTION, "inverted": inverted}

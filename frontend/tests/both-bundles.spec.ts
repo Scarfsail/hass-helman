@@ -33,7 +33,11 @@ const CARD_TAGS = [
     "scheduling-explanation-panel",
     "helman-optimizer-edit-dialog",
 ];
-const EDITOR_TAGS = ["helman-config-editor-panel", "helman-bias-correction-status"];
+const EDITOR_TAGS = [
+    "helman-config-editor-panel",
+    "helman-bias-correction-status",
+    "helman-entity-group",
+];
 const SHARED_TAGS = ["helman-optimizer-editor"];
 
 async function loadBoth(page: Page, order: readonly string[]): Promise<string[]> {
