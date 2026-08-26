@@ -193,10 +193,15 @@ const ENTITY_INSPECTION_INTERVAL_MS = 2000;
  * So the trigger is leading-edge: the *first* change of a burst goes out at
  * once -- which is every discrete change, a select or a picker -- and anything
  * that arrives inside the window is collapsed into a single trailing call once
- * it closes. Typing costs two requests rather than one per character, and a
- * click costs no delay at all.
+ * it closes. A click costs no delay at all.
+ *
+ * The window has to outlast a keystroke to be worth anything. Ordinary typing
+ * runs 150-300 ms per character, so a shorter window would put every character
+ * on its own leading edge and send exactly the flood it was meant to stop --
+ * a synthetic burst of writes with no gaps is the only case a short window
+ * actually covers, and no user types that way.
  */
-const ENTITY_INSPECTION_DEBOUNCE_MS = 150;
+const ENTITY_INSPECTION_DEBOUNCE_MS = 400;
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -708,6 +713,18 @@ export class HelmanConfigEditorPanel
    */
   private _inspectionSequence = 0;
   private _inspectionApplied = 0;
+  /**
+   * How many requests are out.
+   *
+   * Ordering is the sequence numbers' job; this is the separate concern of not
+   * piling up. The interval restarts when a request *starts*, so a websocket
+   * that has stalled -- HA reconnecting, a slow handler -- would otherwise put
+   * another whole config document on the wire every two seconds with nothing
+   * capping the pile. The idle tick yields while one is out; a poll the user
+   * caused never does, because dropping that one drops the state they just
+   * typed.
+   */
+  private _inspectionInFlight = 0;
 
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
@@ -735,7 +752,7 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener(ENTITY_GROUP_CONNECTED, this._requestEntityInspection);
+    this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
     this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     this._restartEntityInspectionTimer();
     void loadHaForm()
@@ -757,7 +774,7 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
-    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._requestEntityInspection);
+    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
     this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     if (this._inspectionTimer !== undefined) {
       clearInterval(this._inspectionTimer);
@@ -1879,13 +1896,10 @@ export class HelmanConfigEditorPanel
     if (!detail?.config) {
       return;
     }
-    // The same bookkeeping `_applyMutation` does for the panel's own fields —
-    // the edit came from a child element, but it is still an edit of this
-    // draft, and the validation report it invalidates is still ours.
+    // The edit came from a child element, but it is still an edit of this
+    // draft, so it goes through the same bookkeeping rather than repeating it.
     this._config = detail.config;
-    this._dirty = true;
-    this._validation = null;
-    this._message = null;
+    this._markDraftChanged();
   };
 
   private _renderAutomationEnabledField(): TemplateResult {
@@ -3310,6 +3324,20 @@ export class HelmanConfigEditorPanel
    * a section mounts several groups at once and the first of them fires before
    * its siblings exist, so the trailing call is what picks the rest up.
    */
+  /**
+   * A group announcing itself as it mounts.
+   *
+   * Deferred to a microtask, unlike a config write, because this one arrives
+   * from inside the panel's own render commit: the group's `connectedCallback`
+   * runs while Lit is inserting children, after the update is marked done, so
+   * writing the reactive `_entityInspections` synchronously would schedule an
+   * update from inside one -- the dev warning, and an extra render pass. The
+   * write the user caused has no such problem and keeps its leading edge.
+   */
+  private _handleEntityGroupConnected = (): void => {
+    queueMicrotask(() => this._requestEntityInspection());
+  };
+
   private _requestEntityInspection = (): void => {
     if (this._inspectionDebounce !== undefined) {
       this._inspectionTrailing = true;
@@ -3338,7 +3366,7 @@ export class HelmanConfigEditorPanel
       clearInterval(this._inspectionTimer);
     }
     this._inspectionTimer = setInterval(
-      () => void this._pollEntityInspections(),
+      () => void this._pollEntityInspections("idle"),
       ENTITY_INSPECTION_INTERVAL_MS,
     );
   }
@@ -3371,8 +3399,9 @@ export class HelmanConfigEditorPanel
    * A failed tick is swallowed — the last reading stays on screen rather than
    * the panel growing an error banner that reappears every two seconds.
    */
-  private async _pollEntityInspections(): Promise<void> {
+  private async _pollEntityInspections(trigger: "idle" | "change" = "change"): Promise<void> {
     if (!this.hass || !this._config) return;
+    if (trigger === "idle" && this._inspectionInFlight > 0) return;
     const saved = this._savedConfig;
     const targets = this._mountedEntityGroups()
       .map((group) => ({ key: group.key, path: group.path }))
@@ -3382,6 +3411,10 @@ export class HelmanConfigEditorPanel
           (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
       );
     if (targets.length === 0) {
+      // Clearing is an answer like any other, so it takes an id too. Without
+      // one, a slow earlier request could resolve after this and repaint the
+      // reading for the entity that was just cleared.
+      this._inspectionApplied = ++this._inspectionSequence;
       if (Object.keys(this._entityInspections).length > 0) {
         this._entityInspections = {};
       }
@@ -3389,6 +3422,7 @@ export class HelmanConfigEditorPanel
     }
     const sequence = ++this._inspectionSequence;
     this._restartEntityInspectionTimer();
+    this._inspectionInFlight += 1;
     try {
       const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
         type: "helman/inspect_entities",
@@ -3408,6 +3442,8 @@ export class HelmanConfigEditorPanel
       this._entityInspections = next;
     } catch {
       // Polled: a dropped tick costs a stale badge, not a message.
+    } finally {
+      this._inspectionInFlight -= 1;
     }
   }
 
@@ -4242,17 +4278,32 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The one place a field write reaches the draft document.
+   * How every `_set*` helper writes into the draft document.
    *
-   * Every `_set*` helper funnels through here, which is why the entity
-   * groups' re-read is wired here and not into the individual renderers: a
-   * field added tomorrow gets a live reading for free and cannot forget to ask
-   * for one.
+   * They all funnel through here, which is why the entity groups' re-read is
+   * wired into `_markDraftChanged` below rather than into the individual
+   * renderers: a field added tomorrow gets a live reading for free and cannot
+   * forget to ask for one. It is not the *only* door into the draft, though --
+   * see `_markDraftChanged`.
    */
   private _applyMutation(mutator: (draft: JsonObject) => void): void {
     const draft = cloneJson(this._config ?? {});
     mutator(draft);
     this._config = draft;
+    this._markDraftChanged();
+  }
+
+  /**
+   * What every change to the draft owes, wherever the change came from.
+   *
+   * The panel's own fields all funnel through `_applyMutation`, but the
+   * optimizer editor hands back a whole document of its own, and an entity
+   * added there would otherwise never get a live reading. Keeping the
+   * bookkeeping in one function is what stops the two paths drifting -- the
+   * previous version of this comment claimed `_applyMutation` was the only
+   * door, and it was already wrong.
+   */
+  private _markDraftChanged(): void {
     this._dirty = true;
     this._validation = null;
     this._message = null;

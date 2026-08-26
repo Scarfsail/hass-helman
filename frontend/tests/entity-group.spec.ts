@@ -97,6 +97,14 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                     if (request.type === "helman/get_appliances") return { appliances: [] };
                     if (request.type === "helman/inspect_entities") {
                         requests.push(JSON.parse(JSON.stringify(request)));
+                        // A spec can hold one answer back to reproduce a slow
+                        // round trip: the ordering bugs only show when an
+                        // earlier request resolves after a later one.
+                        const delay = (window as any).__inspectDelayMs ?? 0;
+                        if (delay > 0) {
+                            (window as any).__inspectDelayMs = 0;
+                            await new Promise((resolve) => setTimeout(resolve, delay));
+                        }
                         // The *backend* decides what a reading says, so the
                         // stub reads the polarity out of the document it was
                         // sent and picks the token. Nothing on the editor side
@@ -477,4 +485,45 @@ test("typing does not send one request per keystroke", async ({ page }) => {
     const sent = (await requestCount(page)) - before;
     expect(sent).toBeGreaterThan(0);
     expect(sent).toBeLessThanOrEqual(2);
+});
+
+test("a slow answer cannot repaint a reading the user has already cleared", async ({ page }) => {
+    // Regression: the empty-targets branch cleared the map and returned
+    // without taking a sequence number, so it did not count as the newest
+    // answer. An in-flight request that resolved after it was therefore still
+    // "newer than anything applied", and put the cleared entity's reading back
+    // on screen, where it sat until the next tick.
+    //
+    // Starting from a document with nothing at the path is what makes the
+    // clear reach that branch at all: while the *stored* config still names an
+    // entity, the poll rightly keeps asking so the saved reading can be shown.
+    await mountEditor(page, {
+        config: {
+            config_version: 6,
+            power_devices: { grid: { entities: { power: "", power_polarity: "positive_is_import" } } },
+        },
+    });
+    // No tick sync here: with nothing at the path the poll rightly sends
+    // nothing at all, so there is no tick to sync to. Wait for the group to
+    // exist instead.
+    await expect.poll(async () => !!(await readGroup(page, GRID_KEY))).toBe(true);
+    expect((await readGroup(page, GRID_KEY))?.facts ?? []).toEqual([]);
+
+    await page.evaluate(() => {
+        (window as any).__inspectDelayMs = 700;
+        const editor = document.querySelector("helman-config-editor-panel") as any;
+        // The slow request goes out first, carrying the entity...
+        editor.setValue(["power_devices", "grid", "entities", "power"], "sensor.grid_power");
+    });
+    // ...and the clear lands while it is still out, with nothing left to ask
+    // about, so it takes the empty-targets path.
+    await page.waitForTimeout(450);
+    await page.evaluate(() => {
+        const editor = document.querySelector("helman-config-editor-panel") as any;
+        editor.setValue(["power_devices", "grid", "entities", "power"], "");
+    });
+
+    // The slow answer resolves inside this window. It must not come back.
+    await page.waitForTimeout(800);
+    expect((await readGroup(page, GRID_KEY))?.facts ?? []).toEqual([]);
 });
