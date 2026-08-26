@@ -45,12 +45,19 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
     # The polarity sits beside the entity it qualifies, so it is read
     # relative to the target path rather than from a second literal path that
     # could drift away from the registry key.
-    polarity = request.value(*request.path[:-1], POWER_POLARITY_KEY)
+    polarity_path = (*request.path[:-1], POWER_POLARITY_KEY)
+    polarity = request.value(*polarity_path)
     polarity_token = polarity if isinstance(polarity, str) else None
-    signature: tuple[Any, ...] = (request.target_value(), polarity)
+    # The two values this reading is made of, each with the path it came from:
+    # what the comparison against the saved document is run over, and exactly
+    # what a revert puts back.
+    consulted: tuple[tuple[tuple[Any, ...], Any], ...] = (
+        (request.path, request.target_value()),
+        (polarity_path, polarity),
+    )
 
     if entity_id is None:
-        return Inspection(entity_id=None, status="unset", signature=signature)
+        return Inspection(entity_id=None, status="unset", consulted=consulted)
 
     reading = read_numeric_state(request.hass, entity_id)
     if reading.problem is not None:
@@ -58,7 +65,7 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
             entity_id=entity_id,
             status="unavailable",
             facts=(reading.problem,),
-            signature=signature,
+            consulted=consulted,
         )
 
     # The *shown* value is what gets interpreted, not the raw one -- see
@@ -86,5 +93,5 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
         entity_id=entity_id,
         status="ok",
         facts=tuple(facts),
-        signature=signature,
+        consulted=consulted,
     )

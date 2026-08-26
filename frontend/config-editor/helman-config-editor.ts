@@ -1421,10 +1421,6 @@ export class HelmanConfigEditorPanel
               {
                 includeDomains: ["sensor"],
                 helpKey: "editor.help.house_forecast_total_energy_entity",
-                ownedPaths: [
-                  ["power_devices", "house", "forecast", "min_history_days"],
-                  ["power_devices", "house", "forecast", "training_window_days"],
-                ],
               },
               html`
                 <div class="field-grid">
@@ -1560,11 +1556,6 @@ export class HelmanConfigEditorPanel
                           {
                             includeDomains: ["sensor"],
                             helpKey: "editor.help.bias_correction_total_energy_entity",
-                            ownedPaths: [
-                              ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                              ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                              ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
-                            ],
                           },
                           html`
                             <div class="field-grid">
@@ -2410,7 +2401,6 @@ export class HelmanConfigEditorPanel
                     "editor.fields.mode_entity",
                     ["input_select", "select"],
                     "editor.helpers.mode_entity",
-                    undefined,
                     "editor.help.inverter_mode_entity",
                   )}
                 </div>`,
@@ -2542,9 +2532,9 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], undefined, undefined, "editor.help.ev_charge_switch_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_use_mode_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_eco_gear_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], undefined, "editor.help.ev_charge_switch_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], undefined, "editor.help.ev_use_mode_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], undefined, "editor.help.ev_eco_gear_entity")}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2643,7 +2633,7 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], undefined, undefined, "editor.help.appliance_switch_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], undefined, "editor.help.appliance_switch_entity")}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2718,7 +2708,7 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], undefined, undefined, "editor.help.appliance_climate_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], undefined, "editor.help.appliance_climate_entity")}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2990,7 +2980,6 @@ export class HelmanConfigEditorPanel
             "editor.fields.soc_entity",
             ["sensor"],
             undefined,
-            undefined,
             "editor.help.vehicle_soc_entity",
           )}
           ${this._renderOptionalEntityField(
@@ -3195,7 +3184,6 @@ export class HelmanConfigEditorPanel
     labelKey: string,
     includeDomains?: string[],
     helperKey?: string,
-    explicitValue?: unknown,
     helpKey?: string,
   ): TemplateResult {
     return this._renderEntityField(
@@ -3204,7 +3192,7 @@ export class HelmanConfigEditorPanel
       includeDomains,
       helperKey,
       true,
-      explicitValue === undefined ? this._getValue(path) : explicitValue,
+      this._getValue(path),
       helpKey,
     );
   }
@@ -3251,11 +3239,11 @@ export class HelmanConfigEditorPanel
    * what makes a polarity read as part of its sensor instead of as a loose
    * select that happens to sit next to one.
    *
-   * `ownedPaths` is the group's own declaration of what it covers — the entity
-   * path plus whatever was slotted in — and it is deliberately a call-site
-   * concern. The backend decides what a path *means*; this is the place that
-   * already writes those fields' labels, types and help keys, so it is the
-   * cheapest place to say they belong together. It is what a revert restores.
+   * What a revert restores is *not* decided here. The call site knows what it
+   * put in the slot; only the evaluator knows which of those the reading was
+   * made of, and it says so in the inspection's `dependsOn`. A training window
+   * rendered beside a minimum history requirement is the same entity's setting
+   * and is left alone by a revert, because it could never have caused one.
    *
    * Nothing about the reading is decided here. The group is handed a row of
    * facts and renders them; if this method ever grows a branch on what an
@@ -3269,7 +3257,6 @@ export class HelmanConfigEditorPanel
       helperKey?: string;
       helpKey?: string;
       required?: boolean;
-      ownedPaths?: PathSegment[][];
     } = {},
     slotted: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
@@ -3278,7 +3265,6 @@ export class HelmanConfigEditorPanel
         .hass=${this.hass}
         .fieldHost=${this}
         .path=${path}
-        .ownedPaths=${[path, ...(options.ownedPaths ?? [])]}
         .labelKey=${labelKey}
         .helpKey=${options.helpKey}
         .helperKey=${options.helperKey}
@@ -3309,7 +3295,6 @@ export class HelmanConfigEditorPanel
         includeDomains: ["sensor"],
         helpKey,
         required,
-        ownedPaths: [["power_devices", device, "entities", "power_polarity"]],
       },
       this._renderPolarityField(device),
     );

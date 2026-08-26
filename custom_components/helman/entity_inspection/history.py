@@ -105,11 +105,19 @@ def _evaluate(
     default_required_days: int | None,
 ) -> Inspection:
     required = _required_days(request, required_days_key, default_required_days)
-    signature: tuple[Any, ...] = (request.target_value(), required)
+    # Only the setting the badge is actually judged against is listed here. The
+    # training window and the valid-slot minimum ride in the same group's slot,
+    # but nothing below reads them -- so they must neither move the
+    # draft-versus-saved comparison nor be reset by a revert.
+    consulted: tuple[tuple[tuple[Any, ...], Any], ...] = (
+        (request.path, request.target_value()),
+    )
+    if required_days_key is not None:
+        consulted += (((*request.path[:-1], required_days_key), required),)
 
     entity_id = request.entity_id()
     if entity_id is None:
-        return Inspection(entity_id=None, status="unset", signature=signature)
+        return Inspection(entity_id=None, status="unset", consulted=consulted)
 
     reading = read_numeric_state(request.hass, entity_id)
     facts: list[Fact] = [
@@ -129,7 +137,7 @@ def _evaluate(
         entity_id=entity_id,
         status="ok" if reading.problem is None else "unavailable",
         facts=tuple(facts),
-        signature=signature,
+        consulted=consulted,
     )
 
 

@@ -35,13 +35,15 @@ import type { PathSegment } from "../cards/shared/config/types";
  * backend that learns to say something new must not spray key names across an
  * editor that has not caught up.
  *
- * ## What is a frontend concern
+ * ## What a revert restores
  *
- * Which config paths the group *owns* -- the entity path plus the paths of the
- * settings slotted into it -- is declared by the call site, in `ownedPaths`.
- * The backend decides what a path *means*; the call site already writes those
- * fields' labels, types and help keys, so it is where "these belong together"
- * is cheapest to state. `ownedPaths` is what a revert restores.
+ * Exactly the paths the backend says the reading depended on, which arrive as
+ * `dependsOn` on the inspection itself. The call site decides what *renders*
+ * inside a group, but it is in no position to say what the reading was made
+ * of: the house forecast group holds a training window in its slot because it
+ * is the same entity's setting, and nothing about the badge depends on it.
+ * Reverting it along with the rest would be a silent edit -- a value that
+ * could never have made the revert control appear, reset by pressing it.
  *
  * ## What it does not own
  *
@@ -67,6 +69,15 @@ export interface EntityInspection {
     entityId: string | null;
     status: string;
     facts: EntityFact[];
+    /**
+     * The config paths this reading was made of, as the backend read them.
+     *
+     * Not a list of everything in the group: a setting that rides in the slot
+     * without shaping the reading is absent, and a revert therefore leaves it
+     * alone. Only the evaluator knows the difference, which is why the list
+     * comes from there rather than from the call site.
+     */
+    dependsOn?: PathSegment[][];
 }
 
 /** One row of the `helman/inspect_entities` answer. */
@@ -125,8 +136,6 @@ export class HelmanEntityGroup extends LitElement {
     @property({ attribute: false }) fieldHost?: FormFieldHost;
     /** Where the entity id lives in the config document. */
     @property({ attribute: false }) path: PathSegment[] = [];
-    /** Every path this group owns, entity path included. Revert restores these. */
-    @property({ attribute: false }) ownedPaths: PathSegment[][] = [];
     @property({ attribute: false }) labelKey = "";
     @property({ attribute: false }) helpKey?: string;
     @property({ attribute: false }) helperKey?: string;
@@ -342,12 +351,23 @@ export class HelmanEntityGroup extends LitElement {
     private _handleRevert = (): void => {
         this.dispatchEvent(
             new CustomEvent<EntityGroupRevertDetail>(ENTITY_GROUP_REVERT, {
-                detail: { paths: this.ownedPaths.length ? this.ownedPaths : [this.path] },
+                // The backend's own list of what it read. The fallback covers a
+                // response that carries none -- an older backend, or a path
+                // with no evaluator -- where the entity itself is all this
+                // element can honestly claim to own.
+                detail: { paths: this._revertPaths() },
                 bubbles: true,
                 composed: true,
             }),
         );
     };
+
+    /** The paths a revert writes: what the reading was actually made of. */
+    private _revertPaths(): PathSegment[][] {
+        const reported =
+            this.inspection?.draft?.dependsOn ?? this.inspection?.saved?.dependsOn;
+        return reported?.length ? reported.map((path) => [...path]) : [this.path];
+    }
 
     private _renderFacts(inspection: EntityInspection | null): TemplateResult | typeof nothing {
         const badges = (inspection?.facts ?? [])

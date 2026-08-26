@@ -22,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .context import PathSegment
+
 #: How prominently the editor draws a fact. Chooses a badge class and nothing
 #: else -- the frontend never reads it to decide *what* to render.
 Severity = Literal["neutral", "info", "ok", "warn"]
@@ -61,22 +63,45 @@ class Fact:
 class Inspection:
     """What one config path currently amounts to.
 
-    ``signature`` never reaches the frontend. It is everything the evaluator
-    consulted to produce these facts -- the entity id and every setting it
-    read -- and exists so that the *backend* can answer "did the draft and the
-    saved document differ in anything that matters here?". The editor holds
-    both documents and could diff them itself, but only the evaluator knows
-    which keys its answer depends on, so the comparison stays here.
+    ``consulted`` is every ``(path, value)`` the evaluator actually looked at --
+    the entity id and each setting that shaped these facts -- and it answers two
+    different questions from one list, which is the point of it being one list.
+
+    * :attr:`signature` is its values, and lets the *backend* decide whether the
+      draft and the saved document differ in anything that matters here. The
+      editor holds both documents and could diff them, but only the evaluator
+      knows which keys its answer depends on.
+    * :attr:`depends_on` is its paths, and reaches the frontend as ``dependsOn``
+      so that a revert restores exactly what the reading depended on. Anything
+      else in the group -- a training window that rides in the same slot because
+      it is the same entity's setting -- is untouched by a revert, because
+      resetting a value that could never have caused the revert control to
+      appear is a silent edit the user never asked for.
+
+    Keeping them as one list is what stops those two answers from drifting: a
+    setting cannot enter the comparison without also becoming revertible, and a
+    path cannot be offered for revert unless it really was read.
     """
 
     entity_id: str | None
     status: Status
     facts: tuple[Fact, ...] = ()
-    signature: tuple[Any, ...] = ()
+    consulted: tuple[tuple[tuple[PathSegment, ...], Any], ...] = ()
+
+    @property
+    def signature(self) -> tuple[Any, ...]:
+        """The values behind these facts, for the draft-versus-saved comparison."""
+        return tuple(value for _path, value in self.consulted)
+
+    @property
+    def depends_on(self) -> tuple[tuple[PathSegment, ...], ...]:
+        """The config paths behind these facts, in the order they were read."""
+        return tuple(path for path, _value in self.consulted)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "entityId": self.entity_id,
             "status": self.status,
             "facts": [fact.to_dict() for fact in self.facts],
+            "dependsOn": [list(path) for path in self.depends_on],
         }

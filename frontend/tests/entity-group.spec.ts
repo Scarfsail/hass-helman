@@ -107,17 +107,29 @@ interface MountOptions {
     config?: unknown;
     /** Facts the stub answers with for keys other than the grid group's. */
     factsByKey?: Record<string, unknown[]>;
+    /** What the backend says each reading was made of, per group key. */
+    dependsOnByKey?: Record<string, unknown[][]>;
+    /** Keys other than the grid group's that also get a saved reading. */
+    savedKeys?: string[];
 }
 
 async function mountEditor(page: Page, options: MountOptions = {}): Promise<void> {
-    const { withSaved = false, config = STORED_CONFIG, factsByKey = {} } = options;
+    const {
+        withSaved = false,
+        config = STORED_CONFIG,
+        factsByKey = {},
+        savedKeys = [],
+        dependsOnByKey = {
+            [GRID_KEY]: [GRID_PATH, ["power_devices", "grid", "entities", "power_polarity"]],
+        },
+    } = options;
 
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, withSaved, gridKey, draftFacts, savedFacts, factsByKey }) => {
+        ({ config, withSaved, gridKey, draftFacts, savedFacts, factsByKey, dependsOnByKey, savedKeys }) => {
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
@@ -163,22 +175,37 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                                   }
                                 : fact,
                         );
+                        // `dependsOn` is the backend's own list of what it
+                        // read, and it is what a revert writes back. The stub
+                        // reports it for the same reason the backend does:
+                        // nothing in the editor can work it out.
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
                                 draft:
                                     target.key === gridKey
-                                        ? { entityId: "sensor.grid_power", status: "ok", facts: gridFacts }
+                                        ? {
+                                              entityId: "sensor.grid_power",
+                                              status: "ok",
+                                              facts: gridFacts,
+                                              dependsOn: dependsOnByKey[gridKey],
+                                          }
                                         : factsByKey[target.key]
                                           ? {
                                                 entityId: "sensor.stub",
                                                 status: "ok",
                                                 facts: factsByKey[target.key],
+                                                dependsOn: dependsOnByKey[target.key],
                                             }
                                           : { entityId: null, status: "unsupported", facts: [] },
                                 saved:
-                                    withSaved && target.key === gridKey
-                                        ? { entityId: "sensor.grid_power", status: "ok", facts: savedFacts }
+                                    withSaved && (target.key === gridKey || savedKeys.includes(target.key))
+                                        ? {
+                                              entityId: "sensor.stub",
+                                              status: "ok",
+                                              facts: savedFacts,
+                                              dependsOn: dependsOnByKey[target.key],
+                                          }
                                         : null,
                             })),
                         };
@@ -195,6 +222,8 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
             draftFacts: DRAFT_FACTS,
             savedFacts: SAVED_FACTS,
             factsByKey,
+            dependsOnByKey,
+            savedKeys,
         },
     );
 
@@ -659,4 +688,63 @@ test("the history badge follows the severity the backend sent", async ({ page })
         ]);
         expect(group.factClasses.at(-1)).toContain(badgeClass);
     }
+});
+
+test("a revert restores what the reading was made of, and nothing else", async ({ page }) => {
+    // The training window renders inside the house group because it is the
+    // same entity's setting -- but the badge never reads it, so it can never
+    // cause the revert control to appear, and pressing that control must not
+    // reset it. The editor cannot know which is which: it reverts exactly the
+    // paths the backend reported in `dependsOn`.
+    const MIN_DAYS_PATH = ["power_devices", "house", "forecast", "min_history_days"];
+    const WINDOW_PATH = ["power_devices", "house", "forecast", "training_window_days"];
+    await mountEditor(page, {
+        config: HISTORY_CONFIG,
+        withSaved: true,
+        savedKeys: [HOUSE_KEY],
+        factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
+        dependsOnByKey: {
+            [GRID_KEY]: [GRID_PATH, ["power_devices", "grid", "entities", "power_polarity"]],
+            [HOUSE_KEY]: [HOUSE_PATH, MIN_DAYS_PATH],
+        },
+    });
+    await waitForGroupFacts(page, HOUSE_KEY);
+
+    await page.evaluate(
+        ({ entityPath, minDaysPath, windowPath }) => {
+            const editor = document.querySelector("helman-config-editor-panel") as any;
+            editor.setValue(entityPath, "sensor.some_other_meter");
+            editor.setValue(minDaysPath, 5);
+            editor.setValue(windowPath, 90);
+        },
+        { entityPath: HOUSE_PATH, minDaysPath: MIN_DAYS_PATH, windowPath: WINDOW_PATH },
+    );
+
+    await expect
+        .poll(async () => (await readGroup(page, HOUSE_KEY))?.hasRevert ?? false)
+        .toBe(true);
+
+    await page.evaluate((groupKey) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const group = Array.from(root?.querySelectorAll("helman-entity-group") ?? []).find(
+            (element) => (element as any).key === groupKey,
+        ) as any;
+        group.shadowRoot.querySelector(".revert").click();
+    }, HOUSE_KEY);
+
+    await expect
+        .poll(async () =>
+            page.evaluate(() => {
+                const editor = document.querySelector("helman-config-editor-panel") as any;
+                return editor.getValue(["power_devices", "house", "forecast"]);
+            }),
+        )
+        .toEqual({
+            // Restored: the entity and the one setting the badge read.
+            total_energy_entity_id: "sensor.house_energy",
+            min_history_days: 30,
+            // Kept: an edit the reading never depended on, which the user made
+            // deliberately and never asked to undo.
+            training_window_days: 90,
+        });
 });

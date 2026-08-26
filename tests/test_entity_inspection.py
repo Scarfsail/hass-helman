@@ -39,6 +39,7 @@ for _name, _path in [
 
 from custom_components.helman.entity_inspection import (  # noqa: E402
     evaluator_for,
+    has_list_index,
     inspect_target,
     inspect_targets,
     match_key,
@@ -623,6 +624,140 @@ class TestHistoryDraftVersusSaved(_HistoryTestCase):
             saved_config=_history_config(),
         )
         self.assertIsNone(result["saved"])
+
+
+class TestListTargetsHaveNoSavedReading(_HistoryTestCase):
+    """A position in a list is not an identity, so it gets no comparison.
+
+    The revert this withholds is not a nicety. Saved ``[A, B, C]``, the user
+    removes ``A``: the draft's index 0 now holds ``B``, the saved document's
+    index 0 still holds ``A``, and a revert offered on that comparison writes
+    ``A`` back over ``B`` -- deleting an entity the user deliberately kept.
+    Reordering two entries is worse still: reverting one of them leaves the
+    same sensor listed twice, silently double-counting it.
+    """
+
+    def _daily_config(self, *entity_ids: str) -> dict:
+        return {
+            "power_devices": {
+                "solar": {"forecast": {"daily_energy_entity_ids": list(entity_ids)}}
+            }
+        }
+
+    def _saved_for(self, draft: dict, saved: dict, index: int = 0) -> dict | None:
+        hass = _ProbingHass(
+            {
+                "sensor.a": _State("1", unit="kWh"),
+                "sensor.b": _State("2", unit="kWh"),
+            }
+        )
+        [result] = inspect_targets(
+            hass,
+            draft,
+            [
+                {
+                    "key": f"daily.{index}",
+                    "path": ["power_devices", "solar", "forecast", "daily_energy_entity_ids", index],
+                }
+            ],
+            saved_config=saved,
+        )
+        return result["saved"]
+
+    def test_a_removed_first_entry_does_not_offer_to_restore_itself(self):
+        self.assertIsNone(
+            self._saved_for(
+                self._daily_config("sensor.b"),
+                self._daily_config("sensor.a", "sensor.b"),
+            )
+        )
+
+    def test_a_reorder_offers_no_revert_that_would_duplicate_a_sensor(self):
+        self.assertIsNone(
+            self._saved_for(
+                self._daily_config("sensor.b", "sensor.a"),
+                self._daily_config("sensor.a", "sensor.b"),
+            )
+        )
+
+    def test_the_reading_itself_is_unaffected(self):
+        # Only the comparison is withheld. What the entity says is still said.
+        hass = _ProbingHass({"sensor.a": _State("1", unit="kWh")})
+        config = self._daily_config("sensor.a")
+        _, inspection = self.inspect_twice(hass, config, DAILY_HISTORY_PATH)
+        self.assertEqual(inspection["status"], "ok")
+        self.assertIsNotNone(_fact(inspection, "history"))
+
+    def test_a_path_without_a_list_index_still_compares(self):
+        # The guard is about list positions, not about saved readings at large.
+        hass = _ProbingHass({"sensor.grid_power": _State("1400")})
+        [result] = inspect_targets(
+            hass,
+            _config(polarity="positive_is_import"),
+            [{"key": "grid", "path": list(POWER_PATH)}],
+            saved_config=_config(),
+        )
+        self.assertIsNotNone(result["saved"])
+
+    def test_the_rule_reads_the_path_rather_than_the_evaluator(self):
+        self.assertTrue(has_list_index(("a", 0, "b")))
+        self.assertFalse(has_list_index(("a", "0", "b")))
+        self.assertFalse(has_list_index(POWER_PATH))
+
+
+class TestWhatARevertRestores(_HistoryTestCase):
+    """``dependsOn`` names what the reading was made of, and nothing else."""
+
+    def test_only_the_setting_the_badge_reads_is_listed(self):
+        # ``training_window_days`` renders inside the same group because it is
+        # the same entity's setting -- but the badge never reads it, so a
+        # revert must not reset it. The group learns that from here.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        draft = _history_config(min_history_days=30)
+        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        _, inspection = self.inspect_twice(hass, draft, HOUSE_HISTORY_PATH)
+        self.assertEqual(
+            inspection["dependsOn"],
+            [
+                ["power_devices", "house", "forecast", "total_energy_entity_id"],
+                ["power_devices", "house", "forecast", "min_history_days"],
+            ],
+        )
+
+    def test_a_path_with_no_requirement_depends_on_the_entity_alone(self):
+        hass = _ProbingHass({"sensor.solar_total": _State("55", unit="kWh")})
+        _, inspection = self.inspect_twice(
+            hass,
+            _history_config(entity=None, solar_entity="sensor.solar_total"),
+            SOLAR_HISTORY_PATH,
+        )
+        self.assertEqual(
+            inspection["dependsOn"],
+            [["power_devices", "solar", "forecast", "total_energy_entity_id"]],
+        )
+
+    def test_a_power_reading_depends_on_its_entity_and_its_polarity(self):
+        inspection = inspect_target(
+            _Hass({"sensor.grid_power": _State("1400")}), _config(), POWER_PATH
+        ).to_dict()
+        self.assertEqual(
+            inspection["dependsOn"],
+            [
+                ["power_devices", "grid", "entities", "power"],
+                ["power_devices", "grid", "entities", "power_polarity"],
+            ],
+        )
+
+    def test_the_paths_and_the_comparison_are_the_same_list(self):
+        # One list answers both questions, so a setting cannot enter the
+        # draft-versus-saved comparison without also becoming revertible.
+        inspection = inspect_target(
+            _Hass({"sensor.grid_power": _State("1400")}),
+            _config(polarity="positive_is_import"),
+            POWER_PATH,
+        )
+        self.assertEqual(len(inspection.signature), len(inspection.depends_on))
+        self.assertEqual(inspection.signature, ("sensor.grid_power", "positive_is_import"))
 
 
 class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):

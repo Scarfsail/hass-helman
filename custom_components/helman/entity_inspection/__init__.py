@@ -42,6 +42,7 @@ __all__ = [
     "Severity",
     "Status",
     "evaluator_for",
+    "has_list_index",
     "inspect_target",
     "inspect_targets",
     "match_key",
@@ -113,6 +114,9 @@ def inspect_targets(
     A target that is not a mapping, or carries no usable ``path``, still gets a
     row: dropping it would leave the editor waiting forever for a key that
     never comes back.
+
+    **A path through a list index never gets a saved reading**, however
+    different the two documents are -- see :func:`has_list_index`.
     """
     results: list[dict[str, Any]] = []
     for index, target in enumerate(targets):
@@ -120,7 +124,7 @@ def inspect_targets(
         path = normalize_path(raw_path)
         draft = inspect_target(hass, config, path)
         saved: Inspection | None = None
-        if saved_config is not None:
+        if saved_config is not None and not has_list_index(path):
             candidate = inspect_target(hass, saved_config, path)
             if candidate.signature != draft.signature:
                 saved = candidate
@@ -132,6 +136,29 @@ def inspect_targets(
             }
         )
     return results
+
+
+def has_list_index(path: Sequence[PathSegment]) -> bool:
+    """Whether this path reaches its value through a position in a list.
+
+    Such a path names *where a value sits*, not *which value it is*, and the
+    difference is what makes a saved comparison unanswerable for it. Delete the
+    first of three entity ids and every later one shifts up a place: the
+    document at index 1 now holds what index 2 held, and the saved document at
+    index 1 holds something the user deliberately removed. Offering that as
+    "the saved reading" invites a revert that writes the deleted entity back
+    over a kept one -- and reordering two entries invites one that duplicates a
+    sensor. Neither is an edit anybody asked for.
+
+    So a list target gets ``saved: null``, always. The reading itself is still
+    live and still correct; the only thing withheld is a comparison against a
+    document that has no way to say which entry it is talking about.
+
+    This lives here rather than in the editor because it is the same kind of
+    knowledge as "what does this path mean": the backend owns what can be
+    compared, and the frontend renders whatever comparison comes back.
+    """
+    return any(isinstance(segment, int) for segment in path)
 
 
 def _read_target(target: Any, index: int) -> tuple[str, tuple[Any, ...]]:
