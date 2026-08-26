@@ -266,6 +266,7 @@ export class HelmanConfigEditorPanel
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
     _entityInspections: { state: true },
+    _entitiesOnly: { state: true },
   };
 
   static styles = [
@@ -624,6 +625,52 @@ export class HelmanConfigEditorPanel
       margin-top: 4px;
     }
 
+    .entities-only-toggle {
+      /* The toolbar packs to the right; this one control belongs on the left,
+         away from the tab's YAML toggle it must not be mistaken for. */
+      margin-right: auto;
+    }
+
+    /*
+     * The entities-only view.
+     *
+     * Everything that is not an entity group goes away, and every container
+     * left holding no group goes with it -- otherwise the view is a column of
+     * empty section headings, which is the noise this exists to remove.
+     *
+     * :has() is what makes that possible without threading a "contains a
+     * group" flag down every render path, and it is why the sections are forced
+     * open by an attribute rather than by CSS: a closed details renders no
+     * content at all, so :has() could not find a group inside one and every
+     * collapsed section would hide itself.
+     *
+     * The guard against a group's *own* fields is the pair of rules at the end.
+     * A group's slotted settings -- a polarity, a history-day count -- are not
+     * in its shadow root; they are children of <helman-entity-group> in this
+     * element's tree, which is exactly where .entities-only .field reaches.
+     * Hiding them would leave every group showing a picker and a reading with
+     * the settings that qualify it gone, which is the opposite of the point.
+     */
+    .entities-only .field,
+    .entities-only .field-grid:not(:has(helman-entity-group)),
+    .entities-only .list-stack:not(:has(helman-entity-group)),
+    .entities-only .list-card:not(:has(helman-entity-group)),
+    .entities-only details.section-card:not(:has(helman-entity-group)),
+    .entities-only .inline-note,
+    .entities-only .section-footer,
+    .entities-only .mode-toggle {
+      display: none;
+    }
+
+    .entities-only helman-entity-group .field,
+    .entities-only helman-entity-group .field-grid {
+      display: grid;
+    }
+
+    .entities-only helman-entity-group .toggle-field {
+      display: block;
+    }
+
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -645,6 +692,28 @@ export class HelmanConfigEditorPanel
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
   private _activeTab: TabId = "general";
+  /**
+   * Reduce every tab to nothing but its entity groups.
+   *
+   * Session-only on purpose: it lives for as long as the panel is mounted and
+   * comes back off on the next visit. This is an auditing mode, not a way to
+   * configure Helman -- persisting it in localStorage or in the stored
+   * document would make "half the editor is missing" a state a user could
+   * arrive in without having asked for it, and nothing here forecloses adding
+   * that later if the view turns out to be where they live.
+   */
+  private _entitiesOnly = false;
+  /**
+   * Which sections were open when the toggle went on, so turning it off puts
+   * them back.
+   *
+   * Keyed by the element itself. Lit reuses the same `details` nodes across a
+   * re-render, so the identity holds for exactly as long as the answer is
+   * wanted, and a tab switch drops the old nodes on the floor along with the
+   * entries that named them -- which is right, because a tab that was never
+   * open while the toggle was on has no previous state to restore.
+   */
+  private _sectionOpenBeforeEntitiesOnly = new Map<HTMLDetailsElement, boolean>();
   private _config: JsonObject | null = null;
   private _dirty = false;
   private _loading = false;
@@ -815,6 +884,12 @@ export class HelmanConfigEditorPanel
       this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
         () => this._handleDataChanged(),
       );
+    }
+    if (
+      changedProperties.has("_entitiesOnly") ||
+      (this._entitiesOnly && changedProperties.has("_activeTab"))
+    ) {
+      this._applyEntitiesOnlyOpenState();
     }
   }
 
@@ -1030,13 +1105,110 @@ export class HelmanConfigEditorPanel
     return html`
       <div class="tab-scope">
         <div class="scope-toolbar">
+          ${this._renderEntitiesOnlyToggle()}
           ${this._renderModeToggle(scopeId)}
         </div>
         ${this._isScopeYaml(scopeId)
           ? html`<div class="list-card">${this._renderYamlEditor(scopeId)}</div>`
-          : html`<div class="tab-body">${content}</div>`}
+          : html`<div class="tab-body ${this._entitiesOnly ? "entities-only" : ""}">
+              ${content}
+            </div>`}
       </div>
     `;
+  }
+
+  /**
+   * The entities-only switch, in every tab's toolbar.
+   *
+   * On every tab rather than only on Power devices, which is where the noise
+   * complaint came from: the mechanism is a CSS class and a `:has()` selector
+   * that know nothing about which tab they are on, and gating it to one tab
+   * would be more code than leaving it general. A tab whose sections hold no
+   * group simply empties, which is an honest answer to "show me the entities
+   * here".
+   *
+   * It sits *outside* `.tab-body`, so the rules it turns on cannot hide the
+   * control that turned them on -- and beside the tab's own YAML toggle, which
+   * is the other control that changes what this whole tab renders.
+   */
+  private _renderEntitiesOnlyToggle(): TemplateResult {
+    return html`
+      <ha-formfield
+        class="entities-only-toggle"
+        .label=${this._t("editor.toggles.entities_only")}
+      >
+        <ha-switch
+          .checked=${this._entitiesOnly}
+          @change=${(event: Event) =>
+            this._setEntitiesOnly(
+              (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+            )}
+        ></ha-switch>
+      </ha-formfield>
+    `;
+  }
+
+  /**
+   * Every `details` the current tab body renders.
+   *
+   * Deliberately *not* a shadow-crossing walk, unlike `_mountedEntityGroups`.
+   * These are the editor's own section cards; a `details` inside a child
+   * element's shadow root belongs to that element and is not this panel's to
+   * force open. See `_applyEntitiesOnlyOpenState` for what that costs.
+   */
+  private _tabBodyDetails(): HTMLDetailsElement[] {
+    const body = this.shadowRoot?.querySelector(".tab-body");
+    return body ? [...body.querySelectorAll<HTMLDetailsElement>("details")] : [];
+  }
+
+  /**
+   * Flip the toggle, remembering what the tab looked like first.
+   *
+   * The snapshot has to be taken here rather than in `updated`, because by the
+   * time the render has run the sections have already been forced open and
+   * there is nothing left to remember.
+   */
+  private _setEntitiesOnly(next: boolean): void {
+    if (next === this._entitiesOnly) return;
+    if (next) {
+      this._sectionOpenBeforeEntitiesOnly = new Map(
+        this._tabBodyDetails().map((section) => [section, section.open]),
+      );
+    }
+    this._entitiesOnly = next;
+  }
+
+  /**
+   * Open every section while the toggle is on; put them back when it goes off.
+   *
+   * `_renderSectionScope` binds `?open` to the toggle as well, which covers a
+   * section rendered *while* the toggle is already on -- a tab switch, an
+   * appliance added. This pass covers the other half, which the binding cannot:
+   * lit only writes an attribute when the bound value changes, so a section
+   * whose `initialOpen` is already `true` but which the user has since
+   * collapsed would be left collapsed by the binding alone. It also reaches the
+   * `details.list-card` a controllable renders, which has no `open` binding at
+   * all.
+   *
+   * It runs on a change of the toggle and on a tab switch, not on every update:
+   * re-opening on every render would take the collapse control away from the
+   * user for as long as the toggle is on, and the 2 s inspection poll renders.
+   */
+  private _applyEntitiesOnlyOpenState(): void {
+    const sections = this._tabBodyDetails();
+    if (this._entitiesOnly) {
+      for (const section of sections) {
+        section.open = true;
+      }
+      return;
+    }
+    for (const section of sections) {
+      const previous = this._sectionOpenBeforeEntitiesOnly.get(section);
+      if (previous !== undefined) {
+        section.open = previous;
+      }
+    }
+    this._sectionOpenBeforeEntitiesOnly = new Map();
   }
 
   private _renderSectionScope(
@@ -1050,7 +1222,7 @@ export class HelmanConfigEditorPanel
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
     return html`
-      <details class="section-card" ?open=${initialOpen}>
+      <details class="section-card" ?open=${this._entitiesOnly || initialOpen}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">

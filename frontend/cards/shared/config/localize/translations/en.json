@@ -336,6 +336,9 @@
       "unknown": "unknown",
       "missing_id": "missing id"
     },
+    "toggles": {
+      "entities_only": "Entities only"
+    },
     "mode": {
       "visual": "Visual",
       "yaml": "YAML"

@@ -336,6 +336,9 @@
       "unknown": "neznámý",
       "missing_id": "chybí id"
     },
+    "toggles": {
+      "entities_only": "Pouze entity"
+    },
     "mode": {
       "visual": "Vizuální",
       "yaml": "YAML"
