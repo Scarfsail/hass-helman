@@ -30,10 +30,17 @@ from typing import Any
 
 from .context import InspectionRequest, PathSegment
 from .model import Fact, Inspection, Severity, Status
-from .registry import EVALUATORS, Evaluator, evaluator_for, match_key
+from .registry import (
+    EVALUATORS,
+    FALLBACK_EVALUATOR,
+    Evaluator,
+    evaluator_for,
+    match_key,
+)
 
 __all__ = [
     "EVALUATORS",
+    "FALLBACK_EVALUATOR",
     "Evaluator",
     "Fact",
     "Inspection",
@@ -48,10 +55,6 @@ __all__ = [
     "match_key",
     "normalize_path",
 ]
-
-#: What a path with no registered evaluator answers, for every document.
-_UNSUPPORTED = Inspection(entity_id=None, status="unsupported")
-
 
 def normalize_path(raw: Iterable[Any]) -> tuple[PathSegment, ...]:
     """A path from the wire as segments this package can walk.
@@ -81,10 +84,7 @@ def inspect_target(
     An evaluator that raises anyway is contained here rather than failing the
     whole poll: one broken reading must not blank the other nineteen groups.
     """
-    found = evaluator_for(path)
-    if found is None:
-        return _UNSUPPORTED
-    evaluator, wildcards = found
+    evaluator, wildcards = evaluator_for(path)
     request = InspectionRequest(
         hass=hass,
         config=config,

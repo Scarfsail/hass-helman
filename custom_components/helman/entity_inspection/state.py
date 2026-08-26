@@ -53,15 +53,31 @@ class StateReading:
     what an evaluator should interpret: rounding once, up front, is what keeps a
     reading of 0.004 W from rendering the contradictory pair "0 W" and
     "Producing".
+
+    ``text`` is the state exactly as the entity reported it, kept because a
+    state that is not a number is still a reading for anyone not about to do
+    arithmetic with it: a switch says ``on``, a select says its option. Only
+    the fallback evaluator has any use for it -- every other evaluator needs
+    the number and takes the ``problem`` instead.
     """
 
     value: float | None
     unit: str | None
     problem: Fact | None
+    text: str = ""
 
     @property
     def ok(self) -> bool:
         return self.problem is None
+
+    def text_fact(self) -> Fact:
+        """The state as it stands, for a reading that need not be numeric."""
+        return Fact(
+            id="value",
+            token="value",
+            params={"value": self.text, "unit": self.unit or ""},
+            severity="neutral",
+        )
 
     def value_fact(self) -> Fact:
         """The number itself, as the fact every evaluator leads with."""
@@ -118,6 +134,7 @@ def read_numeric_state(hass: Any, entity_id: str) -> StateReading:
         return StateReading(
             value=None,
             unit=unit,
+            text=text,
             problem=Fact(
                 id="state",
                 token="not_numeric",
@@ -128,7 +145,7 @@ def read_numeric_state(hass: Any, entity_id: str) -> StateReading:
 
     # ``or 0.0`` so that a rounded ``-0.0`` reads as zero rather than carrying a
     # sign no reader asked about.
-    return StateReading(value=round(value, 2) or 0.0, unit=unit, problem=None)
+    return StateReading(value=round(value, 2) or 0.0, unit=unit, problem=None, text=text)
 
 
 def _state_of(hass: Any, entity_id: str) -> Any:

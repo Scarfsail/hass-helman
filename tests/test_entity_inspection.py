@@ -3,9 +3,9 @@
 Two things are under test, and the second is the point of the first.
 
 The **registry** must answer for a path it knows, and answer *something* for a
-path it does not: the editor may put a group anywhere, so an unmatched path has
-to come back as ``unsupported`` rather than as an error that blanks the whole
-poll. Every failure mode a half-edited draft can produce -- no entity yet, an
+path it does not: an unclaimed path falls through to the fallback and reads its
+entity's current value, and a path holding no entity id at all comes back as
+``unsupported`` rather than as an error that blanks the whole poll. Every failure mode a half-edited draft can produce -- no entity yet, an
 entity that does not exist, a state that is not a number, a polarity pasted
 from another device's block -- is an ordinary answer here, because this
 endpoint is polled every couple of seconds while the user types.
@@ -38,6 +38,7 @@ for _name, _path in [
     sys.modules[_name] = _pkg
 
 from custom_components.helman.entity_inspection import (  # noqa: E402
+    FALLBACK_EVALUATOR,
     evaluator_for,
     has_list_index,
     inspect_target,
@@ -113,17 +114,85 @@ class TestRegistryMatching(unittest.TestCase):
         for device in ("house", "solar", "battery", "grid"):
             with self.subTest(device=device):
                 found = evaluator_for(("power_devices", device, "entities", "power"))
-                self.assertIsNotNone(found)
                 self.assertEqual(found[1], (device,))
+                self.assertIsNot(found[0], FALLBACK_EVALUATOR)
+
+    def test_an_unclaimed_path_resolves_to_the_fallback(self):
+        evaluator, wildcards = evaluator_for(("power_devices", "grid", "entities", "soc"))
+        self.assertIs(evaluator, FALLBACK_EVALUATOR)
+        self.assertEqual(wildcards, ())
+
+
+SOC_PATH = ("power_devices", "grid", "entities", "soc")
+
+
+def _soc_config(value: Any) -> dict:
+    """A document with something at a path no registry key claims."""
+    return {"power_devices": {"grid": {"entities": {"soc": value}}}}
+
+
+class TestFallbackReadings(unittest.TestCase):
+    """A path with no evaluator of its own still shows what its entity reads.
+
+    Most entities in the configuration carry nothing to interpret -- a switch,
+    a select, an energy meter -- and every one of them still has to show a
+    current value, because the editor's promise is that no configured entity is
+    left blank. That is one registry fallback, not a frontend branch for
+    "a picker with no facts".
+    """
+
+    def test_a_configured_entity_reads_its_value(self):
+        hass = _Hass({"sensor.soc": _State("42", unit="%")})
+        inspection = inspect_target(hass, _soc_config("sensor.soc"), SOC_PATH)
+        self.assertEqual(inspection.status, "ok")
+        self.assertEqual(
+            [(fact.id, fact.token, fact.params) for fact in inspection.facts],
+            [("value", "value", {"value": "42", "unit": "%"})],
+        )
+
+    def test_a_state_that_is_not_a_number_is_still_a_reading(self):
+        # A switch saying ``on`` is not a broken sensor. Only an evaluator
+        # about to do arithmetic has cause to call that a problem.
+        hass = _Hass({"switch.boiler": _State("on", unit=None)})
+        inspection = inspect_target(hass, _soc_config("switch.boiler"), SOC_PATH)
+        self.assertEqual(inspection.status, "ok")
+        fact = inspection.facts[0]
+        self.assertEqual((fact.token, fact.severity), ("value", "neutral"))
+        self.assertEqual(fact.params["value"], "on")
+
+    def test_a_missing_entity_says_so_rather_than_showing_nothing(self):
+        inspection = inspect_target(_Hass(), _soc_config("sensor.gone"), SOC_PATH)
+        self.assertEqual(inspection.status, "unavailable")
+        self.assertEqual(inspection.facts[0].token, "entity_missing")
+
+    def test_an_unset_path_reads_as_unset(self):
+        self.assertEqual(inspect_target(_Hass(), _soc_config(""), SOC_PATH).status, "unset")
+        self.assertEqual(inspect_target(_Hass(), _config(), SOC_PATH).status, "unset")
+
+    def test_a_reading_depends_on_the_entity_alone(self):
+        hass = _Hass({"sensor.soc": _State("42", unit="%")})
+        inspection = inspect_target(hass, _soc_config("sensor.soc"), SOC_PATH)
+        self.assertEqual(inspection.depends_on, (SOC_PATH,))
+
+    def test_a_specific_evaluator_still_wins(self):
+        # The fallback must never take a path someone registered for: a power
+        # sensor would lose its direction and read as a bare number.
+        hass = _Hass({"sensor.grid_power": _State("1400")})
+        inspection = inspect_target(hass, _config(), POWER_PATH)
+        self.assertIn("power_reading.", _fact(inspection.to_dict(), "reading")["token"])
 
 
 class TestUnsupportedPaths(unittest.TestCase):
     """A path nothing speaks for is answered, not refused."""
 
-    def test_no_evaluator_reads_as_unsupported(self):
-        inspection = inspect_target(_Hass(), _config(), ("power_devices", "grid", "entities", "soc"))
-        self.assertEqual(inspection.status, "unsupported")
-        self.assertEqual(inspection.facts, ())
+    def test_a_path_holding_something_other_than_an_entity_id_is_unsupported(self):
+        # A group pointed at a mapping or a list is a call-site mistake, and a
+        # fabricated reading would hide it.
+        for value in ({"nested": "sensor.x"}, ["sensor.x"], 42):
+            with self.subTest(value=value):
+                inspection = inspect_target(_Hass(), _soc_config(value), SOC_PATH)
+                self.assertEqual(inspection.status, "unsupported")
+                self.assertEqual(inspection.facts, ())
 
     def test_an_unknown_device_under_a_matching_shape_is_unsupported(self):
         # The key matches, but ``power_polarity`` has no vocabulary for this
@@ -135,6 +204,7 @@ class TestUnsupportedPaths(unittest.TestCase):
         self.assertEqual(inspection.status, "unsupported")
 
     def test_an_empty_path_is_unsupported(self):
+        # The whole document is not an entity id.
         self.assertEqual(inspect_target(_Hass(), _config(), ()).status, "unsupported")
 
 

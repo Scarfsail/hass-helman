@@ -11,9 +11,11 @@ That is what lets the websocket command carry no entity id and no settings.
 Adding an evaluation kind is a new module plus one line in :data:`EVALUATORS`.
 Nothing else in the integration, and nothing at all in the frontend, changes.
 
-A path no key matches is not an error. The editor may put an entity group
-anywhere, and one whose path nothing knows about simply shows its picker with
-no facts under it -- see ``status: "unsupported"`` in :mod:`.model`.
+A path no key matches is not an error, and no longer answers with nothing
+either: it falls through to :func:`~.fallback.evaluate_entity_value`, which
+states the entity's current value and interprets none of it. A specific key
+always wins over the fallback, so registering one is how a path stops being
+merely shown and starts being read.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
 )
 from .context import InspectionRequest, PathSegment
+from .fallback import evaluate_entity_value
 from .history import history_evaluator
 from .model import Inspection
 from .power import evaluate_power_entity
@@ -55,6 +58,13 @@ EVALUATORS: dict[str, Evaluator] = {
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }
 
+#: What speaks for a path no key claims: the value, and no interpretation. It
+#: is not an entry in :data:`EVALUATORS` because it matches every path length
+#: at once, which is the one thing a key cannot express -- and because a key
+#: that matched everything would have to be kept last by convention rather than
+#: by construction.
+FALLBACK_EVALUATOR: Evaluator = evaluate_entity_value
+
 #: The segment a key uses to mean "anything, and tell the evaluator what".
 WILDCARD = "*"
 
@@ -82,10 +92,15 @@ def match_key(key: str, path: Sequence[PathSegment]) -> tuple[str, ...] | None:
 
 def evaluator_for(
     path: Sequence[PathSegment],
-) -> tuple[Evaluator, tuple[str, ...]] | None:
-    """The evaluator that speaks for ``path``, with the wildcards it matched."""
+) -> tuple[Evaluator, tuple[str, ...]]:
+    """The evaluator that speaks for ``path``, with the wildcards it matched.
+
+    Always answers: an unclaimed path gets :data:`FALLBACK_EVALUATOR` and no
+    wildcards, because every entity in the configuration is worth a reading
+    even where there is nothing to make of it.
+    """
     for key, evaluator in EVALUATORS.items():
         wildcards = match_key(key, path)
         if wildcards is not None:
             return evaluator, wildcards
-    return None
+    return FALLBACK_EVALUATOR, ()
