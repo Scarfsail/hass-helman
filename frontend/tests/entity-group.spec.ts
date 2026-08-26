@@ -97,12 +97,29 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                     if (request.type === "helman/get_appliances") return { appliances: [] };
                     if (request.type === "helman/inspect_entities") {
                         requests.push(JSON.parse(JSON.stringify(request)));
+                        // The *backend* decides what a reading says, so the
+                        // stub reads the polarity out of the document it was
+                        // sent and picks the token. Nothing on the editor side
+                        // knows that a polarity has anything to do with this.
+                        const polarity =
+                            request.config?.power_devices?.grid?.entities?.power_polarity;
+                        const gridFacts = draftFacts.map((fact: any) =>
+                            fact.id === "reading"
+                                ? {
+                                      ...fact,
+                                      token:
+                                          polarity === "positive_is_export"
+                                              ? "power_reading.exporting"
+                                              : "power_reading.importing",
+                                  }
+                                : fact,
+                        );
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
                                 draft:
                                     target.key === gridKey
-                                        ? { entityId: "sensor.grid_power", status: "ok", facts: draftFacts }
+                                        ? { entityId: "sensor.grid_power", status: "ok", facts: gridFacts }
                                         : { entityId: null, status: "unsupported", facts: [] },
                                 saved:
                                     withSaved && target.key === gridKey
@@ -203,6 +220,12 @@ function readGroup(page: Page, key: string) {
             hasRevert: !!savedRow?.querySelector(".revert"),
         };
     }, key);
+}
+
+/** Block until the idle timer fires, so the next assertion owns a whole interval. */
+async function waitForTick(page: Page): Promise<void> {
+    const before = await requestCount(page);
+    await expect.poll(() => requestCount(page), { timeout: 4000 }).toBeGreaterThan(before);
 }
 
 async function waitForFacts(page: Page) {
@@ -396,4 +419,62 @@ test("a tab with no groups at all never asks", async ({ page }) => {
     await openTab(page, "General");
     await page.waitForTimeout(2500);
     expect(await requestCount(page)).toBe(0);
+});
+
+
+test("changing a setting re-reads at once, without waiting for the timer", async ({ page }) => {
+    // Regression: the timer was the only thing that polled, so flipping a
+    // polarity left the old direction on screen for up to two seconds — a
+    // control that visibly did nothing.
+    await mountEditor(page);
+    const before = await waitForFacts(page);
+    expect(before.facts).toEqual(["1400 W", "Importing from the grid"]);
+
+    // Sync to a tick before touching anything, so the assertion below owns a
+    // window the timer cannot close. Without this the spec passes against a
+    // build with no fix in it at all, whenever a tick happens to land inside
+    // the assertion's own timeout — which is most of the time.
+    await waitForTick(page);
+    const requestsBefore = await requestCount(page);
+
+    await page.evaluate((groupKey) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const group = Array.from(root?.querySelectorAll("helman-entity-group") ?? []).find(
+            (element) => (element as any).key === groupKey,
+        ) as any;
+        const select = group.querySelector("select") as HTMLSelectElement;
+        select.value = "positive_is_export";
+        select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    }, GRID_KEY);
+
+    // Well inside the interval the tick above just restarted.
+    await expect
+        .poll(async () => (await readGroup(page, GRID_KEY))?.facts ?? [], { timeout: 600 })
+        .toEqual(["1400 W", "Exporting to the grid"]);
+    expect(await requestCount(page)).toBeGreaterThan(requestsBefore);
+});
+
+test("typing does not send one request per keystroke", async ({ page }) => {
+    // The other half of the trigger: leading edge for the discrete change,
+    // coalesced for a burst. Ten writes in a row must not be ten documents on
+    // the wire — and must still be more than none.
+    await mountEditor(page);
+    await waitForFacts(page);
+
+    await waitForTick(page);
+    const before = await requestCount(page);
+
+    await page.evaluate(() => {
+        const editor = document.querySelector("helman-config-editor-panel") as any;
+        for (let index = 0; index < 10; index += 1) {
+            editor.setValue(["power_devices", "house", "power_sensor_label"], "x".repeat(index + 1));
+        }
+    });
+
+    // One leading call plus at most one trailing call for the whole burst,
+    // all of it inside the interval the tick above restarted.
+    await page.waitForTimeout(600);
+    const sent = (await requestCount(page)) - before;
+    expect(sent).toBeGreaterThan(0);
+    expect(sent).toBeLessThanOrEqual(2);
 });

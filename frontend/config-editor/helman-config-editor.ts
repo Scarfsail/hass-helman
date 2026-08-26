@@ -181,6 +181,23 @@ const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
  */
 const ENTITY_INSPECTION_INTERVAL_MS = 2000;
 
+/**
+ * How long an immediate re-read waits before it can fire again.
+ *
+ * Every write into the draft asks for a fresh reading, because a reading the
+ * user just invalidated is worse than no reading -- flipping a polarity and
+ * watching the old direction sit there for two seconds reads as a control that
+ * did nothing. But text fields write on every keystroke, and one whole config
+ * document per character is not a poll, it is a flood.
+ *
+ * So the trigger is leading-edge: the *first* change of a burst goes out at
+ * once -- which is every discrete change, a select or a picker -- and anything
+ * that arrives inside the window is collapsed into a single trailing call once
+ * it closes. Typing costs two requests rather than one per character, and a
+ * click costs no delay at all.
+ */
+const ENTITY_INSPECTION_DEBOUNCE_MS = 150;
+
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
 } as const;
@@ -675,9 +692,22 @@ export class HelmanConfigEditorPanel
   /** The last answer, keyed by group. Groups read their own row from here. */
   private _entityInspections: Record<string, EntityInspectionResult> = {};
   private _inspectionTimer?: ReturnType<typeof setInterval>;
-  private _inspectionPending?: ReturnType<typeof setTimeout>;
-  /** One request at a time: a slow tick must not queue behind itself. */
-  private _inspectionInFlight = false;
+  /** Open while a burst is being coalesced; see the debounce constant. */
+  private _inspectionDebounce?: ReturnType<typeof setTimeout>;
+  /** Something changed while the window was open, so send once more at its end. */
+  private _inspectionTrailing = false;
+  /**
+   * Request ids, so a slow answer cannot overwrite a newer one.
+   *
+   * Requests are allowed to overlap rather than being serialised behind an
+   * in-flight flag: dropping a request because an older one is still out would
+   * drop exactly the state the user just typed, which is the bug this whole
+   * mechanism exists to prevent. Instead every request takes the next id and
+   * only an id newer than the last one applied may reach the screen -- a
+   * response that arrives out of order is discarded, not rendered.
+   */
+  private _inspectionSequence = 0;
+  private _inspectionApplied = 0;
 
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
@@ -705,12 +735,9 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener(ENTITY_GROUP_CONNECTED, this._scheduleEntityInspection);
+    this.addEventListener(ENTITY_GROUP_CONNECTED, this._requestEntityInspection);
     this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
-    this._inspectionTimer = setInterval(
-      () => void this._pollEntityInspections(),
-      ENTITY_INSPECTION_INTERVAL_MS,
-    );
+    this._restartEntityInspectionTimer();
     void loadHaForm()
       .then(() => {
         this.requestUpdate();
@@ -730,16 +757,17 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
-    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._scheduleEntityInspection);
+    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._requestEntityInspection);
     this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     if (this._inspectionTimer !== undefined) {
       clearInterval(this._inspectionTimer);
       this._inspectionTimer = undefined;
     }
-    if (this._inspectionPending !== undefined) {
-      clearTimeout(this._inspectionPending);
-      this._inspectionPending = undefined;
+    if (this._inspectionDebounce !== undefined) {
+      clearTimeout(this._inspectionDebounce);
+      this._inspectionDebounce = undefined;
     }
+    this._inspectionTrailing = false;
   }
 
   protected updated(changedProperties: PropertyValues<this>): void {
@@ -3265,22 +3293,55 @@ export class HelmanConfigEditorPanel
         }
       }
     });
+  };
+
+  /**
+   * Read again now, because something the reading depends on moved.
+   *
+   * The single trigger for everything that is not the timer: a group mounting,
+   * and every write into the draft document. It deliberately does *not* ask
+   * which paths changed or which group owns them. The poll is one batched call
+   * over the groups the collector finds in the DOM, and a config write is rare
+   * enough that asking unconditionally is both simpler than a dependency map
+   * and impossible to get subtly wrong -- a field added later cannot forget to
+   * opt in.
+   *
+   * Leading edge, with a trailing call when the burst had more in it. Expanding
+   * a section mounts several groups at once and the first of them fires before
+   * its siblings exist, so the trailing call is what picks the rest up.
+   */
+  private _requestEntityInspection = (): void => {
+    if (this._inspectionDebounce !== undefined) {
+      this._inspectionTrailing = true;
+      return;
+    }
+    this._inspectionDebounce = setTimeout(() => {
+      this._inspectionDebounce = undefined;
+      if (this._inspectionTrailing) {
+        this._inspectionTrailing = false;
+        this._requestEntityInspection();
+      }
+    }, ENTITY_INSPECTION_DEBOUNCE_MS);
     void this._pollEntityInspections();
   };
 
   /**
-   * Poll soon, without waiting out a whole tick.
+   * Start the idle tick over.
    *
-   * A group announces itself as it mounts, and expanding a section mounts
-   * several at once; the pending one-shot collapses that burst into one call.
+   * Called whenever a request actually goes out, so an immediate poll *resets*
+   * the two-second rhythm instead of running beside it. Without this, a burst
+   * of edits would leave the timer firing in the gaps between the polls the
+   * edits already caused.
    */
-  private _scheduleEntityInspection = (): void => {
-    if (this._inspectionPending !== undefined) return;
-    this._inspectionPending = setTimeout(() => {
-      this._inspectionPending = undefined;
-      void this._pollEntityInspections();
-    }, 0);
-  };
+  private _restartEntityInspectionTimer(): void {
+    if (this._inspectionTimer !== undefined) {
+      clearInterval(this._inspectionTimer);
+    }
+    this._inspectionTimer = setInterval(
+      () => void this._pollEntityInspections(),
+      ENTITY_INSPECTION_INTERVAL_MS,
+    );
+  }
 
   /**
    * The groups actually on screen, read from the DOM at the moment of asking.
@@ -3311,7 +3372,7 @@ export class HelmanConfigEditorPanel
    * the panel growing an error banner that reappears every two seconds.
    */
   private async _pollEntityInspections(): Promise<void> {
-    if (!this.hass || !this._config || this._inspectionInFlight) return;
+    if (!this.hass || !this._config) return;
     const saved = this._savedConfig;
     const targets = this._mountedEntityGroups()
       .map((group) => ({ key: group.key, path: group.path }))
@@ -3326,7 +3387,8 @@ export class HelmanConfigEditorPanel
       }
       return;
     }
-    this._inspectionInFlight = true;
+    const sequence = ++this._inspectionSequence;
+    this._restartEntityInspectionTimer();
     try {
       const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
         type: "helman/inspect_entities",
@@ -3334,6 +3396,11 @@ export class HelmanConfigEditorPanel
         ...(saved ? { saved_config: saved } : {}),
         targets,
       });
+      // A slower earlier request must never repaint over a newer answer: that
+      // would put the stale reading back on screen, which is the whole defect
+      // the immediate poll exists to remove.
+      if (sequence < this._inspectionApplied) return;
+      this._inspectionApplied = sequence;
       const next: Record<string, EntityInspectionResult> = {};
       for (const row of response?.results ?? []) {
         next[row.key] = row;
@@ -3341,8 +3408,6 @@ export class HelmanConfigEditorPanel
       this._entityInspections = next;
     } catch {
       // Polled: a dropped tick costs a stale badge, not a message.
-    } finally {
-      this._inspectionInFlight = false;
     }
   }
 
@@ -4176,6 +4241,14 @@ export class HelmanConfigEditorPanel
     return changed;
   }
 
+  /**
+   * The one place a field write reaches the draft document.
+   *
+   * Every `_set*` helper funnels through here, which is why the entity
+   * groups' re-read is wired here and not into the individual renderers: a
+   * field added tomorrow gets a live reading for free and cannot forget to ask
+   * for one.
+   */
   private _applyMutation(mutator: (draft: JsonObject) => void): void {
     const draft = cloneJson(this._config ?? {});
     mutator(draft);
@@ -4183,6 +4256,7 @@ export class HelmanConfigEditorPanel
     this._dirty = true;
     this._validation = null;
     this._message = null;
+    this._requestEntityInspection();
   }
 
   // --- FormFieldHost -------------------------------------------------------
