@@ -118,6 +118,7 @@ from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
+from .power_polarity import is_power_inverted
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
     TodaySlotEnergyReader,
@@ -4404,6 +4405,13 @@ class HelmanCoordinator:
             battery_cfg = self._active_config.get("power_devices", {}).get("battery", {})
             sensor_id = battery_cfg.get("entities", {}).get("power")
             hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
+
+            # The one power reading not routed through ``value_type``: this
+            # works off the raw history buffer, so it has to apply the
+            # configured polarity itself. Getting it wrong is silent -- the two
+            # ETAs simply report each other's value.
+            if is_power_inverted(battery_cfg, "battery"):
+                hist = [-v for v in hist]
 
             pos_values = [v for v in hist if v > 1]
             neg_values = [abs(v) for v in hist if v < -1]

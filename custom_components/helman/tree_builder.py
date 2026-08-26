@@ -12,6 +12,7 @@ from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .controllables.config import read_deferrable_consumers
+from .power_polarity import consumer_value_type, source_value_type
 
 @dataclass
 class DeviceNodeDTO:
@@ -104,7 +105,7 @@ class HelmanTreeBuilder:
                 solar_config["entities"]["power"],
                 solar_config,
                 source_type="solar",
-                value_type="default",
+                value_type=source_value_type(solar_config, "solar"),
                 icon="mdi:solar-power",
             ))
 
@@ -113,7 +114,7 @@ class HelmanTreeBuilder:
                 battery_config["entities"]["power"],
                 battery_config,
                 source_type="battery",
-                value_type="negative",
+                value_type=source_value_type(battery_config, "battery"),
                 icon="mdi:battery",
             ))
 
@@ -122,7 +123,7 @@ class HelmanTreeBuilder:
                 grid_config["entities"]["power"],
                 grid_config,
                 source_type="grid",
-                value_type="negative",
+                value_type=source_value_type(grid_config, "grid"),
                 icon="mdi:transmission-tower-export",
             ))
 
@@ -142,7 +143,7 @@ class HelmanTreeBuilder:
                 is_source=False,
                 is_unmeasured=False,
                 is_virtual=False,
-                value_type="default",
+                value_type=consumer_value_type(house_config, "house"),
                 labels=[],
                 label_badge_texts=[],
                 source_config=house_config,
@@ -164,7 +165,7 @@ class HelmanTreeBuilder:
                 battery_config["entities"]["power"],
                 battery_config,
                 source_type="battery",
-                value_type="positive",
+                value_type=consumer_value_type(battery_config, "battery"),
                 icon="mdi:battery",
             ))
 
@@ -173,7 +174,7 @@ class HelmanTreeBuilder:
                 grid_config["entities"]["power"],
                 grid_config,
                 source_type="grid",
-                value_type="positive",
+                value_type=consumer_value_type(grid_config, "grid"),
                 icon="mdi:transmission-tower-import",
             ))
 

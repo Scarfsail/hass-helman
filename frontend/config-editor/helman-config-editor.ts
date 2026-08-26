@@ -2,6 +2,43 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 
+/**
+ * Which sign a power sensor uses to carry its quantity, per power device.
+ *
+ * Mirrors ``POWER_POLARITY_OPTIONS`` in ``custom_components/helman/power_polarity.py``
+ * -- that module is the authority, and the backend rejects anything not in its
+ * table, so the two must be changed together. First entry of each pair is the
+ * default and reproduces the convention Helman hard-coded before the setting
+ * existed.
+ */
+const POWER_POLARITY_OPTIONS = {
+  solar: ["positive_is_production", "negative_is_production"],
+  house: ["positive_is_consumption", "negative_is_consumption"],
+  battery: ["positive_is_charging", "positive_is_discharging"],
+  grid: ["positive_is_export", "positive_is_import"],
+} as const satisfies Record<string, readonly [string, string]>;
+
+type PowerPolarityDevice = keyof typeof POWER_POLARITY_OPTIONS;
+
+/**
+ * Shown when the locale has no string for an option -- never the raw enum value.
+ *
+ * Each option is a complete statement of the convention, not a bare noun. The
+ * field asks which sign convention the sensor follows, so an option has to say
+ * *which* sign carries the quantity: "Consumption" alone reads as an assertion
+ * that the value is positive, which is exactly what half of these deny.
+ */
+const POWER_POLARITY_FALLBACK_LABELS: Record<string, string> = {
+  positive_is_production: "Positive = production",
+  negative_is_production: "Negative = production",
+  positive_is_consumption: "Positive = consumption",
+  negative_is_consumption: "Negative = consumption",
+  positive_is_charging: "Positive = charging",
+  positive_is_discharging: "Positive = discharging",
+  positive_is_export: "Positive = export (to the grid)",
+  positive_is_import: "Positive = import (from the grid)",
+};
+
 import {
   appendListItem,
   asJsonArray,
@@ -64,6 +101,7 @@ import {
   renderHelpIcon,
   renderOptionalNumberField,
   renderOptionalSelectField,
+  renderSelectFieldWithDefault,
   renderRequiredNumberField,
   renderRequiredTextField,
   renderSvgIcon,
@@ -1264,6 +1302,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.house_power_entity",
             )}
+            ${this._renderPolarityField("house")}
             ${this._renderOptionalTextField(
               ["power_devices", "house", "power_sensor_label"],
               "editor.fields.power_sensor_label",
@@ -1314,6 +1353,7 @@ export class HelmanConfigEditorPanel
                   undefined,
                   "editor.help.solar_power_entity",
                 )}
+                ${this._renderPolarityField("solar")}
                 ${this._renderOptionalEntityField(
                   ["power_devices", "solar", "entities", "today_energy"],
                   "editor.fields.today_energy_entity",
@@ -1414,8 +1454,8 @@ export class HelmanConfigEditorPanel
                           ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
                           "editor.fields.bias_correction_aggregation_method",
                           [
-                            { value: "ratio_of_sums", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
-                            { value: "trimmed_mean", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
+                            { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
+                            { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
                           ],
                           "editor.help.bias_correction_aggregation_method",
                         )}
@@ -1561,6 +1601,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.battery_power_entity",
             )}
+            ${this._renderPolarityField("battery")}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
@@ -1631,6 +1672,7 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.grid_power_entity",
             )}
+            ${this._renderPolarityField("grid")}
             ${this._renderOptionalEntityField(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
@@ -2908,6 +2950,53 @@ export class HelmanConfigEditorPanel
     helpKey?: string,
   ): TemplateResult {
     return renderRequiredNumberField(this, path, labelKey, explicitValue, step, helpKey);
+  }
+
+  /**
+   * The polarity select shown under a power device's power-entity picker.
+   *
+   * One control across all four devices, but the wording is looked up per
+   * device: "positive is import or export?" is a question a user can answer by
+   * looking at their inverter, where "is it inverted?" is not. Grid and
+   * battery name two directions of the same axis; house and solar have only
+   * one quantity each, so theirs name which *sign* carries it. Either way the
+   * option states the whole convention, so it reads as a statement rather than
+   * as a value the field's label has already contradicted.
+   *
+   * The first option of each pair is the default, and it is exactly the
+   * convention Helman hard-coded before the setting existed, so leaving the
+   * field unset must keep an existing dashboard byte-identical. An unset field
+   * therefore renders showing that default rather than blank: something is in
+   * force either way, and a blank select would hide which.
+   */
+  private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
+    const options = POWER_POLARITY_OPTIONS[device].map((value) => ({
+      value,
+      label: this._optionLabel(`editor.fields.power_polarity_${value}`, POWER_POLARITY_FALLBACK_LABELS[value]),
+    }));
+    return renderSelectFieldWithDefault(
+      this,
+      ["power_devices", device, "entities", "power_polarity"],
+      "editor.fields.power_polarity",
+      options,
+      POWER_POLARITY_OPTIONS[device][0],
+      `editor.help.power_polarity_${device}`,
+    );
+  }
+
+  /**
+   * A select option's label, from the editor's own translation files.
+   *
+   * ``_t`` is what reads those; ``hass.localize`` resolves against the
+   * integration's *backend* strings, which carry no editor keys at all, so a
+   * label looked up that way is the English fallback in every locale --
+   * however carefully the editor's own locale files were translated. A missing
+   * key comes back as the key itself, which is why the fallback is compared
+   * rather than ``||``-ed.
+   */
+  private _optionLabel(key: string, fallback: string): string {
+    const translated = this._t(key);
+    return translated === key ? fallback : translated;
   }
 
   private _renderOptionalSelectField(
