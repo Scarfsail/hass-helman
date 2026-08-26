@@ -90,7 +90,8 @@
     "empty": {
       "no_automation_optimizers": "No optimizers configured yet.",
       "no_controllables": "No controllables configured yet.",
-      "no_device_label_categories": "No device label categories configured."
+      "no_device_label_categories": "No device label categories configured.",
+      "no_entities_on_tab": "This tab configures no entities."
     },
     "card": {
       "category": "Category",
@@ -252,7 +253,8 @@
     "entity_group": {
       "saved_reading": "Saved config reads",
       "revert": "Revert to saved",
-      "revert_aria": "Revert this entity and its settings to the saved config"
+      "revert_aria": "Revert this entity and its settings to the saved config",
+      "more_info_aria": "Show details of {entity}"
     },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",

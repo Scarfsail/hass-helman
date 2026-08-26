@@ -698,6 +698,26 @@ export class HelmanConfigEditorPanel
       display: inline-flex;
     }
 
+    /*
+     * "There are no entities here", said only when it is true.
+     *
+     * The same :has() that hides the empty sections decides this, which is
+     * what keeps the two from ever disagreeing: the message appears exactly
+     * when every section on the tab has been hidden. Being a CSS question
+     * rather than a piece of state also means it cannot flash before the first
+     * inspection poll -- it is about whether the tab *configures* an entity,
+     * not about whether a reading has arrived for one -- and a scope left in
+     * YAML mode counts as content, because its entity ids are on screen even
+     * though no group is.
+     */
+    .entities-only-empty {
+      display: none;
+    }
+
+    .entities-only:not(:has(helman-entity-group, .scope-yaml)) > .entities-only-empty {
+      display: block;
+    }
+
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -1139,6 +1159,11 @@ export class HelmanConfigEditorPanel
           ? html`<div class="list-card">${this._renderYamlEditor(scopeId)}</div>`
           : html`<div class="tab-body ${this._entitiesOnly ? "entities-only" : ""}">
               ${content}
+              ${this._entitiesOnly
+                ? html`<div class="message info entities-only-empty">
+                    ${this._t("editor.empty.no_entities_on_tab")}
+                  </div>`
+                : nothing}
             </div>`}
       </div>
     `;

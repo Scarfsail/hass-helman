@@ -157,7 +157,21 @@ export class HelmanEntityGroup extends LitElement {
             padding: 12px;
             border-radius: 12px;
             border: 1px solid var(--divider-color);
-            background: var(--secondary-background-color);
+            /*
+             * A faint wash of the theme's own accent over the card ground,
+             * rather than a fixed colour: --rgb-primary-color is what HA gives
+             * a theme to tint with, so a group reads as the same "picked
+             * entity" surface on a light theme and a dark one instead of the
+             * bright silver --secondary-background-color paints on a dark one.
+             * The overlay is a gradient rather than an rgba background-color
+             * because it has to composite over a *known* ground -- an alpha
+             * colour would blend with whatever section happens to be behind it.
+             */
+            background-color: var(--card-background-color);
+            background-image: linear-gradient(
+                rgba(var(--rgb-primary-color, 3, 169, 244), 0.09),
+                rgba(var(--rgb-primary-color, 3, 169, 244), 0.09)
+            );
             min-width: 0;
         }
 
@@ -221,6 +235,14 @@ export class HelmanEntityGroup extends LitElement {
         .badge {
             display: inline-block;
             padding: 3px 10px;
+            /*
+             * Declared on every badge, transparent by default, so that the
+             * button form below can set nothing about the border and the
+             * colour classes keep owning it. A reset that touched border
+             * would have to out-specify them, and then a neutral badge would
+             * lose its outline the moment it became clickable.
+             */
+            border: 1px solid transparent;
             border-radius: 12px;
             font-size: 0.82rem;
             font-weight: 600;
@@ -229,7 +251,7 @@ export class HelmanEntityGroup extends LitElement {
         .badge-neutral {
             background: var(--card-background-color);
             color: var(--primary-text-color);
-            border: 1px solid var(--divider-color);
+            border-color: var(--divider-color);
         }
 
         .badge-info {
@@ -245,6 +267,32 @@ export class HelmanEntityGroup extends LitElement {
         .badge-warning {
             background: rgba(245, 127, 23, 0.2);
             color: #f57f17;
+        }
+
+        /*
+         * A fact that names an entity is a way into that entity.
+         *
+         * A real <button>, not a span with a click handler: this opens a
+         * dialog, so it has to be reachable by keyboard and announce itself as
+         * something that does. Only the properties the UA gets wrong are
+         * reset -- background, colour and border stay with the severity
+         * classes, which is what keeps a clickable badge looking exactly like
+         * the one beside it that has nothing to open.
+         */
+        button.badge {
+            font-family: inherit;
+            line-height: inherit;
+            text-align: inherit;
+            cursor: pointer;
+        }
+
+        button.badge:hover {
+            border-color: var(--primary-color);
+        }
+
+        button.badge:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
         }
 
         .saved-reading {
@@ -369,9 +417,18 @@ export class HelmanEntityGroup extends LitElement {
         return reported?.length ? reported.map((path) => [...path]) : [this.path];
     }
 
+    /**
+     * One row of badges, all of them about the same entity.
+     *
+     * The entity id comes from the *inspection* rather than from a fact,
+     * which is what lets a draft row and a saved row open different entities:
+     * changing the picker is exactly the edit that makes the two differ, and
+     * the saved row is then the only place the old entity is still named.
+     */
     private _renderFacts(inspection: EntityInspection | null): TemplateResult | typeof nothing {
+        const entityId = stringValue(inspection?.entityId ?? "");
         const badges = (inspection?.facts ?? [])
-            .map((fact) => this._renderFact(fact))
+            .map((fact) => this._renderFact(fact, entityId))
             .filter((badge): badge is TemplateResult => badge !== null);
         if (badges.length === 0) {
             return nothing;
@@ -379,13 +436,63 @@ export class HelmanEntityGroup extends LitElement {
         return html`<div class="facts">${badges}</div>`;
     }
 
-    private _renderFact(fact: EntityFact): TemplateResult | null {
+    /**
+     * A fact, and -- when there is an entity behind it -- a way into it.
+     *
+     * Every badge in a row opens the dialog, not just the one carrying the
+     * state. Picking the "value" fact out by its id would mean this element
+     * deciding which of the backend's facts is the real reading, which is the
+     * one thing it is not allowed to know; the honest statement is that the
+     * whole row is about this entity, so any of it is a handle on it.
+     *
+     * An inspection with no entity id -- an unset picker, a path no evaluator
+     * claims -- renders a plain span. A dialog opened on nothing is worse than
+     * no dialog, and a control that does nothing when pressed is worse still.
+     */
+    private _renderFact(fact: EntityFact, entityId: string): TemplateResult | null {
         const text = this._factText(fact);
         if (text === null) {
             return null;
         }
         const badgeClass = BADGE_CLASSES[fact.severity ?? "neutral"] ?? BADGE_CLASSES.neutral;
-        return html`<span class="badge ${badgeClass}">${text}</span>`;
+        if (!entityId) {
+            return html`<span class="badge ${badgeClass}">${text}</span>`;
+        }
+        return html`
+            <button
+                type="button"
+                class="badge ${badgeClass}"
+                aria-label=${this._moreInfoLabel(entityId)}
+                title=${entityId}
+                @click=${() => this._showMoreInfo(entityId)}
+            >${text}</button>
+        `;
+    }
+
+    /**
+     * Ask Home Assistant for its more-info dialog.
+     *
+     * `hass-more-info` is HA's own protocol and its dialog manager listens for
+     * it on the root `home-assistant` element, which is several shadow roots
+     * above this one -- hence `composed`, without which the event stops at the
+     * group's own boundary and nothing happens at all.
+     */
+    private _showMoreInfo(entityId: string): void {
+        this.dispatchEvent(
+            new CustomEvent("hass-more-info", {
+                detail: { entityId },
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    /** "Show details of sensor.x", with the id substituted if the string asks. */
+    private _moreInfoLabel(entityId: string): string {
+        const template = this._t("editor.entity_group.more_info_aria");
+        return template.includes("{entity}")
+            ? template.split("{entity}").join(entityId)
+            : `${template} ${entityId}`;
     }
 
     /**

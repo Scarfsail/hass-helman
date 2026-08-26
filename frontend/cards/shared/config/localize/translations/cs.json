@@ -90,7 +90,8 @@
     "empty": {
       "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
       "no_controllables": "Zatím nejsou nakonfigurovány žádné ovládané prvky.",
-      "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků."
+      "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků.",
+      "no_entities_on_tab": "Tato záložka nekonfiguruje žádné entity."
     },
     "card": {
       "category": "Kategorie",
@@ -252,7 +253,8 @@
     "entity_group": {
       "saved_reading": "Uložená konfigurace čte",
       "revert": "Vrátit na uloženou",
-      "revert_aria": "Vrátit tuto entitu a její nastavení na uloženou konfiguraci"
+      "revert_aria": "Vrátit tuto entitu a její nastavení na uloženou konfiguraci",
+      "more_info_aria": "Zobrazit podrobnosti entity {entity}"
     },
     "helpers": {
       "history_buckets": "Kolik bucketů historie Helman drží pro UI historii.",

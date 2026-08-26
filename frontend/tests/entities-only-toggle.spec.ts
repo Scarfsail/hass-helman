@@ -309,6 +309,17 @@ function visibleGroupPaths(page: Page): Promise<string[]> {
     });
 }
 
+/** The empty-state message, if the view is showing one. */
+function emptyNotice(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const notice = root?.querySelector(".entities-only-empty");
+        return notice && (window as any).isShown(notice)
+            ? notice.textContent?.trim() ?? ""
+            : null;
+    });
+}
+
 test.describe("entities-only toggle", () => {
     test("shows every Power devices entity group without expanding anything", async ({
         page,
@@ -537,5 +548,53 @@ test.describe("entities-only toggle", () => {
         // And the way back actually works from inside the view.
         await setScopeMode(page, "details.section-card[data-test-battery]", "Visual");
         expect(await visibleGroupPaths(page)).toEqual(POWER_DEVICE_ENTITY_PATHS);
+    });
+
+    test("says so on a tab that configures no entities", async ({ page }) => {
+        await mountEditor(page);
+        // The Automation tab configures thresholds and an optimizer pipeline
+        // and not one entity, so with the view on every section on it is
+        // hidden. An empty panel is indistinguishable from a broken one.
+        await openTab(page, "Automation");
+        expect(await emptyNotice(page)).toBe(null);
+
+        await setEntitiesOnly(page, true);
+        expect(await visibleGroupPaths(page)).toEqual([]);
+        expect(await emptyNotice(page)).toBe("This tab configures no entities.");
+
+        // And never where there is something to show. This is the assertion
+        // that would catch a message keyed off "no readings have arrived yet"
+        // rather than off "this tab has no entities".
+        await openTab(page, "Power devices");
+        expect(await emptyNotice(page)).toBe(null);
+        expect(await visibleGroupPaths(page)).toEqual(POWER_DEVICE_ENTITY_PATHS);
+
+        await setEntitiesOnly(page, false);
+        await openTab(page, "Automation");
+        expect(await emptyNotice(page)).toBe(null);
+    });
+
+    test("stays quiet about a scope left in YAML mode", async ({ page }) => {
+        await mountEditor(page);
+        await openTab(page, "Automation");
+
+        // A *section* in YAML mode is the case that matters: the tab body is
+        // still there and still holds no group, so the message would fire --
+        // in front of a code editor whose document may well name entities.
+        // Saying "this tab configures no entities" there would be a lie.
+        await page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            const first = root?.querySelector("details.section-card");
+            first?.setAttribute("data-test-scope", "");
+        });
+        await setScopeMode(page, "details.section-card[data-test-scope]", "YAML");
+        await setEntitiesOnly(page, true);
+        expect(await visibleGroupPaths(page)).toEqual([]);
+        expect(await emptyNotice(page)).toBe(null);
+
+        // The whole tab in YAML mode renders no tab body at all, so there is
+        // nowhere for the message to be either.
+        await setScopeMode(page, ".scope-toolbar", "YAML");
+        expect(await emptyNotice(page)).toBe(null);
     });
 });
