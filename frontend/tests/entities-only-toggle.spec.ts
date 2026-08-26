@@ -70,8 +70,32 @@ const CONFIG = {
             forecast: { sell_price_entity_id: "sensor.sell_price", import_price_unit: "CZK" },
         },
     },
-    controllables: [],
+    controllables: [
+        {
+            kind: "inverter",
+            id: "inverter",
+            name: "Inverter",
+            controls: { mode: { entity_id: "select.inverter_mode", options: {} } },
+        },
+        {
+            kind: "generic",
+            id: "boiler",
+            name: "Boiler",
+            controls: { switch: { entity_id: "switch.boiler" } },
+            consumption: {
+                energy_entity_id: "sensor.boiler_energy_total",
+                projection: { strategy: "fixed", hourly_energy_kwh: 2 },
+            },
+        },
+    ],
 };
+
+/** The same, for the tab whose entity groups live inside appliance cards. */
+const CONTROLLABLE_ENTITY_PATHS = [
+    "controllables.0.controls.mode.entity_id",
+    "controllables.1.controls.switch.entity_id",
+    "controllables.1.consumption.energy_entity_id",
+].sort();
 
 const DAILY_ENERGY_ENTITIES =
     CONFIG.power_devices.solar.forecast.daily_energy_entity_ids;
@@ -109,6 +133,15 @@ async function mountEditor(page: Page): Promise<void> {
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate((config) => {
+        // The editor will not enter YAML mode until `ha-yaml-editor` is
+        // defined -- in the real panel it walks HA's developer-tools chunk to
+        // get it, which does not exist here. Defining a stub short-circuits
+        // that walk, which is all the two YAML-mode tests below need: they
+        // assert on what the *editor* does around a scope in YAML mode, never
+        // on the code editor itself.
+        if (!customElements.get("ha-yaml-editor")) {
+            customElements.define("ha-yaml-editor", class extends HTMLElement {});
+        }
         const element = document.createElement(
             "helman-config-editor-panel",
         ) as HTMLElement & Record<string, unknown>;
@@ -182,22 +215,69 @@ async function mountEditor(page: Page): Promise<void> {
         .toBe(true);
 }
 
-async function openPowerDevicesTab(page: Page): Promise<void> {
+async function openTab(page: Page, label: string): Promise<void> {
     await expect
         .poll(() =>
-            page.evaluate(() => {
+            page.evaluate((tabLabel) => {
                 const root =
                     document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Power devices",
+                    (button) => button.textContent?.trim() === tabLabel,
                 );
                 if (!tab) return false;
                 tab.click();
                 return true;
-            }),
+            }, label),
         )
         .toBe(true);
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(80);
+}
+
+const openPowerDevicesTab = (page: Page) => openTab(page, "Power devices");
+
+/**
+ * Switch a scope between Visual and YAML through the button the user clicks.
+ *
+ * `container` picks which mode toggle: the tab's own lives in the toolbar
+ * outside the tab body, a section's lives in its summary.
+ */
+async function setScopeMode(
+    page: Page,
+    container: string,
+    mode: "Visual" | "YAML",
+): Promise<void> {
+    const clicked = await page.evaluate(
+        ({ selector, label }) => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            const host = root?.querySelector(selector);
+            const button = Array.from(
+                host?.querySelectorAll(".mode-toggle button") ?? [],
+            ).find((candidate) => candidate.textContent?.trim() === label) as
+                | HTMLButtonElement
+                | undefined;
+            if (!button) return false;
+            button.click();
+            return true;
+        },
+        { selector: container, label: mode },
+    );
+    expect(clicked).toBe(true);
+    await page.waitForTimeout(120);
+}
+
+/** The open/closed state of every appliance card on the current tab. */
+function readCardOpenState(page: Page): Promise<[string, boolean][]> {
+    return page.evaluate(
+        () =>
+            Array.from(
+                document
+                    .querySelector("helman-config-editor-panel")
+                    ?.shadowRoot?.querySelectorAll("details.list-card") ?? [],
+            ).map((card) => [
+                card.querySelector(".card-title strong")?.textContent?.trim() ?? "",
+                (card as HTMLDetailsElement).open,
+            ]) as [string, boolean][],
+    );
 }
 
 /** Flip the toolbar switch, through the control the user actually clicks. */
@@ -363,5 +443,99 @@ test.describe("entities-only toggle", () => {
 
         await setEntitiesOnly(page, false);
         expect(await readOpenState()).toEqual(before);
+    });
+
+    test("leaves the appliance cards on another tab as it found them", async ({
+        page,
+    }) => {
+        await mountEditor(page);
+        await openTab(page, "Controllables");
+        // Appliance cards are `details.list-card`, and unlike a section card
+        // they carry no `open` binding at all -- nothing in a render would ever
+        // put one back, so forcing them open has to be paired with a record of
+        // what they were.
+        const before = await readCardOpenState(page);
+        expect(before.length).toBeGreaterThan(0);
+        expect(before.every(([, open]) => !open)).toBe(true);
+
+        // The toggle goes on somewhere else, so this tab is not the one that
+        // was on screen when the snapshot would have been taken.
+        await openTab(page, "General");
+        await setEntitiesOnly(page, true);
+        await openTab(page, "Controllables");
+        expect((await readCardOpenState(page)).every(([, open]) => open)).toBe(true);
+
+        await setEntitiesOnly(page, false);
+        expect(await readCardOpenState(page)).toEqual(before);
+    });
+
+    test("shows the entities of a tab rendered after it was switched on", async ({
+        page,
+    }) => {
+        await mountEditor(page);
+        await openTab(page, "Controllables");
+        // In YAML mode the tab renders a code editor and no tab body at all,
+        // so there is nothing on screen for the toggle to have opened.
+        await setScopeMode(page, ".scope-toolbar", "YAML");
+        await setEntitiesOnly(page, true);
+        expect(await visibleGroupPaths(page)).toEqual([]);
+
+        // Coming back to Visual renders a whole fresh tab body. Every card in
+        // it arrives collapsed, and a collapsed `details` renders no content --
+        // so `:has()` finds no group inside one and the view would hide the
+        // lot, coming up empty exactly where it promises completeness.
+        await setScopeMode(page, ".scope-toolbar", "Visual");
+        expect(await visibleGroupPaths(page)).toEqual(CONTROLLABLE_ENTITY_PATHS);
+    });
+
+    test("keeps a section left in YAML mode, and its way back", async ({ page }) => {
+        await mountEditor(page);
+        await openPowerDevicesTab(page);
+
+        // Put the Battery section in YAML mode *before* turning the view on,
+        // which is the order a real user arrives in: the mode is remembered,
+        // the audit happens later.
+        await page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            const battery = Array.from(
+                root?.querySelectorAll("details.section-card") ?? [],
+            ).find(
+                (section) =>
+                    section.querySelector(".section-summary-label")?.textContent?.trim() ===
+                    "Battery",
+            ) as HTMLDetailsElement | undefined;
+            if (battery) battery.setAttribute("data-test-battery", "");
+        });
+        await setScopeMode(page, "details.section-card[data-test-battery]", "YAML");
+        await setEntitiesOnly(page, true);
+
+        // A code editor holds no group, so every hiding rule here would sweep
+        // the section away -- and the rule that hides section mode toggles
+        // would remove the only control that could bring it back. The user
+        // would be shown a tab with the battery silently missing from it.
+        const yamlSection = await page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            const battery = root?.querySelector(
+                "details.section-card[data-test-battery]",
+            ) as HTMLElement | null;
+            return {
+                sectionShown: !!battery && (window as any).isShown(battery),
+                editorShown: !!battery?.querySelector(".yaml-field")
+                    ? (window as any).isShown(battery.querySelector(".yaml-field"))
+                    : false,
+                toggleShown: !!battery?.querySelector("summary .mode-toggle")
+                    ? (window as any).isShown(battery.querySelector("summary .mode-toggle"))
+                    : false,
+            };
+        });
+        expect(yamlSection).toEqual({
+            sectionShown: true,
+            editorShown: true,
+            toggleShown: true,
+        });
+
+        // And the way back actually works from inside the view.
+        await setScopeMode(page, "details.section-card[data-test-battery]", "Visual");
+        expect(await visibleGroupPaths(page)).toEqual(POWER_DEVICE_ENTITY_PATHS);
     });
 });

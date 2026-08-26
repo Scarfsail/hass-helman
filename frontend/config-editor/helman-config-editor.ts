@@ -653,9 +653,9 @@ export class HelmanConfigEditorPanel
      */
     .entities-only .field,
     .entities-only .field-grid:not(:has(helman-entity-group)),
-    .entities-only .list-stack:not(:has(helman-entity-group)),
-    .entities-only .list-card:not(:has(helman-entity-group)),
-    .entities-only details.section-card:not(:has(helman-entity-group)),
+    .entities-only .list-stack:not(:has(helman-entity-group, .scope-yaml)),
+    .entities-only .list-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
+    .entities-only details.section-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
     .entities-only .inline-note,
     .entities-only .section-footer,
     .entities-only .mode-toggle {
@@ -669,6 +669,33 @@ export class HelmanConfigEditorPanel
 
     .entities-only helman-entity-group .toggle-field {
       display: block;
+    }
+
+    /*
+     * A scope left in YAML mode is kept, editor and all.
+     *
+     * It renders a code editor instead of fields, so it holds no group and
+     * every rule above would sweep it away -- and the rule that hides the
+     * per-section mode toggles would take away the only control that could
+     * switch it back. A user who left the Battery section in YAML mode and
+     * later turns this view on to audit their entities would be shown a tab
+     * with the battery silently missing from it and no way to find out.
+     *
+     * The promise is "nothing missed", not "nothing I can introspect". The
+     * entity ids are right there in the YAML, so the honest answer is to show
+     * the scope as it is and leave its toggle working.
+     */
+    .entities-only details.scope-yaml {
+      display: block;
+    }
+
+    .entities-only .scope-yaml .yaml-surface,
+    .entities-only .scope-yaml .yaml-field {
+      display: grid;
+    }
+
+    .entities-only .scope-yaml > summary .mode-toggle {
+      display: inline-flex;
     }
 
     @media (max-width: 900px) {
@@ -704,16 +731,17 @@ export class HelmanConfigEditorPanel
    */
   private _entitiesOnly = false;
   /**
-   * Which sections were open when the toggle went on, so turning it off puts
-   * them back.
+   * What each section looked like just before the toggle forced it open, so
+   * turning the toggle off puts it back.
    *
-   * Keyed by the element itself. Lit reuses the same `details` nodes across a
-   * re-render, so the identity holds for exactly as long as the answer is
-   * wanted, and a tab switch drops the old nodes on the floor along with the
-   * entries that named them -- which is right, because a tab that was never
-   * open while the toggle was on has no previous state to restore.
+   * Keyed by the element itself, and a `WeakMap` on purpose: a tab switch
+   * detaches a whole tab's worth of `details` and renders new ones, and every
+   * one of them wants an entry of its own. A `Map` would hold the detached
+   * nodes alive for the life of the panel to answer a question nobody will ask
+   * again; restoring only ever looks a *currently rendered* section up, so
+   * weak references are exactly the right strength.
    */
-  private _sectionOpenBeforeEntitiesOnly = new Map<HTMLDetailsElement, boolean>();
+  private _sectionOpenBeforeEntitiesOnly = new WeakMap<HTMLDetailsElement, boolean>();
   private _config: JsonObject | null = null;
   private _dirty = false;
   private _loading = false;
@@ -885,10 +913,9 @@ export class HelmanConfigEditorPanel
         () => this._handleDataChanged(),
       );
     }
-    if (
-      changedProperties.has("_entitiesOnly") ||
-      (this._entitiesOnly && changedProperties.has("_activeTab"))
-    ) {
+    // Every update while the toggle is on, and once more on the update that
+    // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
+    if (this._entitiesOnly || changedProperties.has("_entitiesOnly")) {
       this._applyEntitiesOnlyOpenState();
     }
   }
@@ -1161,43 +1188,40 @@ export class HelmanConfigEditorPanel
     return body ? [...body.querySelectorAll<HTMLDetailsElement>("details")] : [];
   }
 
-  /**
-   * Flip the toggle, remembering what the tab looked like first.
-   *
-   * The snapshot has to be taken here rather than in `updated`, because by the
-   * time the render has run the sections have already been forced open and
-   * there is nothing left to remember.
-   */
   private _setEntitiesOnly(next: boolean): void {
     if (next === this._entitiesOnly) return;
-    if (next) {
-      this._sectionOpenBeforeEntitiesOnly = new Map(
-        this._tabBodyDetails().map((section) => [section, section.open]),
-      );
-    }
     this._entitiesOnly = next;
   }
 
   /**
    * Open every section while the toggle is on; put them back when it goes off.
    *
-   * `_renderSectionScope` binds `?open` to the toggle as well, which covers a
-   * section rendered *while* the toggle is already on -- a tab switch, an
-   * appliance added. This pass covers the other half, which the binding cannot:
-   * lit only writes an attribute when the bound value changes, so a section
-   * whose `initialOpen` is already `true` but which the user has since
-   * collapsed would be left collapsed by the binding alone. It also reaches the
-   * `details.list-card` a controllable renders, which has no `open` binding at
-   * all.
+   * This is done to the DOM rather than through an `?open` binding, and the
+   * reason is that a binding cannot answer the question the restore needs.
+   * Lit writes an attribute only when the bound value changes, so a section the
+   * user has collapsed by hand would be left collapsed by a binding on the
+   * toggle -- and the `details.list-card` a controllable renders has no `open`
+   * binding at all, so nothing would open it and nothing would close it again.
    *
-   * It runs on a change of the toggle and on a tab switch, not on every update:
-   * re-opening on every render would take the collapse control away from the
-   * user for as long as the toggle is on, and the 2 s inspection poll renders.
+   * It runs on **every** update, not only when the toggle or the tab changes,
+   * because content appears while the toggle is on for reasons neither of those
+   * covers: switching a scope out of YAML mode renders a whole fresh tab body,
+   * and adding an appliance renders one more card. A section that arrives
+   * collapsed is not merely inconvenient here -- a closed `details` renders no
+   * content, so `:has()` finds no group inside it and the view hides it
+   * outright. Coming up empty is the one failure this feature cannot have.
+   *
+   * Running every time is safe because the map is also the record of what has
+   * already been dealt with: a section already in it is left exactly as it is,
+   * so collapsing one by hand while the toggle is on sticks, and the 2 s
+   * inspection poll does not reopen it.
    */
   private _applyEntitiesOnlyOpenState(): void {
     const sections = this._tabBodyDetails();
     if (this._entitiesOnly) {
       for (const section of sections) {
+        if (this._sectionOpenBeforeEntitiesOnly.has(section)) continue;
+        this._sectionOpenBeforeEntitiesOnly.set(section, section.open);
         section.open = true;
       }
       return;
@@ -1208,7 +1232,7 @@ export class HelmanConfigEditorPanel
         section.open = previous;
       }
     }
-    this._sectionOpenBeforeEntitiesOnly = new Map();
+    this._sectionOpenBeforeEntitiesOnly = new WeakMap();
   }
 
   private _renderSectionScope(
@@ -1220,9 +1244,15 @@ export class HelmanConfigEditorPanel
     const { initialOpen = true } = options;
     const sectionIcon = SECTION_ICONS[scopeId];
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    // A scope in YAML mode renders a code editor holding entity ids as text,
+    // which no `:has()` can see. Marked so the entities-only view keeps it --
+    // see `.scope-yaml` in the styles for why hiding it would be a lie.
+    const sectionClasses = this._isScopeYaml(scopeId)
+      ? "section-card scope-yaml"
+      : "section-card";
 
     return html`
-      <details class="section-card" ?open=${this._entitiesOnly || initialOpen}>
+      <details class=${sectionClasses} ?open=${initialOpen}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
@@ -2554,7 +2584,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2691,7 +2721,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2817,7 +2847,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2900,7 +2930,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
