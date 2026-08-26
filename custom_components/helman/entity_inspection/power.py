@@ -18,6 +18,7 @@ answers.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ..power_polarity import (
@@ -34,16 +35,23 @@ _ABSENT_STATES = frozenset({"unknown", "unavailable", "", "none"})
 
 
 def _format_value(value: float) -> str:
-    """The reading as the editor should show it, without a locale opinion.
+    """A *finite* reading as the editor should show it, without a locale opinion.
 
     Trailing zeros are trimmed because a power sensor reporting ``1400.0`` and
     one reporting ``1400`` are saying the same thing, and a status line that
     changes width on the second decimal is hard to read at a two-second poll.
+
+    Fixed-point rather than ``%g``, whose six significant digits would render a
+    perfectly ordinary ``12345.67`` W as ``12345.7``: the point of the badge is
+    to show what the sensor says.
+
+    Callers must have ruled out ``nan`` and ``inf`` already -- ``int()`` raises
+    on both, and see :func:`evaluate_power_entity` for why they are not this
+    function's problem to report.
     """
-    rounded = round(value, 2)
-    if rounded == int(rounded):
-        return str(int(rounded))
-    return f"{rounded:g}"
+    if value == int(value):
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def evaluate_power_entity(request: InspectionRequest) -> Inspection:
@@ -94,6 +102,14 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
     try:
         value = float(text)
     except (TypeError, ValueError):
+        value = math.nan
+    if not math.isfinite(value):
+        # ``nan`` and ``inf`` parse as floats but are not readings, and a
+        # template sensor dividing by an unavailable source emits ``nan``
+        # routinely. They belong in the same warning as "abc": what the editor
+        # must not do is fall through and format them, which raises and would
+        # degrade the whole row to ``unsupported`` -- indistinguishable from a
+        # path the backend has never heard of.
         return Inspection(
             entity_id=entity_id,
             status="unavailable",
@@ -110,13 +126,18 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
 
     attributes = getattr(state, "attributes", None) or {}
     unit = attributes.get("unit_of_measurement") if hasattr(attributes, "get") else None
-    reading = interpret_power_reading(device, polarity_token, value)
+    # The *shown* value is what gets interpreted, not the raw one. Otherwise a
+    # reading of 0.004 W renders the contradictory pair "0 W" and "Producing":
+    # rounding once, up front, makes the number and the word agree by
+    # construction rather than by two thresholds happening to line up.
+    shown = round(value, 2) or 0.0
+    reading = interpret_power_reading(device, polarity_token, shown)
 
     facts = [
         Fact(
             id="value",
             token="value",
-            params={"value": _format_value(value), "unit": unit or ""},
+            params={"value": _format_value(shown), "unit": unit or ""},
             severity="neutral",
         ),
         Fact(

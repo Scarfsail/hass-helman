@@ -154,6 +154,28 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
         .toBeGreaterThan(0);
 }
 
+/** Click one of the editor's top-level tabs by its English label. */
+async function openTab(page: Page, label: string): Promise<void> {
+    await expect
+        .poll(async () =>
+            page.evaluate((tabLabel) => {
+                const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+                const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
+                    (button) => button.textContent?.trim() === tabLabel,
+                );
+                if (!tab) return false;
+                tab.click();
+                return true;
+            }, label),
+        )
+        .toBe(true);
+}
+
+/** How many `helman/inspect_entities` calls the stub has answered so far. */
+function requestCount(page: Page): Promise<number> {
+    return page.evaluate(() => (window as any).__inspectRequests.length);
+}
+
 /** Everything one group currently shows, read out of its shadow root. */
 function readGroup(page: Page, key: string) {
     return page.evaluate((groupKey) => {
@@ -283,4 +305,95 @@ test("one request carries every mounted group, with paths and no entity ids", as
         expect(Array.isArray(target.path)).toBe(true);
     }
     expect(request.targets.map((target: any) => target.key)).toContain(GRID_KEY);
+});
+
+
+test("unmounting every group stops the polling", async ({ page }) => {
+    // Regression: the group used to announce its own removal from
+    // `disconnectedCallback`, which fires after the browser has detached it --
+    // so the announcement never reached the panel and the collector kept
+    // sending targets for groups that were gone, together with the whole
+    // config document, for as long as the editor stayed open.
+    await mountEditor(page);
+    await waitForFacts(page);
+
+    await openTab(page, "General");
+    await expect
+        .poll(async () =>
+            page.evaluate(() => {
+                const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+                return root?.querySelectorAll("helman-entity-group").length ?? 0;
+            }),
+        )
+        .toBe(0);
+
+    // Two full ticks with nothing mounted must produce no further calls.
+    const before = await requestCount(page);
+    await page.waitForTimeout(2500);
+    expect(await requestCount(page)).toBe(before);
+
+    // And coming back brings the readings straight back, so the fix did not
+    // simply stop the poll for good.
+    await openTab(page, "Power devices");
+    await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        Array.from(root?.querySelectorAll("details") ?? []).forEach((section) =>
+            section.setAttribute("open", ""),
+        );
+    });
+    const group = await waitForFacts(page);
+    expect(group.facts).toEqual(["1400 W", "Importing from the grid"]);
+});
+
+test("clearing a configured entity keeps the saved reading and its revert", async ({ page }) => {
+    // Regression: targets whose draft value was blank were filtered out of the
+    // request, on the grounds that the backend would only answer `unset`. But
+    // `unset` is exactly when the saved document reads differently -- so the
+    // one edit most likely to want a revert was the one edit that removed it.
+    await mountEditor(page, { withSaved: true });
+    await waitForFacts(page);
+
+    // Count first: a filtered-out target leaves the *previous* request in
+    // place, and asserting on the latest one would then pass on the very bug
+    // this test exists to catch. What has to be true is that a request sent
+    // *after* the clear still carries the group.
+    const before = await requestCount(page);
+    await page.evaluate((path) => {
+        const editor = document.querySelector("helman-config-editor-panel") as any;
+        editor.setValue(path, "");
+    }, GRID_PATH);
+
+    await expect.poll(async () => requestCount(page)).toBeGreaterThan(before);
+    const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
+    expect(request.targets.map((target: any) => target.key)).toContain(GRID_KEY);
+
+    await expect
+        .poll(async () => (await readGroup(page, GRID_KEY))?.hasRevert ?? false)
+        .toBe(true);
+
+    await page.evaluate((groupKey) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const group = Array.from(root?.querySelectorAll("helman-entity-group") ?? []).find(
+            (element) => (element as any).key === groupKey,
+        ) as any;
+        group.shadowRoot.querySelector(".revert").click();
+    }, GRID_KEY);
+
+    await expect
+        .poll(async () =>
+            page.evaluate(() => {
+                const editor = document.querySelector("helman-config-editor-panel") as any;
+                return editor.getValue(["power_devices", "grid", "entities", "power"]);
+            }),
+        )
+        .toBe("sensor.grid_power");
+});
+
+test("a tab with no groups at all never asks", async ({ page }) => {
+    // The early return has to survive the widened filter: nothing picked and
+    // nothing saved means no call, not a call with an empty target list.
+    await mountEditor(page, { config: { config_version: 6 } });
+    await openTab(page, "General");
+    await page.waitForTimeout(2500);
+    expect(await requestCount(page)).toBe(0);
 });

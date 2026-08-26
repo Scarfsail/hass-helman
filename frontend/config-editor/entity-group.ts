@@ -49,9 +49,9 @@ import type { PathSegment } from "../cards/shared/config/types";
  * mounted group's path into a single `helman/inspect_entities` call, and
  * pushes the answer down through `inspection`; twenty groups fetching their
  * own status would be twenty round trips per tick. The group announces itself
- * on connect and disconnect so that collector knows who is mounted, and asks
- * for a revert by event rather than reaching into the document itself -- the
- * editor is what holds both the draft and the saved document.
+ * on connect so that collector can poll it without waiting out a whole tick,
+ * and asks for a revert by event rather than reaching into the document
+ * itself -- the editor is what holds both the draft and the saved document.
  */
 
 /** One localizable statement about a picked entity, as the backend sends it. */
@@ -76,9 +76,19 @@ export interface EntityInspectionResult {
     saved: EntityInspection | null;
 }
 
-/** A mounted group announcing itself to the editor's poll collector. */
+/**
+ * A mounted group announcing itself, so the collector can poll it promptly.
+ *
+ * There is deliberately **no matching disconnect event**. `disconnectedCallback`
+ * runs after the browser has already detached the element (or the ancestor
+ * subtree holding it), and an event dispatched on a detached node propagates
+ * only within that detached subtree -- it would never reach the panel, and a
+ * collector that trusted it would poll for groups that are gone forever. The
+ * collector enumerates the groups actually in its own shadow root instead, so
+ * "mounted" is read from the DOM rather than from a bookkeeping set that can
+ * silently fall out of step.
+ */
 export const ENTITY_GROUP_CONNECTED = "helman-entity-group-connected";
-export const ENTITY_GROUP_DISCONNECTED = "helman-entity-group-disconnected";
 /** A group asking the editor to restore its owned paths from the saved doc. */
 export const ENTITY_GROUP_REVERT = "helman-entity-group-revert";
 
@@ -263,11 +273,6 @@ export class HelmanEntityGroup extends LitElement {
     connectedCallback(): void {
         super.connectedCallback();
         this._announce(ENTITY_GROUP_CONNECTED);
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._announce(ENTITY_GROUP_DISCONNECTED);
     }
 
     /** The key the editor's collector knows this group by. */

@@ -186,6 +186,36 @@ class TestPowerReadings(unittest.TestCase):
         self.assertEqual(_fact(inspection, "reading")["token"], "power_reading.exporting")
         self.assertIsNone(_fact(inspection, "polarity"))
 
+    def test_a_non_finite_state_is_a_warning_rather_than_a_blank_row(self):
+        # ``nan`` is what a template sensor dividing by an unavailable source
+        # emits, and it parses as a float. Formatted rather than caught, it
+        # raises and the whole row degrades to ``unsupported`` -- which reads
+        # as "the backend does not know this path", the one thing it is not.
+        for text in ("nan", "inf", "-inf"):
+            with self.subTest(state=text):
+                hass = _Hass({"sensor.grid_power": _State(text)})
+                inspection = inspect_target(hass, _config(), POWER_PATH)
+                self.assertEqual(inspection.status, "unavailable")
+                self.assertEqual(inspection.entity_id, "sensor.grid_power")
+                self.assertEqual([fact.token for fact in inspection.facts], ["not_numeric"])
+
+    def test_a_value_is_shown_in_full_rather_than_to_six_digits(self):
+        hass = _Hass({"sensor.grid_power": _State("12345.67")})
+        inspection = inspect_target(hass, _config(), POWER_PATH).to_dict()
+        self.assertEqual(_fact(inspection, "value")["params"]["value"], "12345.67")
+
+    def test_a_shown_zero_never_reads_as_a_direction(self):
+        # The number and the word come from the same rounded value, so "0 W"
+        # cannot be paired with "exporting".
+        for text in ("0.004", "-0.004", "0"):
+            with self.subTest(state=text):
+                hass = _Hass({"sensor.grid_power": _State(text)})
+                inspection = inspect_target(hass, _config(), POWER_PATH).to_dict()
+                self.assertEqual(_fact(inspection, "value")["params"]["value"], "0")
+                self.assertEqual(
+                    _fact(inspection, "reading")["token"], "power_reading.idle"
+                )
+
     def test_a_unit_less_sensor_still_reports_its_value(self):
         hass = _Hass({"sensor.grid_power": _State("12.5", unit=None)})
         inspection = inspect_target(hass, _config(), POWER_PATH).to_dict()

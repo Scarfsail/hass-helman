@@ -119,12 +119,11 @@ import "./bias-correction-status";
 import "./entity-group";
 import {
   ENTITY_GROUP_CONNECTED,
-  ENTITY_GROUP_DISCONNECTED,
   ENTITY_GROUP_REVERT,
   entityGroupKey,
-  type EntityGroupRegistrationDetail,
   type EntityGroupRevertDetail,
   type EntityInspectionResult,
+  type HelmanEntityGroup,
 } from "./entity-group";
 import type {
   HomeAssistantLike,
@@ -675,8 +674,6 @@ export class HelmanConfigEditorPanel
   private _savedConfig: JsonObject | null = null;
   /** The last answer, keyed by group. Groups read their own row from here. */
   private _entityInspections: Record<string, EntityInspectionResult> = {};
-  /** Which groups are on screen right now — a collapsed section renders none. */
-  private readonly _mountedGroups = new Map<string, PathSegment[]>();
   private _inspectionTimer?: ReturnType<typeof setInterval>;
   private _inspectionPending?: ReturnType<typeof setTimeout>;
   /** One request at a time: a slow tick must not queue behind itself. */
@@ -708,8 +705,7 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
-    this.addEventListener(ENTITY_GROUP_DISCONNECTED, this._handleEntityGroupDisconnected);
+    this.addEventListener(ENTITY_GROUP_CONNECTED, this._scheduleEntityInspection);
     this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     this._inspectionTimer = setInterval(
       () => void this._pollEntityInspections(),
@@ -734,8 +730,7 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
-    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
-    this.removeEventListener(ENTITY_GROUP_DISCONNECTED, this._handleEntityGroupDisconnected);
+    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._scheduleEntityInspection);
     this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     if (this._inspectionTimer !== undefined) {
       clearInterval(this._inspectionTimer);
@@ -745,7 +740,6 @@ export class HelmanConfigEditorPanel
       clearTimeout(this._inspectionPending);
       this._inspectionPending = undefined;
     }
-    this._mountedGroups.clear();
   }
 
   protected updated(changedProperties: PropertyValues<this>): void {
@@ -3249,22 +3243,6 @@ export class HelmanConfigEditorPanel
     );
   }
 
-  private _handleEntityGroupConnected = (event: Event): void => {
-    const detail = (event as CustomEvent<EntityGroupRegistrationDetail>).detail;
-    if (!detail?.key) return;
-    this._mountedGroups.set(detail.key, detail.path);
-    // A section that was just expanded should not wait a whole tick for its
-    // first reading. The pending one-shot collapses the burst of registrations
-    // one expansion produces into a single call.
-    this._scheduleEntityInspection();
-  };
-
-  private _handleEntityGroupDisconnected = (event: Event): void => {
-    const detail = (event as CustomEvent<EntityGroupRegistrationDetail>).detail;
-    if (!detail?.key) return;
-    this._mountedGroups.delete(detail.key);
-  };
-
   /**
    * Put this group's owned paths back to what the stored document says.
    *
@@ -3290,27 +3268,58 @@ export class HelmanConfigEditorPanel
     void this._pollEntityInspections();
   };
 
-  private _scheduleEntityInspection(): void {
+  /**
+   * Poll soon, without waiting out a whole tick.
+   *
+   * A group announces itself as it mounts, and expanding a section mounts
+   * several at once; the pending one-shot collapses that burst into one call.
+   */
+  private _scheduleEntityInspection = (): void => {
     if (this._inspectionPending !== undefined) return;
     this._inspectionPending = setTimeout(() => {
       this._inspectionPending = undefined;
       void this._pollEntityInspections();
     }, 0);
+  };
+
+  /**
+   * The groups actually on screen, read from the DOM at the moment of asking.
+   *
+   * Deliberately not a set maintained by mount/unmount events. A group cannot
+   * announce its own removal — `disconnectedCallback` runs after the browser
+   * has detached it, and an event dispatched from a detached node never
+   * reaches this element — so a bookkeeping set would grow monotonically and
+   * keep polling for groups that are gone. Querying is also simply true: a
+   * collapsed `details` renders no group, and a tab switch removes them all.
+   */
+  private _mountedEntityGroups(): HelmanEntityGroup[] {
+    return [...(this.shadowRoot?.querySelectorAll("helman-entity-group") ?? [])];
   }
 
   /**
    * One call for every mounted group, or none at all.
    *
-   * Groups whose entity is not picked yet are left out: there is nothing to
-   * read, and the backend would only answer `unset`. A failed tick is
-   * swallowed — the last reading stays on screen rather than the panel growing
-   * an error banner that reappears every two seconds.
+   * A group is worth asking about when *either* document has something at its
+   * path. The draft one is obvious; the saved one is the case that is easy to
+   * get wrong — clearing a configured sensor leaves the draft blank, and that
+   * is exactly when the saved reading and its revert control need to appear.
+   * Skipping it would remove the revert affordance from the single edit most
+   * likely to want it. When neither document has anything there is genuinely
+   * nothing to ask, and no call goes out at all.
+   *
+   * A failed tick is swallowed — the last reading stays on screen rather than
+   * the panel growing an error banner that reappears every two seconds.
    */
   private async _pollEntityInspections(): Promise<void> {
     if (!this.hass || !this._config || this._inspectionInFlight) return;
-    const targets = [...this._mountedGroups.entries()]
-      .filter(([, path]) => stringValue(this._getValue(path)) !== "")
-      .map(([key, path]) => ({ key, path }));
+    const saved = this._savedConfig;
+    const targets = this._mountedEntityGroups()
+      .map((group) => ({ key: group.key, path: group.path }))
+      .filter(
+        ({ path }) =>
+          stringValue(this._getValue(path)) !== "" ||
+          (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
+      );
     if (targets.length === 0) {
       if (Object.keys(this._entityInspections).length > 0) {
         this._entityInspections = {};
@@ -3322,7 +3331,7 @@ export class HelmanConfigEditorPanel
       const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
         type: "helman/inspect_entities",
         config: this._config,
-        ...(this._savedConfig ? { saved_config: this._savedConfig } : {}),
+        ...(saved ? { saved_config: saved } : {}),
         targets,
       });
       const next: Record<string, EntityInspectionResult> = {};
