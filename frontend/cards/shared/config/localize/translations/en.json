@@ -90,7 +90,8 @@
     "empty": {
       "no_automation_optimizers": "No optimizers configured yet.",
       "no_controllables": "No controllables configured yet.",
-      "no_device_label_categories": "No device label categories configured."
+      "no_device_label_categories": "No device label categories configured.",
+      "no_entities_on_tab": "This tab configures no entities."
     },
     "card": {
       "category": "Category",
@@ -231,6 +232,30 @@
       "power_polarity_positive_is_export": "Positive = export (to the grid)",
       "power_polarity_positive_is_import": "Positive = import (from the grid)"
     },
+    "entity_status": {
+      "value": "{value} {unit}",
+      "entity_missing": "Entity not found",
+      "state_absent": "No reading ({state})",
+      "not_numeric": "Not a number ({state})",
+      "history_depth": "{available} d of history ({required} d required)",
+      "history_depth_only": "{available} d of history",
+      "polarity_inverted": "Read against Helman's sign convention",
+      "power_reading": {
+        "producing": "Producing",
+        "consuming": "Consuming",
+        "charging": "Charging",
+        "discharging": "Discharging",
+        "importing": "Importing from the grid",
+        "exporting": "Exporting to the grid",
+        "idle": "Idle"
+      }
+    },
+    "entity_group": {
+      "saved_reading": "Saved config reads",
+      "revert": "Revert to saved",
+      "revert_aria": "Revert this entity and its settings to the saved config",
+      "more_info_aria": "Show details of {entity}"
+    },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
       "history_bucket_duration": "Duration of one history bucket in hours.",
@@ -312,6 +337,9 @@
       "live_modes_unavailable": "Live modes unavailable",
       "unknown": "unknown",
       "missing_id": "missing id"
+    },
+    "toggles": {
+      "entities_only": "Entities only"
     },
     "mode": {
       "visual": "Visual",

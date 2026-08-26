@@ -187,11 +187,18 @@ test("the inverter card renders its own fields, not the unsupported-kind dump", 
     const rendered = await root(page).evaluate((element) => {
         const shadow = (element as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot;
         const card = shadow.querySelector(".list-card");
+        // An entity group renders its picker and its label inside its own
+        // shadow root, so the card's own `label` elements are only half the
+        // fields on screen.
+        const labels = [
+            ...Array.from(card?.querySelectorAll("label") ?? []),
+            ...Array.from(card?.querySelectorAll("helman-entity-group") ?? []).flatMap(
+                (group) => Array.from(group.shadowRoot?.querySelectorAll("label") ?? []),
+            ),
+        ];
         return {
             rawPreviews: card?.querySelectorAll(".raw-preview").length ?? -1,
-            labels: Array.from(card?.querySelectorAll("label") ?? []).map(
-                (label) => label.textContent?.trim() ?? "",
-            ),
+            labels: labels.map((label) => label.textContent?.trim() ?? ""),
         };
     });
 
@@ -271,13 +278,17 @@ function sectionTitles(page: Page): Promise<string[]> {
 
 /** Field labels rendered inside the first controllable card. */
 function fieldLabels(page: Page): Promise<string[]> {
-    return page.evaluate(() =>
-        Array.from(
-            document
-                .querySelector("helman-config-editor-panel")
-                ?.shadowRoot?.querySelector(".list-card")
-                ?.querySelectorAll("label, ha-formfield") ?? [],
-        ).map((label) =>
+    return page.evaluate(() => {
+        const card = document
+            .querySelector("helman-config-editor-panel")
+            ?.shadowRoot?.querySelector(".list-card");
+        return [
+            ...Array.from(card?.querySelectorAll("label, ha-formfield") ?? []),
+            // An entity group keeps its label in its own shadow root.
+            ...Array.from(card?.querySelectorAll("helman-entity-group") ?? []).flatMap(
+                (group) => Array.from(group.shadowRoot?.querySelectorAll("label") ?? []),
+            ),
+        ].map((label) =>
             // ha-formfield takes its label as a property, so the attribute is
             // absent and textContent is the empty slot.
             (
@@ -285,8 +296,8 @@ function fieldLabels(page: Page): Promise<string[]> {
                 label.textContent ??
                 ""
             ).trim(),
-        ),
-    );
+        );
+    });
 }
 
 test("a controllable carries a Consumption section, beside Controls", async ({

@@ -30,9 +30,11 @@ for _name, _path in [
 from custom_components.helman import tree_builder as tree_builder_module  # noqa: E402
 from custom_components.helman.config_validation import validate_config_document  # noqa: E402
 from custom_components.helman.power_polarity import (  # noqa: E402
+    IDLE_DIRECTION,
     POWER_POLARITY_OPTIONS,
     consumer_value_type,
     default_polarity,
+    interpret_power_reading,
     is_power_inverted,
     source_value_type,
 )
@@ -201,6 +203,91 @@ class TestValueTypeResolution(unittest.TestCase):
                         source_value_type(config, device),
                         consumer_value_type(config, device),
                     )
+
+
+class TestReadingInterpretation(unittest.TestCase):
+    """What a live value *means*, for every device, option and sign.
+
+    Written as literal direction tokens rather than derived from the table
+    under test, for the same reason the default cases above are: a refactor
+    that drifts the derivation has to fail here instead of agreeing with
+    itself. The config editor shows these words next to the sensor the user
+    just picked, so getting one backwards is exactly the misconfiguration the
+    reading exists to catch.
+    """
+
+    #: ``(device, polarity) -> (positive reads as, negative reads as)``.
+    EXPECTED = {
+        ("solar", "positive_is_production"): ("producing", IDLE_DIRECTION),
+        ("solar", "negative_is_production"): (IDLE_DIRECTION, "producing"),
+        ("house", "positive_is_consumption"): ("consuming", IDLE_DIRECTION),
+        ("house", "negative_is_consumption"): (IDLE_DIRECTION, "consuming"),
+        ("battery", "positive_is_charging"): ("charging", "discharging"),
+        ("battery", "positive_is_discharging"): ("discharging", "charging"),
+        ("grid", "positive_is_export"): ("exporting", "importing"),
+        ("grid", "positive_is_import"): ("importing", "exporting"),
+    }
+
+    def test_every_device_and_option_reads_both_signs(self):
+        for (device, polarity), (positive, negative) in self.EXPECTED.items():
+            with self.subTest(device=device, polarity=polarity):
+                self.assertEqual(
+                    interpret_power_reading(device, polarity, 1400.0)["direction"],
+                    positive,
+                )
+                self.assertEqual(
+                    interpret_power_reading(device, polarity, -1400.0)["direction"],
+                    negative,
+                )
+
+    def test_zero_is_idle_everywhere(self):
+        for device, options in POWER_POLARITY_OPTIONS.items():
+            for polarity in options:
+                with self.subTest(device=device, polarity=polarity):
+                    self.assertEqual(
+                        interpret_power_reading(device, polarity, 0)["direction"],
+                        IDLE_DIRECTION,
+                    )
+
+    def test_an_absent_polarity_reads_as_the_default(self):
+        for device, options in POWER_POLARITY_OPTIONS.items():
+            with self.subTest(device=device):
+                self.assertEqual(
+                    interpret_power_reading(device, None, 1400.0),
+                    interpret_power_reading(device, options[0], 1400.0),
+                )
+
+    def test_inverted_is_true_only_for_the_non_default_option(self):
+        for device, options in POWER_POLARITY_OPTIONS.items():
+            with self.subTest(device=device):
+                self.assertFalse(interpret_power_reading(device, options[0], 1.0)["inverted"])
+                self.assertTrue(interpret_power_reading(device, options[1], 1.0)["inverted"])
+
+    def test_a_value_from_another_devices_vocabulary_reads_upright(self):
+        # The same resolution ``is_power_inverted`` makes, so the reading and
+        # the tree cannot disagree about a config neither of them likes.
+        reading = interpret_power_reading("grid", "positive_is_charging", 1400.0)
+        self.assertEqual(reading, interpret_power_reading("grid", None, 1400.0))
+        self.assertFalse(reading["inverted"])
+
+    def test_an_unknown_device_answers_rather_than_raising(self):
+        self.assertEqual(
+            interpret_power_reading("heat_pump", None, 1400.0),
+            {"direction": IDLE_DIRECTION, "inverted": False},
+        )
+
+    def test_the_reading_agrees_with_the_tree_for_the_grid(self):
+        # The two readers of a polarity must never disagree: a grid value the
+        # tree files under a *source* node is an export, and the reading has to
+        # say so in words.
+        for polarity in POWER_POLARITY_OPTIONS["grid"]:
+            with self.subTest(polarity=polarity):
+                config = {"entities": {"power_polarity": polarity}}
+                exporting_sign = 1.0 if source_value_type(config, "grid") == "negative" else -1.0
+                self.assertEqual(
+                    interpret_power_reading("grid", polarity, exporting_sign)["direction"],
+                    "exporting",
+                )
 
 
 if __name__ == "__main__":

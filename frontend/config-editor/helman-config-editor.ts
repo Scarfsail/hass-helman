@@ -116,6 +116,15 @@ import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles"
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "./bias-correction-status";
+import "./entity-group";
+import {
+  ENTITY_GROUP_CONNECTED,
+  ENTITY_GROUP_REVERT,
+  entityGroupKey,
+  type EntityGroupRevertDetail,
+  type EntityInspectionResult,
+  type HelmanEntityGroup,
+} from "./entity-group";
 import type {
   HomeAssistantLike,
   JsonObject,
@@ -161,6 +170,57 @@ const INVERTER_ACTION_OPTIONS = [
 ] as const;
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
+/**
+ * How often the editor asks what its picked entities currently read.
+ *
+ * A poll rather than a state subscription: the reading is a hint the reader
+ * glances at while configuring, not a live dashboard, and a couple of seconds
+ * of lag costs nothing. Subscribing would mean tracking which entities the
+ * draft names as it is edited -- and *which* entities a path resolves to is
+ * knowledge this editor deliberately does not have.
+ */
+const ENTITY_INSPECTION_INTERVAL_MS = 2000;
+
+/**
+ * Every match under `root`, including the ones inside nested shadow roots.
+ *
+ * `querySelectorAll` does not cross a shadow boundary, and the editor renders
+ * part of itself through child elements that have one. Anything looking for
+ * "all the groups on screen" has to walk.
+ */
+function queryDeep<T extends Element>(root: ParentNode | null | undefined, selector: string): T[] {
+  if (!root) return [];
+  const found: T[] = [...root.querySelectorAll<T>(selector)];
+  for (const element of root.querySelectorAll("*")) {
+    if (element.shadowRoot) {
+      found.push(...queryDeep<T>(element.shadowRoot, selector));
+    }
+  }
+  return found;
+}
+
+/**
+ * How long an immediate re-read waits before it can fire again.
+ *
+ * Every write into the draft asks for a fresh reading, because a reading the
+ * user just invalidated is worse than no reading -- flipping a polarity and
+ * watching the old direction sit there for two seconds reads as a control that
+ * did nothing. But text fields write on every keystroke, and one whole config
+ * document per character is not a poll, it is a flood.
+ *
+ * So the trigger is leading-edge: the *first* change of a burst goes out at
+ * once -- which is every discrete change, a select or a picker -- and anything
+ * that arrives inside the window is collapsed into a single trailing call once
+ * it closes. A click costs no delay at all.
+ *
+ * The window has to outlast a keystroke to be worth anything. Ordinary typing
+ * runs 150-300 ms per character, so a shorter window would put every character
+ * on its own leading edge and send exactly the flood it was meant to stop --
+ * a synthetic burst of writes with no gaps is the only case a short window
+ * actually covers, and no user types that way.
+ */
+const ENTITY_INSPECTION_DEBOUNCE_MS = 400;
+
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
 } as const;
@@ -205,6 +265,8 @@ export class HelmanConfigEditorPanel
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
+    _entityInspections: { state: true },
+    _entitiesOnly: { state: true },
   };
 
   static styles = [
@@ -563,6 +625,99 @@ export class HelmanConfigEditorPanel
       margin-top: 4px;
     }
 
+    .entities-only-toggle {
+      /* The toolbar packs to the right; this one control belongs on the left,
+         away from the tab's YAML toggle it must not be mistaken for. */
+      margin-right: auto;
+    }
+
+    /*
+     * The entities-only view.
+     *
+     * Everything that is not an entity group goes away, and every container
+     * left holding no group goes with it -- otherwise the view is a column of
+     * empty section headings, which is the noise this exists to remove.
+     *
+     * :has() is what makes that possible without threading a "contains a
+     * group" flag down every render path, and it is why the sections are forced
+     * open by an attribute rather than by CSS: a closed details renders no
+     * content at all, so :has() could not find a group inside one and every
+     * collapsed section would hide itself.
+     *
+     * The guard against a group's *own* fields is the pair of rules at the end.
+     * A group's slotted settings -- a polarity, a history-day count -- are not
+     * in its shadow root; they are children of <helman-entity-group> in this
+     * element's tree, which is exactly where .entities-only .field reaches.
+     * Hiding them would leave every group showing a picker and a reading with
+     * the settings that qualify it gone, which is the opposite of the point.
+     */
+    .entities-only .field,
+    .entities-only .field-grid:not(:has(helman-entity-group)),
+    .entities-only .list-stack:not(:has(helman-entity-group, .scope-yaml)),
+    .entities-only .list-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
+    .entities-only details.section-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
+    .entities-only .inline-note,
+    .entities-only .section-footer,
+    .entities-only .mode-toggle {
+      display: none;
+    }
+
+    .entities-only helman-entity-group .field,
+    .entities-only helman-entity-group .field-grid {
+      display: grid;
+    }
+
+    .entities-only helman-entity-group .toggle-field {
+      display: block;
+    }
+
+    /*
+     * A scope left in YAML mode is kept, editor and all.
+     *
+     * It renders a code editor instead of fields, so it holds no group and
+     * every rule above would sweep it away -- and the rule that hides the
+     * per-section mode toggles would take away the only control that could
+     * switch it back. A user who left the Battery section in YAML mode and
+     * later turns this view on to audit their entities would be shown a tab
+     * with the battery silently missing from it and no way to find out.
+     *
+     * The promise is "nothing missed", not "nothing I can introspect". The
+     * entity ids are right there in the YAML, so the honest answer is to show
+     * the scope as it is and leave its toggle working.
+     */
+    .entities-only details.scope-yaml {
+      display: block;
+    }
+
+    .entities-only .scope-yaml .yaml-surface,
+    .entities-only .scope-yaml .yaml-field {
+      display: grid;
+    }
+
+    .entities-only .scope-yaml > summary .mode-toggle {
+      display: inline-flex;
+    }
+
+    /*
+     * "There are no entities here", said only when it is true.
+     *
+     * The same :has() that hides the empty sections decides this, which is
+     * what keeps the two from ever disagreeing: the message appears exactly
+     * when every section on the tab has been hidden. Being a CSS question
+     * rather than a piece of state also means it cannot flash before the first
+     * inspection poll -- it is about whether the tab *configures* an entity,
+     * not about whether a reading has arrived for one -- and a scope left in
+     * YAML mode counts as content, because its entity ids are on screen even
+     * though no group is.
+     */
+    .entities-only-empty {
+      display: none;
+    }
+
+    .entities-only:not(:has(helman-entity-group, .scope-yaml)) > .entities-only-empty {
+      display: block;
+    }
+
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -584,6 +739,29 @@ export class HelmanConfigEditorPanel
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
   private _activeTab: TabId = "general";
+  /**
+   * Reduce every tab to nothing but its entity groups.
+   *
+   * Session-only on purpose: it lives for as long as the panel is mounted and
+   * comes back off on the next visit. This is an auditing mode, not a way to
+   * configure Helman -- persisting it in localStorage or in the stored
+   * document would make "half the editor is missing" a state a user could
+   * arrive in without having asked for it, and nothing here forecloses adding
+   * that later if the view turns out to be where they live.
+   */
+  private _entitiesOnly = false;
+  /**
+   * What each section looked like just before the toggle forced it open, so
+   * turning the toggle off puts it back.
+   *
+   * Keyed by the element itself, and a `WeakMap` on purpose: a tab switch
+   * detaches a whole tab's worth of `details` and renders new ones, and every
+   * one of them wants an entry of its own. A `Map` would hold the detached
+   * nodes alive for the life of the panel to answer a question nobody will ask
+   * again; restoring only ever looks a *currently rendered* section up, so
+   * weak references are exactly the right strength.
+   */
+  private _sectionOpenBeforeEntitiesOnly = new WeakMap<HTMLDetailsElement, boolean>();
   private _config: JsonObject | null = null;
   private _dirty = false;
   private _loading = false;
@@ -637,6 +815,52 @@ export class HelmanConfigEditorPanel
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
   private _configFragmentRequested = false;
 
+  // --- Entity inspection ---------------------------------------------------
+  //
+  // One owner for the whole editor. Every mounted `helman-entity-group`
+  // announces its config path here, and one `helman/inspect_entities` call per
+  // tick answers for all of them; the appliances tab alone will hold twenty
+  // groups, and a call per group would be twenty round trips every two seconds
+  // for readings that all come out of the same document.
+  //
+  // The draft document is sent whole on every tick. It is a few KB over a local
+  // socket, and any scheme for sending only what changed would be more code
+  // than it saves.
+
+  /** The stored document, as read. What a revert restores from. */
+  private _savedConfig: JsonObject | null = null;
+  /** The last answer, keyed by group. Groups read their own row from here. */
+  private _entityInspections: Record<string, EntityInspectionResult> = {};
+  private _inspectionTimer?: ReturnType<typeof setInterval>;
+  /** Open while a burst is being coalesced; see the debounce constant. */
+  private _inspectionDebounce?: ReturnType<typeof setTimeout>;
+  /** Something changed while the window was open, so send once more at its end. */
+  private _inspectionTrailing = false;
+  /**
+   * Request ids, so a slow answer cannot overwrite a newer one.
+   *
+   * Requests are allowed to overlap rather than being serialised behind an
+   * in-flight flag: dropping a request because an older one is still out would
+   * drop exactly the state the user just typed, which is the bug this whole
+   * mechanism exists to prevent. Instead every request takes the next id and
+   * only an id newer than the last one applied may reach the screen -- a
+   * response that arrives out of order is discarded, not rendered.
+   */
+  private _inspectionSequence = 0;
+  private _inspectionApplied = 0;
+  /**
+   * How many requests are out.
+   *
+   * Ordering is the sequence numbers' job; this is the separate concern of not
+   * piling up. The interval restarts when a request *starts*, so a websocket
+   * that has stalled -- HA reconnecting, a slow handler -- would otherwise put
+   * another whole config document on the wire every two seconds with nothing
+   * capping the pile. The idle tick yields while one is out; a poll the user
+   * caused never does, because dropping that one drops the state they just
+   * typed.
+   */
+  private _inspectionInFlight = 0;
+
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
   }
@@ -663,6 +887,9 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
+    this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
+    this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
+    this._restartEntityInspectionTimer();
     void loadHaForm()
       .then(() => {
         this.requestUpdate();
@@ -682,6 +909,17 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
+    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
+    this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
+    if (this._inspectionTimer !== undefined) {
+      clearInterval(this._inspectionTimer);
+      this._inspectionTimer = undefined;
+    }
+    if (this._inspectionDebounce !== undefined) {
+      clearTimeout(this._inspectionDebounce);
+      this._inspectionDebounce = undefined;
+    }
+    this._inspectionTrailing = false;
   }
 
   protected updated(changedProperties: PropertyValues<this>): void {
@@ -694,6 +932,11 @@ export class HelmanConfigEditorPanel
       this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
         () => this._handleDataChanged(),
       );
+    }
+    // Every update while the toggle is on, and once more on the update that
+    // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
+    if (this._entitiesOnly || changedProperties.has("_entitiesOnly")) {
+      this._applyEntitiesOnlyOpenState();
     }
   }
 
@@ -909,13 +1152,112 @@ export class HelmanConfigEditorPanel
     return html`
       <div class="tab-scope">
         <div class="scope-toolbar">
+          ${this._renderEntitiesOnlyToggle()}
           ${this._renderModeToggle(scopeId)}
         </div>
         ${this._isScopeYaml(scopeId)
           ? html`<div class="list-card">${this._renderYamlEditor(scopeId)}</div>`
-          : html`<div class="tab-body">${content}</div>`}
+          : html`<div class="tab-body ${this._entitiesOnly ? "entities-only" : ""}">
+              ${content}
+              ${this._entitiesOnly
+                ? html`<div class="message info entities-only-empty">
+                    ${this._t("editor.empty.no_entities_on_tab")}
+                  </div>`
+                : nothing}
+            </div>`}
       </div>
     `;
+  }
+
+  /**
+   * The entities-only switch, in every tab's toolbar.
+   *
+   * On every tab rather than only on Power devices, which is where the noise
+   * complaint came from: the mechanism is a CSS class and a `:has()` selector
+   * that know nothing about which tab they are on, and gating it to one tab
+   * would be more code than leaving it general. A tab whose sections hold no
+   * group simply empties, which is an honest answer to "show me the entities
+   * here".
+   *
+   * It sits *outside* `.tab-body`, so the rules it turns on cannot hide the
+   * control that turned them on -- and beside the tab's own YAML toggle, which
+   * is the other control that changes what this whole tab renders.
+   */
+  private _renderEntitiesOnlyToggle(): TemplateResult {
+    return html`
+      <ha-formfield
+        class="entities-only-toggle"
+        .label=${this._t("editor.toggles.entities_only")}
+      >
+        <ha-switch
+          .checked=${this._entitiesOnly}
+          @change=${(event: Event) =>
+            this._setEntitiesOnly(
+              (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+            )}
+        ></ha-switch>
+      </ha-formfield>
+    `;
+  }
+
+  /**
+   * Every `details` the current tab body renders.
+   *
+   * Deliberately *not* a shadow-crossing walk, unlike `_mountedEntityGroups`.
+   * These are the editor's own section cards; a `details` inside a child
+   * element's shadow root belongs to that element and is not this panel's to
+   * force open. See `_applyEntitiesOnlyOpenState` for what that costs.
+   */
+  private _tabBodyDetails(): HTMLDetailsElement[] {
+    const body = this.shadowRoot?.querySelector(".tab-body");
+    return body ? [...body.querySelectorAll<HTMLDetailsElement>("details")] : [];
+  }
+
+  private _setEntitiesOnly(next: boolean): void {
+    if (next === this._entitiesOnly) return;
+    this._entitiesOnly = next;
+  }
+
+  /**
+   * Open every section while the toggle is on; put them back when it goes off.
+   *
+   * This is done to the DOM rather than through an `?open` binding, and the
+   * reason is that a binding cannot answer the question the restore needs.
+   * Lit writes an attribute only when the bound value changes, so a section the
+   * user has collapsed by hand would be left collapsed by a binding on the
+   * toggle -- and the `details.list-card` a controllable renders has no `open`
+   * binding at all, so nothing would open it and nothing would close it again.
+   *
+   * It runs on **every** update, not only when the toggle or the tab changes,
+   * because content appears while the toggle is on for reasons neither of those
+   * covers: switching a scope out of YAML mode renders a whole fresh tab body,
+   * and adding an appliance renders one more card. A section that arrives
+   * collapsed is not merely inconvenient here -- a closed `details` renders no
+   * content, so `:has()` finds no group inside it and the view hides it
+   * outright. Coming up empty is the one failure this feature cannot have.
+   *
+   * Running every time is safe because the map is also the record of what has
+   * already been dealt with: a section already in it is left exactly as it is,
+   * so collapsing one by hand while the toggle is on sticks, and the 2 s
+   * inspection poll does not reopen it.
+   */
+  private _applyEntitiesOnlyOpenState(): void {
+    const sections = this._tabBodyDetails();
+    if (this._entitiesOnly) {
+      for (const section of sections) {
+        if (this._sectionOpenBeforeEntitiesOnly.has(section)) continue;
+        this._sectionOpenBeforeEntitiesOnly.set(section, section.open);
+        section.open = true;
+      }
+      return;
+    }
+    for (const section of sections) {
+      const previous = this._sectionOpenBeforeEntitiesOnly.get(section);
+      if (previous !== undefined) {
+        section.open = previous;
+      }
+    }
+    this._sectionOpenBeforeEntitiesOnly = new WeakMap();
   }
 
   private _renderSectionScope(
@@ -927,9 +1269,15 @@ export class HelmanConfigEditorPanel
     const { initialOpen = true } = options;
     const sectionIcon = SECTION_ICONS[scopeId];
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    // A scope in YAML mode renders a code editor holding entity ids as text,
+    // which no `:has()` can see. Marked so the entities-only view keeps it --
+    // see `.scope-yaml` in the styles for why hiding it would be a lie.
+    const sectionClasses = this._isScopeYaml(scopeId)
+      ? "section-card scope-yaml"
+      : "section-card";
 
     return html`
-      <details class="section-card" ?open=${initialOpen}>
+      <details class=${sectionClasses} ?open=${initialOpen}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
@@ -1294,15 +1642,12 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.power_devices.house,
         html`
           <div class="field-grid">
-            ${this._renderRequiredEntityField(
-              ["power_devices", "house", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "house",
               "editor.fields.house_power_entity",
-              ["sensor"],
-              undefined,
-              undefined,
               "editor.help.house_power_entity",
+              true,
             )}
-            ${this._renderPolarityField("house")}
             ${this._renderOptionalTextField(
               ["power_devices", "house", "power_sensor_label"],
               "editor.fields.power_sensor_label",
@@ -1315,24 +1660,29 @@ export class HelmanConfigEditorPanel
               ["power_devices", "house", "unmeasured_power_title"],
               "editor.fields.unmeasured_power_title",
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "house", "forecast", "total_energy_entity_id"],
               "editor.fields.forecast_total_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.house_forecast_total_energy_entity",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "house", "forecast", "min_history_days"],
-              "editor.fields.min_history_days",
-              undefined,
-              "editor.help.house_min_history_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "house", "forecast", "training_window_days"],
-              "editor.fields.training_window_days",
-              undefined,
-              "editor.help.house_training_window_days",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.house_forecast_total_energy_entity",
+              },
+              html`
+                <div class="field-grid">
+                  ${this._renderOptionalNumberField(
+                    ["power_devices", "house", "forecast", "min_history_days"],
+                    "editor.fields.min_history_days",
+                    undefined,
+                    "editor.help.house_min_history_days",
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["power_devices", "house", "forecast", "training_window_days"],
+                    "editor.fields.training_window_days",
+                    undefined,
+                    "editor.help.house_training_window_days",
+                  )}
+                </div>
+              `,
             )}
           </div>
         `,
@@ -1346,22 +1696,20 @@ export class HelmanConfigEditorPanel
             SECTION_SCOPE_IDS.power_devices.solar_general,
             html`
               <div class="field-grid field-grid--roomy">
-                ${this._renderOptionalEntityField(
-                  ["power_devices", "solar", "entities", "power"],
+                ${this._renderPowerEntityGroup(
+                  "solar",
                   "editor.fields.power_entity",
-                  ["sensor"],
-                  undefined,
                   "editor.help.solar_power_entity",
                 )}
-                ${this._renderPolarityField("solar")}
-                ${this._renderOptionalEntityField(
+                ${this._renderEntityGroup(
                   ["power_devices", "solar", "entities", "today_energy"],
                   "editor.fields.today_energy_entity",
-                  ["sensor"],
-                  undefined,
-                  "editor.help.solar_today_energy_entity",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.solar_today_energy_entity",
+                  },
                 )}
-                ${this._renderOptionalEntityField(
+                ${this._renderEntityGroup(
                   [
                     "power_devices",
                     "solar",
@@ -1369,9 +1717,10 @@ export class HelmanConfigEditorPanel
                     "remaining_today_energy_forecast",
                   ],
                   "editor.fields.remaining_today_energy_forecast",
-                  ["sensor"],
-                  undefined,
-                  "editor.help.solar_remaining_today_energy_forecast",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.solar_remaining_today_energy_forecast",
+                  },
                 )}
               </div>
             `,
@@ -1385,18 +1734,19 @@ export class HelmanConfigEditorPanel
                 SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
                 html`
                   <div class="field-grid field-grid--roomy">
-                    ${this._renderOptionalEntityField(
+                    ${this._renderEntityGroup(
                       ["power_devices", "solar", "forecast", "total_energy_entity_id"],
                       "editor.fields.forecast_total_energy_entity",
-                      ["sensor"],
-                      undefined,
-                      "editor.help.solar_forecast_total_energy_entity",
+                      {
+                        includeDomains: ["sensor"],
+                        helpKey: "editor.help.solar_forecast_total_energy_entity",
+                      },
                     )}
                   </div>
 
                   <div class="list-stack">
-                    ${dailyEnergyEntityIds.map((value, index) =>
-                      this._renderDailyEnergyEntity(value, index, dailyEnergyEntityIds.length),
+                    ${dailyEnergyEntityIds.map((_value, index) =>
+                      this._renderDailyEnergyEntity(index, dailyEnergyEntityIds.length),
                     )}
                   </div>
                   <div class="section-footer">
@@ -1419,24 +1769,6 @@ export class HelmanConfigEditorPanel
                           ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
                           "editor.fields.bias_correction_enabled",
                           false,
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                          "editor.fields.bias_correction_min_history_days",
-                          "editor.helpers.bias_correction_min_history_days",
-                          "editor.help.bias_correction_min_history_days",
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                          "editor.fields.max_training_window_days",
-                          "editor.helpers.bias_correction_max_training_window_days",
-                          "editor.help.bias_correction_max_training_window_days",
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
-                          "editor.fields.bias_correction_min_valid_slot_days",
-                          "editor.helpers.bias_correction_min_valid_slot_days",
-                          "editor.help.bias_correction_min_valid_slot_days",
                         )}
                         ${this._renderOptionalNumberField(
                           ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
@@ -1465,12 +1797,35 @@ export class HelmanConfigEditorPanel
                           "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
                           "editor.help.bias_correction_max_interpolated_consecutive_slots",
                         )}
-                        ${this._renderOptionalEntityField(
+                        ${this._renderEntityGroup(
                           ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
                           "editor.fields.bias_correction_total_energy_entity",
-                          ["sensor"],
-                          undefined,
-                          "editor.help.bias_correction_total_energy_entity",
+                          {
+                            includeDomains: ["sensor"],
+                            helpKey: "editor.help.bias_correction_total_energy_entity",
+                          },
+                          html`
+                            <div class="field-grid">
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+                                "editor.fields.bias_correction_min_history_days",
+                                "editor.helpers.bias_correction_min_history_days",
+                                "editor.help.bias_correction_min_history_days",
+                              )}
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
+                                "editor.fields.max_training_window_days",
+                                "editor.helpers.bias_correction_max_training_window_days",
+                                "editor.help.bias_correction_max_training_window_days",
+                              )}
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
+                                "editor.fields.bias_correction_min_valid_slot_days",
+                                "editor.helpers.bias_correction_min_valid_slot_days",
+                                "editor.help.bias_correction_min_valid_slot_days",
+                              )}
+                            </div>
+                          `,
                         )}
                       </div>
 
@@ -1594,41 +1949,42 @@ export class HelmanConfigEditorPanel
             ${this._t("editor.notes.battery_entities")}
           </p>
           <div class="field-grid field-grid--roomy">
-            ${this._renderOptionalEntityField(
-              ["power_devices", "battery", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "battery",
               "editor.fields.power_entity",
-              ["sensor"],
-              undefined,
               "editor.help.battery_power_entity",
             )}
-            ${this._renderPolarityField("battery")}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_remaining_energy_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_remaining_energy_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "capacity"],
               "editor.fields.capacity_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_capacity_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_capacity_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "min_soc"],
               "editor.fields.min_soc_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_min_soc_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_min_soc_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "max_soc"],
               "editor.fields.max_soc_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_max_soc_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_max_soc_entity",
+              },
             )}
           </div>
           <div class="field-grid">
@@ -1665,20 +2021,18 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.power_devices.grid,
         html`
           <div class="field-grid">
-            ${this._renderOptionalEntityField(
-              ["power_devices", "grid", "entities", "power"],
+            ${this._renderPowerEntityGroup(
+              "grid",
               "editor.fields.power_entity",
-              ["sensor"],
-              undefined,
               "editor.help.grid_power_entity",
             )}
-            ${this._renderPolarityField("grid")}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.grid_sell_price_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.grid_sell_price_entity",
+              },
             )}
             ${this._renderOptionalTextField(
               ["power_devices", "grid", "forecast", "import_price_unit"],
@@ -1805,13 +2159,10 @@ export class HelmanConfigEditorPanel
     if (!detail?.config) {
       return;
     }
-    // The same bookkeeping `_applyMutation` does for the panel's own fields —
-    // the edit came from a child element, but it is still an edit of this
-    // draft, and the validation report it invalidates is still ours.
+    // The edit came from a child element, but it is still an edit of this
+    // draft, so it goes through the same bookkeeping rather than repeating it.
     this._config = detail.config;
-    this._dirty = true;
-    this._validation = null;
-    this._message = null;
+    this._markDraftChanged();
   };
 
   private _renderAutomationEnabledField(): TemplateResult {
@@ -2041,8 +2392,14 @@ export class HelmanConfigEditorPanel
     });
   }
 
+  /**
+   * One entry of the solar daily-forecast list, as a group.
+   *
+   * The item's value is no longer passed in: the group reads it from the
+   * document at its own path, the same way every other group does, and a list
+   * index is an ordinary path segment on both sides of the websocket.
+   */
   private _renderDailyEnergyEntity(
-    value: unknown,
     index: number,
     total: number,
   ): TemplateResult {
@@ -2097,7 +2454,11 @@ export class HelmanConfigEditorPanel
             </button>
           </div>
         </div>
-        ${this._renderRequiredEntityField(path, "editor.fields.entity_id", ["sensor"], undefined, value, "editor.help.solar_daily_energy_entity")}
+        ${this._renderEntityGroup(path, "editor.fields.entity_id", {
+          includeDomains: ["sensor"],
+          helpKey: "editor.help.solar_daily_energy_entity",
+          required: true,
+        })}
       </div>
     `;
   }
@@ -2248,7 +2609,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2287,13 +2648,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField(
+                  ${this._renderEntityGroup(
                     [...modePath, "entity_id"],
                     "editor.fields.mode_entity",
-                    ["input_select", "select"],
-                    "editor.helpers.mode_entity",
-                    undefined,
-                    "editor.help.inverter_mode_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helperKey: "editor.helpers.mode_entity",
+                      helpKey: "editor.help.inverter_mode_entity",
+                      required: true,
+                    },
                   )}
                 </div>`,
               )}
@@ -2383,7 +2746,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2424,9 +2787,33 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], undefined, undefined, "editor.help.ev_charge_switch_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_use_mode_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_eco_gear_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "charge", "entity_id"],
+                    "editor.fields.charge_switch_entity",
+                    {
+                      includeDomains: ["switch"],
+                      helpKey: "editor.help.ev_charge_switch_entity",
+                      required: true,
+                    },
+                  )}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "use_mode", "entity_id"],
+                    "editor.fields.use_mode_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helpKey: "editor.help.ev_use_mode_entity",
+                      required: true,
+                    },
+                  )}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "eco_gear", "entity_id"],
+                    "editor.fields.eco_gear_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helpKey: "editor.help.ev_eco_gear_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2485,7 +2872,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2525,7 +2912,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], undefined, undefined, "editor.help.appliance_switch_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "switch", "entity_id"],
+                    "editor.fields.switch_entity",
+                    {
+                      includeDomains: ["switch"],
+                      helpKey: "editor.help.appliance_switch_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2560,7 +2955,7 @@ export class HelmanConfigEditorPanel
     const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
-      <details class="list-card">
+      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -2600,7 +2995,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], undefined, undefined, "editor.help.appliance_climate_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "climate", "entity_id"],
+                    "editor.fields.climate_entity",
+                    {
+                      includeDomains: ["climate"],
+                      helpKey: "editor.help.appliance_climate_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2645,12 +3048,14 @@ export class HelmanConfigEditorPanel
       <div class="section-content">
         ${noteKey ? html`<p class="inline-note">${this._t(noteKey)}</p>` : nothing}
         <div class="field-grid">
-          ${this._renderOptionalEntityField(
+          ${this._renderEntityGroup(
             [...consumptionPath, "energy_entity_id"],
             "editor.fields.consumption_energy_entity",
-            ["sensor"],
-            "editor.helpers.consumption_energy_entity",
-            "editor.help.consumption_energy_entity",
+            {
+              includeDomains: ["sensor"],
+              helperKey: "editor.helpers.consumption_energy_entity",
+              helpKey: "editor.help.consumption_energy_entity",
+            },
           )}
         </div>
         ${hasMeter
@@ -2867,20 +3272,22 @@ export class HelmanConfigEditorPanel
         <div class="field-grid">
           ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.vehicle_id", undefined, "editor.help.vehicle_id")}
           ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.vehicle_name")}
-          ${this._renderRequiredEntityField(
+          ${this._renderEntityGroup(
             [...basePath, "telemetry", "soc_entity_id"],
             "editor.fields.soc_entity",
-            ["sensor"],
-            undefined,
-            undefined,
-            "editor.help.vehicle_soc_entity",
+            {
+              includeDomains: ["sensor"],
+              helpKey: "editor.help.vehicle_soc_entity",
+              required: true,
+            },
           )}
-          ${this._renderOptionalEntityField(
+          ${this._renderEntityGroup(
             [...basePath, "telemetry", "charge_limit_entity_id"],
             "editor.fields.charge_limit_entity",
-            ["number"],
-            undefined,
-            "editor.help.vehicle_charge_limit_entity",
+            {
+              includeDomains: ["number"],
+              helpKey: "editor.help.vehicle_charge_limit_entity",
+            },
           )}
           ${this._renderRequiredNumberField(
             [...basePath, "limits", "battery_capacity_kwh"],
@@ -3054,74 +3461,249 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderOptionalEntityField(
+  /**
+   * An entity picker, the settings that qualify it, and what it reads — as one.
+   *
+   * A picker in a bordered block, plus a slot: the settings that belong to
+   * this entity are passed *into* it rather than rendered as siblings in the
+   * same field grid, which is what makes a polarity read as part of its sensor
+   * instead of as a loose select that happens to sit next to one.
+   *
+   * **Every entity picker in the editor goes through here.** A path with no
+   * evaluator of its own is not a reason to render a bare field: the registry's
+   * fallback states its current value, so the group is the one control an
+   * entity is ever picked in — which is what lets the entities-only view claim
+   * it shows all of them.
+   *
+   * What a revert restores is *not* decided here. The call site knows what it
+   * put in the slot; only the evaluator knows which of those the reading was
+   * made of, and it says so in the inspection's `dependsOn`. A training window
+   * rendered beside a minimum history requirement is the same entity's setting
+   * and is left alone by a revert, because it could never have caused one.
+   *
+   * Nothing about the reading is decided here. The group is handed a row of
+   * facts and renders them; if this method ever grows a branch on what an
+   * entity is, the contract in `entity-group.ts` has been broken.
+   */
+  private _renderEntityGroup(
     path: PathSegment[],
     labelKey: string,
-    includeDomains?: string[],
-    helperKey?: string,
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderEntityField(
-      path,
-      labelKey,
-      includeDomains,
-      helperKey,
-      false,
-      this._getValue(path),
-      helpKey,
-    );
-  }
-
-  private _renderRequiredEntityField(
-    path: PathSegment[],
-    labelKey: string,
-    includeDomains?: string[],
-    helperKey?: string,
-    explicitValue?: unknown,
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderEntityField(
-      path,
-      labelKey,
-      includeDomains,
-      helperKey,
-      true,
-      explicitValue === undefined ? this._getValue(path) : explicitValue,
-      helpKey,
-    );
-  }
-
-  private _renderEntityField(
-    path: PathSegment[],
-    labelKey: string,
-    includeDomains: string[] | undefined,
-    helperKey: string | undefined,
-    required: boolean,
-    value: unknown,
-    helpKey?: string,
+    options: {
+      includeDomains?: string[];
+      helperKey?: string;
+      helpKey?: string;
+      required?: boolean;
+    } = {},
+    slotted: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
     return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <ha-entity-picker
-          .hass=${this.hass}
-          .value=${this._stringValue(value)}
-          .includeDomains=${includeDomains}
-          @value-changed=${(event: Event) => {
-            const nextValue = (event as CustomEvent<{ value?: string }>).detail?.value ?? "";
-            if (required) {
-              this._setRequiredString(path, nextValue);
-            } else {
-              this._setOptionalString(path, nextValue);
-            }
-          }}
-        ></ha-entity-picker>
-        ${helperKey ? html`<div class="helper">${this._t(helperKey)}</div>` : nothing}
-      </div>
+      <helman-entity-group
+        .hass=${this.hass}
+        .fieldHost=${this}
+        .path=${path}
+        .labelKey=${labelKey}
+        .helpKey=${options.helpKey}
+        .helperKey=${options.helperKey}
+        .includeDomains=${options.includeDomains}
+        ?required=${options.required ?? false}
+        .inspection=${this._entityInspections[entityGroupKey(path)] ?? null}
+      >${slotted}</helman-entity-group>
     `;
+  }
+
+  /**
+   * A power device's power sensor: the picker, its polarity, and its reading.
+   *
+   * The polarity select is unchanged — same options, same path, same wording —
+   * it has only moved from beside the picker to inside it.
+   */
+  private _renderPowerEntityGroup(
+    device: PowerPolarityDevice,
+    labelKey: string,
+    helpKey: string,
+    required = false,
+  ): TemplateResult {
+    const entityPath: PathSegment[] = ["power_devices", device, "entities", "power"];
+    return this._renderEntityGroup(
+      entityPath,
+      labelKey,
+      {
+        includeDomains: ["sensor"],
+        helpKey,
+        required,
+      },
+      this._renderPolarityField(device),
+    );
+  }
+
+  /**
+   * Put this group's owned paths back to what the stored document says.
+   *
+   * The editor does the write because it is what holds both documents; the
+   * group only knows which paths are its own. A path the saved document does
+   * not have is removed rather than blanked, so reverting an entity that was
+   * never saved leaves the same document as never having picked one.
+   */
+  private _handleEntityGroupRevert = (event: Event): void => {
+    const detail = (event as CustomEvent<EntityGroupRevertDetail>).detail;
+    const saved = this._savedConfig;
+    if (!saved || !detail?.paths?.length) return;
+    this._applyMutation((draft) => {
+      for (const path of detail.paths) {
+        const value = getValueAtPath(saved, path);
+        if (value === undefined) {
+          unsetValueAtPath(draft, path);
+        } else {
+          setValueAtPath(draft, path, cloneJson(value as JsonValue));
+        }
+      }
+    });
+  };
+
+  /**
+   * Read again now, because something the reading depends on moved.
+   *
+   * The single trigger for everything that is not the timer: a group mounting,
+   * and every write into the draft document. It deliberately does *not* ask
+   * which paths changed or which group owns them. The poll is one batched call
+   * over the groups the collector finds in the DOM, and a config write is rare
+   * enough that asking unconditionally is both simpler than a dependency map
+   * and impossible to get subtly wrong -- a field added later cannot forget to
+   * opt in.
+   *
+   * Leading edge, with a trailing call when the burst had more in it. Expanding
+   * a section mounts several groups at once and the first of them fires before
+   * its siblings exist, so the trailing call is what picks the rest up.
+   */
+  /**
+   * A group announcing itself as it mounts.
+   *
+   * Deferred to a microtask, unlike a config write, because this one arrives
+   * from inside the panel's own render commit: the group's `connectedCallback`
+   * runs while Lit is inserting children, after the update is marked done, so
+   * writing the reactive `_entityInspections` synchronously would schedule an
+   * update from inside one -- the dev warning, and an extra render pass. The
+   * write the user caused has no such problem and keeps its leading edge.
+   */
+  private _handleEntityGroupConnected = (): void => {
+    queueMicrotask(() => this._requestEntityInspection());
+  };
+
+  private _requestEntityInspection = (): void => {
+    if (this._inspectionDebounce !== undefined) {
+      this._inspectionTrailing = true;
+      return;
+    }
+    this._inspectionDebounce = setTimeout(() => {
+      this._inspectionDebounce = undefined;
+      if (this._inspectionTrailing) {
+        this._inspectionTrailing = false;
+        this._requestEntityInspection();
+      }
+    }, ENTITY_INSPECTION_DEBOUNCE_MS);
+    void this._pollEntityInspections();
+  };
+
+  /**
+   * Start the idle tick over.
+   *
+   * Called whenever a request actually goes out, so an immediate poll *resets*
+   * the two-second rhythm instead of running beside it. Without this, a burst
+   * of edits would leave the timer firing in the gaps between the polls the
+   * edits already caused.
+   */
+  private _restartEntityInspectionTimer(): void {
+    if (this._inspectionTimer !== undefined) {
+      clearInterval(this._inspectionTimer);
+    }
+    this._inspectionTimer = setInterval(
+      () => void this._pollEntityInspections("idle"),
+      ENTITY_INSPECTION_INTERVAL_MS,
+    );
+  }
+
+  /**
+   * The groups actually on screen, read from the DOM at the moment of asking.
+   *
+   * Deliberately not a set maintained by mount/unmount events. A group cannot
+   * announce its own removal — `disconnectedCallback` runs after the browser
+   * has detached it, and an event dispatched from a detached node never
+   * reaches this element — so a bookkeeping set would grow monotonically and
+   * keep polling for groups that are gone. Querying is also simply true: a
+   * collapsed `details` renders no group, and a tab switch removes them all.
+   *
+   * It descends nested shadow roots because a plain `querySelectorAll` stops
+   * at the first one: `helman-optimizer-editor` renders the Automation tab
+   * inside its own, and a group placed there would simply never be polled —
+   * mounted, bordered and permanently blank, with nothing to say it was
+   * missed. The whole invariant is that no picker goes factless, so the
+   * collector has to reach every group that exists rather than every group
+   * this element happened to render itself.
+   */
+  private _mountedEntityGroups(): HelmanEntityGroup[] {
+    return queryDeep<HelmanEntityGroup>(this.shadowRoot, "helman-entity-group");
+  }
+
+  /**
+   * One call for every mounted group, or none at all.
+   *
+   * A group is worth asking about when *either* document has something at its
+   * path. The draft one is obvious; the saved one is the case that is easy to
+   * get wrong — clearing a configured sensor leaves the draft blank, and that
+   * is exactly when the saved reading and its revert control need to appear.
+   * Skipping it would remove the revert affordance from the single edit most
+   * likely to want it. When neither document has anything there is genuinely
+   * nothing to ask, and no call goes out at all.
+   *
+   * A failed tick is swallowed — the last reading stays on screen rather than
+   * the panel growing an error banner that reappears every two seconds.
+   */
+  private async _pollEntityInspections(trigger: "idle" | "change" = "change"): Promise<void> {
+    if (!this.hass || !this._config) return;
+    if (trigger === "idle" && this._inspectionInFlight > 0) return;
+    const saved = this._savedConfig;
+    const targets = this._mountedEntityGroups()
+      .map((group) => ({ key: group.key, path: group.path }))
+      .filter(
+        ({ path }) =>
+          stringValue(this._getValue(path)) !== "" ||
+          (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
+      );
+    if (targets.length === 0) {
+      // Clearing is an answer like any other, so it takes an id too. Without
+      // one, a slow earlier request could resolve after this and repaint the
+      // reading for the entity that was just cleared.
+      this._inspectionApplied = ++this._inspectionSequence;
+      if (Object.keys(this._entityInspections).length > 0) {
+        this._entityInspections = {};
+      }
+      return;
+    }
+    const sequence = ++this._inspectionSequence;
+    this._restartEntityInspectionTimer();
+    this._inspectionInFlight += 1;
+    try {
+      const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
+        type: "helman/inspect_entities",
+        config: this._config,
+        ...(saved ? { saved_config: saved } : {}),
+        targets,
+      });
+      // A slower earlier request must never repaint over a newer answer: that
+      // would put the stale reading back on screen, which is the whole defect
+      // the immediate poll exists to remove.
+      if (sequence < this._inspectionApplied) return;
+      this._inspectionApplied = sequence;
+      const next: Record<string, EntityInspectionResult> = {};
+      for (const row of response?.results ?? []) {
+        next[row.key] = row;
+      }
+      this._entityInspections = next;
+    } catch {
+      // Polled: a dropped tick costs a stale badge, not a message.
+    } finally {
+      this._inspectionInFlight -= 1;
+    }
   }
 
   private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
@@ -3217,6 +3799,7 @@ export class HelmanConfigEditorPanel
       );
       if (current !== undefined) {
         this._configBaseline = canonicalJson(current);
+        this._savedConfig = cloneJson(current);
       }
     } catch {
       // Leaving the old baseline costs at most one spurious notice, which the
@@ -3244,6 +3827,9 @@ export class HelmanConfigEditorPanel
       // What was read is what this editor now agrees with, so it is what a
       // later announcement has to be compared against.
       this._configBaseline = canonicalJson(loadedConfig ?? {});
+      // The same document the baseline is taken from, kept whole: it is what a
+      // group's revert restores, and what the backend compares a draft against.
+      this._savedConfig = loadedConfig ? cloneJson(loadedConfig) : {};
       // Whatever changed elsewhere is now in hand, however the reload was asked
       // for -- the button, the announcement, or the first load.
       this._staleConfigNotice = false;
@@ -3950,13 +4536,37 @@ export class HelmanConfigEditorPanel
     return changed;
   }
 
+  /**
+   * How every `_set*` helper writes into the draft document.
+   *
+   * They all funnel through here, which is why the entity groups' re-read is
+   * wired into `_markDraftChanged` below rather than into the individual
+   * renderers: a field added tomorrow gets a live reading for free and cannot
+   * forget to ask for one. It is not the *only* door into the draft, though --
+   * see `_markDraftChanged`.
+   */
   private _applyMutation(mutator: (draft: JsonObject) => void): void {
     const draft = cloneJson(this._config ?? {});
     mutator(draft);
     this._config = draft;
+    this._markDraftChanged();
+  }
+
+  /**
+   * What every change to the draft owes, wherever the change came from.
+   *
+   * The panel's own fields all funnel through `_applyMutation`, but the
+   * optimizer editor hands back a whole document of its own, and an entity
+   * added there would otherwise never get a live reading. Keeping the
+   * bookkeeping in one function is what stops the two paths drifting -- the
+   * previous version of this comment claimed `_applyMutation` was the only
+   * door, and it was already wrong.
+   */
+  private _markDraftChanged(): void {
     this._dirty = true;
     this._validation = null;
     this._message = null;
+    this._requestEntityInspection();
   }
 
   // --- FormFieldHost -------------------------------------------------------

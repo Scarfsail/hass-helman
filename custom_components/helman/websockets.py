@@ -16,6 +16,7 @@ from .const import (
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
 from .config_validation import validate_config_document
+from .entity_inspection import inspect_targets
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
@@ -85,6 +86,18 @@ def _validate_group_index(value: object) -> int:
     return value
 
 
+def _validate_optional_config_document(value: object) -> dict | None:
+    """A config document, or ``None`` meaning "there is no saved one yet".
+
+    Spelled out rather than written as ``vol.Any(dict, None)`` so the schema
+    stays readable to the hand-rolled voluptuous stub some test modules install
+    in place of the real package.
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    raise vol.Invalid("saved_config must be a config document or null")
+
+
 def _validate_forecast_days(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise vol.Invalid("forecast_days must be an integer")
@@ -118,6 +131,56 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_schedule_explanation)
     async_register_command(hass, ws_get_condition_trace)
+    async_register_command(hass, ws_inspect_entities)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/inspect_entities",
+    vol.Required("config"): dict,
+    vol.Optional("saved_config"): _validate_optional_config_document,
+    vol.Required("targets"): [dict],
+})
+@callback
+def ws_inspect_entities(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """What the entities picked in an editor draft currently read.
+
+    The request names **paths, not entities**: it carries the draft config
+    document and a list of config paths into it, and the backend resolves the
+    entity id and every setting that qualifies it from that document. That is
+    deliberate — "which settings matter for this path" is knowledge that has to
+    stay in :mod:`.entity_inspection` rather than being split across the
+    websocket boundary into the editor's TypeScript. See that package's
+    docstring for the whole argument.
+
+    The answer is a list of localizable facts per target, which the editor
+    renders in order and does not interpret. ``saved`` is non-``null`` only
+    when the stored document would read differently, which is a question only
+    the evaluator can answer — so both documents are sent and the comparison
+    happens here.
+
+    Polled roughly every two seconds while the editor is open, so it never
+    raises on a target it dislikes: an unknown entity, a non-numeric state or a
+    path with no evaluator is a ``status`` on that row, not an error on the
+    call.
+    """
+    if not _require_admin(connection, msg):
+        return
+
+    connection.send_result(
+        msg["id"],
+        {
+            "results": inspect_targets(
+                hass,
+                msg["config"],
+                msg["targets"],
+                saved_config=msg.get("saved_config"),
+            )
+        },
+    )
 
 
 @websocket_api.websocket_command({
