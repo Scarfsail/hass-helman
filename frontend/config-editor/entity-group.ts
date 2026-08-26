@@ -248,6 +248,23 @@ export class HelmanEntityGroup extends LitElement {
             font-weight: 600;
         }
 
+        /*
+         * Severity is carried by the fill and the outline, never by the text.
+         *
+         * These used to set the severity hue as the *text* colour over a wash
+         * of itself -- a mid-tone on a pale tint. Measured against the group
+         * ground that lands at 2.2:1 for a warning on a light theme and 2.8:1
+         * for info on a dark one, well under the 4.5:1 that text this size
+         * needs, and no alpha nudge fixes both themes at once because the two
+         * grounds move in opposite directions. The text is now the theme's own
+         * text colour, which is the one colour guaranteed to read on the
+         * theme's own ground, and the four severities stay apart by their fill
+         * and a 1px outline of the full-strength colour.
+         *
+         * The hues come from HA's state variables so a theme restyles them
+         * with everything else; the fallbacks are HA's own defaults, so a theme
+         * that defines neither looks exactly as it would have.
+         */
         .badge-neutral {
             background: var(--card-background-color);
             color: var(--primary-text-color);
@@ -255,18 +272,21 @@ export class HelmanEntityGroup extends LitElement {
         }
 
         .badge-info {
-            background: rgba(33, 150, 243, 0.2);
-            color: #1976d2;
+            background: rgba(var(--rgb-info-color, 3, 155, 229), 0.18);
+            color: var(--primary-text-color);
+            border-color: var(--info-color, #039be5);
         }
 
         .badge-success {
-            background: rgba(46, 125, 50, 0.2);
-            color: #2e7d32;
+            background: rgba(var(--rgb-success-color, 67, 160, 71), 0.18);
+            color: var(--primary-text-color);
+            border-color: var(--success-color, #43a047);
         }
 
         .badge-warning {
-            background: rgba(245, 127, 23, 0.2);
-            color: #f57f17;
+            background: rgba(var(--rgb-warning-color, 255, 166, 0), 0.18);
+            color: var(--primary-text-color);
+            border-color: var(--warning-color, #ffa600);
         }
 
         /*
@@ -437,17 +457,24 @@ export class HelmanEntityGroup extends LitElement {
     }
 
     /**
-     * A fact, and -- when there is an entity behind it -- a way into it.
+     * A fact, and -- when it is the entity's value -- a way into the entity.
      *
-     * Every badge in a row opens the dialog, not just the one carrying the
-     * state. Picking the "value" fact out by its id would mean this element
-     * deciding which of the backend's facts is the real reading, which is the
-     * one thing it is not allowed to know; the honest statement is that the
-     * whole row is about this entity, so any of it is a handle on it.
+     * Only the value badge opens the dialog. The reading badges beside it
+     * ("Charging", "206 d historie", the polarity note) are statements about
+     * the entity, not the entity, and making them all controls put four tab
+     * stops on one row that all did the same thing.
+     *
+     * Gating on the fact's `id` is not this element interpreting a fact: the
+     * backend assigns that identity itself -- `value_fact()` and `text_fact()`
+     * both emit `value`, readings are `reading`, history is `history` and
+     * problems are `state` -- so this reads a label rather than inferring one.
+     * Nothing here decides what a badge *means*; it only asks which one the
+     * backend called the value.
      *
      * An inspection with no entity id -- an unset picker, a path no evaluator
-     * claims -- renders a plain span. A dialog opened on nothing is worse than
-     * no dialog, and a control that does nothing when pressed is worse still.
+     * claims -- renders a plain span even for its value. A dialog opened on
+     * nothing is worse than no dialog, and a control that does nothing when
+     * pressed is worse still.
      */
     private _renderFact(fact: EntityFact, entityId: string): TemplateResult | null {
         const text = this._factText(fact);
@@ -455,7 +482,7 @@ export class HelmanEntityGroup extends LitElement {
             return null;
         }
         const badgeClass = BADGE_CLASSES[fact.severity ?? "neutral"] ?? BADGE_CLASSES.neutral;
-        if (!entityId) {
+        if (!entityId || fact.id !== "value") {
             return html`<span class="badge ${badgeClass}">${text}</span>`;
         }
         return html`

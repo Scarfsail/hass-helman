@@ -47,13 +47,27 @@ const VALUE_FACT = {
     severity: "neutral",
 };
 
+/**
+ * A fact that is a statement *about* the entity rather than its value.
+ *
+ * The backend gives it an id of its own -- readings are `reading`, history is
+ * `history`, problems are `state` -- and only the one it calls `value` is a way
+ * into the entity.
+ */
+const READING_FACT = {
+    id: "reading",
+    token: "power_reading.importing",
+    params: {},
+    severity: "info",
+};
+
 async function mountEditor(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, gridKey, houseKey, draftEntity, savedEntity, valueFact }) => {
+        ({ config, gridKey, houseKey, draftEntity, savedEntity, valueFact, readingFact }) => {
             // Recorded at `document`, which is as far as the event has to
             // travel: HA's dialog manager listens on the root element, several
             // shadow boundaries above the group that fires it.
@@ -89,7 +103,7 @@ async function mountEditor(page: Page): Promise<void> {
                                         draft: {
                                             entityId: draftEntity,
                                             status: "ok",
-                                            facts: [valueFact],
+                                            facts: [valueFact, readingFact],
                                         },
                                         // The stored document named a different
                                         // sensor, which is exactly the edit that
@@ -97,7 +111,7 @@ async function mountEditor(page: Page): Promise<void> {
                                         saved: {
                                             entityId: savedEntity,
                                             status: "ok",
-                                            facts: [valueFact],
+                                            facts: [valueFact, readingFact],
                                         },
                                     };
                                 }
@@ -147,6 +161,7 @@ async function mountEditor(page: Page): Promise<void> {
             draftEntity: DRAFT_ENTITY,
             savedEntity: SAVED_ENTITY,
             valueFact: VALUE_FACT,
+            readingFact: READING_FACT,
         },
     );
 
@@ -243,7 +258,7 @@ test.describe("more-info from a reading", () => {
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([DRAFT_ENTITY]);
     });
 
-    test("a fact with no entity behind it is not a control", async ({ page }) => {
+    test("a value with no entity behind it is not a control", async ({ page }) => {
         await mountEditor(page);
         const kind = await page.evaluate(
             (key) => (window as any).badgesOf(key, "draft")[0]?.tagName,
@@ -253,6 +268,31 @@ test.describe("more-info from a reading", () => {
         // named no entity for it. A dialog opened on nothing is worse than no
         // dialog, and a control that does nothing when pressed is worse still.
         expect(kind).toBe("SPAN");
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([]);
+    });
+
+    test("a reading beside the value is not a control", async ({ page }) => {
+        await mountEditor(page);
+        // Both rows, because the saved row builds its badges the same way and
+        // a rule applied in one place and not the other is the easy mistake.
+        for (const row of ["draft", "saved"]) {
+            const kinds = await page.evaluate(
+                ({ key, which }) =>
+                    (window as any)
+                        .badgesOf(key, which)
+                        .map((badge: Element) => badge.tagName),
+                { key: GRID_KEY, which: row },
+            );
+            // The value opens the entity; "importing" is a statement *about*
+            // the entity and opening a dialog from it put a second tab stop on
+            // the row that did exactly what the first one did.
+            expect(kinds).toEqual(["BUTTON", "SPAN"]);
+        }
+
+        await page.evaluate((key) => {
+            const badge = (window as any).badgesOf(key, "draft")[1] as HTMLElement;
+            badge.click();
+        }, GRID_KEY);
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([]);
     });
 });
