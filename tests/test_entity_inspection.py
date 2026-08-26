@@ -160,6 +160,26 @@ class TestFallbackReadings(unittest.TestCase):
         self.assertEqual((fact.token, fact.severity), ("value", "neutral"))
         self.assertEqual(fact.params["value"], "on")
 
+    def test_a_select_sitting_on_none_shows_the_option_rather_than_a_warning(self):
+        # ``None`` is an ordinary option of a select, not one of Home
+        # Assistant's absence sentinels -- those are ``unknown``, ``unavailable``
+        # and the empty state. Reading it as an absence put an orange warning
+        # beside a correctly configured control entity.
+        hass = _Hass({"input_select.eco_gear": _State("None", unit=None)})
+        inspection = inspect_target(hass, _soc_config("input_select.eco_gear"), SOC_PATH)
+        self.assertEqual(inspection.status, "ok")
+        fact = inspection.facts[0]
+        self.assertEqual((fact.token, fact.severity), ("value", "neutral"))
+        self.assertEqual(fact.params["value"], "None")
+
+    def test_a_power_sensor_reading_none_is_still_a_warning(self):
+        # The other half of the same change: a *numeric* evaluator has to keep
+        # objecting, and ``not_numeric`` is what it should object with.
+        hass = _Hass({"sensor.grid_power": _State("None")})
+        inspection = inspect_target(hass, _config(), POWER_PATH)
+        self.assertEqual(inspection.status, "unavailable")
+        self.assertEqual([fact.token for fact in inspection.facts], ["not_numeric"])
+
     def test_a_missing_entity_says_so_rather_than_showing_nothing(self):
         inspection = inspect_target(_Hass(), _soc_config("sensor.gone"), SOC_PATH)
         self.assertEqual(inspection.status, "unavailable")

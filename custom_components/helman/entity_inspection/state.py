@@ -21,7 +21,15 @@ from .model import Fact
 
 #: HA's "no reading" sentinels, which are states like any other and would
 #: otherwise be reported as a non-numeric value.
-_ABSENT_STATES = frozenset({"unknown", "unavailable", "", "none"})
+#:
+#: ``none`` is deliberately *not* here. Home Assistant's sentinels are
+#: ``unknown``, ``unavailable`` and the empty state; ``None`` is an ordinary
+#: option a ``select`` or ``input_select`` can be sitting on, and the fallback
+#: evaluator now routes exactly those entities through here. Treating it as an
+#: absence put an orange warning beside a correctly configured control. A
+#: numeric evaluator reading ``None`` falls through to ``not_numeric`` instead,
+#: which is the right thing to say about a power sensor.
+_ABSENT_STATES = frozenset({"unknown", "unavailable", ""})
 
 
 def format_value(value: float) -> str:

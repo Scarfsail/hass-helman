@@ -29,9 +29,48 @@ const BUNDLE = resolve(
 
 const TABS = ["General", "Power devices", "Automation", "Controllables"];
 
+/**
+ * Enough optimizer schema for the Automation tab to render something.
+ *
+ * Without it that tab is an empty pipeline and a "no optimizers" message, and
+ * both assertions below pass over it having looked at nothing. One kind and one
+ * configured optimizer is all it takes for the tab to mount a real
+ * `helman-optimizer-editor` -- which is also the editor's one nested shadow
+ * root, and so the case that makes the walk below worth doing.
+ */
+const SCHEMA = {
+    version: 2,
+    kinds: [
+        {
+            kind: "export_price",
+            target: [],
+            params: [],
+            conditionTypes: [
+                {
+                    key: "when_price_below",
+                    scope: "slot",
+                    field: { key: "when_price_below", type: "number", default: 0 },
+                },
+            ],
+            newDraft: { conditions: [{ when_price_below: 0 }] },
+        },
+    ],
+};
+
 /** A document with something picked at every entity path the editor offers. */
 const CONFIG = {
     config_version: 7,
+    automation: {
+        enabled: true,
+        optimizers: [
+            {
+                id: "export-when-cheap",
+                kind: "export_price",
+                enabled: true,
+                conditions: [{ when_price_below: 1.5 }],
+            },
+        ],
+    },
     power_devices: {
         house: {
             entities: { power: "sensor.house_power" },
@@ -132,10 +171,11 @@ async function mountEditor(page: Page): Promise<void> {
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
-    await page.evaluate((config) => {
+    await page.evaluate(({ config, schema }) => {
         const element = document.createElement(
             "helman-config-editor-panel",
         ) as HTMLElement & Record<string, unknown>;
+        (window as any).__inspectRequests = [];
         element.hass = {
             language: "en",
             locale: { language: "en" },
@@ -146,10 +186,13 @@ async function mountEditor(page: Page): Promise<void> {
                     return JSON.parse(JSON.stringify(config));
                 }
                 if (request.type === "helman/get_optimizer_schema") {
-                    return { version: 2, kinds: [] };
+                    return JSON.parse(JSON.stringify(schema));
                 }
                 if (request.type === "helman/get_appliances") return { appliances: [] };
                 if (request.type === "helman/inspect_entities") {
+                    (window as any).__inspectRequests.push(
+                        JSON.parse(JSON.stringify(request)),
+                    );
                     // Every target gets the same fact, whatever its path: that
                     // is what the backend's fallback does for a path no
                     // evaluator claims, and the editor cannot tell the two
@@ -177,7 +220,20 @@ async function mountEditor(page: Page): Promise<void> {
             },
         };
         document.body.appendChild(element);
-    }, CONFIG);
+
+        // Both helpers below have to cross shadow boundaries:
+        // `querySelectorAll` stops at the first one, and the Automation tab
+        // renders inside `helman-optimizer-editor`'s. Installed once, here,
+        // because it is needed from several evaluates.
+        (window as any).deepQuery = function deepQuery(root: any, selector: string): Element[] {
+            if (!root) return [];
+            const found: Element[] = [...root.querySelectorAll(selector)];
+            for (const child of root.querySelectorAll("*")) {
+                if (child.shadowRoot) found.push(...deepQuery(child.shadowRoot, selector));
+            }
+            return found;
+        };
+    }, { config: CONFIG, schema: SCHEMA });
 
     await expect
         .poll(() =>
@@ -231,15 +287,33 @@ async function expandEverything(page: Page): Promise<void> {
     }
 }
 
-/** Entity pickers rendered by the panel itself -- a group's live in its own root. */
+/**
+ * Entity pickers the editor renders outside a group.
+ *
+ * The walk crosses shadow boundaries so that a picker added inside a nested
+ * element -- `helman-optimizer-editor` is the one that exists today -- cannot
+ * pass this guard by being somewhere `querySelectorAll` does not look. That
+ * means it also reaches each group's *own* picker, which is exactly what is
+ * meant to be there, so those are dropped by their host.
+ */
 function barePickerLabels(page: Page): Promise<string[]> {
     return page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        return Array.from(root?.querySelectorAll("ha-entity-picker") ?? []).map(
-            (picker) =>
-                picker.closest(".field")?.querySelector("label")?.textContent?.trim() ??
-                "(unlabelled)",
-        );
+        return ((window as any).deepQuery(root, "ha-entity-picker") as Element[])
+            // The walk reaches inside the groups too, and a group's own picker
+            // is the thing this suite wants to see everywhere -- so it is
+            // identified by its host and dropped, leaving only the pickers
+            // rendered outside one.
+            .filter(
+                (picker) =>
+                    (picker.getRootNode() as ShadowRoot).host?.tagName?.toLowerCase() !==
+                    "helman-entity-group",
+            )
+            .map(
+                (picker) =>
+                    picker.closest(".field")?.querySelector("label")?.textContent?.trim() ??
+                    "(unlabelled)",
+            );
     });
 }
 
@@ -248,7 +322,7 @@ function groupReadings(page: Page): Promise<Record<string, string[]>> {
     return page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
         const readings: Record<string, string[]> = {};
-        for (const group of root?.querySelectorAll("helman-entity-group") ?? []) {
+        for (const group of (window as any).deepQuery(root, "helman-entity-group") as Element[]) {
             readings[(group as any).key] = Array.from(
                 group.shadowRoot?.querySelectorAll(".entity-group > .facts .badge") ?? [],
             ).map((badge) => badge.textContent?.trim() ?? "");
@@ -264,6 +338,76 @@ test("no tab renders an entity picker outside a group", async ({ page }) => {
         await expandEverything(page);
         expect(await barePickerLabels(page), `bare pickers on ${label}`).toEqual([]);
     }
+});
+
+test("the Automation tab really renders its pipeline", async ({ page }) => {
+    // Guards the guard: the tab above is only worth walking if the fixture
+    // makes it render something. An empty pipeline would let both assertions
+    // pass over it having looked at nothing at all.
+    await mountEditor(page);
+    await openTab(page, "Automation");
+    await expandEverything(page);
+
+    const rendered = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const editors = root?.querySelectorAll("helman-optimizer-editor") ?? [];
+        return {
+            editors: editors.length,
+            // Content inside the nested shadow root, not just the host tag.
+            nested: ((window as any).deepQuery(root, "input, select, label") as Element[])
+                .filter((element) => element.getRootNode() !== root).length,
+        };
+    });
+
+    expect(rendered.editors).toBe(1);
+    expect(rendered.nested).toBeGreaterThan(0);
+});
+
+test("a group in a nested shadow root is seen by the collector and the guard", async ({
+    page,
+}) => {
+    // Nothing in the editor renders an entity field inside a nested element
+    // today, so this mounts one: a host with its own shadow root holding a
+    // group and a bare picker, appended into the panel. Both the collector and
+    // the guard have to reach it. If they do not, a future group placed inside
+    // `helman-optimizer-editor` would sit there permanently blank, and a
+    // future bare picker would pass the check above in silence -- and #165 is
+    // about to claim its view shows every entity.
+    await mountEditor(page);
+    await openTab(page, "General");
+
+    await page.evaluate((path) => {
+        const panel = document.querySelector("helman-config-editor-panel") as any;
+        const host = document.createElement("div");
+        const shadow = host.attachShadow({ mode: "open" });
+
+        const group = document.createElement("helman-entity-group") as any;
+        group.path = path;
+        group.hass = panel.hass;
+        group.fieldHost = panel;
+        shadow.appendChild(group);
+
+        const field = document.createElement("div");
+        field.className = "field";
+        const label = document.createElement("label");
+        label.textContent = "Nested picker";
+        field.appendChild(label);
+        field.appendChild(document.createElement("ha-entity-picker"));
+        shadow.appendChild(field);
+
+        panel.shadowRoot.appendChild(host);
+    }, ["power_devices", "grid", "entities", "power"]);
+
+    expect(await barePickerLabels(page)).toEqual(["Nested picker"]);
+
+    await expect
+        .poll(async () =>
+            page.evaluate(() => {
+                const requests = (window as any).__inspectRequests as any[];
+                return (requests.at(-1)?.targets ?? []).map((target: any) => target.key);
+            }),
+        )
+        .toContain("power_devices.grid.entities.power");
 });
 
 test("every picked entity shows the reading the backend sent for it", async ({ page }) => {

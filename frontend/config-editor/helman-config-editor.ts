@@ -182,6 +182,24 @@ const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 const ENTITY_INSPECTION_INTERVAL_MS = 2000;
 
 /**
+ * Every match under `root`, including the ones inside nested shadow roots.
+ *
+ * `querySelectorAll` does not cross a shadow boundary, and the editor renders
+ * part of itself through child elements that have one. Anything looking for
+ * "all the groups on screen" has to walk.
+ */
+function queryDeep<T extends Element>(root: ParentNode | null | undefined, selector: string): T[] {
+  if (!root) return [];
+  const found: T[] = [...root.querySelectorAll<T>(selector)];
+  for (const element of root.querySelectorAll("*")) {
+    if (element.shadowRoot) {
+      found.push(...queryDeep<T>(element.shadowRoot, selector));
+    }
+  }
+  return found;
+}
+
+/**
  * How long an immediate re-read waits before it can fire again.
  *
  * Every write into the draft asks for a fresh reading, because a reading the
@@ -3386,9 +3404,17 @@ export class HelmanConfigEditorPanel
    * reaches this element — so a bookkeeping set would grow monotonically and
    * keep polling for groups that are gone. Querying is also simply true: a
    * collapsed `details` renders no group, and a tab switch removes them all.
+   *
+   * It descends nested shadow roots because a plain `querySelectorAll` stops
+   * at the first one: `helman-optimizer-editor` renders the Automation tab
+   * inside its own, and a group placed there would simply never be polled —
+   * mounted, bordered and permanently blank, with nothing to say it was
+   * missed. The whole invariant is that no picker goes factless, so the
+   * collector has to reach every group that exists rather than every group
+   * this element happened to render itself.
    */
   private _mountedEntityGroups(): HelmanEntityGroup[] {
-    return [...(this.shadowRoot?.querySelectorAll("helman-entity-group") ?? [])];
+    return queryDeep<HelmanEntityGroup>(this.shadowRoot, "helman-entity-group");
   }
 
   /**
