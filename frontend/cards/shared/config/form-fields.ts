@@ -240,6 +240,14 @@ export function renderOptionalNumberField(
  *
  * The config itself stays untouched until the user actually chooses, which is
  * what keeps "unset" and "set to the default" the same document.
+ *
+ * A stored value outside ``options`` falls back to the default too, and not as
+ * a cosmetic patch: the backend resolves an unrecognised value to the default,
+ * so that *is* what is in force. Left verbatim it would match no option, and
+ * the browser would either silently show option 0 or -- on a re-render, e.g.
+ * after pasting through the YAML tab -- blank the select, which is the empty
+ * state this function exists to prevent. Validation still reports the bad value
+ * on save; the display simply stops disagreeing with the runtime.
  */
 export function renderSelectFieldWithDefault(
     host: FormFieldHost,
@@ -250,7 +258,7 @@ export function renderSelectFieldWithDefault(
     helpKey?: string,
 ): TemplateResult {
     const stored = stringValue(host.getValue(path));
-    const shown = stored === "" ? defaultValue : stored;
+    const shown = options.some((option) => option.value === stored) ? stored : defaultValue;
     return html`
         <div class="field">
             ${renderLabelRow(host, labelKey, helpKey)}

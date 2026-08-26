@@ -288,6 +288,39 @@ test("every option states which sign carries the quantity", async ({ page }) => 
     ]);
 });
 
+test("a value from another device's vocabulary shows the default", async ({ page }) => {
+    // An easy copy-paste slip, since the docs put the grid and battery YAML
+    // blocks next to each other. The backend resolves an unrecognised value to
+    // the default, so the default is genuinely what is in force -- showing it
+    // makes the field agree with the runtime instead of rendering blank.
+    // Validation still reports the bad value on save.
+    await mountEditorWith(page, {
+        config_version: 6,
+        power_devices: {
+            grid: {
+                entities: {
+                    power: "sensor.grid_power",
+                    power_polarity: "positive_is_charging",
+                },
+            },
+        },
+    });
+    const shown = await readSelectedValues(page, { grid: EXPECTED_OPTIONS.grid });
+    expect(shown.grid).toBe("positive_is_export");
+
+    // Displayed only: the bad value is still in the document for validation to
+    // catch, not quietly rewritten underneath the user.
+    const stored = await page.evaluate(() => {
+        const editor = document.querySelector("helman-config-editor-panel") as
+            | (HTMLElement & { getValue?: (path: unknown[]) => unknown })
+            | null;
+        return editor?.getValue?.([
+            "power_devices", "grid", "entities", "power_polarity",
+        ]);
+    });
+    expect(stored).toBe("positive_is_charging");
+});
+
 test("the aggregation-method select is localized too", async ({ page }) => {
     // Same root cause, same file: its Czech strings had been written all along
     // and never rendered, because the lookup went to the backend namespace.
