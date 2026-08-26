@@ -1456,14 +1456,15 @@ export class HelmanConfigEditorPanel
                   "editor.fields.power_entity",
                   "editor.help.solar_power_entity",
                 )}
-                ${this._renderOptionalEntityField(
+                ${this._renderEntityGroup(
                   ["power_devices", "solar", "entities", "today_energy"],
                   "editor.fields.today_energy_entity",
-                  ["sensor"],
-                  undefined,
-                  "editor.help.solar_today_energy_entity",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.solar_today_energy_entity",
+                  },
                 )}
-                ${this._renderOptionalEntityField(
+                ${this._renderEntityGroup(
                   [
                     "power_devices",
                     "solar",
@@ -1471,9 +1472,10 @@ export class HelmanConfigEditorPanel
                     "remaining_today_energy_forecast",
                   ],
                   "editor.fields.remaining_today_energy_forecast",
-                  ["sensor"],
-                  undefined,
-                  "editor.help.solar_remaining_today_energy_forecast",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.solar_remaining_today_energy_forecast",
+                  },
                 )}
               </div>
             `,
@@ -1707,33 +1709,37 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.battery_power_entity",
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_remaining_energy_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_remaining_energy_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "capacity"],
               "editor.fields.capacity_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_capacity_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_capacity_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "min_soc"],
               "editor.fields.min_soc_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_min_soc_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_min_soc_entity",
+              },
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "battery", "entities", "max_soc"],
               "editor.fields.max_soc_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.battery_max_soc_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.battery_max_soc_entity",
+              },
             )}
           </div>
           <div class="field-grid">
@@ -1775,12 +1781,13 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.grid_power_entity",
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.grid_sell_price_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.grid_sell_price_entity",
+              },
             )}
             ${this._renderOptionalTextField(
               ["power_devices", "grid", "forecast", "import_price_unit"],
@@ -2396,12 +2403,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField(
+                  ${this._renderEntityGroup(
                     [...modePath, "entity_id"],
                     "editor.fields.mode_entity",
-                    ["input_select", "select"],
-                    "editor.helpers.mode_entity",
-                    "editor.help.inverter_mode_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helperKey: "editor.helpers.mode_entity",
+                      helpKey: "editor.help.inverter_mode_entity",
+                      required: true,
+                    },
                   )}
                 </div>`,
               )}
@@ -2532,9 +2542,33 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], undefined, "editor.help.ev_charge_switch_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], undefined, "editor.help.ev_use_mode_entity")}
-                  ${this._renderRequiredEntityField([...basePath, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], undefined, "editor.help.ev_eco_gear_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "charge", "entity_id"],
+                    "editor.fields.charge_switch_entity",
+                    {
+                      includeDomains: ["switch"],
+                      helpKey: "editor.help.ev_charge_switch_entity",
+                      required: true,
+                    },
+                  )}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "use_mode", "entity_id"],
+                    "editor.fields.use_mode_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helpKey: "editor.help.ev_use_mode_entity",
+                      required: true,
+                    },
+                  )}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "eco_gear", "entity_id"],
+                    "editor.fields.eco_gear_entity",
+                    {
+                      includeDomains: ["input_select", "select"],
+                      helpKey: "editor.help.ev_eco_gear_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2633,7 +2667,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], undefined, "editor.help.appliance_switch_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "switch", "entity_id"],
+                    "editor.fields.switch_entity",
+                    {
+                      includeDomains: ["switch"],
+                      helpKey: "editor.help.appliance_switch_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2708,7 +2750,15 @@ export class HelmanConfigEditorPanel
               ${this._renderSimpleSection(
                 this._t("editor.sections.controls"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...basePath, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], undefined, "editor.help.appliance_climate_entity")}
+                  ${this._renderEntityGroup(
+                    [...basePath, "controls", "climate", "entity_id"],
+                    "editor.fields.climate_entity",
+                    {
+                      includeDomains: ["climate"],
+                      helpKey: "editor.help.appliance_climate_entity",
+                      required: true,
+                    },
+                  )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -2753,12 +2803,14 @@ export class HelmanConfigEditorPanel
       <div class="section-content">
         ${noteKey ? html`<p class="inline-note">${this._t(noteKey)}</p>` : nothing}
         <div class="field-grid">
-          ${this._renderOptionalEntityField(
+          ${this._renderEntityGroup(
             [...consumptionPath, "energy_entity_id"],
             "editor.fields.consumption_energy_entity",
-            ["sensor"],
-            "editor.helpers.consumption_energy_entity",
-            "editor.help.consumption_energy_entity",
+            {
+              includeDomains: ["sensor"],
+              helperKey: "editor.helpers.consumption_energy_entity",
+              helpKey: "editor.help.consumption_energy_entity",
+            },
           )}
         </div>
         ${hasMeter
@@ -2975,19 +3027,22 @@ export class HelmanConfigEditorPanel
         <div class="field-grid">
           ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.vehicle_id", undefined, "editor.help.vehicle_id")}
           ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.vehicle_name")}
-          ${this._renderRequiredEntityField(
+          ${this._renderEntityGroup(
             [...basePath, "telemetry", "soc_entity_id"],
             "editor.fields.soc_entity",
-            ["sensor"],
-            undefined,
-            "editor.help.vehicle_soc_entity",
+            {
+              includeDomains: ["sensor"],
+              helpKey: "editor.help.vehicle_soc_entity",
+              required: true,
+            },
           )}
-          ${this._renderOptionalEntityField(
+          ${this._renderEntityGroup(
             [...basePath, "telemetry", "charge_limit_entity_id"],
             "editor.fields.charge_limit_entity",
-            ["number"],
-            undefined,
-            "editor.help.vehicle_charge_limit_entity",
+            {
+              includeDomains: ["number"],
+              helpKey: "editor.help.vehicle_charge_limit_entity",
+            },
           )}
           ${this._renderRequiredNumberField(
             [...basePath, "limits", "battery_capacity_kwh"],
@@ -3161,83 +3216,19 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderOptionalEntityField(
-    path: PathSegment[],
-    labelKey: string,
-    includeDomains?: string[],
-    helperKey?: string,
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderEntityField(
-      path,
-      labelKey,
-      includeDomains,
-      helperKey,
-      false,
-      this._getValue(path),
-      helpKey,
-    );
-  }
-
-  private _renderRequiredEntityField(
-    path: PathSegment[],
-    labelKey: string,
-    includeDomains?: string[],
-    helperKey?: string,
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderEntityField(
-      path,
-      labelKey,
-      includeDomains,
-      helperKey,
-      true,
-      this._getValue(path),
-      helpKey,
-    );
-  }
-
-  private _renderEntityField(
-    path: PathSegment[],
-    labelKey: string,
-    includeDomains: string[] | undefined,
-    helperKey: string | undefined,
-    required: boolean,
-    value: unknown,
-    helpKey?: string,
-  ): TemplateResult {
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <ha-entity-picker
-          .hass=${this.hass}
-          .value=${this._stringValue(value)}
-          .includeDomains=${includeDomains}
-          @value-changed=${(event: Event) => {
-            const nextValue = (event as CustomEvent<{ value?: string }>).detail?.value ?? "";
-            if (required) {
-              this._setRequiredString(path, nextValue);
-            } else {
-              this._setOptionalString(path, nextValue);
-            }
-          }}
-        ></ha-entity-picker>
-        ${helperKey ? html`<div class="helper">${this._t(helperKey)}</div>` : nothing}
-      </div>
-    `;
-  }
-
   /**
    * An entity picker, the settings that qualify it, and what it reads — as one.
    *
-   * The group is the same markup `_renderEntityField` emits, in a bordered
-   * block, plus a slot: the settings that belong to this entity are passed
-   * *into* it rather than rendered as siblings in the same field grid, which is
-   * what makes a polarity read as part of its sensor instead of as a loose
-   * select that happens to sit next to one.
+   * A picker in a bordered block, plus a slot: the settings that belong to
+   * this entity are passed *into* it rather than rendered as siblings in the
+   * same field grid, which is what makes a polarity read as part of its sensor
+   * instead of as a loose select that happens to sit next to one.
+   *
+   * **Every entity picker in the editor goes through here.** A path with no
+   * evaluator of its own is not a reason to render a bare field: the registry's
+   * fallback states its current value, so the group is the one control an
+   * entity is ever picked in — which is what lets the entities-only view claim
+   * it shows all of them.
    *
    * What a revert restores is *not* decided here. The call site knows what it
    * put in the slot; only the evaluator knows which of those the reading was
