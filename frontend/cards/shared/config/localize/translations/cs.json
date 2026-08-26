@@ -236,6 +236,8 @@
       "entity_missing": "Entita nenalezena",
       "state_absent": "Bez hodnoty ({state})",
       "not_numeric": "Není číslo ({state})",
+      "history_depth": "{available} d historie ({required} d požadováno)",
+      "history_depth_only": "{available} d historie",
       "polarity_inverted": "Čte se proti znaménkové konvenci Helmana",
       "power_reading": {
         "producing": "Vyrábí",

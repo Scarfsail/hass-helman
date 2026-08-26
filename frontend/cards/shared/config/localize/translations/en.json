@@ -236,6 +236,8 @@
       "entity_missing": "Entity not found",
       "state_absent": "No reading ({state})",
       "not_numeric": "Not a number ({state})",
+      "history_depth": "{available} d of history ({required} d required)",
+      "history_depth_only": "{available} d of history",
       "polarity_inverted": "Read against Helman's sign convention",
       "power_reading": {
         "producing": "Producing",

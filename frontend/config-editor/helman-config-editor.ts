@@ -1415,24 +1415,33 @@ export class HelmanConfigEditorPanel
               ["power_devices", "house", "unmeasured_power_title"],
               "editor.fields.unmeasured_power_title",
             )}
-            ${this._renderOptionalEntityField(
+            ${this._renderEntityGroup(
               ["power_devices", "house", "forecast", "total_energy_entity_id"],
               "editor.fields.forecast_total_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.house_forecast_total_energy_entity",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "house", "forecast", "min_history_days"],
-              "editor.fields.min_history_days",
-              undefined,
-              "editor.help.house_min_history_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "house", "forecast", "training_window_days"],
-              "editor.fields.training_window_days",
-              undefined,
-              "editor.help.house_training_window_days",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.house_forecast_total_energy_entity",
+                ownedPaths: [
+                  ["power_devices", "house", "forecast", "min_history_days"],
+                  ["power_devices", "house", "forecast", "training_window_days"],
+                ],
+              },
+              html`
+                <div class="field-grid">
+                  ${this._renderOptionalNumberField(
+                    ["power_devices", "house", "forecast", "min_history_days"],
+                    "editor.fields.min_history_days",
+                    undefined,
+                    "editor.help.house_min_history_days",
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["power_devices", "house", "forecast", "training_window_days"],
+                    "editor.fields.training_window_days",
+                    undefined,
+                    "editor.help.house_training_window_days",
+                  )}
+                </div>
+              `,
             )}
           </div>
         `,
@@ -1482,18 +1491,19 @@ export class HelmanConfigEditorPanel
                 SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
                 html`
                   <div class="field-grid field-grid--roomy">
-                    ${this._renderOptionalEntityField(
+                    ${this._renderEntityGroup(
                       ["power_devices", "solar", "forecast", "total_energy_entity_id"],
                       "editor.fields.forecast_total_energy_entity",
-                      ["sensor"],
-                      undefined,
-                      "editor.help.solar_forecast_total_energy_entity",
+                      {
+                        includeDomains: ["sensor"],
+                        helpKey: "editor.help.solar_forecast_total_energy_entity",
+                      },
                     )}
                   </div>
 
                   <div class="list-stack">
-                    ${dailyEnergyEntityIds.map((value, index) =>
-                      this._renderDailyEnergyEntity(value, index, dailyEnergyEntityIds.length),
+                    ${dailyEnergyEntityIds.map((_value, index) =>
+                      this._renderDailyEnergyEntity(index, dailyEnergyEntityIds.length),
                     )}
                   </div>
                   <div class="section-footer">
@@ -1516,24 +1526,6 @@ export class HelmanConfigEditorPanel
                           ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
                           "editor.fields.bias_correction_enabled",
                           false,
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                          "editor.fields.bias_correction_min_history_days",
-                          "editor.helpers.bias_correction_min_history_days",
-                          "editor.help.bias_correction_min_history_days",
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                          "editor.fields.max_training_window_days",
-                          "editor.helpers.bias_correction_max_training_window_days",
-                          "editor.help.bias_correction_max_training_window_days",
-                        )}
-                        ${this._renderOptionalNumberField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
-                          "editor.fields.bias_correction_min_valid_slot_days",
-                          "editor.helpers.bias_correction_min_valid_slot_days",
-                          "editor.help.bias_correction_min_valid_slot_days",
                         )}
                         ${this._renderOptionalNumberField(
                           ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
@@ -1562,12 +1554,40 @@ export class HelmanConfigEditorPanel
                           "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
                           "editor.help.bias_correction_max_interpolated_consecutive_slots",
                         )}
-                        ${this._renderOptionalEntityField(
+                        ${this._renderEntityGroup(
                           ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
                           "editor.fields.bias_correction_total_energy_entity",
-                          ["sensor"],
-                          undefined,
-                          "editor.help.bias_correction_total_energy_entity",
+                          {
+                            includeDomains: ["sensor"],
+                            helpKey: "editor.help.bias_correction_total_energy_entity",
+                            ownedPaths: [
+                              ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+                              ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
+                              ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
+                            ],
+                          },
+                          html`
+                            <div class="field-grid">
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+                                "editor.fields.bias_correction_min_history_days",
+                                "editor.helpers.bias_correction_min_history_days",
+                                "editor.help.bias_correction_min_history_days",
+                              )}
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
+                                "editor.fields.max_training_window_days",
+                                "editor.helpers.bias_correction_max_training_window_days",
+                                "editor.help.bias_correction_max_training_window_days",
+                              )}
+                              ${this._renderOptionalNumberField(
+                                ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
+                                "editor.fields.bias_correction_min_valid_slot_days",
+                                "editor.helpers.bias_correction_min_valid_slot_days",
+                                "editor.help.bias_correction_min_valid_slot_days",
+                              )}
+                            </div>
+                          `,
                         )}
                       </div>
 
@@ -2129,8 +2149,14 @@ export class HelmanConfigEditorPanel
     });
   }
 
+  /**
+   * One entry of the solar daily-forecast list, as a group.
+   *
+   * The item's value is no longer passed in: the group reads it from the
+   * document at its own path, the same way every other group does, and a list
+   * index is an ordinary path segment on both sides of the websocket.
+   */
   private _renderDailyEnergyEntity(
-    value: unknown,
     index: number,
     total: number,
   ): TemplateResult {
@@ -2185,7 +2211,11 @@ export class HelmanConfigEditorPanel
             </button>
           </div>
         </div>
-        ${this._renderRequiredEntityField(path, "editor.fields.entity_id", ["sensor"], undefined, value, "editor.help.solar_daily_energy_entity")}
+        ${this._renderEntityGroup(path, "editor.fields.entity_id", {
+          includeDomains: ["sensor"],
+          helpKey: "editor.help.solar_daily_energy_entity",
+          required: true,
+        })}
       </div>
     `;
   }

@@ -62,21 +62,62 @@ const SAVED_FACTS = [
     { id: "reading", token: "power_reading.exporting", params: {}, severity: "info" },
 ];
 
+/**
+ * A second group, on a path whose settings the backend judges: the house
+ * forecast meter, with its two day counts moved into the group's slot.
+ *
+ * Nothing in the editor knows that any of these three fields has anything to do
+ * with history -- the call site puts them in one group, and the backend decides
+ * what to say about the entity. That is exactly what the tests below assert:
+ * the fixture chooses the severity, and the badge follows it.
+ */
+const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_id"];
+const HOUSE_KEY = HOUSE_PATH.join(".");
+
+const HISTORY_CONFIG = {
+    ...STORED_CONFIG,
+    power_devices: {
+        ...STORED_CONFIG.power_devices,
+        house: {
+            forecast: {
+                total_energy_entity_id: "sensor.house_energy",
+                min_history_days: 30,
+                training_window_days: 60,
+            },
+        },
+    },
+};
+
+/** A history reading of the fixture's choosing, at the severity it names. */
+function historyFacts(available: number, required: number, severity: string) {
+    return [
+        { id: "value", token: "value", params: { value: "1234.5", unit: "kWh" }, severity: "neutral" },
+        {
+            id: "history",
+            token: "history_depth",
+            params: { available, required },
+            severity,
+        },
+    ];
+}
+
 interface MountOptions {
     /** Whether the stubbed answer carries a saved reading and thus a revert. */
     withSaved?: boolean;
     config?: unknown;
+    /** Facts the stub answers with for keys other than the grid group's. */
+    factsByKey?: Record<string, unknown[]>;
 }
 
 async function mountEditor(page: Page, options: MountOptions = {}): Promise<void> {
-    const { withSaved = false, config = STORED_CONFIG } = options;
+    const { withSaved = false, config = STORED_CONFIG, factsByKey = {} } = options;
 
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, withSaved, gridKey, draftFacts, savedFacts }) => {
+        ({ config, withSaved, gridKey, draftFacts, savedFacts, factsByKey }) => {
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
@@ -128,7 +169,13 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                                 draft:
                                     target.key === gridKey
                                         ? { entityId: "sensor.grid_power", status: "ok", facts: gridFacts }
-                                        : { entityId: null, status: "unsupported", facts: [] },
+                                        : factsByKey[target.key]
+                                          ? {
+                                                entityId: "sensor.stub",
+                                                status: "ok",
+                                                facts: factsByKey[target.key],
+                                            }
+                                          : { entityId: null, status: "unsupported", facts: [] },
                                 saved:
                                     withSaved && target.key === gridKey
                                         ? { entityId: "sensor.grid_power", status: "ok", facts: savedFacts }
@@ -147,6 +194,7 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
             gridKey: GRID_KEY,
             draftFacts: DRAFT_FACTS,
             savedFacts: SAVED_FACTS,
+            factsByKey,
         },
     );
 
@@ -220,6 +268,14 @@ function readGroup(page: Page, key: string) {
                 .flatMap((select) => Array.from(select.options).map((option) => option.value)),
             facts: Array.from(shadow.querySelectorAll(".entity-group > .facts .badge")).map(
                 (badge) => badge.textContent?.trim() ?? "",
+            ),
+            factClasses: Array.from(
+                shadow.querySelectorAll(".entity-group > .facts .badge"),
+            ).map((badge) => badge.className),
+            // Slotted fields live in the group's light DOM, because the panel
+            // renders them and passes them in through the slot.
+            slottedFieldLabels: Array.from(group.querySelectorAll(".field label")).map(
+                (label) => label.textContent?.trim() ?? "",
             ),
             savedFacts: Array.from(savedRow?.querySelectorAll(".badge") ?? []).map(
                 (badge) => badge.textContent?.trim() ?? "",
@@ -526,4 +582,81 @@ test("a slow answer cannot repaint a reading the user has already cleared", asyn
     // The slow answer resolves inside this window. It must not come back.
     await page.waitForTimeout(800);
     expect((await readGroup(page, GRID_KEY))?.facts ?? []).toEqual([]);
+});
+
+
+/** Everything one group shows, once it has been given facts to show. */
+async function waitForGroupFacts(page: Page, key: string) {
+    await expect
+        .poll(async () => (await readGroup(page, key))?.facts.length ?? 0)
+        .toBeGreaterThan(0);
+    return (await readGroup(page, key))!;
+}
+
+/** Where the panel renders the field carrying one label. */
+function labelPlacement(page: Page, label: string) {
+    return page.evaluate((text) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const labels = Array.from(root?.querySelectorAll(".field label") ?? []).filter(
+            (element) => element.textContent?.trim() === text,
+        );
+        return {
+            count: labels.length,
+            // `closest` walks light-DOM ancestors, and a slotted field is a
+            // light-DOM child of the group it was passed into.
+            insideGroup: labels.map((element) => !!element.closest("helman-entity-group")),
+        };
+    }, label);
+}
+
+test("a group's own day-count settings render inside it, not beside it", async ({ page }) => {
+    // The layout move this phase is made of: the two settings that qualify the
+    // house forecast meter are passed into its group's slot instead of sitting
+    // in the same field grid as unrelated siblings.
+    await mountEditor(page, {
+        config: HISTORY_CONFIG,
+        factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
+    });
+    const group = await waitForGroupFacts(page, HOUSE_KEY);
+
+    expect(group.slottedFieldLabels).toEqual(["Min history days", "Training window days"]);
+    // "Min history days" is also the bias-correction group's label, and that
+    // one moved into its own group in this phase too -- so the assertion is
+    // that no field with either label is left rendering outside a group.
+    for (const label of ["Min history days", "Training window days"]) {
+        const placement = await labelPlacement(page, label);
+        expect(placement.count).toBeGreaterThan(0);
+        expect(placement.insideGroup).not.toContain(false);
+    }
+
+    // And the group is asked about by path, like every other one.
+    const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
+    expect(request.targets.map((target: any) => target.key)).toContain(HOUSE_KEY);
+    expect(request.targets.find((target: any) => target.key === HOUSE_KEY).path).toEqual(
+        HOUSE_PATH,
+    );
+});
+
+test("the history badge follows the severity the backend sent", async ({ page }) => {
+    // The point of the phase, as one assertion: the *only* thing that moves
+    // the badge from green to amber is the severity in the answer. Nothing in
+    // the bundle compares 3 against 30 -- if it did, the fixture below could
+    // not put an "ok" on a reading that is plainly short.
+    for (const [available, severity, badgeClass] of [
+        [41, "ok", "badge-success"],
+        [3, "warn", "badge-warning"],
+        [3, "ok", "badge-success"],
+    ] as [number, string, string][]) {
+        await mountEditor(page, {
+            config: HISTORY_CONFIG,
+            factsByKey: { [HOUSE_KEY]: historyFacts(available, 30, severity) },
+        });
+        const group = await waitForGroupFacts(page, HOUSE_KEY);
+
+        expect(group.facts).toEqual([
+            "1234.5 kWh",
+            `${available} d of history (30 d required)`,
+        ]);
+        expect(group.factClasses.at(-1)).toContain(badgeClass);
+    }
 });
