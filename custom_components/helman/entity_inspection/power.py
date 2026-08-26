@@ -10,15 +10,17 @@ direction a sign carries, and the editor's translation files own the sentence;
 this module only joins the two. A device added to ``POWER_POLARITY_OPTIONS``
 therefore gets a live reading with no change to this file at all.
 
-It never raises. This runs on a poll against a half-edited draft, so an entity
-that does not exist, a state of ``unknown``, a unit-less sensor and a polarity
-copied from another device's vocabulary are all ordinary inputs with ordinary
-answers.
+Getting from an entity id to a number is :mod:`.state`'s job, shared with every
+other evaluator: an entity that does not exist, a state of ``unknown``, a
+unit-less sensor and a ``nan`` from a template sensor are not power questions.
+
+It never raises. This runs on a poll against a half-edited draft, so a polarity
+copied from another device's vocabulary is an ordinary input with an ordinary
+answer.
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from ..power_polarity import (
@@ -28,30 +30,7 @@ from ..power_polarity import (
 )
 from .context import InspectionRequest
 from .model import Fact, Inspection
-
-#: HA's two "no reading" sentinels, which are states like any other and would
-#: otherwise be reported as a non-numeric value.
-_ABSENT_STATES = frozenset({"unknown", "unavailable", "", "none"})
-
-
-def _format_value(value: float) -> str:
-    """A *finite* reading as the editor should show it, without a locale opinion.
-
-    Trailing zeros are trimmed because a power sensor reporting ``1400.0`` and
-    one reporting ``1400`` are saying the same thing, and a status line that
-    changes width on the second decimal is hard to read at a two-second poll.
-
-    Fixed-point rather than ``%g``, whose six significant digits would render a
-    perfectly ordinary ``12345.67`` W as ``12345.7``: the point of the badge is
-    to show what the sensor says.
-
-    Callers must have ruled out ``nan`` and ``inf`` already -- ``int()`` raises
-    on both, and see :func:`evaluate_power_entity` for why they are not this
-    function's problem to report.
-    """
-    if value == int(value):
-        return str(int(value))
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+from .state import read_numeric_state
 
 
 def evaluate_power_entity(request: InspectionRequest) -> Inspection:
@@ -73,80 +52,31 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
     if entity_id is None:
         return Inspection(entity_id=None, status="unset", signature=signature)
 
-    state = _state_of(request.hass, entity_id)
-    if state is None:
+    reading = read_numeric_state(request.hass, entity_id)
+    if reading.problem is not None:
         return Inspection(
             entity_id=entity_id,
             status="unavailable",
-            facts=(Fact(id="state", token="entity_missing", severity="warn"),),
+            facts=(reading.problem,),
             signature=signature,
         )
 
-    raw = getattr(state, "state", None)
-    text = raw.strip() if isinstance(raw, str) else ""
-    if text.lower() in _ABSENT_STATES:
-        return Inspection(
-            entity_id=entity_id,
-            status="unavailable",
-            facts=(
-                Fact(
-                    id="state",
-                    token="state_absent",
-                    params={"state": text},
-                    severity="warn",
-                ),
-            ),
-            signature=signature,
-        )
-
-    try:
-        value = float(text)
-    except (TypeError, ValueError):
-        value = math.nan
-    if not math.isfinite(value):
-        # ``nan`` and ``inf`` parse as floats but are not readings, and a
-        # template sensor dividing by an unavailable source emits ``nan``
-        # routinely. They belong in the same warning as "abc": what the editor
-        # must not do is fall through and format them, which raises and would
-        # degrade the whole row to ``unsupported`` -- indistinguishable from a
-        # path the backend has never heard of.
-        return Inspection(
-            entity_id=entity_id,
-            status="unavailable",
-            facts=(
-                Fact(
-                    id="state",
-                    token="not_numeric",
-                    params={"state": text},
-                    severity="warn",
-                ),
-            ),
-            signature=signature,
-        )
-
-    attributes = getattr(state, "attributes", None) or {}
-    unit = attributes.get("unit_of_measurement") if hasattr(attributes, "get") else None
-    # The *shown* value is what gets interpreted, not the raw one. Otherwise a
-    # reading of 0.004 W renders the contradictory pair "0 W" and "Producing":
-    # rounding once, up front, makes the number and the word agree by
-    # construction rather than by two thresholds happening to line up.
-    shown = round(value, 2) or 0.0
-    reading = interpret_power_reading(device, polarity_token, shown)
+    # The *shown* value is what gets interpreted, not the raw one -- see
+    # :class:`~.state.StateReading`, which rounds once so that the number and
+    # the word agree by construction rather than by two thresholds happening to
+    # line up.
+    shown = reading.value or 0.0
+    interpreted = interpret_power_reading(device, polarity_token, shown)
 
     facts = [
-        Fact(
-            id="value",
-            token="value",
-            params={"value": _format_value(shown), "unit": unit or ""},
-            severity="neutral",
-        ),
+        reading.value_fact(),
         Fact(
             id="reading",
-            token=f"power_reading.{reading['direction']}",
+            token=f"power_reading.{interpreted['direction']}",
             severity="info",
         ),
     ]
-    if reading["inverted"]:
+    if interpreted["inverted"]:
         # Worth saying out loud: the sign on screen is the opposite of the one
         # Helman works in, and that is the setting the reader just chose rather
         # than something wrong.
@@ -158,15 +88,3 @@ def evaluate_power_entity(request: InspectionRequest) -> Inspection:
         facts=tuple(facts),
         signature=signature,
     )
-
-
-def _state_of(hass: Any, entity_id: str) -> Any:
-    """``hass.states.get`` behind a guard, for a hass that may be half-set-up."""
-    states = getattr(hass, "states", None)
-    getter = getattr(states, "get", None)
-    if getter is None:
-        return None
-    try:
-        return getter(entity_id)
-    except Exception:  # noqa: BLE001 - a poll must never fail on a bad id
-        return None

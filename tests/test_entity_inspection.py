@@ -18,10 +18,14 @@ asserting on prose, the boundary this package exists to hold has moved.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
+import unittest.mock
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,6 +43,15 @@ from custom_components.helman.entity_inspection import (  # noqa: E402
     inspect_targets,
     match_key,
 )
+from custom_components.helman import recorder_statistics_span as span_mod  # noqa: E402
+from custom_components.helman.const import (  # noqa: E402
+    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+)
+from custom_components.helman.consumption_forecast_profiles import (  # noqa: E402
+    _compute_history_days,
+)
+from custom_components.helman.entity_inspection import history  # noqa: E402
 from custom_components.helman.websockets import ws_inspect_entities  # noqa: E402
 
 POWER_PATH = ("power_devices", "grid", "entities", "power")
@@ -275,6 +288,452 @@ class TestDraftVersusSaved(unittest.TestCase):
         results = inspect_targets(hass, _config(), [{"key": "a"}, "nonsense"])
         self.assertEqual([row["key"] for row in results], ["a", "#1"])
         self.assertEqual([row["draft"]["status"] for row in results], ["unsupported"] * 2)
+
+
+HOUSE_HISTORY_PATH = (
+    "power_devices",
+    "house",
+    "forecast",
+    "total_energy_entity_id",
+)
+SOLAR_HISTORY_PATH = (
+    "power_devices",
+    "solar",
+    "forecast",
+    "total_energy_entity_id",
+)
+BIAS_HISTORY_PATH = (
+    "power_devices",
+    "solar",
+    "forecast",
+    "bias_correction",
+    "total_energy_entity_id",
+)
+DAILY_HISTORY_PATH = (
+    "power_devices",
+    "solar",
+    "forecast",
+    "daily_energy_entity_ids",
+    0,
+)
+
+HOUSE_METER = "sensor.house_energy"
+
+
+class _ProbingHass(_Hass):
+    """A hass that runs a scheduled probe to completion, and counts them.
+
+    The evaluator answers synchronously and measures in the background, so a
+    test that wants to see a measured value has to let the task actually run.
+    Running it inline is also what makes "one query for two polls" assertable
+    at all.
+    """
+
+    def __init__(self, states: dict[str, _State] | None = None) -> None:
+        super().__init__(states)
+        self.tasks = 0
+
+    def async_create_task(self, coro):
+        self.tasks += 1
+        asyncio.run(coro)
+
+
+class _Probe:
+    """A stand-in for the one recorder read, counting how often it is made."""
+
+    def __init__(self, days: int | None = 41, error: Exception | None = None) -> None:
+        self.days = days
+        self.error = error
+        self.calls: list[str] = []
+
+    async def __call__(self, hass, entity_id: str) -> int:
+        self.calls.append(entity_id)
+        if self.error is not None:
+            raise self.error
+        return self.days
+
+
+def _history_config(
+    *,
+    entity: str | None = HOUSE_METER,
+    min_history_days: Any = None,
+    solar_entity: str | None = None,
+) -> dict:
+    forecast: dict = {}
+    if entity is not None:
+        forecast["total_energy_entity_id"] = entity
+    if min_history_days is not None:
+        forecast["min_history_days"] = min_history_days
+    solar_forecast: dict = {}
+    if solar_entity is not None:
+        solar_forecast["total_energy_entity_id"] = solar_entity
+    return {
+        "power_devices": {
+            "house": {"forecast": forecast},
+            "solar": {"forecast": solar_forecast},
+        }
+    }
+
+
+class _HistoryTestCase(unittest.TestCase):
+    """Shared plumbing: a clean cache and a counted probe around every test."""
+
+    def setUp(self) -> None:
+        history.reset_history_cache()
+        self.probe = _Probe()
+        patcher = unittest.mock.patch.object(history, "_query", self.probe)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(history.reset_history_cache)
+
+    def inspect_twice(self, hass, config, path) -> tuple[dict, dict]:
+        """The poll before the measurement lands, and the one after it.
+
+        The evaluator cannot block a websocket callback on a database, so the
+        first answer is deliberately without a history fact and the second --
+        one tick later in the editor, one line later here -- carries it.
+        """
+        first = inspect_target(hass, config, path).to_dict()
+        second = inspect_target(hass, config, path).to_dict()
+        return first, second
+
+
+class TestHistoryDepth(_HistoryTestCase):
+    """What the history evaluator says, over the drafts a user can produce."""
+
+    def test_a_measurement_arrives_on_the_poll_after_it_is_asked_for(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        first, second = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertIsNone(_fact(first, "history"))
+        self.assertEqual(_fact(first, "value")["params"], {"value": "1234.5", "unit": "kWh"})
+        self.assertEqual(_fact(second, "history")["token"], "history_depth")
+
+    def test_enough_history_reads_as_ok_against_the_setting_in_the_draft(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(fact["params"], {"available": 41, "required": 30})
+        self.assertEqual(fact["severity"], "ok")
+
+    def test_not_enough_history_reads_as_a_warning(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.days = 3
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(fact["params"], {"available": 3, "required": 30})
+        self.assertEqual(fact["severity"], "warn")
+
+    def test_no_recorder_rows_is_zero_days_rather_than_no_answer(self):
+        # A meter picked a minute ago. "Nothing yet" is the most useful thing
+        # the badge can say, and it is short of any requirement.
+        hass = _ProbingHass({HOUSE_METER: _State("0", unit="kWh")})
+        self.probe.days = 0
+        _, inspection = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        fact = _fact(inspection, "history")
+        self.assertEqual(fact["params"]["available"], 0)
+        self.assertEqual(fact["severity"], "warn")
+
+    def test_an_absent_setting_is_judged_against_the_runtime_default(self):
+        # The draft says nothing about min_history_days, so the badge has to
+        # use the number the integration itself would fall back to -- which is
+        # knowledge that lives on the backend and nowhere else.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        _, inspection = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(
+            _fact(inspection, "history")["params"]["required"],
+            HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        )
+
+    def test_a_half_typed_day_count_falls_back_rather_than_moving_the_bar(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        for raw in ("", 0, -5, "30", True):
+            with self.subTest(raw=raw):
+                history.reset_history_cache()
+                _, inspection = self.inspect_twice(
+                    hass, _history_config(min_history_days=raw), HOUSE_HISTORY_PATH
+                )
+                self.assertEqual(
+                    _fact(inspection, "history")["params"]["required"],
+                    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+                )
+
+    def test_a_path_with_no_requirement_states_the_depth_and_judges_nothing(self):
+        hass = _ProbingHass({"sensor.solar_total": _State("55", unit="kWh")})
+        _, inspection = self.inspect_twice(
+            hass,
+            _history_config(entity=None, solar_entity="sensor.solar_total"),
+            SOLAR_HISTORY_PATH,
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(fact["token"], "history_depth_only")
+        self.assertEqual(fact["params"], {"available": 41})
+        self.assertEqual(fact["severity"], "neutral")
+
+    def test_every_registered_history_path_answers(self):
+        config = {
+            "power_devices": {
+                "house": {"forecast": {"total_energy_entity_id": HOUSE_METER}},
+                "solar": {
+                    "forecast": {
+                        "total_energy_entity_id": HOUSE_METER,
+                        "daily_energy_entity_ids": [HOUSE_METER],
+                        "bias_correction": {"total_energy_entity_id": HOUSE_METER},
+                    }
+                },
+            }
+        }
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        for path in (
+            HOUSE_HISTORY_PATH,
+            SOLAR_HISTORY_PATH,
+            BIAS_HISTORY_PATH,
+            DAILY_HISTORY_PATH,
+        ):
+            with self.subTest(path=path):
+                _, inspection = self.inspect_twice(hass, config, path)
+                self.assertEqual(inspection["status"], "ok")
+                self.assertIsNotNone(_fact(inspection, "history"))
+
+    def test_the_bias_entity_is_judged_against_its_own_default(self):
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "bias_correction": {"total_energy_entity_id": HOUSE_METER}
+                    }
+                }
+            }
+        }
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        _, inspection = self.inspect_twice(hass, config, BIAS_HISTORY_PATH)
+        self.assertEqual(
+            _fact(inspection, "history")["params"]["required"],
+            SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+        )
+
+    def test_an_unset_entity_reads_as_unset_without_touching_the_recorder(self):
+        hass = _ProbingHass()
+        inspection = inspect_target(hass, _history_config(entity=None), HOUSE_HISTORY_PATH)
+        self.assertEqual(inspection.status, "unset")
+        self.assertEqual(self.probe.calls, [])
+
+    def test_a_dead_entity_id_is_never_probed(self):
+        # Nothing in the state machine means nothing worth a database scan, and
+        # the picker is what needs fixing rather than the history.
+        hass = _ProbingHass()
+        first, second = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(second["status"], "unavailable")
+        self.assertEqual([fact["token"] for fact in second["facts"]], ["entity_missing"])
+        self.assertEqual(self.probe.calls, [])
+
+    def test_an_entity_that_exists_but_reads_unknown_still_reports_its_history(self):
+        hass = _ProbingHass({HOUSE_METER: _State("unknown", unit="kWh")})
+        _, inspection = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(inspection["status"], "unavailable")
+        self.assertEqual(
+            [fact["token"] for fact in inspection["facts"]],
+            ["state_absent", "history_depth"],
+        )
+
+    def test_a_history_fact_carries_tokens_and_numbers_rather_than_prose(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        _, inspection = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        for fact in inspection["facts"]:
+            self.assertNotIn(" ", fact["token"])
+            self.assertIn(fact["severity"], {"neutral", "info", "ok", "warn"})
+        for value in _fact(inspection, "history")["params"].values():
+            self.assertIsInstance(value, int)
+
+
+class TestHistoryCache(_HistoryTestCase):
+    """The recorder is asked once a minute, not once every two seconds."""
+
+    def test_a_second_poll_is_served_from_the_measurement_the_first_made(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        for _ in range(5):
+            inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(self.probe.calls, [HOUSE_METER])
+
+    def test_a_measurement_older_than_the_ttl_is_taken_again(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(len(self.probe.calls), 1)
+
+        aged = history._MEASUREMENTS[HOUSE_METER]
+        history._MEASUREMENTS[HOUSE_METER] = history._Measurement(
+            days=aged.days, at=aged.at - history.HISTORY_CACHE_TTL - 1
+        )
+        inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
+        self.assertEqual(len(self.probe.calls), 2)
+
+    def test_a_failed_probe_is_remembered_so_it_is_not_retried_every_tick(self):
+        # A recorder that is not set up must not be asked thirty times a
+        # minute, and the row it cannot answer for simply carries no badge.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.error = RuntimeError("recorder not ready")
+        for _ in range(4):
+            inspection = inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH).to_dict()
+        self.assertEqual(len(self.probe.calls), 1)
+        self.assertIsNone(_fact(inspection, "history"))
+        self.assertEqual(inspection["status"], "ok")
+
+    def test_a_hass_that_cannot_take_a_task_still_answers(self):
+        inspection = inspect_target(
+            _Hass({HOUSE_METER: _State("1234.5", unit="kWh")}),
+            _history_config(),
+            HOUSE_HISTORY_PATH,
+        ).to_dict()
+        self.assertEqual(inspection["status"], "ok")
+        self.assertIsNone(_fact(inspection, "history"))
+
+
+class TestHistoryDraftVersusSaved(_HistoryTestCase):
+    """A requirement the user just typed is part of what the reading depends on."""
+
+    def test_changing_the_required_days_produces_a_saved_reading(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        # Warm the measurement so both readings carry a history fact.
+        inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
+        [result] = inspect_targets(
+            hass,
+            _history_config(min_history_days=90),
+            [{"key": "house", "path": list(HOUSE_HISTORY_PATH)}],
+            saved_config=_history_config(min_history_days=30),
+        )
+        self.assertEqual(_fact(result["draft"], "history")["severity"], "warn")
+        self.assertIsNotNone(result["saved"])
+        self.assertEqual(_fact(result["saved"], "history")["severity"], "ok")
+
+    def test_an_unrelated_day_count_in_the_same_group_changes_nothing(self):
+        # ``training_window_days`` rides in the same group's slot, because it is
+        # the same entity's setting -- but the badge does not consult it, so
+        # editing it must not offer a revert.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
+        draft = _history_config()
+        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        [result] = inspect_targets(
+            hass,
+            draft,
+            [{"key": "house", "path": list(HOUSE_HISTORY_PATH)}],
+            saved_config=_history_config(),
+        )
+        self.assertIsNone(result["saved"])
+
+
+class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
+    """The two halves of one measurement must not drift apart.
+
+    ``_compute_history_days`` reduces rows a training run already fetched;
+    ``query_history_days`` asks the recorder from an entity id, for the editor,
+    which holds no rows. Same question, same arithmetic -- and if that stops
+    being true, a group will contradict the card that reads the same history.
+    """
+
+    async def test_both_paths_report_the_same_depth_for_the_same_oldest_sample(self):
+        today = date(2026, 8, 26)
+        for days_back in (0, 1, 41, 400):
+            with self.subTest(days_back=days_back):
+                oldest = today - timedelta(days=days_back)
+                rows = [
+                    {
+                        "start": datetime(
+                            oldest.year, oldest.month, oldest.day, tzinfo=timezone.utc
+                        ).timestamp()
+                    },
+                    {
+                        "start": datetime(
+                            today.year, today.month, today.day, tzinfo=timezone.utc
+                        ).timestamp()
+                    },
+                ]
+                from_rows = _compute_history_days(rows, today_local=today)
+
+                async def _oldest(hass, ids, *, local_tz, _date=oldest):
+                    return _date
+
+                with unittest.mock.patch.object(
+                    span_mod, "query_oldest_statistics_date", _oldest
+                ):
+                    from_entity = await span_mod.query_history_days(
+                        None,
+                        "sensor.house_energy",
+                        today_local=today,
+                        local_tz=timezone.utc,
+                    )
+                self.assertEqual(from_rows, days_back)
+                self.assertEqual(from_entity, from_rows)
+
+    async def test_nothing_recorded_is_zero_days_on_both_paths(self):
+        async def _nothing(hass, ids, *, local_tz):
+            return None
+
+        async def _no_states(hass, entity_id, *, local_tz):
+            return None
+
+        with unittest.mock.patch.object(
+            span_mod, "query_oldest_statistics_date", _nothing
+        ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _no_states):
+            from_entity = await span_mod.query_history_days(
+                None,
+                "sensor.house_energy",
+                today_local=date(2026, 8, 26),
+                local_tz=timezone.utc,
+            )
+        self.assertEqual(from_entity, 0)
+        self.assertEqual(_compute_history_days([], today_local=date(2026, 8, 26)), 0)
+
+
+class TestHistoryDaysFallback(unittest.IsolatedAsyncioTestCase):
+    """Statistics answer where they exist; raw states answer where they do not."""
+
+    async def _days(self, *, statistics, state_date, calls: list[str]):
+        async def _stats(hass, ids, *, local_tz):
+            calls.append("statistics")
+            return statistics
+
+        async def _states(hass, entity_id, *, local_tz):
+            calls.append("states")
+            return state_date
+
+        with unittest.mock.patch.object(
+            span_mod, "query_oldest_statistics_date", _stats
+        ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _states):
+            return await span_mod.query_history_days(
+                None,
+                "sensor.forecast_today",
+                today_local=date(2026, 8, 26),
+                local_tz=timezone.utc,
+            )
+
+    async def test_statistics_answer_alone_when_there_are_any(self):
+        calls: list[str] = []
+        days = await self._days(
+            statistics=date(2026, 7, 16), state_date=date(2020, 1, 1), calls=calls
+        )
+        self.assertEqual(days, 41)
+        self.assertEqual(calls, ["statistics"])
+
+    async def test_an_entity_the_recorder_compiles_no_statistics_for_still_has_history(self):
+        # A forecast sensor with no ``state_class`` has no statistics at all,
+        # and calling that zero days would be a plain falsehood about an entity
+        # the recorder has been storing all year.
+        calls: list[str] = []
+        days = await self._days(
+            statistics=None, state_date=date(2026, 7, 16), calls=calls
+        )
+        self.assertEqual(days, 41)
+        self.assertEqual(calls, ["statistics", "states"])
+
+    async def test_neither_source_holding_anything_is_zero(self):
+        calls: list[str] = []
+        self.assertEqual(
+            await self._days(statistics=None, state_date=None, calls=calls), 0
+        )
 
 
 class _Connection:

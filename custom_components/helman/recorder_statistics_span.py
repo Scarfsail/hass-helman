@@ -411,6 +411,91 @@ async def query_oldest_statistics_date(
     return datetime.fromtimestamp(oldest, tz=local_tz).date()
 
 
+async def query_history_days(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    today_local: date,
+    local_tz: tzinfo,
+) -> int:
+    """How many whole local days of history the recorder holds for one entity.
+
+    The same question :func:`~.consumption_forecast_profiles._compute_history_days`
+    answers, asked from the other end. That one is handed rows a training run has
+    already fetched and reduces them; this one starts from an entity id and asks
+    the recorder directly, which is what a config editor -- with nothing fetched
+    and no training run to wait for -- needs.
+
+    **The two must agree.** Same arithmetic, deliberately: whole days between the
+    local date the oldest sample falls on and ``today_local``, so an entity whose
+    first statistic is stamped yesterday reads as one day in both. They are two
+    functions only because neither call site can use the other's input without a
+    second round trip -- the trainer already holds the rows, and the editor holds
+    nothing. ``tests/test_entity_inspection.py`` pins the agreement.
+
+    Statistics first, raw states second. Long-term statistics are the cheap
+    answer and the one that matches what the training runs actually read, but
+    they exist only for a sensor the recorder compiles -- a forecast entity with
+    no ``state_class`` has none, and reporting it as zero days would be a plain
+    falsehood about an entity the recorder has been storing all year. The state
+    probe is one indexed ``LIMIT 1`` read and only runs when the statistics
+    table had nothing.
+
+    ``0`` when the recorder holds neither, which is the ordinary answer for a
+    sensor picked a minute ago, and the same answer the rows-based path gives
+    for an empty window.
+    """
+    oldest = await query_oldest_statistics_date(hass, [entity_id], local_tz=local_tz)
+    if oldest is None:
+        oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
+    if oldest is None:
+        return 0
+    return max(0, (today_local - oldest).days)
+
+
+async def _query_oldest_state_date(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    local_tz: tzinfo,
+) -> date | None:
+    """The local date of the oldest raw state the recorder still holds.
+
+    The fallback for an entity with no long-term statistics. ``limit=1`` on an
+    ascending scan from the epoch is a single indexed row -- the query does not
+    grow with how much history there is -- and ``include_start_time_state`` is
+    off because there is nothing before the epoch to carry in and asking for it
+    costs a second lookup.
+
+    The import is deferred like every other reach into the recorder: it need not
+    be set up, and the caller treats a failure as "the recorder cannot say".
+    """
+    from homeassistant.components.recorder.history import state_changes_during_period
+
+    def _query() -> dict[str, list[Any]]:
+        return state_changes_during_period(
+            hass,
+            _HISTORY_PROBE_EPOCH,
+            None,
+            entity_id,
+            no_attributes=True,
+            descending=False,
+            limit=1,
+            include_start_time_state=False,
+        )
+
+    raw = await get_instance(hass).async_add_executor_job(_query)
+    states = (raw or {}).get(entity_id) or (raw or {}).get(entity_id.lower()) or []
+    if not states:
+        return None
+    when = getattr(states[0], "last_changed", None) or getattr(
+        states[0], "last_updated", None
+    )
+    if when is None:
+        return None
+    return when.astimezone(local_tz).date()
+
+
 def _tail_window_start(
     tail_start: datetime | None, utc_end: datetime
 ) -> datetime | None:

@@ -20,7 +20,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from ..const import (
+    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+)
 from .context import InspectionRequest, PathSegment
+from .history import history_evaluator
 from .model import Inspection
 from .power import evaluate_power_entity
 
@@ -31,8 +36,23 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: order only decides which of two equally specific keys wins -- there are none
 #: today, and a later key that overlaps an earlier one is a mistake worth
 #: noticing rather than a precedence rule worth relying on.
+#:
+#: The history entries carry the *requirement* each entity is judged against --
+#: which setting names it, and what the runtime falls back to when the draft
+#: leaves it blank. That pairing is the registry's business precisely because it
+#: is a statement of meaning: the same group also carries a training window and
+#: a valid-slot minimum in its slot, and those are settings of the entity rather
+#: than requirements on its history, so nothing here consults them.
 EVALUATORS: dict[str, Evaluator] = {
     "power_devices.*.entities.power": evaluate_power_entity,
+    "power_devices.house.forecast.total_energy_entity_id": history_evaluator(
+        "min_history_days", HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
+    ),
+    "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
+    "power_devices.solar.forecast.bias_correction.total_energy_entity_id": (
+        history_evaluator("min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS)
+    ),
+    "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }
 
 #: The segment a key uses to mean "anything, and tell the evaluator what".
