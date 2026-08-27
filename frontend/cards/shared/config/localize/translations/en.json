@@ -88,7 +88,10 @@
       "controllables": "Everything Helman drives lives in one list: the inverter and the EV charger, climate and generic appliances. All four are edited directly here. Unsupported future kinds are preserved and shown read-only unless you remove them.",
       "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
       "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient.",
-      "ev_charger_consumption": "The charger's own energy meter. It has no demand projection — that comes from the vehicle — but its load is deferrable, which is what lets the optimizer move charging into cheaper slots."
+      "ev_charger_consumption": "The charger's own energy meter. It has no demand projection — that comes from the vehicle — but its load is deferrable, which is what lets the optimizer move charging into cheaper slots.",
+      "training_house_consumption": "These two settings decide how the house consumption forecast is fitted: the minimum history is the floor below which the forecast reports insufficient data, and the training window is how far back the fit looks. They govern the house meter below and every controllable's own energy meter — the table lists them all, with what the recorder actually holds for each.",
+      "training_solar_bias": "These settings decide how the solar bias correction is fitted: the minimum history is the floor below which correction is skipped, and the maximum training window is how far back the fit looks. They govern the bias-correction meter, plus the grid power and battery capacity readings curtailment detection uses — the table lists all three against what the recorder holds.",
+      "training_solar_bias_min_valid_slot_days": "Minimum valid slot-days rides in this same group because it is the same trainer's setting, but it is not a requirement on any one entity's history and carries no row of its own in the table below."
     },
     "empty": {
       "no_automation_optimizers": "No optimizers configured yet.",
@@ -105,6 +108,20 @@
       "optimizer": "Optimizer",
       "use_mode_mapping": "Use mode mapping",
       "eco_gear_mapping": "Eco gear mapping"
+    },
+    "training_depth": {
+      "column_entity": "Entity",
+      "column_window": "Window (d)",
+      "column_minimum": "Minimum (d)",
+      "column_raw_states": "Raw states (d)",
+      "column_statistics": "Statistics (d)",
+      "column_lookback": "Own lookback (d)",
+      "house_meter": "House meter",
+      "bias_meter": "Bias-correction meter",
+      "grid_power": "Grid power (curtailment detection)",
+      "battery_capacity": "Battery capacity (curtailment detection)",
+      "controllable_fallback_name": "Controllable",
+      "no_entity": "Not configured"
     },
     "fields": {
       "history_buckets": "History buckets",

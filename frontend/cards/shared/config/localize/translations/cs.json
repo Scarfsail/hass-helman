@@ -88,7 +88,10 @@
       "controllables": "Všechno, co Helman ovládá, je v jednom seznamu: střídač a EV nabíječka, topení/klimatizace i obecný spotřebič. Všechny čtyři typy se editují přímo tady. Nepodporované budoucí typy se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
       "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
       "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu.",
-      "ev_charger_consumption": "Vlastní měřič energie nabíječky. Nemá projekci poptávky — ta vychází z vozidla — ale jeho zátěž je odložitelná, což optimalizátoru umožní přesunout nabíjení do levnějších slotů."
+      "ev_charger_consumption": "Vlastní měřič energie nabíječky. Nemá projekci poptávky — ta vychází z vozidla — ale jeho zátěž je odložitelná, což optimalizátoru umožní přesunout nabíjení do levnějších slotů.",
+      "training_house_consumption": "Tato dvě nastavení určují, jak se sestavuje predikce spotřeby domácnosti: minimální historie je hranice, pod kterou predikce hlásí nedostatek dat, a trénovací okno určuje, jak daleko do minulosti se predikce dívá. Platí pro měřič domácnosti níže a pro vlastní měřič energie každého ovládaného spotřebiče — tabulka je vypisuje všechny s tím, co recorder pro každý z nich skutečně obsahuje.",
+      "training_solar_bias": "Tato nastavení určují, jak se trénuje korekce solární predikce: minimální historie je hranice, pod kterou se korekce přeskočí, a maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá. Platí pro měřič korekce, a také pro výkon sítě a kapacitu baterie, které využívá detekce omezování výkonu (curtailment) — tabulka vypisuje všechny tři proti tomu, co recorder obsahuje.",
+      "training_solar_bias_min_valid_slot_days": "Minimální počet platných slot-dní je ve stejné skupině, protože jde o nastavení stejného trenéru, ale není to požadavek na historii žádné konkrétní entity, a proto v tabulce níže nemá vlastní řádek."
     },
     "empty": {
       "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
@@ -105,6 +108,20 @@
       "optimizer": "Optimalizátor",
       "use_mode_mapping": "Mapování režimu použití",
       "eco_gear_mapping": "Mapování eco gear"
+    },
+    "training_depth": {
+      "column_entity": "Entita",
+      "column_window": "Okno (d)",
+      "column_minimum": "Minimum (d)",
+      "column_raw_states": "Raw states (d)",
+      "column_statistics": "Statistiky (d)",
+      "column_lookback": "Vlastní lookback (d)",
+      "house_meter": "Měřič domácnosti",
+      "bias_meter": "Měřič korekce",
+      "grid_power": "Výkon sítě (detekce omezování)",
+      "battery_capacity": "Kapacita baterie (detekce omezování)",
+      "controllable_fallback_name": "Spotřebič",
+      "no_entity": "Nenastaveno"
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",
