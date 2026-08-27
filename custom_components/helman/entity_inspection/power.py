@@ -34,8 +34,18 @@ from .state import read_numeric_state
 
 
 def evaluate_power_entity(request: InspectionRequest) -> Inspection:
-    """What ``power_devices.<device>.entities.power`` currently reads."""
-    device = request.wildcards[0] if request.wildcards else ""
+    """What ``power_devices.<device>.entities.power`` currently reads.
+
+    The device name comes from the path itself -- ``request.path[1]`` in
+    ``power_devices.<device>.entities.power`` -- rather than from
+    ``request.wildcards``. The wildcard would carry the same segment when this
+    is reached through the generic ``power_devices.*.entities.power`` key, but
+    ``power_devices.grid.entities.power`` is also registered as its own exact
+    key (:mod:`.registry`, so :func:`~.history.history_aware` can wrap this
+    evaluator for the grid meter), and an exact key matches no wildcard at
+    all. Reading the path directly answers both the same way.
+    """
+    device = str(request.path[1]) if len(request.path) > 1 else ""
     if device not in POWER_POLARITY_OPTIONS:
         # A path shaped like a power device but naming one Helman has no
         # vocabulary for. Nothing truthful can be said about its sign.

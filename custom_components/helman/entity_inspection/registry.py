@@ -28,7 +28,7 @@ from ..const import (
 )
 from .context import InspectionRequest, PathSegment
 from .fallback import evaluate_entity_value
-from .history import history_evaluator
+from .history import history_aware, history_evaluator
 from .model import Inspection
 from .power import evaluate_power_entity
 
@@ -36,9 +36,14 @@ from .power import evaluate_power_entity
 Evaluator = Callable[[InspectionRequest], Inspection]
 
 #: Registry keys in declaration order. Matching is exact on segment count, so
-#: order only decides which of two equally specific keys wins -- there are none
-#: today, and a later key that overlaps an earlier one is a mistake worth
-#: noticing rather than a precedence rule worth relying on.
+#: order only decides which of two equally specific keys wins. That is not
+#: hypothetical for one pair below: ``power_devices.grid.entities.power`` is
+#: also a match for the wildcard ``power_devices.*.entities.power``, and it is
+#: declared *first* on purpose, so the grid meter keeps its power reading
+#: (:mod:`.power`) with a history fact appended (:func:`~.history.history_aware`)
+#: rather than falling through to the plain power reading every other device
+#: gets. Every other overlap between two keys here is a mistake worth noticing
+#: rather than a precedence rule worth relying on.
 #:
 #: The history entries carry the *requirement* each entity is judged against --
 #: an absolute path to the setting, and what the runtime falls back to when the
@@ -47,9 +52,29 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: also carries a training window and (for solar bias) a valid-slot minimum,
 #: and those are settings of the *trainer* rather than requirements on this
 #: one entity's history, so nothing here consults them.
+#:
+#: Five entries below exist purely to say *who reads this entity's history*
+#: (issue #172): the grid meter and the battery capacity sensor feed solar-bias
+#: curtailment detection, and every controllable's own energy meter feeds the
+#: house-consumption trainer alongside the house meter itself. None of the
+#: three governs its own requirement -- they are judged against the same
+#: ``training.*`` path the entity that already carried the badge is.
 EVALUATORS: dict[str, Evaluator] = {
+    "power_devices.grid.entities.power": history_aware(
+        evaluate_power_entity,
+        ("training", "solar_bias", "min_history_days"),
+        SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    ),
     "power_devices.*.entities.power": evaluate_power_entity,
+    "power_devices.battery.entities.capacity": history_evaluator(
+        ("training", "solar_bias", "min_history_days"),
+        SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    ),
     "power_devices.house.forecast.total_energy_entity_id": history_evaluator(
+        ("training", "house_consumption", "min_history_days"),
+        HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    ),
+    "controllables.*.consumption.energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),

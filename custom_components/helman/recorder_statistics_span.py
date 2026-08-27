@@ -434,12 +434,20 @@ async def query_history_days(
     nothing. ``tests/test_entity_inspection.py`` pins the agreement.
 
     Statistics first, raw states second. Long-term statistics are the cheap
-    answer and the one that matches what the training runs actually read, but
-    they exist only for a sensor the recorder compiles -- a forecast entity with
-    no ``state_class`` has none, and reporting it as zero days would be a plain
-    falsehood about an entity the recorder has been storing all year. The state
-    probe is one indexed ``LIMIT 1`` read and only runs when the statistics
-    table had nothing.
+    answer, but they exist only for a sensor the recorder compiles -- a
+    forecast entity with no ``state_class`` has none, and reporting it as zero
+    days would be a plain falsehood about an entity the recorder has been
+    storing all year. The state probe is one indexed ``LIMIT 1`` read and only
+    runs when the statistics table had nothing.
+
+    **This is not the table the training runs read.** Every trainer reads raw
+    states through :mod:`recorder_hourly_series`, which ``purge_keep_days``
+    prunes; long-term statistics survive indefinitely and can make an entity
+    look far deeper than what a training run will actually find. This function
+    exists for callers who genuinely want "whichever of the two the recorder
+    can answer" -- a history *view* has no trainer to agree with. A caller that
+    needs both numbers, and needs the one that matches training honestly
+    labelled, wants :func:`query_history_depths` instead.
 
     ``0`` when the recorder holds neither, which is the ordinary answer for a
     sensor picked a minute ago, and the same answer the rows-based path gives
@@ -451,6 +459,58 @@ async def query_history_days(
     if oldest is None:
         return 0
     return max(0, (today_local - oldest).days)
+
+
+@dataclass(frozen=True)
+class HistoryDepths:
+    """How much history the recorder holds for one entity, in both tables.
+
+    ``0`` in either field means "the recorder holds nothing there", the same
+    convention :func:`query_history_days` uses -- there is no meaningful
+    difference, for a badge or a table, between "no rows" and "zero days of
+    rows".
+    """
+
+    statistics_days: int
+    raw_states_days: int
+
+
+async def query_history_depths(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    today_local: date,
+    local_tz: tzinfo,
+) -> HistoryDepths:
+    """Both tables' depth for one entity, so a caller can show -- or judge -- either.
+
+    :func:`query_history_days` picks one number by falling back from
+    statistics to raw states, which is the right answer for a caller that
+    only wants to know "how far back can this be shown". It is the wrong
+    answer for a caller that has to say how far back *training* can reach,
+    because every trainer reads raw states and a deep statistics table can
+    make a shallow, ``purge_keep_days``-pruned entity look perfectly fine.
+
+    So this runs both probes unconditionally rather than short-circuiting --
+    the same two queries :func:`query_history_days` already issues in its
+    worst case (no statistics), just no longer conditional on the first one
+    coming back empty. A caller with statistics and no interest in raw depth
+    should keep using :func:`query_history_days`; this one is for a caller
+    that needs to tell the two apart.
+    """
+    statistics_oldest = await query_oldest_statistics_date(
+        hass, [entity_id], local_tz=local_tz
+    )
+    states_oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
+    statistics_days = (
+        max(0, (today_local - statistics_oldest).days)
+        if statistics_oldest is not None
+        else 0
+    )
+    raw_states_days = (
+        max(0, (today_local - states_oldest).days) if states_oldest is not None else 0
+    )
+    return HistoryDepths(statistics_days=statistics_days, raw_states_days=raw_states_days)
 
 
 async def _query_oldest_state_date(
