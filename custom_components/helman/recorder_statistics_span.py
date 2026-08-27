@@ -411,70 +411,13 @@ async def query_oldest_statistics_date(
     return datetime.fromtimestamp(oldest, tz=local_tz).date()
 
 
-async def query_history_days(
-    hass: HomeAssistant,
-    entity_id: str,
-    *,
-    today_local: date,
-    local_tz: tzinfo,
-) -> int:
-    """How many whole local days of history the recorder holds for one entity.
-
-    The same question :func:`~.consumption_forecast_profiles._compute_history_days`
-    answers, asked from the other end. That one is handed rows a training run has
-    already fetched and reduces them; this one starts from an entity id and asks
-    the recorder directly, which is what a config editor -- with nothing fetched
-    and no training run to wait for -- needs.
-
-    **The two must agree.** Same arithmetic, deliberately: whole days between the
-    local date the oldest sample falls on and ``today_local``, so an entity whose
-    first statistic is stamped yesterday reads as one day in both. They are two
-    functions only because neither call site can use the other's input without a
-    second round trip -- the trainer already holds the rows, and the editor holds
-    nothing. ``tests/test_entity_inspection.py`` pins the agreement.
-
-    Statistics first, raw states second. Long-term statistics are the cheap
-    answer, but they exist only for a sensor the recorder compiles -- a
-    forecast entity with no ``state_class`` has none, and reporting it as zero
-    days would be a plain falsehood about an entity the recorder has been
-    storing all year. The state probe is one indexed ``LIMIT 1`` read and only
-    runs when the statistics table had nothing.
-
-    **This is not the table the training runs read.** Every trainer reads raw
-    states through :mod:`recorder_hourly_series`, which ``purge_keep_days``
-    prunes; long-term statistics survive indefinitely and can make an entity
-    look far deeper than what a training run will actually find.
-
-    **Nothing in production calls this any more.** The entity inspector, its
-    last caller, moved to :func:`query_history_depths` when the badge started
-    reporting both tables (issue #172), and no other module took it up. It is
-    kept, and kept tested, as the pinned reference for the "whichever of the
-    two the recorder can answer" convention that
-    :func:`~.consumption_forecast_profiles._compute_history_days` is checked
-    against -- delete it only along with that agreement test. Anything new
-    wants :func:`query_history_depths`, which reports the two depths
-    separately and says which one trains.
-
-    ``0`` when the recorder holds neither, which is the ordinary answer for a
-    sensor picked a minute ago, and the same answer the rows-based path gives
-    for an empty window.
-    """
-    oldest = await query_oldest_statistics_date(hass, [entity_id], local_tz=local_tz)
-    if oldest is None:
-        oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
-    if oldest is None:
-        return 0
-    return max(0, (today_local - oldest).days)
-
-
 @dataclass(frozen=True)
 class HistoryDepths:
     """How much history the recorder holds for one entity, in both tables.
 
-    ``0`` in either field means "the recorder holds nothing there", the same
-    convention :func:`query_history_days` uses -- there is no meaningful
-    difference, for a badge or a table, between "no rows" and "zero days of
-    rows".
+    ``0`` in either field means "the recorder holds nothing there": there is
+    no meaningful difference, for a badge or a table, between "no rows" and
+    "zero days of rows".
     """
 
     statistics_days: int
@@ -490,19 +433,25 @@ async def query_history_depths(
 ) -> HistoryDepths:
     """Both tables' depth for one entity, so a caller can show -- or judge -- either.
 
-    :func:`query_history_days` picks one number by falling back from
-    statistics to raw states, which is the right answer for a caller that
-    only wants to know "how far back can this be shown". It is the wrong
-    answer for a caller that has to say how far back *training* can reach,
-    because every trainer reads raw states and a deep statistics table can
-    make a shallow, ``purge_keep_days``-pruned entity look perfectly fine.
+    This used to be one number, picked by falling back from statistics to raw
+    states. That is the right answer for a caller that only wants to know "how
+    far back can this be shown", and the wrong one for a caller that has to say
+    how far back *training* can reach: every trainer reads raw states through
+    :mod:`recorder_hourly_series`, which ``purge_keep_days`` prunes, while
+    long-term statistics survive indefinitely -- so the fallback made a
+    shallow, pruned entity look perfectly deep (issue #169).
 
-    So this runs both probes unconditionally rather than short-circuiting --
-    the same two queries :func:`query_history_days` already issues in its
-    worst case (no statistics), just no longer conditional on the first one
-    coming back empty. A caller with statistics and no interest in raw depth
-    should keep using :func:`query_history_days`; this one is for a caller
-    that needs to tell the two apart.
+    So both probes run unconditionally rather than short-circuiting -- the same
+    two queries the fallback already issued in its worst case (no statistics),
+    just no longer conditional on the first coming back empty.
+
+    **The arithmetic matches the trainer's.** Whole days between the local date
+    the oldest sample falls on and ``today_local``, which is exactly what
+    :func:`~.consumption_forecast_profiles._compute_history_days` computes from
+    rows a training run already fetched. The two exist separately only because
+    neither call site can use the other's input without a second round trip --
+    the trainer already holds the rows, the editor holds nothing but an entity
+    id. ``tests/test_entity_inspection.py`` pins the agreement.
     """
     statistics_oldest = await query_oldest_statistics_date(
         hass, [entity_id], local_tz=local_tz

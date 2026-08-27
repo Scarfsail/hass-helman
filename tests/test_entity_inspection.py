@@ -1013,9 +1013,13 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
     """The two halves of one measurement must not drift apart.
 
     ``_compute_history_days`` reduces rows a training run already fetched;
-    ``query_history_days`` asks the recorder from an entity id, for the editor,
-    which holds no rows. Same question, same arithmetic -- and if that stops
-    being true, a group will contradict the card that reads the same history.
+    ``query_history_depths`` asks the recorder from an entity id, for the
+    editor, which holds no rows. Same question, same arithmetic -- and if that
+    stops being true, a group will contradict the card that reads the same
+    history.
+
+    It is the *raw-states* depth that has to agree, because that is the table
+    the trainer whose rows ``_compute_history_days`` reduces actually read.
     """
 
     async def test_both_paths_report_the_same_depth_for_the_same_oldest_sample(self):
@@ -1037,20 +1041,29 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                 ]
                 from_rows = _compute_history_days(rows, today_local=today)
 
-                async def _oldest(hass, ids, *, local_tz, _date=oldest):
+                async def _oldest(hass, entity_id, *, local_tz, _date=oldest):
                     return _date
 
+                async def _no_statistics(hass, ids, *, local_tz):
+                    return None
+
+                # Statistics are stubbed empty on purpose: the depth that has
+                # to agree with the trainer is the raw-states one, and pinning
+                # it here means a statistics table that disagreed could never
+                # be mistaken for agreement.
                 with unittest.mock.patch.object(
-                    span_mod, "query_oldest_statistics_date", _oldest
+                    span_mod, "_query_oldest_state_date", _oldest
+                ), unittest.mock.patch.object(
+                    span_mod, "query_oldest_statistics_date", _no_statistics
                 ):
-                    from_entity = await span_mod.query_history_days(
+                    depths = await span_mod.query_history_depths(
                         None,
                         "sensor.house_energy",
                         today_local=today,
                         local_tz=timezone.utc,
                     )
                 self.assertEqual(from_rows, days_back)
-                self.assertEqual(from_entity, from_rows)
+                self.assertEqual(depths.raw_states_days, from_rows)
 
     async def test_nothing_recorded_is_zero_days_on_both_paths(self):
         async def _nothing(hass, ids, *, local_tz):
@@ -1062,71 +1075,23 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
         with unittest.mock.patch.object(
             span_mod, "query_oldest_statistics_date", _nothing
         ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _no_states):
-            from_entity = await span_mod.query_history_days(
+            depths = await span_mod.query_history_depths(
                 None,
                 "sensor.house_energy",
                 today_local=date(2026, 8, 26),
                 local_tz=timezone.utc,
             )
-        self.assertEqual(from_entity, 0)
+        self.assertEqual(depths.raw_states_days, 0)
         self.assertEqual(_compute_history_days([], today_local=date(2026, 8, 26)), 0)
-
-
-class TestHistoryDaysFallback(unittest.IsolatedAsyncioTestCase):
-    """Statistics answer where they exist; raw states answer where they do not."""
-
-    async def _days(self, *, statistics, state_date, calls: list[str]):
-        async def _stats(hass, ids, *, local_tz):
-            calls.append("statistics")
-            return statistics
-
-        async def _states(hass, entity_id, *, local_tz):
-            calls.append("states")
-            return state_date
-
-        with unittest.mock.patch.object(
-            span_mod, "query_oldest_statistics_date", _stats
-        ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _states):
-            return await span_mod.query_history_days(
-                None,
-                "sensor.forecast_today",
-                today_local=date(2026, 8, 26),
-                local_tz=timezone.utc,
-            )
-
-    async def test_statistics_answer_alone_when_there_are_any(self):
-        calls: list[str] = []
-        days = await self._days(
-            statistics=date(2026, 7, 16), state_date=date(2020, 1, 1), calls=calls
-        )
-        self.assertEqual(days, 41)
-        self.assertEqual(calls, ["statistics"])
-
-    async def test_an_entity_the_recorder_compiles_no_statistics_for_still_has_history(self):
-        # A forecast sensor with no ``state_class`` has no statistics at all,
-        # and calling that zero days would be a plain falsehood about an entity
-        # the recorder has been storing all year.
-        calls: list[str] = []
-        days = await self._days(
-            statistics=None, state_date=date(2026, 7, 16), calls=calls
-        )
-        self.assertEqual(days, 41)
-        self.assertEqual(calls, ["statistics", "states"])
-
-    async def test_neither_source_holding_anything_is_zero(self):
-        calls: list[str] = []
-        self.assertEqual(
-            await self._days(statistics=None, state_date=None, calls=calls), 0
-        )
 
 
 class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
     """``query_history_depths`` answers with both numbers, unconditionally.
 
-    Unlike :func:`~.recorder_statistics_span.query_history_days`, which
-    short-circuits once statistics answer, this always asks both tables --
-    the whole point is telling a reader where they disagree, and a caller
-    that skipped the second query could never say.
+    Unlike the single-number fallback this replaced, which short-circuited
+    once statistics answered, it always asks both tables -- the whole point is
+    telling a reader where they disagree, and a caller that skipped the second
+    query could never say.
     """
 
     async def _depths(self, *, statistics, state_date, calls: list[str]):
@@ -1155,16 +1120,16 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(depths.statistics_days, 41)
         self.assertEqual(depths.raw_states_days, (date(2026, 8, 26) - date(2020, 1, 1)).days)
-        # Both tables asked, unlike the single-answer function -- this is the
+        # Both tables asked, unlike the single-answer fallback -- this is the
         # one extra query in the common case, and it is what buys the second
         # number.
         self.assertEqual(calls, ["statistics", "states"])
 
     async def test_no_more_than_two_queries_in_the_worst_case(self):
-        # The recorder-query-count guard: ``query_history_days`` already
-        # issues two reads (statistics, then raw states) in its worst case --
-        # no statistics at all -- so this must not cost more than that same
-        # worst case, however both probes answer.
+        # The recorder-query-count guard: the single-number fallback this
+        # replaced already issued two reads (statistics, then raw states) in
+        # its worst case -- no statistics at all -- so this must not cost more
+        # than that same worst case, however both probes answer.
         calls: list[str] = []
         await self._depths(statistics=None, state_date=None, calls=calls)
         self.assertEqual(len(calls), 2)

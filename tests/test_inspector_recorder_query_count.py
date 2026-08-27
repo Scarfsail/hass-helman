@@ -285,12 +285,13 @@ class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
 class TestHistoryDepthProbeIssuesNoMoreQueriesThanBefore(unittest.IsolatedAsyncioTestCase):
     """The entity inspector's dual-depth probe costs what the single-depth one did.
 
-    Splitting ``query_history_days`` into ``query_history_depths`` (issue
-    #172) means a caller that wants both tables' depth now always asks both,
-    rather than falling back to the second query only when the first came up
-    empty. The worst case of the old function was already two reads -- no
-    statistics, then a raw-states probe -- so the new function costs nothing
-    more than that worst case; this is the guard that pins it.
+    ``query_history_depths`` replaced a single-number probe that fell back
+    from statistics to raw states (the since-deleted ``query_history_days``,
+    issue #172): a caller that wants both tables' depth now always asks both,
+    rather than asking the second only when the first came up empty. That
+    predecessor's worst case was already two reads -- no statistics, then a
+    raw-states probe -- so this costs nothing more than that worst case; this
+    is the guard that pins it.
     """
 
     async def test_the_dual_depth_probe_issues_exactly_one_statistics_and_one_state_query(
