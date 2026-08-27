@@ -263,6 +263,14 @@ def _validate_training_config(
                 "training.house_consumption.training_window_days",
                 house_consumption_map.get("training_window_days"),
             )
+            _validate_window_covers_minimum(
+                report,
+                section,
+                minimum=house_consumption_map.get("min_history_days"),
+                minimum_path="training.house_consumption.min_history_days",
+                window=house_consumption_map.get("training_window_days"),
+                window_path="training.house_consumption.training_window_days",
+            )
 
     solar_bias = training.get("solar_bias")
     if solar_bias is not None:
@@ -291,6 +299,54 @@ def _validate_training_config(
                         code="invalid_range",
                         message=f"{path} must be an integer between 1 and 365",
                     )
+            _validate_window_covers_minimum(
+                report,
+                section,
+                minimum=solar_bias_map.get("min_history_days"),
+                minimum_path="training.solar_bias.min_history_days",
+                window=solar_bias_map.get("max_training_window_days"),
+                window_path="training.solar_bias.max_training_window_days",
+            )
+
+
+def _validate_window_covers_minimum(
+    report: ValidationReport,
+    section: str,
+    *,
+    minimum: object,
+    minimum_path: str,
+    window: object,
+    window_path: str,
+) -> None:
+    """A minimum a trainer can never reach is a silent no-op, so refuse it.
+
+    The window is the ceiling on what the trainer *asks* the recorder for; the
+    minimum is the floor on what it will *trust*. Because no fetch returns rows
+    older than the window, a minimum above it can never be met -- the house
+    trainer would report ``insufficient_history`` on every run and the solar
+    one would omit every slot, both for as long as the config stood. Each value
+    is legitimate on its own, which is why nothing else here catches it.
+
+    Only a relation between two integers is judged. Either one absent (the
+    default applies), or non-integer (already reported by the per-value check),
+    leaves this quiet rather than piling a second error onto the same field.
+    """
+    if not isinstance(minimum, int) or isinstance(minimum, bool):
+        return
+    if not isinstance(window, int) or isinstance(window, bool):
+        return
+    if minimum <= window:
+        return
+    report.add_error(
+        section=section,
+        path=minimum_path,
+        code="invalid_relation",
+        message=(
+            f"{minimum_path} ({minimum}) must not exceed {window_path} ({window}); "
+            "the trainer never sees history older than its window, so a higher "
+            "minimum can never be met"
+        ),
+    )
 
 
 def _validate_house_config(raw_house: object, report: ValidationReport) -> None:

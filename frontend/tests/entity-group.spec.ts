@@ -672,9 +672,9 @@ test("the day-count settings render on the Training tab instead", async ({ page 
     });
     await openTab(page, "Training");
 
-    // "Min history days" is also the solar-bias section's label -- the
-    // assertion is that no field with either label renders inside a group.
-    for (const label of ["Min history days", "Training window days"]) {
+    // Both labels are shared with the solar-bias section -- the assertion is
+    // that no field carrying either one renders inside a group.
+    for (const label of ["Minimum training window days", "Maximum training window days"]) {
         const placement = await labelPlacement(page, label);
         expect(placement.count).toBeGreaterThan(0);
         expect(placement.insideGroup).not.toContain(true);

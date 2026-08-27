@@ -381,7 +381,7 @@ test.describe("entities-only toggle", () => {
         // relocation moved them to the Training tab -- see entity-group.spec.ts
         // for the coverage that took over.
         expect(slotted.filter((label: string) => label === "Sign convention")).toHaveLength(4);
-        expect(slotted).not.toContain("Min history days");
+        expect(slotted).not.toContain("Minimum training window days");
     });
 
     test("drops the sections that hold no entity", async ({ page }) => {

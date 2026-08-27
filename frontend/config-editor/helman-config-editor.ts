@@ -2110,13 +2110,13 @@ export class HelmanConfigEditorPanel
             ${this._renderOptionalNumberField(
               ["training", "house_consumption", "min_history_days"],
               "editor.fields.house_consumption_min_history_days",
-              undefined,
+              "editor.helpers.house_consumption_min_history_days",
               "editor.help.house_consumption_min_history_days",
             )}
             ${this._renderOptionalNumberField(
               ["training", "house_consumption", "training_window_days"],
               "editor.fields.house_consumption_training_window_days",
-              undefined,
+              "editor.helpers.house_consumption_training_window_days",
               "editor.help.house_consumption_training_window_days",
             )}
           </div>

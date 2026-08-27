@@ -43,6 +43,25 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_a_minimum_above_the_max_training_window_is_refused(self) -> None:
+        # The solar floor is judged against *usable* days, which can only ever
+        # be fewer than the window fetched -- so a minimum above the window is
+        # unreachable and would omit every slot on every run.
+        config = _valid_config()
+        config["training"] = {
+            "solar_bias": {"min_history_days": 120, "max_training_window_days": 90}
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training.solar_bias.min_history_days"
+                and issue.code == "invalid_relation"
+                for issue in report.errors
+            )
+        )
+
     def test_min_history_days_invalid_when_zero(self) -> None:
         config = _valid_config()
         config["training"] = {"solar_bias": {"min_history_days": 0}}
