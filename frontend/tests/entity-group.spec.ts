@@ -64,12 +64,14 @@ const SAVED_FACTS = [
 
 /**
  * A second group, on a path whose settings the backend judges: the house
- * forecast meter, with its two day counts moved into the group's slot.
+ * forecast meter. Its two day counts live in a top-level `training` section
+ * since the v14 relocation -- not in this group's own slot.
  *
- * Nothing in the editor knows that any of these three fields has anything to do
- * with history -- the call site puts them in one group, and the backend decides
- * what to say about the entity. That is exactly what the tests below assert:
- * the fixture chooses the severity, and the badge follows it.
+ * Nothing in the editor knows that either of those fields has anything to do
+ * with history -- the backend decides what to say about the entity via
+ * `dependsOn`, wherever in the document the setting it names actually lives.
+ * That is exactly what the tests below assert: the fixture chooses the
+ * severity, and the badge follows it.
  */
 const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_id"];
 const HOUSE_KEY = HOUSE_PATH.join(".");
@@ -81,9 +83,13 @@ const HISTORY_CONFIG = {
         house: {
             forecast: {
                 total_energy_entity_id: "sensor.house_energy",
-                min_history_days: 30,
-                training_window_days: 60,
             },
+        },
+    },
+    training: {
+        house_consumption: {
+            min_history_days: 30,
+            training_window_days: 60,
         },
     },
 };
@@ -638,32 +644,41 @@ function labelPlacement(page: Page, label: string) {
     }, label);
 }
 
-test("a group's own day-count settings render inside it, not beside it", async ({ page }) => {
-    // The layout move this phase is made of: the two settings that qualify the
-    // house forecast meter are passed into its group's slot instead of sitting
-    // in the same field grid as unrelated siblings.
+test("the house group's day counts no longer render inside it", async ({ page }) => {
+    // The P1 relocation moved the two settings that qualify the house
+    // forecast meter out of its group's slot into a top-level Training tab --
+    // several entities' history can now name the same setting instead of it
+    // living inside just one of them.
     await mountEditor(page, {
         config: HISTORY_CONFIG,
         factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
     });
     const group = await waitForGroupFacts(page, HOUSE_KEY);
 
-    expect(group.slottedFieldLabels).toEqual(["Min history days", "Training window days"]);
-    // "Min history days" is also the bias-correction group's label, and that
-    // one moved into its own group in this phase too -- so the assertion is
-    // that no field with either label is left rendering outside a group.
-    for (const label of ["Min history days", "Training window days"]) {
-        const placement = await labelPlacement(page, label);
-        expect(placement.count).toBeGreaterThan(0);
-        expect(placement.insideGroup).not.toContain(false);
-    }
+    expect(group.slottedFieldLabels).toEqual([]);
 
-    // And the group is asked about by path, like every other one.
+    // And the group is still asked about by path, like every other one.
     const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
     expect(request.targets.map((target: any) => target.key)).toContain(HOUSE_KEY);
     expect(request.targets.find((target: any) => target.key === HOUSE_KEY).path).toEqual(
         HOUSE_PATH,
     );
+});
+
+test("the day-count settings render on the Training tab instead", async ({ page }) => {
+    await mountEditor(page, {
+        config: HISTORY_CONFIG,
+        factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
+    });
+    await openTab(page, "Training");
+
+    // "Min history days" is also the solar-bias section's label -- the
+    // assertion is that no field with either label renders inside a group.
+    for (const label of ["Min history days", "Training window days"]) {
+        const placement = await labelPlacement(page, label);
+        expect(placement.count).toBeGreaterThan(0);
+        expect(placement.insideGroup).not.toContain(true);
+    }
 });
 
 test("the history badge follows the severity the backend sent", async ({ page }) => {
@@ -691,13 +706,13 @@ test("the history badge follows the severity the backend sent", async ({ page })
 });
 
 test("a revert restores what the reading was made of, and nothing else", async ({ page }) => {
-    // The training window renders inside the house group because it is the
-    // same entity's setting -- but the badge never reads it, so it can never
-    // cause the revert control to appear, and pressing that control must not
-    // reset it. The editor cannot know which is which: it reverts exactly the
-    // paths the backend reported in `dependsOn`.
-    const MIN_DAYS_PATH = ["power_devices", "house", "forecast", "min_history_days"];
-    const WINDOW_PATH = ["power_devices", "house", "forecast", "training_window_days"];
+    // The training window rides in the same training group as the minimum --
+    // both are the house trainer's settings -- but the badge never reads it,
+    // so it can never cause the revert control to appear, and pressing that
+    // control must not reset it. The editor cannot know which is which: it
+    // reverts exactly the paths the backend reported in `dependsOn`.
+    const MIN_DAYS_PATH = ["training", "house_consumption", "min_history_days"];
+    const WINDOW_PATH = ["training", "house_consumption", "training_window_days"];
     await mountEditor(page, {
         config: HISTORY_CONFIG,
         withSaved: true,
@@ -740,8 +755,19 @@ test("a revert restores what the reading was made of, and nothing else", async (
             }),
         )
         .toEqual({
-            // Restored: the entity and the one setting the badge read.
+            // Restored: the entity the badge reads.
             total_energy_entity_id: "sensor.house_energy",
+        });
+
+    await expect
+        .poll(async () =>
+            page.evaluate(() => {
+                const editor = document.querySelector("helman-config-editor-panel") as any;
+                return editor.getValue(["training", "house_consumption"]);
+            }),
+        )
+        .toEqual({
+            // Restored: the one setting the badge read.
             min_history_days: 30,
             // Kept: an edit the reading never depended on, which the user made
             // deliberately and never asked to undo.

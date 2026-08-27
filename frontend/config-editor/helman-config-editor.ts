@@ -1133,6 +1133,8 @@ export class HelmanConfigEditorPanel
           TAB_SCOPE_IDS.power_devices,
           this._renderPowerDevicesTab(),
         );
+      case "training":
+        return this._renderTabScope(TAB_SCOPE_IDS.training, this._renderTrainingTab());
       case "automation":
         return this._renderTabScope(
           TAB_SCOPE_IDS.automation,
@@ -1667,22 +1669,6 @@ export class HelmanConfigEditorPanel
                 includeDomains: ["sensor"],
                 helpKey: "editor.help.house_forecast_total_energy_entity",
               },
-              html`
-                <div class="field-grid">
-                  ${this._renderOptionalNumberField(
-                    ["power_devices", "house", "forecast", "min_history_days"],
-                    "editor.fields.min_history_days",
-                    undefined,
-                    "editor.help.house_min_history_days",
-                  )}
-                  ${this._renderOptionalNumberField(
-                    ["power_devices", "house", "forecast", "training_window_days"],
-                    "editor.fields.training_window_days",
-                    undefined,
-                    "editor.help.house_training_window_days",
-                  )}
-                </div>
-              `,
             )}
           </div>
         `,
@@ -1791,28 +1777,6 @@ export class HelmanConfigEditorPanel
                             includeDomains: ["sensor"],
                             helpKey: "editor.help.bias_correction_total_energy_entity",
                           },
-                          html`
-                            <div class="field-grid">
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                                "editor.fields.bias_correction_min_history_days",
-                                "editor.helpers.bias_correction_min_history_days",
-                                "editor.help.bias_correction_min_history_days",
-                              )}
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                                "editor.fields.max_training_window_days",
-                                "editor.helpers.bias_correction_max_training_window_days",
-                                "editor.help.bias_correction_max_training_window_days",
-                              )}
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
-                                "editor.fields.bias_correction_min_valid_slot_days",
-                                "editor.helpers.bias_correction_min_valid_slot_days",
-                                "editor.help.bias_correction_min_valid_slot_days",
-                              )}
-                            </div>
-                          `,
                         )}
                       </div>
 
@@ -2044,6 +2008,62 @@ export class HelmanConfigEditorPanel
           </div>
         `,
         { initialOpen: false },
+      )}
+    `;
+  }
+
+  /**
+   * The five history-window settings, relocated here from the two entities
+   * that used to carry them. Same fields, same paths' meaning — only where
+   * they live in the document and in the editor moved. Layout and copy stay
+   * as they were on Power devices; the explanatory page is a later phase.
+   */
+  private _renderTrainingTab(): TemplateResult {
+    return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.house_consumption,
+        html`
+          <div class="field-grid">
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "min_history_days"],
+              "editor.fields.house_consumption_min_history_days",
+              undefined,
+              "editor.help.house_consumption_min_history_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "training_window_days"],
+              "editor.fields.house_consumption_training_window_days",
+              undefined,
+              "editor.help.house_consumption_training_window_days",
+            )}
+          </div>
+        `,
+      )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.solar_bias,
+        html`
+          <div class="field-grid">
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "min_history_days"],
+              "editor.fields.solar_bias_min_history_days",
+              "editor.helpers.solar_bias_min_history_days",
+              "editor.help.solar_bias_min_history_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "max_training_window_days"],
+              "editor.fields.solar_bias_max_training_window_days",
+              "editor.helpers.solar_bias_max_training_window_days",
+              "editor.help.solar_bias_max_training_window_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "min_valid_slot_days"],
+              "editor.fields.solar_bias_min_valid_slot_days",
+              "editor.helpers.solar_bias_min_valid_slot_days",
+              "editor.help.solar_bias_min_valid_slot_days",
+            )}
+          </div>
+        `,
       )}
     `;
   }
@@ -3746,6 +3766,7 @@ export class HelmanConfigEditorPanel
     const counts: Record<TabId, { errors: number; warnings: number }> = {
       general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
+      training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       controllables: { errors: 0, warnings: 0 },
     };
