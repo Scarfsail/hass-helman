@@ -163,7 +163,7 @@ class _RecordingSlotHistory:
 
 
 class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
-    def _make_builder(self):
+    def _make_builder(self, *, min_history_days: int = 14, training_window_days: int = 56):
         recorder_module = importlib.reload(
             importlib.import_module("custom_components.helman.recorder_hourly_series")
         )
@@ -180,9 +180,15 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 "house": {
                     "forecast": {
                         "total_energy_entity_id": "sensor.house_total",
-                        "training_window_days": 56,
-                        "min_history_days": 14,
                     }
+                }
+            },
+            # Since the v14 relocation these two live at an absolute path, not
+            # as siblings of the entity they govern.
+            "training": {
+                "house_consumption": {
+                    "min_history_days": min_history_days,
+                    "training_window_days": training_window_days,
                 }
             },
             # The deferrable split is read off the controllables now: the
@@ -285,6 +291,38 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["model"])
         self.assertEqual(payload["series"], [])
         self.assertNotIn("currentSlot", payload)
+
+    async def test_build_reads_the_minimum_from_training_house_consumption(self) -> None:
+        """A non-default value proves the field is read from its new home --
+        the v14 relocation moved it out from under power_devices.house.forecast."""
+        consumption_module, recorder_module, builder = self._make_builder(
+            min_history_days=21, training_window_days=90
+        )
+        profile = consumption_module.HouseConsumptionProfile(
+            schema_version=1,
+            history_days=10,
+            non_deferrable=[consumption_module.ForecastBand(1.0, 1.0, 1.0)] * 168,
+            consumers={},
+        )
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                builder,
+                "_build_actual_history",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=profile,
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["status"], "insufficient_history")
+        self.assertEqual(payload["requiredHistoryDays"], 21)
+        self.assertEqual(payload["trainingWindowDays"], 90)
 
     async def test_build_without_a_profile_is_unavailable_and_queries_nothing(
         self,

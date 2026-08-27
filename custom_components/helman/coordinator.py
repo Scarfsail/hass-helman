@@ -94,8 +94,6 @@ from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_CANONICAL_RESOLUTION,
     FORECAST_STALE_AFTER_SECONDS,
-    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
-    HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
@@ -104,7 +102,10 @@ from .const import (
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_STOP_EXPORT,
 )
-from .consumption_forecast_builder import ConsumptionForecastBuilder
+from .consumption_forecast_builder import (
+    ConsumptionForecastBuilder,
+    read_house_training_window_config,
+)
 from .controllables.config import read_deferrable_consumers, read_scheduled_consumers
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
@@ -1169,13 +1170,8 @@ class HelmanCoordinator:
         total_energy_entity_id = ConsumptionForecastBuilder._read_entity_id(
             forecast_cfg.get("total_energy_entity_id")
         )
-        training_window_days = ConsumptionForecastBuilder._read_positive_int(
-            forecast_cfg.get("training_window_days"),
-            HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
-        )
-        min_history_days = ConsumptionForecastBuilder._read_positive_int(
-            forecast_cfg.get("min_history_days"),
-            HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        min_history_days, training_window_days = read_house_training_window_config(
+            self._active_config
         )
         consumers_config = read_deferrable_consumers(self._active_config)
         config_fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(

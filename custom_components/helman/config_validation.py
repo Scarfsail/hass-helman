@@ -109,6 +109,7 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
 
     _validate_general_config(config, report)
     _validate_power_devices_config(config, report)
+    _validate_training_config(config, report)
     _validate_controllables_config(config, report)
     _validate_automation_config(config, report)
     return report
@@ -221,6 +222,77 @@ def _validate_power_devices_config(
     _validate_grid_config(config, raw_power_devices.get("grid"), report)
 
 
+def _validate_training_config(
+    config: Mapping[str, Any],
+    report: ValidationReport,
+) -> None:
+    """The five history-window settings, relocated here since v14.
+
+    A peer of ``power_devices``, not nested under it -- these settings are
+    read by several entities' history rather than owned by one, which is the
+    whole reason they moved. See ``_migrate_v13_to_v14`` for the load-side
+    counterpart; this is the save-side half of "load migrates, save refuses"
+    for their old paths.
+    """
+    section = "training"
+    raw_training = config.get("training")
+    if raw_training is None:
+        return
+    training = _require_mapping(raw_training, "training", section, report)
+    if training is None:
+        return
+
+    house_consumption = training.get("house_consumption")
+    if house_consumption is not None:
+        house_consumption_map = _require_mapping(
+            house_consumption,
+            "training.house_consumption",
+            section,
+            report,
+        )
+        if house_consumption_map is not None:
+            _validate_optional_positive_int(
+                report,
+                section,
+                "training.house_consumption.min_history_days",
+                house_consumption_map.get("min_history_days"),
+            )
+            _validate_optional_positive_int(
+                report,
+                section,
+                "training.house_consumption.training_window_days",
+                house_consumption_map.get("training_window_days"),
+            )
+
+    solar_bias = training.get("solar_bias")
+    if solar_bias is not None:
+        solar_bias_map = _require_mapping(
+            solar_bias,
+            "training.solar_bias",
+            section,
+            report,
+        )
+        if solar_bias_map is not None:
+            for key in (
+                "min_history_days",
+                "max_training_window_days",
+                "min_valid_slot_days",
+            ):
+                value = solar_bias_map.get(key)
+                if value is None:
+                    continue
+                path = f"training.solar_bias.{key}"
+                if isinstance(value, bool) or not isinstance(value, int) or not (
+                    1 <= value <= 365
+                ):
+                    report.add_error(
+                        section=section,
+                        path=path,
+                        code="invalid_range",
+                        message=f"{path} must be an integer between 1 and 365",
+                    )
+
+
 def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
     section = "power_devices"
     if raw_house is None:
@@ -280,18 +352,20 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
         "power_devices.house.forecast.total_energy_entity_id",
         forecast_map.get("total_energy_entity_id"),
     )
-    _validate_optional_positive_int(
-        report,
-        section,
-        "power_devices.house.forecast.min_history_days",
-        forecast_map.get("min_history_days"),
-    )
-    _validate_optional_positive_int(
-        report,
-        section,
-        "power_devices.house.forecast.training_window_days",
-        forecast_map.get("training_window_days"),
-    )
+    for retired_key, new_path in (
+        ("min_history_days", "training.house_consumption.min_history_days"),
+        ("training_window_days", "training.house_consumption.training_window_days"),
+    ):
+        if retired_key in forecast_map:
+            report.add_error(
+                section=section,
+                path=f"power_devices.house.forecast.{retired_key}",
+                code="retired_config_key",
+                message=(
+                    f"'power_devices.house.forecast.{retired_key}' moved to "
+                    f"'{new_path}'"
+                ),
+            )
     if "deferrable_consumers" in forecast_map:
         report.add_error(
             section=section,
@@ -385,60 +459,21 @@ def _validate_solar_config(
         bias_map.get("enabled"),
     )
 
-    # min_history_days: int in [1, 365]
-    min_hist = bias_map.get("min_history_days")
-    if min_hist is not None:
-        if isinstance(min_hist, bool) or not isinstance(min_hist, int) or not (
-            1 <= min_hist <= 365
-        ):
+    # The three day-count settings moved to training.solar_bias.*; the old
+    # paths (including the legacy training_window_days alias) are refused
+    # rather than validated.
+    for retired_key, new_path in (
+        ("min_history_days", "training.solar_bias.min_history_days"),
+        ("max_training_window_days", "training.solar_bias.max_training_window_days"),
+        ("training_window_days", "training.solar_bias.max_training_window_days"),
+        ("min_valid_slot_days", "training.solar_bias.min_valid_slot_days"),
+    ):
+        if retired_key in bias_map:
             report.add_error(
                 section=section,
-                path=f"{base_path}.min_history_days",
-                code="invalid_range",
-                message=f"{base_path}.min_history_days must be an integer between 1 and 365",
-            )
-
-    # max_training_window_days: int in [1, 365]
-    max_training_window_days = bias_map.get("max_training_window_days")
-    if max_training_window_days is not None:
-        if isinstance(max_training_window_days, bool) or not isinstance(
-            max_training_window_days, int
-        ) or not (1 <= max_training_window_days <= 365):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.max_training_window_days",
-                code="invalid_range",
-                message=f"{base_path}.max_training_window_days must be an integer between 1 and 365",
-            )
-
-    # legacy training_window_days: int in [1, 365]
-    training_window_days = bias_map.get("training_window_days")
-    if training_window_days is not None:
-        if isinstance(training_window_days, bool) or not isinstance(
-            training_window_days, int
-        ) or not (1 <= training_window_days <= 365):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.training_window_days",
-                code="invalid_range",
-                message=f"{base_path}.training_window_days must be an integer between 1 and 365",
-            )
-
-    min_valid_slot_days = bias_map.get("min_valid_slot_days")
-    if min_valid_slot_days is not None:
-        if (
-            isinstance(min_valid_slot_days, bool)
-            or not isinstance(min_valid_slot_days, int)
-            or not (1 <= min_valid_slot_days <= 365)
-        ):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.min_valid_slot_days",
-                code="invalid_range",
-                message=(
-                    f"{base_path}.min_valid_slot_days must be an integer "
-                    "between 1 and 365"
-                ),
+                path=f"{base_path}.{retired_key}",
+                code="retired_config_key",
+                message=f"'{base_path}.{retired_key}' moved to '{new_path}'",
             )
 
     # clamp_min: float in (0, 1]

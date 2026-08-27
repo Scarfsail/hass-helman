@@ -78,8 +78,6 @@ def _valid_config() -> dict:
                 "unmeasured_power_title": "Unmeasured",
                 "forecast": {
                     "total_energy_entity_id": "sensor.house_energy_total",
-                    "min_history_days": 14,
-                    "training_window_days": 56,
                 },
             },
             "solar": {
@@ -122,6 +120,12 @@ def _valid_config() -> dict:
                         {"start": "06:00", "end": "00:00", "price": 3.5},
                     ],
                 },
+            },
+        },
+        "training": {
+            "house_consumption": {
+                "min_history_days": 14,
+                "training_window_days": 56,
             },
         },
         "controllables": [
@@ -933,6 +937,46 @@ class ConfigValidationTests(unittest.TestCase):
                 for issue in report.errors
             )
         )
+
+    def test_the_retired_house_forecast_history_window_keys_are_reported(self) -> None:
+        """min_history_days and training_window_days moved to training.house_consumption.
+
+        Load migrates (see ``_migrate_v13_to_v14`` in automation/migration.py);
+        save refuses these at their old home.
+        """
+        for retired_key in ("min_history_days", "training_window_days"):
+            with self.subTest(retired_key=retired_key):
+                config = _valid_config()
+                config["power_devices"]["house"]["forecast"][retired_key] = 30
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path
+                        == f"power_devices.house.forecast.{retired_key}"
+                        and issue.code == "retired_config_key"
+                        for issue in report.errors
+                    )
+                )
+
+    def test_training_house_consumption_settings_must_be_positive_ints(self) -> None:
+        for key in ("min_history_days", "training_window_days"):
+            with self.subTest(key=key):
+                config = _valid_config()
+                config["training"]["house_consumption"][key] = 0
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path == f"training.house_consumption.{key}"
+                        and issue.code == "invalid_positive_int"
+                        for issue in report.errors
+                    )
+                )
 
     def test_climate_requires_climate_domain(self) -> None:
         config = _valid_config()

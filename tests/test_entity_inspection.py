@@ -453,17 +453,20 @@ def _history_config(
     forecast: dict = {}
     if entity is not None:
         forecast["total_energy_entity_id"] = entity
-    if min_history_days is not None:
-        forecast["min_history_days"] = min_history_days
     solar_forecast: dict = {}
     if solar_entity is not None:
         solar_forecast["total_energy_entity_id"] = solar_entity
-    return {
+    config: dict = {
         "power_devices": {
             "house": {"forecast": forecast},
             "solar": {"forecast": solar_forecast},
         }
     }
+    # min_history_days lives at an absolute path since the v14 relocation --
+    # no longer a sibling of the entity it governs.
+    if min_history_days is not None:
+        config["training"] = {"house_consumption": {"min_history_days": min_history_days}}
+    return config
 
 
 class _HistoryTestCase(unittest.TestCase):
@@ -700,13 +703,13 @@ class TestHistoryDraftVersusSaved(_HistoryTestCase):
         self.assertEqual(_fact(result["saved"], "history")["severity"], "ok")
 
     def test_an_unrelated_day_count_in_the_same_group_changes_nothing(self):
-        # ``training_window_days`` rides in the same group's slot, because it is
-        # the same entity's setting -- but the badge does not consult it, so
-        # editing it must not offer a revert.
+        # ``training_window_days`` rides in the same training group, because
+        # it is the same trainer's setting -- but the badge does not consult
+        # it, so editing it must not offer a revert.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
         draft = _history_config()
-        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        draft["training"] = {"house_consumption": {"training_window_days": 90}}
         [result] = inspect_targets(
             hass,
             draft,
@@ -799,18 +802,19 @@ class TestWhatARevertRestores(_HistoryTestCase):
     """``dependsOn`` names what the reading was made of, and nothing else."""
 
     def test_only_the_setting_the_badge_reads_is_listed(self):
-        # ``training_window_days`` renders inside the same group because it is
-        # the same entity's setting -- but the badge never reads it, so a
-        # revert must not reset it. The group learns that from here.
+        # ``training_window_days`` renders inside the same training group
+        # because it is the same trainer's setting -- but the badge never
+        # reads it, so a revert must not reset it. The group learns that from
+        # here.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         draft = _history_config(min_history_days=30)
-        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        draft["training"]["house_consumption"]["training_window_days"] = 90
         _, inspection = self.inspect_twice(hass, draft, HOUSE_HISTORY_PATH)
         self.assertEqual(
             inspection["dependsOn"],
             [
                 ["power_devices", "house", "forecast", "total_energy_entity_id"],
-                ["power_devices", "house", "forecast", "min_history_days"],
+                ["training", "house_consumption", "min_history_days"],
             ],
         )
 

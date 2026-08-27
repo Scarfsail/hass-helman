@@ -41,19 +41,24 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: noticing rather than a precedence rule worth relying on.
 #:
 #: The history entries carry the *requirement* each entity is judged against --
-#: which setting names it, and what the runtime falls back to when the draft
-#: leaves it blank. That pairing is the registry's business precisely because it
-#: is a statement of meaning: the same group also carries a training window and
-#: a valid-slot minimum in its slot, and those are settings of the entity rather
-#: than requirements on its history, so nothing here consults them.
+#: an absolute path to the setting, and what the runtime falls back to when the
+#: draft leaves it blank. That pairing is the registry's business precisely
+#: because it is a statement of meaning: the same top-level ``training`` group
+#: also carries a training window and (for solar bias) a valid-slot minimum,
+#: and those are settings of the *trainer* rather than requirements on this
+#: one entity's history, so nothing here consults them.
 EVALUATORS: dict[str, Evaluator] = {
     "power_devices.*.entities.power": evaluate_power_entity,
     "power_devices.house.forecast.total_energy_entity_id": history_evaluator(
-        "min_history_days", HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
+        ("training", "house_consumption", "min_history_days"),
+        HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "power_devices.solar.forecast.bias_correction.total_energy_entity_id": (
-        history_evaluator("min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS)
+        history_evaluator(
+            ("training", "solar_bias", "min_history_days"),
+            SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+        )
     ),
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }

@@ -78,42 +78,46 @@ def reset_history_cache() -> None:
 
 
 def history_evaluator(
-    required_days_key: str | None = None,
+    required_days_path: tuple[str, ...] | None = None,
     default_required_days: int | None = None,
 ) -> Evaluator:
     """An evaluator for one entity whose worth depends on its recorder history.
 
-    ``required_days_key`` names the setting -- a sibling of the entity in the
-    document, the same way a polarity is -- that says how much history this
-    entity is expected to have. ``default_required_days`` is what the runtime
-    uses when that setting is absent, so an untouched draft is judged against
-    the threshold that will actually apply rather than against nothing.
+    ``required_days_path`` is the absolute document path to the setting that
+    says how much history this entity is expected to have. It used to be a key
+    resolved as a sibling of the entity, back when every requirement lived in
+    the same group as the entity it governed; the v14 relocation moved the
+    settings to a top-level ``training`` section, so the registry now names
+    where they live instead of leaving this module to infer it.
+    ``default_required_days`` is what the runtime uses when that setting is
+    absent, so an untouched draft is judged against the threshold that will
+    actually apply rather than against nothing.
 
     Both ``None`` for a path where no amount of history is required: the badge
     then simply states what there is.
     """
 
     def evaluate(request: InspectionRequest) -> Inspection:
-        return _evaluate(request, required_days_key, default_required_days)
+        return _evaluate(request, required_days_path, default_required_days)
 
     return evaluate
 
 
 def _evaluate(
     request: InspectionRequest,
-    required_days_key: str | None,
+    required_days_path: tuple[str, ...] | None,
     default_required_days: int | None,
 ) -> Inspection:
-    required = _required_days(request, required_days_key, default_required_days)
+    required = _required_days(request, required_days_path, default_required_days)
     # Only the setting the badge is actually judged against is listed here. The
-    # training window and the valid-slot minimum ride in the same group's slot,
-    # but nothing below reads them -- so they must neither move the
+    # training window and the valid-slot minimum live in the same training
+    # group, but nothing below reads them -- so they must neither move the
     # draft-versus-saved comparison nor be reset by a revert.
     consulted: tuple[tuple[tuple[Any, ...], Any], ...] = (
         (request.path, request.target_value()),
     )
-    if required_days_key is not None:
-        consulted += (((*request.path[:-1], required_days_key), required),)
+    if required_days_path is not None:
+        consulted += ((tuple(required_days_path), required),)
 
     entity_id = request.entity_id()
     if entity_id is None:
@@ -161,7 +165,7 @@ def _history_fact(available: int, required: int | None) -> Fact:
 
 def _required_days(
     request: InspectionRequest,
-    required_days_key: str | None,
+    required_days_path: tuple[str, ...] | None,
     default_required_days: int | None,
 ) -> int | None:
     """The threshold this entity is judged against, read from the draft.
@@ -171,9 +175,9 @@ def _required_days(
     would itself apply, because a half-typed number must not make the badge
     change its mind about what is being asked for.
     """
-    if required_days_key is None:
+    if required_days_path is None:
         return None
-    raw = request.value(*request.path[:-1], required_days_key)
+    raw = request.value(*required_days_path)
     if isinstance(raw, bool):
         return default_required_days
     if isinstance(raw, int) and raw > 0:

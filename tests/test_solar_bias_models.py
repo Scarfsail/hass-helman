@@ -59,18 +59,22 @@ def test_read_nested_config():
                 "forecast": {
                     "bias_correction": {
                         "enabled": False,
-                        "min_history_days": 5,
-                        "max_training_window_days": 45,
                         "training_time": "04:00",
                         "clamp_min": 0.5,
                         "clamp_max": 1.5,
-                        "min_valid_slot_days": 7,
                     },
                     "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
                     "total_energy_entity_id": "sensor.total",
                 }
             }
-        }
+        },
+        "training": {
+            "solar_bias": {
+                "min_history_days": 5,
+                "max_training_window_days": 45,
+                "min_valid_slot_days": 7,
+            }
+        },
     }
 
     bias = read_bias_config(config)
@@ -124,18 +128,13 @@ def test_the_retired_bias_training_time_still_wins_when_present():
     assert bias.training_time == "04:00"
 
 
-def test_legacy_training_window_days_is_still_accepted_as_fallback():
-    config = {
-        "power_devices": {
-            "solar": {
-                "forecast": {
-                    "bias_correction": {
-                        "training_window_days": 30,
-                    },
-                }
-            }
-        }
-    }
+def test_max_training_window_days_is_read_from_the_training_section():
+    # The legacy `training_window_days` alias was retired as a *read* concern
+    # by the v14 relocation: it is collapsed into `max_training_window_days`
+    # by `_migrate_v13_to_v14` on load, so read_bias_config never sees it --
+    # see tests/test_automation_migration.py::TrainingSectionRelocationTests
+    # for the alias-collapsing behaviour itself.
+    config = {"training": {"solar_bias": {"max_training_window_days": 30}}}
 
     bias = read_bias_config(config)
 
