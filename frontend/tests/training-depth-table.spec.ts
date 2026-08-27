@@ -314,6 +314,86 @@ test("no column repeats a value that is the same for every row", async ({ page }
     ]);
 });
 
+test("clicking an entity asks Home Assistant for its more-info dialog", async ({
+    page,
+}) => {
+    await mountEditor(page);
+    await waitForRows(page, 6);
+
+    const detail = await page.evaluate(async () => {
+        const panel = document.querySelector("helman-config-editor-panel")!;
+        const seen: unknown[] = [];
+        // `hass-more-info` is composed, so it leaves the panel's shadow root
+        // and reaches HA's dialog manager -- listening on document proves it
+        // escapes rather than dying at the boundary.
+        document.addEventListener("hass-more-info", (event) => {
+            seen.push((event as CustomEvent).detail);
+        });
+        const button = panel.shadowRoot!.querySelector(
+            ".training-depth-entity-button",
+        ) as HTMLButtonElement;
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return seen[0] ?? null;
+    });
+
+    expect(detail).toEqual({ entityId: "sensor.house_energy" });
+});
+
+test("a row with no entity configured is not clickable", async ({ page }) => {
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    delete config.power_devices.battery.entities.capacity;
+
+    await mountEditor(page, config);
+    await waitForRows(page, 6);
+
+    const buttonCount = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return root?.querySelectorAll(".training-depth-entity-button").length ?? -1;
+    });
+
+    // Five of the six rows have an entity; the unset one renders plain text.
+    expect(buttonCount).toBe(5);
+});
+
+test("the entity column keeps its width on a wide screen", async ({ page }) => {
+    // The prose column used to be declared width:100%, which starved the
+    // entity column down to a few characters and broke every id across four
+    // lines while the prose sat in whitespace.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await mountEditor(page);
+    await waitForRows(page, 6);
+
+    const widths = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const row = root!.querySelector(".training-depth-table tbody tr")!;
+        return Array.from(row.querySelectorAll("td")).map(
+            (cell) => (cell as HTMLElement).getBoundingClientRect().width,
+        );
+    });
+
+    // Wide enough for a typical entity id on one or two lines, not four.
+    expect(widths[0]).toBeGreaterThan(180);
+    // And the prose still gets the largest share.
+    expect(widths[1]).toBeGreaterThan(widths[0]);
+});
+
+test("the table fits a narrow viewport instead of scrolling sideways", async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
+    await mountEditor(page);
+    await waitForRows(page, 6);
+
+    const overflow = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const wrap = root?.querySelector(".training-depth-table-wrap") as HTMLElement;
+        return { scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth };
+    });
+
+    // The role column wraps rather than holding one line, so the table is
+    // taller on a narrow screen instead of wider than its container.
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+});
+
 test("a controllable the house trainer skips gets no row", async ({ page }) => {
     // `read_deferrable_consumers` refuses the inverter and honours
     // `deferrable: false`, so neither meter is read by the house window -- and

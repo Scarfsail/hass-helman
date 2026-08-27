@@ -652,8 +652,20 @@ export class HelmanConfigEditorPanel
     .training-depth-table td {
       padding: 6px 10px;
       text-align: left;
-      white-space: nowrap;
+      vertical-align: top;
       border-bottom: 1px solid var(--divider-color);
+    }
+
+    /* Only the digits hold a line. Everything else -- the prose, the entity
+       ids, and these columns' own two-word headings -- wraps, so a narrow
+       screen makes the table taller instead of pushing it sideways. */
+    .training-depth-table th.training-depth-number,
+    .training-depth-table td.training-depth-number {
+      text-align: right;
+    }
+
+    .training-depth-table td.training-depth-number {
+      white-space: nowrap;
     }
 
     .training-depth-table th {
@@ -668,17 +680,56 @@ export class HelmanConfigEditorPanel
     .training-depth-entity-id {
       color: var(--secondary-text-color);
       font-size: 0.82rem;
+      /* Entity ids are long and have no spaces to break at. */
+      overflow-wrap: anywhere;
+    }
+
+    /* The name and id, as one target for HA's more-info dialog. A button so
+       it is reachable by keyboard and announced as an action; styled back
+       down to the plain two-line cell it replaces. */
+    .training-depth-entity-button {
+      display: block;
+      width: 100%;
+      padding: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    /* The id is as much the target as the name -- it is the part a reader
+       recognises -- so both take the hover treatment, not just the heading. */
+    .training-depth-entity-button:hover .training-depth-label,
+    .training-depth-entity-button:hover .training-depth-entity-id,
+    .training-depth-entity-button:focus-visible .training-depth-label,
+    .training-depth-entity-button:focus-visible .training-depth-entity-id {
+      color: var(--primary-color);
+      text-decoration: underline;
+    }
+
+    .training-depth-entity-button:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
     }
 
     .training-depth-unset {
       font-style: italic;
     }
 
-    /* The one column that is prose. Every other cell is a short number or a
-       name and stays on one line; this one has to wrap, and needs room to. */
+    /* Entity names and ids. A share of the table rather than a width in ch,
+       because the overflow-wrap: anywhere below drops the column's intrinsic
+       width to a single character -- auto layout would otherwise hand the
+       whole table to the prose column and break every id across four lines. */
+    .training-depth-table td:first-child,
+    .training-depth-table th:first-child {
+      width: 26%;
+    }
+
+    /* The one column that is prose: it takes what the rest leaves and wraps
+       inside it, so the table never needs horizontal scrolling. */
     .training-depth-role {
-      white-space: normal;
-      min-width: 22ch;
       color: var(--secondary-text-color);
     }
 
@@ -2290,8 +2341,12 @@ export class HelmanConfigEditorPanel
             <tr>
               <th>${this._t("editor.training_depth.column_entity")}</th>
               <th>${this._t("editor.training_depth.column_role")}</th>
-              <th>${this._t("editor.training_depth.column_raw_states")}</th>
-              <th>${this._t("editor.training_depth.column_statistics")}</th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_raw_states")}
+              </th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_statistics")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -2310,23 +2365,61 @@ export class HelmanConfigEditorPanel
     );
     const rawStates = historyFact?.params?.["available"];
     const statistics = historyFact?.params?.["statistics"];
+    const name = html`<div class="training-depth-label">${row.label}</div>`;
+    const warnClass =
+      historyFact?.severity === "warn"
+        ? "training-depth-number training-depth-warn"
+        : "training-depth-number";
     return html`
       <tr>
         <td>
-          <div class="training-depth-label">${row.label}</div>
           ${entityId
-            ? html`<div class="training-depth-entity-id">${entityId}</div>`
-            : html`<div class="training-depth-entity-id training-depth-unset">
-                ${this._t("editor.training_depth.no_entity")}
-              </div>`}
+            ? html`<button
+                type="button"
+                class="training-depth-entity-button"
+                aria-label=${this._moreInfoLabel(entityId)}
+                title=${entityId}
+                @click=${() => this._showMoreInfo(entityId)}
+              >
+                ${name}
+                <div class="training-depth-entity-id">${entityId}</div>
+              </button>`
+            : html`${name}
+                <div class="training-depth-entity-id training-depth-unset">
+                  ${this._t("editor.training_depth.no_entity")}
+                </div>`}
         </td>
         <td class="training-depth-role">${this._t(row.roleKey)}</td>
-        <td class=${historyFact?.severity === "warn" ? "training-depth-warn" : ""}>
-          ${this._trainingDepthCell(rawStates)}
-        </td>
-        <td>${this._trainingDepthCell(statistics)}</td>
+        <td class=${warnClass}>${this._trainingDepthCell(rawStates)}</td>
+        <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
       </tr>
     `;
+  }
+
+  /**
+   * Ask Home Assistant for its more-info dialog.
+   *
+   * `hass-more-info` is HA's own protocol, and its dialog manager listens on
+   * the root `home-assistant` element several shadow roots above this one --
+   * hence `composed`, without which the event stops at this panel's boundary.
+   * Same contract `entity-group.ts` uses for the badge that opens an entity.
+   */
+  private _showMoreInfo(entityId: string): void {
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** "Show details of sensor.x", with the id substituted if the string asks. */
+  private _moreInfoLabel(entityId: string): string {
+    const template = this._t("editor.entity_group.more_info_aria");
+    return template.includes("{entity}")
+      ? template.replace("{entity}", entityId)
+      : `${template} ${entityId}`;
   }
 
   /** A measured cell: the number, or a dash while it is unknown. */
