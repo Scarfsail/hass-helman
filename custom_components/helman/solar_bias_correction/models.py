@@ -607,7 +607,12 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     # The three day-count settings live under ``training.solar_bias`` since the
     # v14 relocation -- read on load, so what arrives here has already been
     # migrated; no legacy alias handling is needed at this layer.
-    solar_bias_training = config.get("training", {}).get("solar_bias", {}) or {}
+    raw_training = config.get("training")
+    training = raw_training if isinstance(raw_training, dict) else {}
+    raw_solar_bias_training = training.get("solar_bias")
+    solar_bias_training = (
+        raw_solar_bias_training if isinstance(raw_solar_bias_training, dict) else {}
+    )
 
     enabled = bias.get("enabled", SOLAR_BIAS_DEFAULT_ENABLED)
     min_history_days = solar_bias_training.get(

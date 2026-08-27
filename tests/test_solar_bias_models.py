@@ -141,6 +141,32 @@ def test_max_training_window_days_is_read_from_the_training_section():
     assert bias.max_training_window_days == 30
 
 
+def test_a_non_mapping_training_section_falls_back_to_the_defaults():
+    import custom_components.helman.const as const
+
+    # `training:` typed bare in the whole-document YAML scope validates clean
+    # (`_validate_training_config` returns early on None), and read_bias_config
+    # runs unguarded from `HelmanCoordinator.async_setup` -- so a null or
+    # scalar section must not take the whole integration down with it.
+    for raw_training in (None, "nonsense", []):
+        bias = read_bias_config({"training": raw_training})
+
+        assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        assert (
+            bias.max_training_window_days
+            == const.SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+        )
+        assert bias.min_valid_slot_days == const.SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+
+
+def test_a_non_mapping_solar_bias_subsection_falls_back_to_the_defaults():
+    import custom_components.helman.const as const
+
+    bias = read_bias_config({"training": {"solar_bias": None}})
+
+    assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+
+
 def test_slot_invalidation_fields_default_when_absent():
     config = {
         "power_devices": {

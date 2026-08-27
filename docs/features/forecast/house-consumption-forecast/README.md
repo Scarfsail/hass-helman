@@ -24,8 +24,11 @@ power_devices:
       today_energy: sensor.house_energy_today
     forecast:
       total_energy_entity_id: sensor.house_energy_total
-      min_history_days: 14
-      training_window_days: 56
+
+training:
+  house_consumption:
+    min_history_days: 14
+    training_window_days: 56
 
 controllables:
   - id: ev
@@ -45,8 +48,8 @@ controllables:
 ### Config fields
 
 - `power_devices.house.forecast.total_energy_entity_id` — Required. Statistics-friendly cumulative energy entity used as the total forecast source.
-- `power_devices.house.forecast.min_history_days` — Optional. Minimum Recorder history span required before the forecast becomes available. Default: `14`.
-- `power_devices.house.forecast.training_window_days` — Optional. Hourly Recorder/statistics lookback window used to build the model. Default: `56`.
+- `training.house_consumption.min_history_days` — Optional. Minimum Recorder history span required before the forecast becomes available. Default: `14`. Lived at `power_devices.house.forecast.min_history_days` before the v14 relocation; the old path is refused on save.
+- `training.house_consumption.training_window_days` — Optional. Hourly Recorder/statistics lookback window used to build the model. Default: `56`. Lived at `power_devices.house.forecast.training_window_days` before the v14 relocation; the old path is refused on save.
 
 The deferrable consumers — the separately forecast flexible loads — are not configured here. They are
 derived from `controllables` by `read_deferrable_consumers`: every non-inverter entry whose

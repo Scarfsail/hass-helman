@@ -31,8 +31,6 @@ export interface GridDeviceConfig extends PowerDeviceConfigBase {
 
 export interface HouseForecastConfig {
     total_energy_entity_id: string;
-    min_history_days?: number;
-    training_window_days?: number;
 }
 
 export interface HouseDeviceConfig extends PowerDeviceConfigBase {
