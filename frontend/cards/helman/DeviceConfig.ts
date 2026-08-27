@@ -17,7 +17,6 @@ export interface SolarDeviceConfig extends PowerDeviceConfigBase {
     entities:{
         power: string;
         today_energy?: string;
-        remaining_today_energy_forecast?: string;
     }
     forecast?: SolarForecastConfig;
 }

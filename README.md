@@ -112,8 +112,9 @@ Common optional fields (house tree disambiguation):
 - `power_devices.battery`: `entities.power`, `entities.capacity` (% SoC), `entities.min_soc`,
   `entities.max_soc`, `entities.remaining_energy` (Wh). When enough fields are present and current
   power is significant, the card shows target SoC, ETA time, and wall clock time.
-- `power_devices.solar`: `entities.power`, `entities.today_energy`,
-  `entities.remaining_today_energy_forecast`.
+- `power_devices.solar`: `entities.power`, `entities.today_energy`. The "remaining today" figure
+  next to it on the card is Helman's own bias-corrected
+  `sensor.helman_energy_production_today_remaining` and is not configurable.
 
 All energy sensors auto-detect units from `unit_of_measurement` (Wh, kWh, MWh, GWh supported).
 

@@ -80,7 +80,6 @@ const CONFIG = {
             entities: {
                 power: "sensor.solar_power",
                 today_energy: "sensor.solar_today_energy",
-                remaining_today_energy_forecast: "sensor.solar_remaining_today",
             },
             forecast: {
                 total_energy_entity_id: "sensor.solar_energy",
@@ -155,10 +154,9 @@ const CONFIG = {
     ],
 };
 
-/** The four the user pointed at: loose fields beside a bordered sensor. */
+/** The ones the user pointed at: loose fields beside a bordered sensor. */
 const CIRCLED_KEYS = [
     "power_devices.solar.entities.today_energy",
-    "power_devices.solar.entities.remaining_today_energy_forecast",
     "power_devices.battery.entities.remaining_energy",
     "power_devices.battery.entities.capacity",
 ];

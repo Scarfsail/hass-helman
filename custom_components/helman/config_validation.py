@@ -336,12 +336,6 @@ def _validate_solar_config(
                 "power_devices.solar.entities.today_energy",
                 entity_map.get("today_energy"),
             )
-            _validate_optional_entity_id(
-                report,
-                section,
-                "power_devices.solar.entities.remaining_today_energy_forecast",
-                entity_map.get("remaining_today_energy_forecast"),
-            )
 
     forecast = solar.get("forecast")
     if forecast is None:

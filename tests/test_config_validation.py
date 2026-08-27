@@ -86,7 +86,6 @@ def _valid_config() -> dict:
                 "entities": {
                     "power": "sensor.solar_power",
                     "today_energy": "sensor.solar_today",
-                    "remaining_today_energy_forecast": "sensor.solar_remaining",
                 },
                 "forecast": {
                     "daily_energy_entity_ids": [

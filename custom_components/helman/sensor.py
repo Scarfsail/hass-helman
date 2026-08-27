@@ -8,7 +8,12 @@ from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
+from .const import (
+    DOMAIN,
+    GRID_EXPORT_PRICE_ENTITY_ID,
+    GRID_IMPORT_PRICE_ENTITY_ID,
+    SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
+)
 
 _HYSTERESIS_W: float = 5.0
 _HYSTERESIS_MAX_GAP_S: float = 30.0
@@ -370,7 +375,7 @@ class HelmanSolarForecastRemainingSensor(SensorEntity):
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         self._coordinator = coordinator
-        self.entity_id = "sensor.helman_energy_production_today_remaining"
+        self.entity_id = SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID
         self._attr_unique_id = f"{entry.entry_id}_energy_production_today_remaining"
         self._attr_translation_key = "energy_production_today_remaining"
 

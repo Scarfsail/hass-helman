@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+from .const import (
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
+)
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import query_slot_energy_changes
 from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
@@ -82,9 +85,6 @@ class HelmanForecastBuilder:
                 len(daily_entity_ids),
             )
 
-        remaining_today_entity_id = self._read_entity_id(
-            self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
-        )
         actual_history = await self._build_solar_actual_history(
             reference_time,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -93,7 +93,7 @@ class HelmanForecastBuilder:
         return {
             "status": status,
             "unit": unit,
-            "remainingTodayEnergyEntityId": remaining_today_entity_id,
+            "remainingTodayEnergyEntityId": SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
             "actualHistory": actual_history,
             "points": points,
         }

@@ -1170,5 +1170,58 @@ class ExportEnabledEntityRetirementTests(unittest.TestCase):
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
 
 
+class SolarRemainingTodayForecastRetirementTests(unittest.TestCase):
+    """v12 -> v13: the "remaining today" entity is Helman's own, so the key goes."""
+
+    @staticmethod
+    def _migrate_from_v12(entities):
+        document = {
+            **_document(),
+            "config_version": 12,
+            "power_devices": {
+                "solar": {
+                    "entities": entities,
+                    "forecast": {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
+                }
+            },
+        }
+        migrated, _ids = migrate_config_document(document)
+        return migrated["power_devices"]["solar"]
+
+    def test_the_retired_key_is_dropped(self) -> None:
+        solar = self._migrate_from_v12(
+            {
+                "power": "sensor.solar_power",
+                "remaining_today_energy_forecast": (
+                    "sensor.helman_energy_production_today_remaining"
+                ),
+            }
+        )
+
+        self.assertEqual(solar["entities"], {"power": "sensor.solar_power"})
+
+    def test_a_value_pointing_elsewhere_is_dropped_just_the_same(self) -> None:
+        solar = self._migrate_from_v12(
+            {
+                "power": "sensor.solar_power",
+                "today_energy": "sensor.solar_today",
+                "remaining_today_energy_forecast": "sensor.somebody_elses_guess",
+            }
+        )
+
+        self.assertEqual(
+            solar["entities"],
+            {"power": "sensor.solar_power", "today_energy": "sensor.solar_today"},
+        )
+        self.assertEqual(solar["forecast"]["daily_energy_entity_ids"], ["sensor.solar_day_0"])
+
+    def test_a_document_without_the_key_survives(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {**_document(), "config_version": 12}
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+
+
 if __name__ == "__main__":
     unittest.main()

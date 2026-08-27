@@ -8,6 +8,10 @@ import { sharedStyles } from "./shared-styles";
 import { convertToKWh, getDisplayEnergyUnit } from "./energy-unit-converter";
 import "../schedule-badge";
 
+/** Helman's own bias-corrected "still to come today" sensor. Not configurable:
+ *  it is the integration's own output, published under a fixed entity id. */
+const SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_energy_production_today_remaining";
+
 @customElement("power-device-info")
 export class PowerDeviceInfo extends LitElement {
     @property({ attribute: false }) device!: DeviceNode;
@@ -117,9 +121,8 @@ export class PowerDeviceInfo extends LitElement {
         if (batteryConfig.entities.capacity)
             return this._renderBatteryInfo(device, batteryConfig)
 
-        const solarConfig = device.deviceConfig as SolarDeviceConfig;
-        if (solarConfig.entities.remaining_today_energy_forecast)
-            return this._renderSolarInfo(device, solarConfig)
+        if (device.sourceType === "solar")
+            return this._renderSolarInfo(device, device.deviceConfig as SolarDeviceConfig)
 
         const gridConfig = device.deviceConfig as GridDeviceConfig;
         if (gridConfig.entities.today_export || gridConfig.entities.today_import)
@@ -167,11 +170,11 @@ export class PowerDeviceInfo extends LitElement {
     }
 
     private _renderSolarInfo(device: DeviceNode, solarConfig: SolarDeviceConfig): TemplateResult | typeof nothing {
-        if (!solarConfig.entities.today_energy || !solarConfig.entities.remaining_today_energy_forecast) {
+        if (!solarConfig.entities.today_energy) {
             return nothing;
         }
         const todayEnergyState = this.hass.states[solarConfig.entities.today_energy];
-        const forecastEnergyState = this.hass.states[solarConfig.entities.remaining_today_energy_forecast];
+        const forecastEnergyState = this.hass.states[SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID];
 
         if (!todayEnergyState || !forecastEnergyState) {
             return nothing;
@@ -193,7 +196,7 @@ export class PowerDeviceInfo extends LitElement {
 
         return html`
             <span class="clickable" @click=${() => this._showMoreInfo(solarConfig.entities.today_energy!)}>⚡${todayDisplay.value.toFixed(1)} <span class="units">${todayDisplay.unit}</span></span>
-            <span class="clickable" @click=${() => this._showMoreInfo(solarConfig.entities.remaining_today_energy_forecast!)}>✨${forecastDisplay.value.toFixed(1)} <span class="units">${forecastDisplay.unit}</span></span>
+            <span class="clickable" @click=${() => this._showMoreInfo(SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID)}>✨${forecastDisplay.value.toFixed(1)} <span class="units">${forecastDisplay.unit}</span></span>
         `;
     }
 

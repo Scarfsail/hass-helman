@@ -234,9 +234,6 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                     "forecast": {
                         "daily_energy_entity_ids": ["sensor.solar_forecast_day_0"],
                     },
-                    "entities": {
-                        "remaining_today_energy_forecast": "sensor.remaining_today_energy",
-                    },
                 }
             }
         }
@@ -262,6 +259,10 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             payload = await builder._build_solar_forecast(REFERENCE_TIME)
 
         self.assertEqual(payload["status"], "available")
+        self.assertEqual(
+            payload["remainingTodayEnergyEntityId"],
+            "sensor.helman_energy_production_today_remaining",
+        )
         self.assertEqual(payload["actualHistory"], [{"timestamp": "history"}])
         actual_history_mock.assert_awaited_once_with(
             REFERENCE_TIME,
