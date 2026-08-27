@@ -54,11 +54,12 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: and those are settings of the *trainer* rather than requirements on this
 #: one entity's history, so nothing here consults them.
 #:
-#: Three entries below exist purely to say *who reads this entity's history*
+#: Four entries below exist purely to say *who reads this entity's history*
 #: (issue #172): the grid meter and the battery capacity sensor feed solar-bias
-#: curtailment detection, and a controllable's own energy meter feeds the
-#: house-consumption trainer alongside the house meter itself. None of the
-#: three governs its own requirement -- they are judged against the same
+#: curtailment detection, the first daily-forecast entity supplies the forecast
+#: side of that same comparison, and a controllable's own energy meter feeds
+#: the house-consumption trainer alongside the house meter itself. None of the
+#: four governs its own requirement -- they are judged against the same
 #: ``training.*`` path the entity that already carried the badge is.
 #:
 #: The controllable meter is the one whose matches are not all governed. The
@@ -111,6 +112,16 @@ EVALUATORS: dict[str, Evaluator] = {
             ("training", "solar_bias", "min_history_days"),
             SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
         )
+    ),
+    # Index 0 only, and declared ahead of the wildcard for that reason. The
+    # bias trainer compares actuals against the forecast *as it was published*,
+    # which it recovers from this entity's recorded ``wh_period_15m`` attribute
+    # at each past midnight (``forecast_history.py:275``) -- and
+    # ``load_trainer_samples`` reads ``daily_energy_entity_ids[0]`` alone, so
+    # the rest of the list is no more governed by the window than before.
+    "power_devices.solar.forecast.daily_energy_entity_ids.0": history_evaluator(
+        ("training", "solar_bias", "min_history_days"),
+        SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }

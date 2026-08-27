@@ -93,7 +93,7 @@
       "training_solar_bias": "Následující nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou se korekce přeskočí; maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá.",
       "training_solar_bias_min_valid_slot_days": "Třetí nastavení je podmínkou pro každý slot zvlášť, ne pro celé sestavení. Den je rozkrájen na 15minutové sloty a každý se koriguje z vlastních podkladů: při výchozí hodnotě 5 se slot 09:15 koriguje až tehdy, když alespoň 5 dní v okně mělo v 09:15 použitelná data. Dny s nulovou prognózou nebo s oříznutou výrobou se nepočítají -- proto se noční sloty nikdy nekorigují. Protože posuzuje každý slot zvlášť, a ne historii konkrétní entity, neodpovídá mu žádný řádek v tabulce níže.",
       "training_house_consumption_what": "Helman se učí, kolik domácnost spotřebuje v kterou denní dobu, aby plánovač věděl, kolik dům odebere zítra ve 14:00, aniž byste mu to museli říct. Tuto spotřebu zároveň dělí na dvě části: základní spotřebu, která běží pořád, a spotřebu ovládaných spotřebičů, kterou lze v čase přesouvat. Kvůli tomuto rozdělení se zde vedle měřiče domácnosti čte i vlastní měřič energie každého ovládaného spotřebiče -- každý se od celkové spotřeby domu odečte a to, co zbude, je základní spotřeba.",
-      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná."
+      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce níže -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná."
     },
     "empty": {
       "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
@@ -126,7 +126,9 @@
       "role_controllable": "Odečítá se od celkové spotřeby domu, aby zbyla základní spotřeba -- a aby byl známý vlastní podíl tohoto spotřebiče.",
       "role_bias_meter": "Skutečná výroba, slot po slotu porovnávaná s prognózou, aby se změřilo, jak moc se lišila.",
       "role_grid_power": "Rozpozná sloty, kdy se nic neexportovalo; spolu s plnou baterií to znamená, že výroba byla oříznutá, ne nízká.",
-      "role_battery_soc": "Rozpozná plnou baterii, druhou polovinu rozpoznání oříznutého slotu."
+      "role_battery_soc": "Rozpozná plnou baterii, druhou polovinu rozpoznání oříznutého slotu.",
+      "forecast_source": "Zveřejněná solární prognóza",
+      "role_forecast_source": "Prognostická strana porovnání: predikce po slotech tak, jak byla zveřejněna o půlnoci, načtená ze zaznamenaných atributů entity. Ty jsou jen v podrobných datech, ve statistikách nikdy."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",

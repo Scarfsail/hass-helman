@@ -413,6 +413,13 @@ DAILY_HISTORY_PATH = (
 GRID_POWER_HISTORY_PATH = ("power_devices", "grid", "entities", "power")
 BATTERY_CAPACITY_HISTORY_PATH = ("power_devices", "battery", "entities", "capacity")
 CONTROLLABLE_ENERGY_HISTORY_PATH = ("controllables", 0, "consumption", "energy_entity_id")
+FORECAST_SOURCE_HISTORY_PATH = (
+    "power_devices",
+    "solar",
+    "forecast",
+    "daily_energy_entity_ids",
+    0,
+)
 
 HOUSE_METER = "sensor.house_energy"
 
@@ -761,6 +768,49 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             ["training", "house_consumption", "min_history_days"],
             inspection["dependsOn"],
         )
+
+    def test_the_first_daily_forecast_entity_is_judged_against_solar_bias(self):
+        # The forecast side of the comparison: `load_trainer_samples` recovers
+        # the published per-slot prediction from this entity's recorded
+        # attributes, so its history is as much a requirement as the actual
+        # production meter's.
+        hass = _ProbingHass({"sensor.solcast_today": _State("18.2", unit="kWh")})
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {"daily_energy_entity_ids": ["sensor.solcast_today"]}
+                }
+            }
+        }
+        _, inspection = self.inspect_twice(hass, config, FORECAST_SOURCE_HISTORY_PATH)
+
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        )
+
+    def test_the_later_daily_forecast_entities_carry_no_requirement(self):
+        # Only index 0 is read for training; the rest keep the plain depth
+        # badge the wildcard already gave them.
+        hass = _ProbingHass({"sensor.solcast_tomorrow": _State("14.0", unit="kWh")})
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": [
+                            "sensor.solcast_today",
+                            "sensor.solcast_tomorrow",
+                        ]
+                    }
+                }
+            }
+        }
+        path = FORECAST_SOURCE_HISTORY_PATH[:-1] + (1,)
+        _, inspection = self.inspect_twice(hass, config, path)
+
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertNotIn("required", fact["params"])
 
     def test_a_meter_opted_out_of_deferral_is_measured_but_not_judged(self):
         # `consumption.deferrable: false` meters a load for its own projection

@@ -23,18 +23,27 @@ const BIAS_PATH = ["power_devices", "solar", "forecast", "bias_correction", "tot
 const GRID_PATH = ["power_devices", "grid", "entities", "power"];
 const BATTERY_PATH = ["power_devices", "battery", "entities", "capacity"];
 const CONTROLLABLE_PATH = ["controllables", 0, "consumption", "energy_entity_id"];
+const FORECAST_SOURCE_PATH = [
+    "power_devices",
+    "solar",
+    "forecast",
+    "daily_energy_entity_ids",
+    0,
+];
 
 const HOUSE_KEY = HOUSE_PATH.join(".");
 const BIAS_KEY = BIAS_PATH.join(".");
 const GRID_KEY = GRID_PATH.join(".");
 const BATTERY_KEY = BATTERY_PATH.join(".");
 const CONTROLLABLE_KEY = CONTROLLABLE_PATH.join(".");
+const FORECAST_SOURCE_KEY = FORECAST_SOURCE_PATH.join(".");
 
 /** Which window governs which entity, mirroring `EVALUATORS` in the registry. */
 const REQUIRED_BY_KEY: Record<string, number> = {
     [HOUSE_KEY]: 14,
     [CONTROLLABLE_KEY]: 14,
     [BIAS_KEY]: 10,
+    [FORECAST_SOURCE_KEY]: 10,
     [GRID_KEY]: 10,
     [BATTERY_KEY]: 10,
 };
@@ -45,6 +54,7 @@ const CONFIG = {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
         solar: {
             forecast: {
+                daily_energy_entity_ids: ["sensor.solcast_today"],
                 bias_correction: { total_energy_entity_id: "sensor.solar_bias_meter" },
             },
         },
@@ -74,6 +84,9 @@ const DEPTHS: Record<string, { available: number; statistics: number }> = {
     [GRID_KEY]: { available: 15, statistics: 15 },
     [BATTERY_KEY]: { available: 25, statistics: 999 },
     [CONTROLLABLE_KEY]: { available: 33, statistics: 33 },
+    // Attribute history lives only in recorder states, so a deep statistics
+    // number here is exactly the reassurance the role text warns against.
+    [FORECAST_SOURCE_KEY]: { available: 12, statistics: 730 },
 };
 
 async function mountEditor(page: Page, configOverride?: unknown): Promise<void> {
@@ -186,24 +199,32 @@ async function waitForRows(page: Page, minRows: number): Promise<string[][][]> {
 
 test("every governed entity in #172's table gets a row, fed by the shared poll", async ({ page }) => {
     await mountEditor(page);
-    // House meter + one controllable, then bias meter + grid + battery.
-    const tables = await waitForRows(page, 5);
+    // House meter + one controllable, then the two sides of the solar
+    // comparison plus grid and battery.
+    const tables = await waitForRows(page, 6);
 
     const allRows = tables.flat();
     // Five rows, five entities -- one target sent, one row rendered, no more
     // and no fewer.
-    expect(allRows.length).toBe(5);
+    expect(allRows.length).toBe(6);
 
     const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
     const requestedKeys = request.targets.map((target: any) => target.key).sort();
     expect(requestedKeys).toEqual(
-        [HOUSE_KEY, BIAS_KEY, GRID_KEY, BATTERY_KEY, CONTROLLABLE_KEY].sort(),
+        [
+            HOUSE_KEY,
+            BIAS_KEY,
+            FORECAST_SOURCE_KEY,
+            GRID_KEY,
+            BATTERY_KEY,
+            CONTROLLABLE_KEY,
+        ].sort(),
     );
 });
 
 test("the numbers in each row match what inspect_entities answered for it", async ({ page }) => {
     await mountEditor(page);
-    const tables = await waitForRows(page, 5);
+    const tables = await waitForRows(page, 6);
     const allRows = tables.flat();
 
     // Four columns: the entity, what the trainer takes from it, and the two
@@ -229,13 +250,33 @@ test("the numbers in each row match what inspect_entities answered for it", asyn
     const batteryRow = allRows.find((row) => row[0].includes("sensor.battery_capacity"));
     expect(batteryRow).toBeDefined();
     expect(batteryRow!.slice(2)).toEqual(["25", "999"]);
+
+    const forecastRow = allRows.find((row) => row[0].includes("sensor.solcast_today"));
+    expect(forecastRow).toBeDefined();
+    expect(forecastRow!.slice(2)).toEqual(["12", "730"]);
+});
+
+test("the forecast the actuals are compared against has a row of its own", async ({
+    page,
+}) => {
+    // Without it the section showed only the actual production and left a
+    // reader asking what it was measured against.
+    await mountEditor(page);
+    const allRows = (await waitForRows(page, 6)).flat();
+
+    const forecastRow = allRows.find((row) => row[0].includes("sensor.solcast_today"));
+    expect(forecastRow).toBeDefined();
+    // Its attributes are what the trainer reads, and attributes never reach
+    // long-term statistics -- the role has to say so, because the statistics
+    // column will happily show a deep and irrelevant number.
+    expect(forecastRow![1]).toContain("statistics");
 });
 
 test("each row says what the trainer takes from that entity", async ({ page }) => {
     // The column the page exists for: a reader who cannot tell why the grid
     // meter is listed under a *solar* trainer gets the answer in the row.
     await mountEditor(page);
-    const allRows = (await waitForRows(page, 5)).flat();
+    const allRows = (await waitForRows(page, 6)).flat();
 
     const roleOf = (entityId: string) =>
         allRows.find((row) => row[0].includes(entityId))![1];
@@ -290,10 +331,10 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     });
 
     await mountEditor(page, config);
-    const tables = await waitForRows(page, 5);
+    const tables = await waitForRows(page, 6);
     const allRows = tables.flat();
 
-    expect(allRows.length).toBe(5);
+    expect(allRows.length).toBe(6);
     expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
 });
@@ -305,7 +346,7 @@ test("a raw-states depth below the requirement is marked, even deep in statistic
     // below its requirement (10) while its statistics depth (400) is not --
     // and the row has to read as a warning regardless.
     await mountEditor(page);
-    await waitForRows(page, 5);
+    await waitForRows(page, 6);
 
     const warnCell = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
