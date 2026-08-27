@@ -443,11 +443,17 @@ async def query_history_days(
     **This is not the table the training runs read.** Every trainer reads raw
     states through :mod:`recorder_hourly_series`, which ``purge_keep_days``
     prunes; long-term statistics survive indefinitely and can make an entity
-    look far deeper than what a training run will actually find. This function
-    exists for callers who genuinely want "whichever of the two the recorder
-    can answer" -- a history *view* has no trainer to agree with. A caller that
-    needs both numbers, and needs the one that matches training honestly
-    labelled, wants :func:`query_history_depths` instead.
+    look far deeper than what a training run will actually find.
+
+    **Nothing in production calls this any more.** The entity inspector, its
+    last caller, moved to :func:`query_history_depths` when the badge started
+    reporting both tables (issue #172), and no other module took it up. It is
+    kept, and kept tested, as the pinned reference for the "whichever of the
+    two the recorder can answer" convention that
+    :func:`~.consumption_forecast_profiles._compute_history_days` is checked
+    against -- delete it only along with that agreement test. Anything new
+    wants :func:`query_history_depths`, which reports the two depths
+    separately and says which one trains.
 
     ``0`` when the recorder holds neither, which is the ordinary answer for a
     sensor picked a minute ago, and the same answer the rows-based path gives

@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -97,6 +98,7 @@ def reset_history_cache() -> None:
 def history_evaluator(
     required_days_path: tuple[str, ...] | None = None,
     default_required_days: int | None = None,
+    governs: Callable[[InspectionRequest], bool] | None = None,
 ) -> Evaluator:
     """An evaluator for one entity whose worth depends on its recorder history.
 
@@ -112,9 +114,18 @@ def history_evaluator(
 
     Both ``None`` for a path where no amount of history is required: the badge
     then simply states what there is.
+
+    ``governs`` is for a wildcard key whose matches are not all read by the
+    same trainer. It is asked, per request, whether the requirement applies to
+    *this* match; when it says no the entity is still measured and still shows
+    its depth, but against no requirement -- so it cannot go orange for a
+    window that never reads it, and the setting stays out of ``consulted``.
+    A key whose every match is governed leaves this ``None``.
     """
 
     def evaluate(request: InspectionRequest) -> Inspection:
+        if governs is not None and not governs(request):
+            return _evaluate(request, None, None)
         return _evaluate(request, required_days_path, default_required_days)
 
     return evaluate

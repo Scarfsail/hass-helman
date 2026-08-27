@@ -711,6 +711,10 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
     itself. All three were previously unclaimed (grid fell through to the
     plain power reading, the other two to the fallback) and carried no
     history fact at all.
+
+    "Every controllable" is the trainer's list, not the config's: the house
+    forecast reads the deferrable consumers, so a meter the trainer skips is
+    measured without being judged.
     """
 
     def _controllable_config(self, entity: str) -> dict:
@@ -752,6 +756,36 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         fact = _fact(inspection, "history")
         self.assertEqual(
             fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
+        )
+        self.assertIn(
+            ["training", "house_consumption", "min_history_days"],
+            inspection["dependsOn"],
+        )
+
+    def test_a_meter_opted_out_of_deferral_is_measured_but_not_judged(self):
+        # `consumption.deferrable: false` meters a load for its own projection
+        # and keeps it out of the house split -- so the house window never
+        # reads this meter, and an orange badge against it would be a lie.
+        hass = _ProbingHass({"sensor.fridge_energy": _State("3.4", unit="kWh")})
+        config = {
+            "controllables": [
+                {
+                    "consumption": {
+                        "energy_entity_id": "sensor.fridge_energy",
+                        "deferrable": False,
+                    }
+                }
+            ]
+        }
+        _, inspection = self.inspect_twice(
+            hass, config, CONTROLLABLE_ENERGY_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertNotIn("required", fact["params"])
+        self.assertNotIn(
+            ["training", "house_consumption", "min_history_days"],
+            inspection["dependsOn"],
         )
 
 

@@ -30,6 +30,15 @@ const GRID_KEY = GRID_PATH.join(".");
 const BATTERY_KEY = BATTERY_PATH.join(".");
 const CONTROLLABLE_KEY = CONTROLLABLE_PATH.join(".");
 
+/** Which window governs which entity, mirroring `EVALUATORS` in the registry. */
+const REQUIRED_BY_KEY: Record<string, number> = {
+    [HOUSE_KEY]: 14,
+    [CONTROLLABLE_KEY]: 14,
+    [BIAS_KEY]: 10,
+    [GRID_KEY]: 10,
+    [BATTERY_KEY]: 10,
+};
+
 const CONFIG = {
     config_version: 14,
     power_devices: {
@@ -67,13 +76,17 @@ const DEPTHS: Record<string, { available: number; statistics: number }> = {
     [CONTROLLABLE_KEY]: { available: 33, statistics: 33 },
 };
 
-async function mountEditor(page: Page): Promise<void> {
+async function mountEditor(page: Page, configOverride?: unknown): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, depths }) => {
+        ({ config, depths, requiredByKey }) => {
+            // The backend derives each fact's `required` from the window that
+            // governs that entity, so the stub does too: a house-consumption
+            // entity is judged against 14, a solar-bias one against 10.
+            const requiredFor = (key: string): number => requiredByKey[key] ?? 0;
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
@@ -113,8 +126,11 @@ async function mountEditor(page: Page): Promise<void> {
                                                   {
                                                       id: "history",
                                                       token: "history_depth",
-                                                      params: { ...depth, required: 10 },
-                                                      severity: depth.available >= 10 ? "ok" : "warn",
+                                                      params: { ...depth, required: requiredFor(target.key) },
+                                                      severity:
+                                                          depth.available >= requiredFor(target.key)
+                                                              ? "ok"
+                                                              : "warn",
                                                   },
                                               ],
                                               dependsOn: [],
@@ -130,7 +146,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, depths: DEPTHS },
+        { config: configOverride ?? CONFIG, depths: DEPTHS, requiredByKey: REQUIRED_BY_KEY },
     );
 
     await expect
@@ -203,17 +219,60 @@ test("the numbers in each row match what inspect_entities answered for it", asyn
     // the draft rather than out of any fact.
     expect(controllableRow!.slice(1)).toEqual(["56", "14", "33", "33", "21"]);
 
+    // The solar-bias table has no "own lookback" column at all -- no row in
+    // it can carry one -- so its rows are four cells wide, not five.
     const biasRow = allRows.find((row) => row[0].includes("sensor.solar_bias_meter"));
     expect(biasRow).toBeDefined();
-    expect(biasRow!.slice(1)).toEqual(["90", "10", "8", "400", "—"]);
+    expect(biasRow!.slice(1)).toEqual(["90", "10", "8", "400"]);
 
     const gridRow = allRows.find((row) => row[0].includes("sensor.grid_power"));
     expect(gridRow).toBeDefined();
-    expect(gridRow!.slice(1)).toEqual(["90", "10", "15", "15", "—"]);
+    expect(gridRow!.slice(1)).toEqual(["90", "10", "15", "15"]);
 
     const batteryRow = allRows.find((row) => row[0].includes("sensor.battery_capacity"));
     expect(batteryRow).toBeDefined();
-    expect(batteryRow!.slice(1)).toEqual(["90", "10", "25", "999", "—"]);
+    expect(batteryRow!.slice(1)).toEqual(["90", "10", "25", "999"]);
+});
+
+test("a controllable the house trainer skips gets no row", async ({ page }) => {
+    // `read_deferrable_consumers` refuses the inverter and honours
+    // `deferrable: false`, so neither meter is read by the house window -- and
+    // a row would claim otherwise.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.controllables.push({
+        id: "fridge",
+        name: "Fridge",
+        consumption: { energy_entity_id: "sensor.fridge_energy", deferrable: false },
+    });
+    config.controllables.push({
+        id: "inverter",
+        name: "Inverter",
+        kind: "inverter",
+    });
+
+    await mountEditor(page, config);
+    const tables = await waitForRows(page, 5);
+    const allRows = tables.flat();
+
+    expect(allRows.length).toBe(5);
+    expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
+    expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
+});
+
+test("a blank minimum shows the default the badge is actually judged against", async ({
+    page,
+}) => {
+    // The backend falls back to the const.py default and colours the cell
+    // against it, so a row that showed a dash here would be judging the user
+    // against a number the page never told them.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    delete config.training.house_consumption.min_history_days;
+
+    await mountEditor(page, config);
+    const tables = await waitForRows(page, 5);
+    const houseRow = tables.flat().find((row) => row[0].includes("sensor.house_energy"));
+
+    expect(houseRow![2]).toBe("14");
 });
 
 test("a raw-states depth below the requirement is marked, even deep in statistics", async ({

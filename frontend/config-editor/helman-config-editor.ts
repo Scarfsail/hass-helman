@@ -2172,17 +2172,32 @@ export class HelmanConfigEditorPanel
         label: this._t("editor.training_depth.house_meter"),
         path: ["power_devices", "house", "forecast", "total_energy_entity_id"],
       },
-      ...controllables.map((controllable, index): TrainingDepthRow => {
+      ...controllables.flatMap((controllable, index): TrainingDepthRow[] => {
         const entry = asJsonObject(controllable) ?? {};
+        // The trainer's list, not the config's: `read_deferrable_consumers`
+        // refuses the inverter (validation denies it a `consumption` block at
+        // all) and honours `deferrable: false`, so a row for either would
+        // claim the house window governs a meter it never reads.
+        const consumption = asJsonObject(entry.consumption) ?? {};
+        const deferrable = consumption.deferrable !== false;
+        if (this._stringValue(entry.kind) === "inverter" || !deferrable) return [];
         const name =
           this._stringValue(entry.name) ||
           this._stringValue(entry.id) ||
           `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`;
-        return {
-          label: name,
-          path: ["controllables", index, "consumption", "energy_entity_id"],
-          lookbackPath: ["controllables", index, "consumption", "projection", "lookback_days"],
-        };
+        return [
+          {
+            label: name,
+            path: ["controllables", index, "consumption", "energy_entity_id"],
+            lookbackPath: [
+              "controllables",
+              index,
+              "consumption",
+              "projection",
+              "lookback_days",
+            ],
+          },
+        ];
       }),
     ];
   }
@@ -2238,8 +2253,10 @@ export class HelmanConfigEditorPanel
     windowPath: PathSegment[],
   ): TemplateResult | typeof nothing {
     if (rows.length === 0) return nothing;
-    const configuredMin = this._trainingDepthNumber(minPath);
     const configuredWindow = this._trainingDepthNumber(windowPath);
+    // Only house-consumption rows carry a per-appliance lookback; the
+    // solar-bias table would otherwise show a column of nothing but dashes.
+    const showLookback = rows.some((row) => row.lookbackPath !== undefined);
     return html`
       <div class="training-depth-table-wrap">
         <table class="training-depth-table">
@@ -2250,11 +2267,15 @@ export class HelmanConfigEditorPanel
               <th>${this._t("editor.training_depth.column_minimum")}</th>
               <th>${this._t("editor.training_depth.column_raw_states")}</th>
               <th>${this._t("editor.training_depth.column_statistics")}</th>
-              <th>${this._t("editor.training_depth.column_lookback")}</th>
+              ${showLookback
+                ? html`<th>${this._t("editor.training_depth.column_lookback")}</th>`
+                : nothing}
             </tr>
           </thead>
           <tbody>
-            ${rows.map((row) => this._renderTrainingDepthRow(row, configuredMin, configuredWindow))}
+            ${rows.map((row) =>
+              this._renderTrainingDepthRow(row, minPath, configuredWindow, showLookback),
+            )}
           </tbody>
         </table>
       </div>
@@ -2263,8 +2284,9 @@ export class HelmanConfigEditorPanel
 
   private _renderTrainingDepthRow(
     row: TrainingDepthRow,
-    configuredMin: string,
+    minPath: PathSegment[],
     configuredWindow: string,
+    showLookback: boolean,
   ): TemplateResult {
     const entityId = this._stringValue(this._getValue(row.path));
     const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
@@ -2273,6 +2295,14 @@ export class HelmanConfigEditorPanel
     );
     const rawStates = historyFact?.params?.["available"];
     const statistics = historyFact?.params?.["statistics"];
+    // The number the badge is judged against, which is the backend's fallback
+    // default when the draft leaves the setting blank -- otherwise a row can
+    // read an orange raw-states depth beside a minimum of "-".
+    const required = historyFact?.params?.["required"];
+    const configuredMin =
+      typeof required === "number" && Number.isFinite(required)
+        ? String(required)
+        : this._trainingDepthNumber(minPath);
     const lookback = row.lookbackPath ? this._getValue(row.lookbackPath) : undefined;
     return html`
       <tr>
@@ -2290,7 +2320,7 @@ export class HelmanConfigEditorPanel
           ${this._trainingDepthCell(rawStates)}
         </td>
         <td>${this._trainingDepthCell(statistics)}</td>
-        <td>${this._trainingDepthCell(lookback)}</td>
+        ${showLookback ? html`<td>${this._trainingDepthCell(lookback)}</td>` : nothing}
       </tr>
     `;
   }

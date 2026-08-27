@@ -26,6 +26,7 @@ from ..const import (
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
 )
+from ..controllables.config import read_deferrable_consumers
 from .context import InspectionRequest, PathSegment
 from .fallback import evaluate_entity_value
 from .history import history_aware, history_evaluator
@@ -53,12 +54,37 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: and those are settings of the *trainer* rather than requirements on this
 #: one entity's history, so nothing here consults them.
 #:
-#: Five entries below exist purely to say *who reads this entity's history*
+#: Three entries below exist purely to say *who reads this entity's history*
 #: (issue #172): the grid meter and the battery capacity sensor feed solar-bias
-#: curtailment detection, and every controllable's own energy meter feeds the
+#: curtailment detection, and a controllable's own energy meter feeds the
 #: house-consumption trainer alongside the house meter itself. None of the
 #: three governs its own requirement -- they are judged against the same
 #: ``training.*`` path the entity that already carried the badge is.
+#:
+#: The controllable meter is the one whose matches are not all governed. The
+#: house trainer reads the *deferrable consumers*, not every controllable: the
+#: inverter is refused a ``consumption`` block outright, and a metered load can
+#: opt out with ``consumption.deferrable: false`` while still being metered for
+#: its own projection. So that key asks
+#: :func:`~..controllables.config.read_deferrable_consumers` whether this match
+#: is one the trainer will actually read, rather than restating its rule here
+#: and letting the two drift.
+def _meter_feeds_the_house_trainer(request: InspectionRequest) -> bool:
+    """Whether this controllable's meter is one the house trainer reads.
+
+    Asked of :func:`~..controllables.config.read_deferrable_consumers` rather
+    than answered here, so the badge and the trainer can never disagree about
+    which meters are carved out of house load.
+    """
+    entity_id = request.entity_id()
+    if entity_id is None:
+        return False
+    return any(
+        consumer.get("energy_entity_id") == entity_id
+        for consumer in read_deferrable_consumers(request.config)
+    )
+
+
 EVALUATORS: dict[str, Evaluator] = {
     "power_devices.grid.entities.power": history_aware(
         evaluate_power_entity,
@@ -77,6 +103,7 @@ EVALUATORS: dict[str, Evaluator] = {
     "controllables.*.consumption.energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        governs=_meter_feeds_the_house_trainer,
     ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "power_devices.solar.forecast.bias_correction.total_energy_entity_id": (
