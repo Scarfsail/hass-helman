@@ -29,7 +29,7 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 12
+CONFIG_DOCUMENT_VERSION = 13
 
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,
@@ -83,6 +83,12 @@ GRID_IMPORT_PRICE_ENTITY_ID = "sensor.helman_grid_import_price"
 #: to declare. Pinned here for the same reason as the import id: the inspector
 #: reads it back by name.
 GRID_EXPORT_PRICE_ENTITY_ID = "sensor.helman_grid_export_price"
+#: The bias-corrected "how much is still to come today" figure Helman derives
+#: from the solar forecast and publishes itself. It used to be a configurable
+#: entity id, which only ever pointed back at this very sensor -- a setting
+#: whose single correct value was Helman's own output. The card reads it back
+#: by this id, so it is pinned here rather than left to entity-id slugging.
+SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_energy_production_today_remaining"
 HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS = 14
 HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS = 56
 HOUSE_FORECAST_DEFAULT_MIN_SLOT_POINTS = 2

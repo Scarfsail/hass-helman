@@ -1709,19 +1709,6 @@ export class HelmanConfigEditorPanel
                     helpKey: "editor.help.solar_today_energy_entity",
                   },
                 )}
-                ${this._renderEntityGroup(
-                  [
-                    "power_devices",
-                    "solar",
-                    "entities",
-                    "remaining_today_energy_forecast",
-                  ],
-                  "editor.fields.remaining_today_energy_forecast",
-                  {
-                    includeDomains: ["sensor"],
-                    helpKey: "editor.help.solar_remaining_today_energy_forecast",
-                  },
-                )}
               </div>
             `,
             { initialOpen: false },

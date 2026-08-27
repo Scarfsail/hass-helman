@@ -42,7 +42,6 @@ const CONFIG = {
             entities: {
                 power: "sensor.solar_power",
                 today_energy: "sensor.solar_today_energy",
-                remaining_today_energy_forecast: "sensor.solar_remaining_today",
             },
             forecast: {
                 total_energy_entity_id: "sensor.solar_energy",
@@ -112,7 +111,6 @@ const POWER_DEVICE_ENTITY_PATHS = [
     "power_devices.house.forecast.total_energy_entity_id",
     "power_devices.solar.entities.power",
     "power_devices.solar.entities.today_energy",
-    "power_devices.solar.entities.remaining_today_energy_forecast",
     "power_devices.solar.forecast.total_energy_entity_id",
     ...DAILY_ENERGY_ENTITIES.map(
         (_value, index) => `power_devices.solar.forecast.daily_energy_entity_ids.${index}`,

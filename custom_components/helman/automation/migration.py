@@ -727,6 +727,38 @@ def _listed_deferrable_consumers(
     return (by_meter, by_label)
 
 
+def _migrate_v12_to_v13(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop ``power_devices.solar.entities.remaining_today_energy_forecast``.
+
+    The key named the entity holding "how much solar is still to come today",
+    and the only entity that ever answers that is Helman's own bias-corrected
+    ``sensor.helman_energy_production_today_remaining``. A setting with one
+    correct value is not a setting: the card now reads that id directly. Any
+    value the key held is discarded rather than checked -- a config that pointed
+    it somewhere else was pointing at a worse number.
+    """
+    power_devices = document.get("power_devices")
+    if not isinstance(power_devices, Mapping):
+        return (document, [])
+    solar = power_devices.get("solar")
+    if not isinstance(solar, Mapping):
+        return (document, [])
+    entities = solar.get("entities")
+    if not isinstance(entities, Mapping) or "remaining_today_energy_forecast" not in entities:
+        return (document, [])
+
+    entities = {
+        key: value
+        for key, value in entities.items()
+        if key != "remaining_today_energy_forecast"
+    }
+    document["power_devices"] = {
+        **power_devices,
+        "solar": {**solar, "entities": entities},
+    }
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -739,6 +771,7 @@ _MIGRATIONS = {
     9: _migrate_v9_to_v10,
     10: _migrate_v10_to_v11,
     11: _migrate_v11_to_v12,
+    12: _migrate_v12_to_v13,
 }
 
 
