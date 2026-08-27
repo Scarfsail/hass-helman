@@ -244,8 +244,8 @@ interface TrainingDepthRow {
   label: string;
   /** Where the entity id lives -- also the key `_entityInspections` is read by. */
   path: PathSegment[];
-  /** A controllable's own `consumption.projection.lookback_days`, read-only. */
-  lookbackPath?: PathSegment[];
+  /** i18n key for what the trainer takes from this entity. */
+  roleKey: string;
 }
 
 export class HelmanConfigEditorPanel
@@ -672,6 +672,14 @@ export class HelmanConfigEditorPanel
 
     .training-depth-unset {
       font-style: italic;
+    }
+
+    /* The one column that is prose. Every other cell is a short number or a
+       name and stays on one line; this one has to wrap, and needs room to. */
+    .training-depth-role {
+      white-space: normal;
+      min-width: 22ch;
+      color: var(--secondary-text-color);
     }
 
     /* Same hue the entity-group badge uses for a shallow raw-states depth. */
@@ -2096,6 +2104,7 @@ export class HelmanConfigEditorPanel
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.house_consumption,
         html`
+          <p class="inline-note">${this._t("editor.notes.training_house_consumption_what")}</p>
           <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
           <div class="field-grid">
             ${this._renderOptionalNumberField(
@@ -2111,17 +2120,14 @@ export class HelmanConfigEditorPanel
               "editor.help.house_consumption_training_window_days",
             )}
           </div>
-          ${this._renderTrainingDepthTable(
-            this._houseConsumptionDepthRows(),
-            ["training", "house_consumption", "min_history_days"],
-            ["training", "house_consumption", "training_window_days"],
-          )}
+          ${this._renderTrainingDepthTable(this._houseConsumptionDepthRows())}
         `,
       )}
 
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.solar_bias,
         html`
+          <p class="inline-note">${this._t("editor.notes.training_solar_bias_what")}</p>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
           <div class="field-grid">
             ${this._renderOptionalNumberField(
@@ -2144,11 +2150,7 @@ export class HelmanConfigEditorPanel
             )}
           </div>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias_min_valid_slot_days")}</p>
-          ${this._renderTrainingDepthTable(
-            this._solarBiasDepthRows(),
-            ["training", "solar_bias", "min_history_days"],
-            ["training", "solar_bias", "max_training_window_days"],
-          )}
+          ${this._renderTrainingDepthTable(this._solarBiasDepthRows())}
         `,
       )}
     `;
@@ -2171,6 +2173,7 @@ export class HelmanConfigEditorPanel
       {
         label: this._t("editor.training_depth.house_meter"),
         path: ["power_devices", "house", "forecast", "total_energy_entity_id"],
+        roleKey: "editor.training_depth.role_house_meter",
       },
       ...controllables.flatMap((controllable, index): TrainingDepthRow[] => {
         const entry = asJsonObject(controllable) ?? {};
@@ -2189,24 +2192,19 @@ export class HelmanConfigEditorPanel
           {
             label: name,
             path: ["controllables", index, "consumption", "energy_entity_id"],
-            lookbackPath: [
-              "controllables",
-              index,
-              "consumption",
-              "projection",
-              "lookback_days",
-            ],
+            roleKey: "editor.training_depth.role_controllable",
           },
         ];
       }),
     ];
   }
 
-  /**
-   * The bias-correction meter, plus the two entities curtailment detection
-   * reads: grid power and battery capacity. Neither of the latter two has a
+   /**
+   * The actual-production meter, plus the two entities curtailment detection
+   * reads: grid power and the battery SoC sensor (which lives under the
+   * `capacity` key — see `actuals.py:411`). Neither of the latter two has a
    * requirement of its own — both are judged against the same
-   * `training.solar_bias.min_history_days` the bias meter is.
+   * `training.solar_bias.min_history_days` the production meter is.
    */
   private _solarBiasDepthRows(): TrainingDepthRow[] {
     return [
@@ -2219,14 +2217,17 @@ export class HelmanConfigEditorPanel
           "bias_correction",
           "total_energy_entity_id",
         ],
+        roleKey: "editor.training_depth.role_bias_meter",
       },
       {
         label: this._t("editor.training_depth.grid_power"),
         path: ["power_devices", "grid", "entities", "power"],
+        roleKey: "editor.training_depth.role_grid_power",
       },
       {
-        label: this._t("editor.training_depth.battery_capacity"),
+        label: this._t("editor.training_depth.battery_soc"),
         path: ["power_devices", "battery", "entities", "capacity"],
+        roleKey: "editor.training_depth.role_battery_soc",
       },
     ];
   }
@@ -2246,48 +2247,46 @@ export class HelmanConfigEditorPanel
     return rows.map((row) => ({ key: entityGroupKey(row.path), path: row.path }));
   }
 
-  /** One depth table: a header row, then one row per governed entity. */
+  /**
+   * One depth table: what the trainer reads, and how much of it there is.
+   *
+   * Deliberately *not* here: the configured window and minimum. Both are the
+   * same for every row -- they are this section's own settings, edited in the
+   * fields directly above -- so a column of them repeated down the table said
+   * nothing a reader could not already see. Nor is a controllable's own
+   * `consumption.projection.lookback_days`: that is a different trainer's
+   * setting, configured per appliance and not on this page, and putting it
+   * here invited the reading that the house window and the appliance lookback
+   * are alternatives rather than two unrelated reads of one sensor.
+   *
+   * What is left is what a reader cannot get anywhere else: which entities
+   * this trainer reads, what it takes from each, and how deep the recorder
+   * actually goes for them.
+   */
   private _renderTrainingDepthTable(
     rows: TrainingDepthRow[],
-    minPath: PathSegment[],
-    windowPath: PathSegment[],
   ): TemplateResult | typeof nothing {
     if (rows.length === 0) return nothing;
-    const configuredWindow = this._trainingDepthNumber(windowPath);
-    // Only house-consumption rows carry a per-appliance lookback; the
-    // solar-bias table would otherwise show a column of nothing but dashes.
-    const showLookback = rows.some((row) => row.lookbackPath !== undefined);
     return html`
       <div class="training-depth-table-wrap">
         <table class="training-depth-table">
           <thead>
             <tr>
               <th>${this._t("editor.training_depth.column_entity")}</th>
-              <th>${this._t("editor.training_depth.column_window")}</th>
-              <th>${this._t("editor.training_depth.column_minimum")}</th>
+              <th>${this._t("editor.training_depth.column_role")}</th>
               <th>${this._t("editor.training_depth.column_raw_states")}</th>
               <th>${this._t("editor.training_depth.column_statistics")}</th>
-              ${showLookback
-                ? html`<th>${this._t("editor.training_depth.column_lookback")}</th>`
-                : nothing}
             </tr>
           </thead>
           <tbody>
-            ${rows.map((row) =>
-              this._renderTrainingDepthRow(row, minPath, configuredWindow, showLookback),
-            )}
+            ${rows.map((row) => this._renderTrainingDepthRow(row))}
           </tbody>
         </table>
       </div>
     `;
   }
 
-  private _renderTrainingDepthRow(
-    row: TrainingDepthRow,
-    minPath: PathSegment[],
-    configuredWindow: string,
-    showLookback: boolean,
-  ): TemplateResult {
+  private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
     const entityId = this._stringValue(this._getValue(row.path));
     const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
     const historyFact: EntityFact | undefined = draft?.facts?.find(
@@ -2295,15 +2294,6 @@ export class HelmanConfigEditorPanel
     );
     const rawStates = historyFact?.params?.["available"];
     const statistics = historyFact?.params?.["statistics"];
-    // The number the badge is judged against, which is the backend's fallback
-    // default when the draft leaves the setting blank -- otherwise a row can
-    // read an orange raw-states depth beside a minimum of "-".
-    const required = historyFact?.params?.["required"];
-    const configuredMin =
-      typeof required === "number" && Number.isFinite(required)
-        ? String(required)
-        : this._trainingDepthNumber(minPath);
-    const lookback = row.lookbackPath ? this._getValue(row.lookbackPath) : undefined;
     return html`
       <tr>
         <td>
@@ -2314,24 +2304,16 @@ export class HelmanConfigEditorPanel
                 ${this._t("editor.training_depth.no_entity")}
               </div>`}
         </td>
-        <td>${configuredWindow}</td>
-        <td>${configuredMin}</td>
+        <td class="training-depth-role">${this._t(row.roleKey)}</td>
         <td class=${historyFact?.severity === "warn" ? "training-depth-warn" : ""}>
           ${this._trainingDepthCell(rawStates)}
         </td>
         <td>${this._trainingDepthCell(statistics)}</td>
-        ${showLookback ? html`<td>${this._trainingDepthCell(lookback)}</td>` : nothing}
       </tr>
     `;
   }
 
-  /** A configured day-count field, as the table shows it: the number, or a dash. */
-  private _trainingDepthNumber(path: PathSegment[]): string {
-    const raw = this._getValue(path);
-    return typeof raw === "number" && Number.isFinite(raw) ? String(raw) : "—";
-  }
-
-  /** A measured or read-only cell: the number, or a dash while it is unknown. */
+  /** A measured cell: the number, or a dash while it is unknown. */
   private _trainingDepthCell(value: unknown): string {
     return typeof value === "number" && Number.isFinite(value) ? String(value) : "—";
   }

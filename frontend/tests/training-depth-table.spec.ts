@@ -206,32 +206,71 @@ test("the numbers in each row match what inspect_entities answered for it", asyn
     const tables = await waitForRows(page, 5);
     const allRows = tables.flat();
 
-    // House-consumption table: house meter first, then the controllable.
+    // Four columns: the entity, what the trainer takes from it, and the two
+    // depths. The configured window and minimum are deliberately not here --
+    // they are the same for every row and are edited in the fields above.
     const houseRow = allRows.find((row) => row[0].includes("sensor.house_energy"));
     expect(houseRow).toBeDefined();
-    expect(houseRow!.slice(1)).toEqual(["56", "14", "41", "620", "—"]);
+    expect(houseRow!.length).toBe(4);
+    expect(houseRow!.slice(2)).toEqual(["41", "620"]);
 
     const controllableRow = allRows.find((row) => row[0].includes("sensor.dishwasher_energy"));
     expect(controllableRow).toBeDefined();
-    // Configured window/minimum come from the *house-consumption* group, same
-    // as the house meter's row -- the controllable has no window of its own.
-    // The last column is its own per-appliance lookback, read straight out of
-    // the draft rather than out of any fact.
-    expect(controllableRow!.slice(1)).toEqual(["56", "14", "33", "33", "21"]);
+    expect(controllableRow!.slice(2)).toEqual(["33", "33"]);
 
-    // The solar-bias table has no "own lookback" column at all -- no row in
-    // it can carry one -- so its rows are four cells wide, not five.
     const biasRow = allRows.find((row) => row[0].includes("sensor.solar_bias_meter"));
     expect(biasRow).toBeDefined();
-    expect(biasRow!.slice(1)).toEqual(["90", "10", "8", "400"]);
+    expect(biasRow!.slice(2)).toEqual(["8", "400"]);
 
     const gridRow = allRows.find((row) => row[0].includes("sensor.grid_power"));
     expect(gridRow).toBeDefined();
-    expect(gridRow!.slice(1)).toEqual(["90", "10", "15", "15"]);
+    expect(gridRow!.slice(2)).toEqual(["15", "15"]);
 
     const batteryRow = allRows.find((row) => row[0].includes("sensor.battery_capacity"));
     expect(batteryRow).toBeDefined();
-    expect(batteryRow!.slice(1)).toEqual(["90", "10", "25", "999"]);
+    expect(batteryRow!.slice(2)).toEqual(["25", "999"]);
+});
+
+test("each row says what the trainer takes from that entity", async ({ page }) => {
+    // The column the page exists for: a reader who cannot tell why the grid
+    // meter is listed under a *solar* trainer gets the answer in the row.
+    await mountEditor(page);
+    const allRows = (await waitForRows(page, 5)).flat();
+
+    const roleOf = (entityId: string) =>
+        allRows.find((row) => row[0].includes(entityId))![1];
+
+    expect(roleOf("sensor.house_energy")).toContain("household total");
+    expect(roleOf("sensor.dishwasher_energy")).toContain("Subtracted from the house total");
+    expect(roleOf("sensor.solar_bias_meter")).toContain("Actual production");
+    expect(roleOf("sensor.grid_power")).toContain("capped");
+    expect(roleOf("sensor.battery_capacity")).toContain("full battery");
+
+    // No row is left without one.
+    expect(allRows.every((row) => row[1].trim().length > 0)).toBe(true);
+});
+
+test("no column repeats a value that is the same for every row", async ({ page }) => {
+    // The window and the minimum are this section's own settings, shown in the
+    // fields above; a column of them down the table said nothing new.
+    await mountEditor(page);
+    const headers = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll(".training-depth-table th") ?? []).map(
+            (cell) => cell.textContent?.trim() ?? "",
+        );
+    });
+
+    expect(headers).not.toContain("Window (d)");
+    expect(headers).not.toContain("Minimum (d)");
+    // A different trainer's per-appliance setting, configured elsewhere.
+    expect(headers).not.toContain("Own lookback (d)");
+    expect(headers.slice(0, 4)).toEqual([
+        "Entity",
+        "What the trainer takes from it",
+        "Detailed data (d)",
+        "Statistics (d)",
+    ]);
 });
 
 test("a controllable the house trainer skips gets no row", async ({ page }) => {
@@ -257,22 +296,6 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     expect(allRows.length).toBe(5);
     expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
-});
-
-test("a blank minimum shows the default the badge is actually judged against", async ({
-    page,
-}) => {
-    // The backend falls back to the const.py default and colours the cell
-    // against it, so a row that showed a dash here would be judging the user
-    // against a number the page never told them.
-    const config = JSON.parse(JSON.stringify(CONFIG));
-    delete config.training.house_consumption.min_history_days;
-
-    await mountEditor(page, config);
-    const tables = await waitForRows(page, 5);
-    const houseRow = tables.flat().find((row) => row[0].includes("sensor.house_energy"));
-
-    expect(houseRow![2]).toBe("14");
 });
 
 test("a raw-states depth below the requirement is marked, even deep in statistics", async ({

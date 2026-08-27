@@ -76,8 +76,8 @@
       "solar_forecast_general": "Obecné",
       "bias_correction_config": "Konfigurace",
       "consumption": "Spotřeba",
-      "house_consumption": "Spotřeba domu",
-      "solar_bias": "Korekce zkreslení solární prognózy"
+      "house_consumption": "Predikce spotřeby domácnosti",
+      "solar_bias": "Korekce solární prognózy"
     },
     "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
@@ -89,9 +89,11 @@
       "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
       "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu.",
       "ev_charger_consumption": "Vlastní měřič energie nabíječky. Nemá projekci poptávky — ta vychází z vozidla — ale jeho zátěž je odložitelná, což optimalizátoru umožní přesunout nabíjení do levnějších slotů.",
-      "training_house_consumption": "Tato dvě nastavení určují, jak se sestavuje predikce spotřeby domácnosti: minimální historie je hranice, pod kterou predikce hlásí nedostatek dat, a trénovací okno určuje, jak daleko do minulosti se predikce dívá. Platí pro měřič domácnosti níže a pro vlastní měřič energie každého ovládaného spotřebiče — tabulka je vypisuje všechny s tím, co recorder pro každý z nich skutečně obsahuje.",
-      "training_solar_bias": "Tato nastavení určují, jak se trénuje korekce solární predikce: minimální historie je hranice, pod kterou se korekce přeskočí, a maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá. Platí pro měřič korekce, a také pro výkon sítě a kapacitu baterie, které využívá detekce omezování výkonu (curtailment) — tabulka vypisuje všechny tři proti tomu, co recorder obsahuje.",
-      "training_solar_bias_min_valid_slot_days": "Minimální počet platných slot-dní je ve stejné skupině, protože jde o nastavení stejného trenéru, ale není to požadavek na historii žádné konkrétní entity, a proto v tabulce níže nemá vlastní řádek."
+      "training_house_consumption": "Následující dvě nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou predikce místo odhadování hlásí nedostatek dat; trénovací okno určuje, jak daleko do minulosti se sestavení dívá. Obojí platí pro všechny entity v tabulce -- odečet totiž sedí jen tehdy, když se každý měřič čte za stejné období jako měřič domácnosti.",
+      "training_solar_bias": "Následující nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou se korekce přeskočí; maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá.",
+      "training_solar_bias_min_valid_slot_days": "Minimální počet platných slot-dní je třetí nastavení stejného trenéru: kolik dní musí projít vyřazováním slotů, aby se daný slot dne vůbec koriginoval. Je to podmínka sestavení, ne požadavek na historii konkrétní entity, a proto mu v tabulce níže neodpovídá žádný řádek.",
+      "training_house_consumption_what": "Helman se učí, kolik domácnost spotřebuje v kterou denní dobu, aby plánovač věděl, kolik dům odebere zítra ve 14:00, aniž byste mu to museli říct. Tuto spotřebu zároveň dělí na dvě části: základní spotřebu, která běží pořád, a spotřebu ovládaných spotřebičů, kterou lze v čase přesouvat. Kvůli tomuto rozdělení se zde vedle měřiče domácnosti čte i vlastní měřič energie každého ovládaného spotřebiče -- každý se od celkové spotřeby domu odečte a to, co zbude, je základní spotřeba.",
+      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná."
     },
     "empty": {
       "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
@@ -111,17 +113,20 @@
     },
     "training_depth": {
       "column_entity": "Entita",
-      "column_window": "Okno (d)",
-      "column_minimum": "Minimum (d)",
-      "column_raw_states": "Raw states (d)",
+      "column_raw_states": "Podrobná data (d)",
       "column_statistics": "Statistiky (d)",
-      "column_lookback": "Vlastní lookback (d)",
-      "house_meter": "Měřič domácnosti",
-      "bias_meter": "Měřič korekce",
-      "grid_power": "Výkon sítě (detekce omezování)",
-      "battery_capacity": "Kapacita baterie (detekce omezování)",
+      "house_meter": "Celková spotřeba domu",
+      "bias_meter": "Měřič skutečné výroby",
+      "grid_power": "Výkon sítě",
       "controllable_fallback_name": "Spotřebič",
-      "no_entity": "Nenastaveno"
+      "no_entity": "Nenastaveno",
+      "column_role": "Co z ní trenér bere",
+      "battery_soc": "Stav nabití baterie",
+      "role_house_meter": "Celková spotřeba domácnosti, ze které se model sestavuje.",
+      "role_controllable": "Odečítá se od celkové spotřeby domu, aby zbyla základní spotřeba -- a aby byl známý vlastní podíl tohoto spotřebiče.",
+      "role_bias_meter": "Skutečná výroba, slot po slotu porovnávaná s prognózou, aby se změřilo, jak moc se lišila.",
+      "role_grid_power": "Rozpozná sloty, kdy se nic neexportovalo; spolu s plnou baterií to znamená, že výroba byla oříznutá, ne nízká.",
+      "role_battery_soc": "Rozpozná plnou baterii, druhou polovinu rozpoznání oříznutého slotu."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",
@@ -299,7 +304,7 @@
       "solar_bias_min_valid_slot_days": "Minimální počet platných historických vzorků den-slot, než může slot přispět do trénování.",
       "bias_correction_max_interpolated_consecutive_slots": "Maximální délka série po sobě jdoucích vynechaných slotů, která může být doplněna interpolací. Nastavte na 0 pro vypnutí.",
       "bias_correction_slot_invalidation_max_battery_soc_percent": "0-100 %. Zapíná detekci omezení výroby: slot se považuje za omezený, jen když SoC baterie dosáhne alespoň této hranice.",
-      "bias_correction_slot_invalidation_curtailment_max_export_w": "Export pod touto hodnotou se stále počítá jako \u201enic neodešlo\u201c. Výchozí 50 W.",
+      "bias_correction_slot_invalidation_curtailment_max_export_w": "Export pod touto hodnotou se stále počítá jako „nic neodešlo“. Výchozí 50 W.",
       "bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio": "Jak hluboko pod vlastní prognózou musí slot skončit, aby se to četlo jako omezení výroby. Výchozí 0,8.",
       "bias_correction_slot_invalidation_data_glitch_max_slot_wh": "Volitelné. Energie ve slotu nad tento strop je považována za chybu rekordéru. Pokud zůstane prázdné, odvodí se ze solar.max_power × 0.25 × 1.05.",
       "bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh": "Minimální prognóza Wh pro pravidlo nulového slotu se sousedem. Výchozí 200 Wh; 0 vypne pravidlo (3).",
@@ -481,9 +486,9 @@
       "bias_correction_max_interpolated_consecutive_slots": "Maximální počet po sobě jdoucích slotů, které nesplnily podmínku min_valid_slot_days a mohou být doplněny lineární interpolací mezi nejbližšími zdravými sousedy. Sloty vynechané z jiných důvodů (např. nízká prognóza) se nikdy neinterpolují. Nastavte na 0 pro úplné vypnutí interpolace a zachování původního chování. Výchozí hodnota je 2.",
       "bias_correction_aggregation_method": "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
       "bias_correction_total_energy_entity": "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce.",
-      "bias_correction_slot_invalidation_max_battery_soc_percent": "Hranice stavu nabití baterie v procentech a zároveň vypínač celé detekce omezení výroby. Slot se považuje za omezený, když SoC baterie v něm dosáhne alespoň této hodnoty, export do sítě zůstane v pásmu necitlivosti níže a slot zároveň zaostane za prognózou vydanou to ráno \u2014 baterie plná, nic neodešlo, vyrobeno méně, než se předpovídalo. Takové sloty Helman vyřadí ze skutečných hodnot pro korekci zkreslení, aby se netrénovalo na uškrcené výrobě. Čte senzory kapacity baterie a výkonu sítě už nastavené v power_devices; žádnou další entitu není třeba zapojovat.",
-      "bias_correction_slot_invalidation_curtailment_max_export_w": "Kolik exportu do sítě se ještě počítá jako \u201enic neodešlo\u201c \u2014 pásmo necitlivosti kolem nuly, ne skutečný export. Slot, jehož špičkový export tuto hodnotu překročí, měl kam energii poslat, takže nebyl omezovaný. Výchozí 50 W.",
-      "bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio": "Jak hluboko pod vlastní prognózou musí slot skončit, aby se schodek četl jako omezení výroby; poměr skutečnost \u00f7 prognóza. Právě to drží mimo vyřazené sloty zataženou chvíli s plnou baterií a hladovým domem: tam dům spotřebuje všechno a nic neodchází, ale výroba přesto sleduje prognózu. Výchozí 0,8.",
+      "bias_correction_slot_invalidation_max_battery_soc_percent": "Hranice stavu nabití baterie v procentech a zároveň vypínač celé detekce omezení výroby. Slot se považuje za omezený, když SoC baterie v něm dosáhne alespoň této hodnoty, export do sítě zůstane v pásmu necitlivosti níže a slot zároveň zaostane za prognózou vydanou to ráno — baterie plná, nic neodešlo, vyrobeno méně, než se předpovídalo. Takové sloty Helman vyřadí ze skutečných hodnot pro korekci zkreslení, aby se netrénovalo na uškrcené výrobě. Čte senzory kapacity baterie a výkonu sítě už nastavené v power_devices; žádnou další entitu není třeba zapojovat.",
+      "bias_correction_slot_invalidation_curtailment_max_export_w": "Kolik exportu do sítě se ještě počítá jako „nic neodešlo“ — pásmo necitlivosti kolem nuly, ne skutečný export. Slot, jehož špičkový export tuto hodnotu překročí, měl kam energii poslat, takže nebyl omezovaný. Výchozí 50 W.",
+      "bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio": "Jak hluboko pod vlastní prognózou musí slot skončit, aby se schodek četl jako omezení výroby; poměr skutečnost ÷ prognóza. Právě to drží mimo vyřazené sloty zataženou chvíli s plnou baterií a hladovým domem: tam dům spotřebuje všechno a nic neodchází, ale výroba přesto sleduje prognózu. Výchozí 0,8.",
       "bias_correction_slot_invalidation_data_glitch_max_slot_wh": "Maximální věrohodná energie pro jeden 15minutový slot. Solární střídač nemůže překročit svůj jmenovitý výkon × 0,25 hodiny; každý slot nad tímto stropem je chyba rekordéru (typicky výpis kumulativního měřidla). Helman vyřadí slot s výkyvem a projde zpět po sobě jdoucími nulovými sloty, aby vyřadil i odpovídající zpětně doplněnou energii. Ponechte prázdné pro odvození z power_devices.solar.max_power × 0,25 × 1,05.",
       "bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh": "Dolní hranice prognózy ve Wh pro pravidlo nulového slotu při známé výrobě. Když je skutečná hodnota slotu 0 Wh, jeho prognóza byla alespoň tolik Wh a sousední slot v rozmezí ±60 minut má nenulové skutečné hodnoty, považuje se slot za výpadek rekordéru a je vyřazen. Výchozí hodnota 200 Wh; nastavením na 0 pravidlo vypnete.",
       "bias_correction_slot_invalidation_data_glitch_backfill_max_minutes": "Maximální počet minut, o které smí doplňovací procházení pokračovat zpět od výkyvu. Procházení se zastaví u první nenulové skutečné hodnoty nebo po vyčerpání tohoto okna. Výchozí hodnota 120 minut.",
