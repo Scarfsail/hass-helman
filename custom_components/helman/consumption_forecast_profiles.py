@@ -258,7 +258,7 @@ def _compute_history_days(rows: list[dict], *, today_local: date) -> int:
     """Compute number of days of history from Recorder rows.
 
     The rows-based half of one measurement. Its twin,
-    :func:`~.recorder_statistics_span.query_history_days`, asks the recorder the
+    :func:`~.recorder_statistics_span.query_history_depths`, asks the recorder the
     same question from an entity id, for callers that hold no rows -- and **the
     two must agree**: whole days between the local date of the oldest sample and
     ``today_local``, zero when there is nothing. This one exists because a

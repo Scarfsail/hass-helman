@@ -282,5 +282,52 @@ class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(QUERIES["batched"], [])
 
 
+class TestHistoryDepthProbeIssuesNoMoreQueriesThanBefore(unittest.IsolatedAsyncioTestCase):
+    """The entity inspector's dual-depth probe costs what the single-depth one did.
+
+    ``query_history_depths`` replaced a single-number probe that fell back
+    from statistics to raw states (the since-deleted ``query_history_days``,
+    issue #172): a caller that wants both tables' depth now always asks both,
+    rather than asking the second only when the first came up empty. That
+    predecessor's worst case was already two reads -- no statistics, then a
+    raw-states probe -- so this costs nothing more than that worst case; this
+    is the guard that pins it.
+    """
+
+    async def test_the_dual_depth_probe_issues_exactly_one_statistics_and_one_state_query(
+        self,
+    ) -> None:
+        span_mod = importlib.import_module(
+            "custom_components.helman.recorder_statistics_span"
+        )
+
+        statistics_calls: list[str] = []
+        state_calls: list[str] = []
+
+        def _statistics_during_period(hass, start, end, statistic_ids, period, *args, **kwargs):
+            statistics_calls.append(sorted(statistic_ids))
+            return {}
+
+        def _state_changes_during_period(hass, start, end, entity_id, *args, **kwargs):
+            state_calls.append(entity_id)
+            return {}
+
+        with patch.object(
+            span_mod, "statistics_during_period", _statistics_during_period
+        ), patch(
+            "homeassistant.components.recorder.history.state_changes_during_period",
+            _state_changes_during_period,
+        ):
+            await span_mod.query_history_depths(
+                SimpleNamespace(),
+                "sensor.forecast_only",
+                today_local=date(2026, 5, 11),
+                local_tz=ZoneInfo("Europe/Prague"),
+            )
+
+        self.assertEqual(len(statistics_calls), 1)
+        self.assertEqual(len(state_calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

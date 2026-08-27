@@ -11,6 +11,7 @@ export type EditorMode = "visual" | "yaml";
 export type TabId =
   | "general"
   | "power_devices"
+  | "training"
   | "automation"
   | "controllables";
 
@@ -18,6 +19,7 @@ export type ScopeId =
   | "document"
   | "tab:general"
   | "tab:power_devices"
+  | "tab:training"
   | "tab:automation"
   | "tab:controllables"
   | "section:general.core_labels_and_history"
@@ -32,6 +34,8 @@ export type ScopeId =
   | "section:power_devices.solar.bias_correction.config"
   | "section:power_devices.battery"
   | "section:power_devices.grid"
+  | "section:training.house_consumption"
+  | "section:training.solar_bias"
   | "section:automation.settings"
   | "section:automation.optimizer_pipeline"
   | "section:controllables.configured_controllables";
@@ -49,6 +53,7 @@ export interface EditorScope {
 export const TAB_ICONS: Record<TabId, string> = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
+  training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   controllables: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
 };
@@ -66,6 +71,8 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:power_devices.solar.bias_correction.config": "M5,14V3H3V14H5M5,21V16H3V21H5M11,21V10H9V21H11M11,8V3H9V8H11M17,21V14H15V21H17M17,12V3H15V12H17Z",
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
+  "section:training.house_consumption": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
+  "section:training.solar_bias": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:controllables.configured_controllables": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
@@ -74,6 +81,7 @@ export const SECTION_ICONS: Record<string, string> = {
 export const TABS: Array<{ id: TabId; labelKey: string }> = [
   { id: "general", labelKey: "editor.tabs.general" },
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
+  { id: "training", labelKey: "editor.tabs.training" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "controllables", labelKey: "editor.tabs.controllables" },
 ];
@@ -81,6 +89,7 @@ export const TABS: Array<{ id: TabId; labelKey: string }> = [
 export const TAB_SECTIONS: Record<string, TabId> = {
   general: "general",
   power_devices: "power_devices",
+  training: "training",
   automation: "automation",
   controllables: "controllables",
   root: "general",
@@ -91,6 +100,7 @@ export const DOCUMENT_SCOPE_ID = "document" as const;
 export const TAB_SCOPE_IDS = {
   general: "tab:general",
   power_devices: "tab:power_devices",
+  training: "tab:training",
   automation: "tab:automation",
   controllables: "tab:controllables",
 } as const satisfies Record<TabId, ScopeId>;
@@ -112,6 +122,10 @@ export const SECTION_SCOPE_IDS = {
     solar_bias_correction_config: "section:power_devices.solar.bias_correction.config",
     battery: "section:power_devices.battery",
     grid: "section:power_devices.grid",
+  },
+  training: {
+    house_consumption: "section:training.house_consumption",
+    solar_bias: "section:training.solar_bias",
   },
   automation: {
     settings: "section:automation.settings",
@@ -168,9 +182,6 @@ const SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS = [
 
 const SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS = [
   { yamlKey: "enabled", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "enabled"] },
-  { yamlKey: "min_history_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"] },
-  { yamlKey: "max_training_window_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"] },
-  { yamlKey: "min_valid_slot_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
   { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
@@ -200,6 +211,17 @@ export const EDITOR_SCOPES = {
     tabId: "power_devices",
     labelKey: "editor.tabs.power_devices",
     adapter: createPathScopeAdapter(["power_devices"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [TAB_SCOPE_IDS.training]: {
+    id: TAB_SCOPE_IDS.training,
+    kind: "tab",
+    parentId: DOCUMENT_SCOPE_ID,
+    tabId: "training",
+    labelKey: "editor.tabs.training",
+    adapter: createPathScopeAdapter(["training"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
@@ -357,6 +379,28 @@ export const EDITOR_SCOPES = {
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
     adapter: createPathScopeAdapter(["power_devices", "grid"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.training.house_consumption]: {
+    id: SECTION_SCOPE_IDS.training.house_consumption,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.training,
+    tabId: "training",
+    labelKey: "editor.sections.house_consumption",
+    adapter: createPathScopeAdapter(["training", "house_consumption"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.training.solar_bias]: {
+    id: SECTION_SCOPE_IDS.training.solar_bias,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.training,
+    tabId: "training",
+    labelKey: "editor.sections.solar_bias",
+    adapter: createPathScopeAdapter(["training", "solar_bias"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),

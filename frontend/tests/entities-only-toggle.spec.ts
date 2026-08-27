@@ -34,8 +34,6 @@ const CONFIG = {
             entities: { power: "sensor.house_power" },
             forecast: {
                 total_energy_entity_id: "sensor.house_energy",
-                min_history_days: 30,
-                training_window_days: 60,
             },
         },
         solar: {
@@ -49,7 +47,6 @@ const CONFIG = {
                 bias_correction: {
                     enabled: true,
                     total_energy_entity_id: "sensor.solar_bias_energy",
-                    min_history_days: 14,
                     slot_invalidation: { max_battery_soc_percent: 95 },
                 },
             },
@@ -379,10 +376,12 @@ test.describe("entities-only toggle", () => {
                         field.querySelector("label")?.textContent?.trim() ?? "(unlabelled)",
                 );
         });
-        // Four polarity selects, and the day counts on the house forecast and
-        // the bias-correction meter.
+        // Four polarity selects. The house forecast's and the bias-correction
+        // meter's day counts used to be slotted here too, but the v14
+        // relocation moved them to the Training tab -- see entity-group.spec.ts
+        // for the coverage that took over.
         expect(slotted.filter((label: string) => label === "Sign convention")).toHaveLength(4);
-        expect(slotted).toContain("Min history days");
+        expect(slotted).not.toContain("Minimum training window days");
     });
 
     test("drops the sections that hold no entity", async ({ page }) => {

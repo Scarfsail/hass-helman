@@ -36,6 +36,28 @@ from .recorder_hourly_series import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def read_house_training_window_config(config: dict[str, Any]) -> tuple[int, int]:
+    """``(min_history_days, training_window_days)`` for the house trainer.
+
+    Read from ``training.house_consumption``, the one place these settings
+    live since the v14 relocation. Shared by the builder's live payload and
+    the coordinator's training request so the two readers cannot drift apart.
+    """
+    training = ConsumptionForecastBuilder._read_dict(config.get("training"))
+    house_consumption = ConsumptionForecastBuilder._read_dict(
+        training.get("house_consumption")
+    )
+    min_history_days = ConsumptionForecastBuilder._read_positive_int(
+        house_consumption.get("min_history_days"),
+        HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    )
+    training_window_days = ConsumptionForecastBuilder._read_positive_int(
+        house_consumption.get("training_window_days"),
+        HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+    )
+    return (min_history_days, training_window_days)
+
+
 @dataclass(frozen=True)
 class _ConsumerSlotHistoryData:
     entity_id: str
@@ -86,13 +108,8 @@ class ConsumptionForecastBuilder:
         total_energy_entity_id = self._read_entity_id(
             forecast_config.get("total_energy_entity_id")
         )
-        min_history_days = self._read_positive_int(
-            forecast_config.get("min_history_days"),
-            HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
-        )
-        training_window_days = self._read_positive_int(
-            forecast_config.get("training_window_days"),
-            HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+        min_history_days, training_window_days = read_house_training_window_config(
+            self._config
         )
         consumers_config = read_deferrable_consumers(self._config)
         config_fingerprint = self._build_config_fingerprint(

@@ -759,6 +759,85 @@ def _migrate_v12_to_v13(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v13_to_v14(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Relocate the five history-window settings into a top-level ``training``.
+
+    ``power_devices.house.forecast.{min_history_days,training_window_days}``
+    and ``power_devices.solar.forecast.bias_correction.{min_history_days,
+    max_training_window_days,min_valid_slot_days}`` move to
+    ``training.house_consumption`` and ``training.solar_bias`` respectively.
+    Pure relocation -- same keys, same defaults, same semantics -- because the
+    settings were never really about the entity they were nested under; they
+    are read by several. The solar-bias legacy alias ``training_window_days``
+    collapses into ``max_training_window_days`` here, preserving the existing
+    alias precedence (``max_training_window_days`` wins when both are
+    present). A ``forecast``/``bias_correction`` map left empty by the move
+    keeps its other keys -- it is not pruned.
+    """
+    power_devices = document.get("power_devices")
+    house_consumption: dict[str, Any] = {}
+    solar_bias: dict[str, Any] = {}
+
+    if isinstance(power_devices, Mapping):
+        power_devices = dict(power_devices)
+        house = power_devices.get("house")
+        if isinstance(house, Mapping):
+            house = dict(house)
+            forecast = house.get("forecast")
+            if isinstance(forecast, Mapping):
+                forecast = dict(forecast)
+                for key in ("min_history_days", "training_window_days"):
+                    if key in forecast:
+                        house_consumption[key] = forecast.pop(key)
+                house["forecast"] = forecast
+            power_devices["house"] = house
+
+        solar = power_devices.get("solar")
+        if isinstance(solar, Mapping):
+            solar = dict(solar)
+            forecast = solar.get("forecast")
+            if isinstance(forecast, Mapping):
+                forecast = dict(forecast)
+                bias = forecast.get("bias_correction")
+                if isinstance(bias, Mapping):
+                    bias = dict(bias)
+                    if "min_history_days" in bias:
+                        solar_bias["min_history_days"] = bias.pop("min_history_days")
+                    legacy_window = bias.pop("training_window_days", None)
+                    if "max_training_window_days" in bias:
+                        solar_bias["max_training_window_days"] = bias.pop(
+                            "max_training_window_days"
+                        )
+                    elif legacy_window is not None:
+                        solar_bias["max_training_window_days"] = legacy_window
+                    if "min_valid_slot_days" in bias:
+                        solar_bias["min_valid_slot_days"] = bias.pop(
+                            "min_valid_slot_days"
+                        )
+                    forecast["bias_correction"] = bias
+                solar["forecast"] = forecast
+            power_devices["solar"] = solar
+
+        document["power_devices"] = power_devices
+
+    if not house_consumption and not solar_bias:
+        return (document, [])
+
+    training = document.get("training")
+    training = dict(training) if isinstance(training, Mapping) else {}
+    if house_consumption:
+        existing = training.get("house_consumption")
+        existing = dict(existing) if isinstance(existing, Mapping) else {}
+        training["house_consumption"] = {**house_consumption, **existing}
+    if solar_bias:
+        existing = training.get("solar_bias")
+        existing = dict(existing) if isinstance(existing, Mapping) else {}
+        training["solar_bias"] = {**solar_bias, **existing}
+    document["training"] = training
+
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -772,6 +851,7 @@ _MIGRATIONS = {
     10: _migrate_v10_to_v11,
     11: _migrate_v11_to_v12,
     12: _migrate_v12_to_v13,
+    13: _migrate_v13_to_v14,
 }
 
 

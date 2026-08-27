@@ -111,10 +111,13 @@ class TestRegistryMatching(unittest.TestCase):
         self.assertEqual(match_key("a.*.b", ("a", 3, "b")), ("3",))
 
     def test_every_power_device_resolves_to_an_evaluator(self):
+        # ``grid`` matches its own exact key ahead of the wildcard (it is
+        # wrapped in a history fact for solar-bias curtailment detection --
+        # see ``registry.EVALUATORS``), so it alone reports no wildcard.
         for device in ("house", "solar", "battery", "grid"):
             with self.subTest(device=device):
                 found = evaluator_for(("power_devices", device, "entities", "power"))
-                self.assertEqual(found[1], (device,))
+                self.assertEqual(found[1], () if device == "grid" else (device,))
                 self.assertIsNot(found[0], FALLBACK_EVALUATOR)
 
     def test_an_unclaimed_path_resolves_to_the_fallback(self):
@@ -407,6 +410,16 @@ DAILY_HISTORY_PATH = (
     "daily_energy_entity_ids",
     0,
 )
+GRID_POWER_HISTORY_PATH = ("power_devices", "grid", "entities", "power")
+BATTERY_CAPACITY_HISTORY_PATH = ("power_devices", "battery", "entities", "capacity")
+CONTROLLABLE_ENERGY_HISTORY_PATH = ("controllables", 0, "consumption", "energy_entity_id")
+FORECAST_SOURCE_HISTORY_PATH = (
+    "power_devices",
+    "solar",
+    "forecast",
+    "daily_energy_entity_ids",
+    0,
+)
 
 HOUSE_METER = "sensor.house_energy"
 
@@ -430,18 +443,30 @@ class _ProbingHass(_Hass):
 
 
 class _Probe:
-    """A stand-in for the one recorder read, counting how often it is made."""
+    """A stand-in for the one recorder read, counting how often it is made.
 
-    def __init__(self, days: int | None = 41, error: Exception | None = None) -> None:
+    ``days`` is the raw-states depth, ``statistics`` the long-term-statistics
+    depth -- separate numbers by default equal to each other, since most tests
+    do not care about the difference; ``TestHistoryDepthDisagreement`` sets
+    them apart on purpose.
+    """
+
+    def __init__(
+        self,
+        days: int | None = 41,
+        statistics: int | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self.days = days
+        self.statistics = days if statistics is None else statistics
         self.error = error
         self.calls: list[str] = []
 
-    async def __call__(self, hass, entity_id: str) -> int:
+    async def __call__(self, hass, entity_id: str) -> tuple[int, int]:
         self.calls.append(entity_id)
         if self.error is not None:
             raise self.error
-        return self.days
+        return self.days, self.statistics
 
 
 def _history_config(
@@ -453,17 +478,20 @@ def _history_config(
     forecast: dict = {}
     if entity is not None:
         forecast["total_energy_entity_id"] = entity
-    if min_history_days is not None:
-        forecast["min_history_days"] = min_history_days
     solar_forecast: dict = {}
     if solar_entity is not None:
         solar_forecast["total_energy_entity_id"] = solar_entity
-    return {
+    config: dict = {
         "power_devices": {
             "house": {"forecast": forecast},
             "solar": {"forecast": solar_forecast},
         }
     }
+    # min_history_days lives at an absolute path since the v14 relocation --
+    # no longer a sibling of the entity it governs.
+    if min_history_days is not None:
+        config["training"] = {"house_consumption": {"min_history_days": min_history_days}}
+    return config
 
 
 class _HistoryTestCase(unittest.TestCase):
@@ -505,17 +533,18 @@ class TestHistoryDepth(_HistoryTestCase):
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 41, "required": 30})
+        self.assertEqual(fact["params"], {"available": 41, "statistics": 41, "required": 30})
         self.assertEqual(fact["severity"], "ok")
 
     def test_not_enough_history_reads_as_a_warning(self):
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         self.probe.days = 3
+        self.probe.statistics = 3
         _, inspection = self.inspect_twice(
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 3, "required": 30})
+        self.assertEqual(fact["params"], {"available": 3, "statistics": 3, "required": 30})
         self.assertEqual(fact["severity"], "warn")
 
     def test_no_recorder_rows_is_zero_days_rather_than_no_answer(self):
@@ -523,6 +552,7 @@ class TestHistoryDepth(_HistoryTestCase):
         # the badge can say, and it is short of any requirement.
         hass = _ProbingHass({HOUSE_METER: _State("0", unit="kWh")})
         self.probe.days = 0
+        self.probe.statistics = 0
         _, inspection = self.inspect_twice(hass, _history_config(), HOUSE_HISTORY_PATH)
         fact = _fact(inspection, "history")
         self.assertEqual(fact["params"]["available"], 0)
@@ -561,7 +591,7 @@ class TestHistoryDepth(_HistoryTestCase):
         )
         fact = _fact(inspection, "history")
         self.assertEqual(fact["token"], "history_depth_only")
-        self.assertEqual(fact["params"], {"available": 41})
+        self.assertEqual(fact["params"], {"available": 41, "statistics": 41})
         self.assertEqual(fact["severity"], "neutral")
 
     def test_every_registered_history_path_answers(self):
@@ -640,6 +670,175 @@ class TestHistoryDepth(_HistoryTestCase):
             self.assertIsInstance(value, int)
 
 
+class TestHistoryDepthDisagreement(_HistoryTestCase):
+    """The false green from #169: deep statistics behind a shallow raw table.
+
+    A stock recorder's ``purge_keep_days`` prunes raw states and leaves
+    long-term statistics untouched, so an entity can show years of statistics
+    while the raw states a training run actually reads go back only a handful
+    of days. Severity must be judged on the raw-states number, not on
+    whichever of the two happens to be deepest.
+    """
+
+    def test_a_warning_shows_even_with_years_of_statistics(self):
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.days = 3
+        self.probe.statistics = 900
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"], {"available": 3, "statistics": 900, "required": 30}
+        )
+        self.assertEqual(fact["severity"], "warn")
+
+    def test_a_shallow_statistics_table_behind_deep_raw_states_still_reads_ok(self):
+        # The rarer direction, and worth pinning precisely because it is the
+        # one a "trust statistics" badge would have gotten right by accident.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.days = 400
+        self.probe.statistics = 2
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"], {"available": 400, "statistics": 2, "required": 30}
+        )
+        self.assertEqual(fact["severity"], "ok")
+
+
+class TestHistoryGovernedEntities(_HistoryTestCase):
+    """Every entity a training window governs gets a badge, not just the two.
+
+    #172's table: the grid meter and the battery capacity sensor feed
+    solar-bias curtailment detection, and every controllable's own energy
+    meter feeds the house-consumption trainer alongside the house meter
+    itself. All three were previously unclaimed (grid fell through to the
+    plain power reading, the other two to the fallback) and carried no
+    history fact at all.
+
+    "Every controllable" is the trainer's list, not the config's: the house
+    forecast reads the deferrable consumers, so a meter the trainer skips is
+    measured without being judged.
+    """
+
+    def _controllable_config(self, entity: str) -> dict:
+        return {"controllables": [{"consumption": {"energy_entity_id": entity}}]}
+
+    def test_the_grid_meter_keeps_its_power_reading_and_gains_a_history_fact(self):
+        hass = _ProbingHass({"sensor.grid_power": _State("1400")})
+        first, second = self.inspect_twice(hass, _config(), GRID_POWER_HISTORY_PATH)
+        self.assertEqual(
+            [fact["token"] for fact in first["facts"]], ["value", "power_reading.exporting"]
+        )
+        tokens = [fact["token"] for fact in second["facts"]]
+        self.assertIn("history_depth", tokens)
+        fact = _fact(second, "history")
+        self.assertEqual(
+            fact["params"],
+            {"available": 41, "statistics": 41, "required": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS},
+        )
+
+    def test_the_battery_capacity_sensor_is_judged_against_solar_bias(self):
+        hass = _ProbingHass({"sensor.batt_capacity": _State("10", unit="kWh")})
+        _, inspection = self.inspect_twice(
+            hass,
+            {"power_devices": {"battery": {"entities": {"capacity": "sensor.batt_capacity"}}}},
+            BATTERY_CAPACITY_HISTORY_PATH,
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        )
+
+    def test_a_controllables_energy_meter_is_judged_against_house_consumption(self):
+        hass = _ProbingHass({"sensor.dishwasher_energy": _State("3.4", unit="kWh")})
+        _, inspection = self.inspect_twice(
+            hass,
+            self._controllable_config("sensor.dishwasher_energy"),
+            CONTROLLABLE_ENERGY_HISTORY_PATH,
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
+        )
+        self.assertIn(
+            ["training", "house_consumption", "min_history_days"],
+            inspection["dependsOn"],
+        )
+
+    def test_the_first_daily_forecast_entity_is_judged_against_solar_bias(self):
+        # The forecast side of the comparison: `load_trainer_samples` recovers
+        # the published per-slot prediction from this entity's recorded
+        # attributes, so its history is as much a requirement as the actual
+        # production meter's.
+        hass = _ProbingHass({"sensor.solcast_today": _State("18.2", unit="kWh")})
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {"daily_energy_entity_ids": ["sensor.solcast_today"]}
+                }
+            }
+        }
+        _, inspection = self.inspect_twice(hass, config, FORECAST_SOURCE_HISTORY_PATH)
+
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        )
+
+    def test_the_later_daily_forecast_entities_carry_no_requirement(self):
+        # Only index 0 is read for training; the rest keep the plain depth
+        # badge the wildcard already gave them.
+        hass = _ProbingHass({"sensor.solcast_tomorrow": _State("14.0", unit="kWh")})
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": [
+                            "sensor.solcast_today",
+                            "sensor.solcast_tomorrow",
+                        ]
+                    }
+                }
+            }
+        }
+        path = FORECAST_SOURCE_HISTORY_PATH[:-1] + (1,)
+        _, inspection = self.inspect_twice(hass, config, path)
+
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertNotIn("required", fact["params"])
+
+    def test_a_meter_opted_out_of_deferral_is_measured_but_not_judged(self):
+        # `consumption.deferrable: false` meters a load for its own projection
+        # and keeps it out of the house split -- so the house window never
+        # reads this meter, and an orange badge against it would be a lie.
+        hass = _ProbingHass({"sensor.fridge_energy": _State("3.4", unit="kWh")})
+        config = {
+            "controllables": [
+                {
+                    "consumption": {
+                        "energy_entity_id": "sensor.fridge_energy",
+                        "deferrable": False,
+                    }
+                }
+            ]
+        }
+        _, inspection = self.inspect_twice(
+            hass, config, CONTROLLABLE_ENERGY_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertNotIn("required", fact["params"])
+        self.assertNotIn(
+            ["training", "house_consumption", "min_history_days"],
+            inspection["dependsOn"],
+        )
+
+
 class TestHistoryCache(_HistoryTestCase):
     """The recorder is asked once a minute, not once every two seconds."""
 
@@ -656,7 +855,9 @@ class TestHistoryCache(_HistoryTestCase):
 
         aged = history._MEASUREMENTS[HOUSE_METER]
         history._MEASUREMENTS[HOUSE_METER] = history._Measurement(
-            days=aged.days, at=aged.at - history.HISTORY_CACHE_TTL - 1
+            raw_states=aged.raw_states,
+            statistics=aged.statistics,
+            at=aged.at - history.HISTORY_CACHE_TTL - 1,
         )
         inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
         self.assertEqual(len(self.probe.calls), 2)
@@ -700,13 +901,13 @@ class TestHistoryDraftVersusSaved(_HistoryTestCase):
         self.assertEqual(_fact(result["saved"], "history")["severity"], "ok")
 
     def test_an_unrelated_day_count_in_the_same_group_changes_nothing(self):
-        # ``training_window_days`` rides in the same group's slot, because it is
-        # the same entity's setting -- but the badge does not consult it, so
-        # editing it must not offer a revert.
+        # ``training_window_days`` rides in the same training group, because
+        # it is the same trainer's setting -- but the badge does not consult
+        # it, so editing it must not offer a revert.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
         draft = _history_config()
-        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        draft["training"] = {"house_consumption": {"training_window_days": 90}}
         [result] = inspect_targets(
             hass,
             draft,
@@ -799,18 +1000,19 @@ class TestWhatARevertRestores(_HistoryTestCase):
     """``dependsOn`` names what the reading was made of, and nothing else."""
 
     def test_only_the_setting_the_badge_reads_is_listed(self):
-        # ``training_window_days`` renders inside the same group because it is
-        # the same entity's setting -- but the badge never reads it, so a
-        # revert must not reset it. The group learns that from here.
+        # ``training_window_days`` renders inside the same training group
+        # because it is the same trainer's setting -- but the badge never
+        # reads it, so a revert must not reset it. The group learns that from
+        # here.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         draft = _history_config(min_history_days=30)
-        draft["power_devices"]["house"]["forecast"]["training_window_days"] = 90
+        draft["training"]["house_consumption"]["training_window_days"] = 90
         _, inspection = self.inspect_twice(hass, draft, HOUSE_HISTORY_PATH)
         self.assertEqual(
             inspection["dependsOn"],
             [
                 ["power_devices", "house", "forecast", "total_energy_entity_id"],
-                ["power_devices", "house", "forecast", "min_history_days"],
+                ["training", "house_consumption", "min_history_days"],
             ],
         )
 
@@ -827,6 +1029,9 @@ class TestWhatARevertRestores(_HistoryTestCase):
         )
 
     def test_a_power_reading_depends_on_its_entity_and_its_polarity(self):
+        # ``grid`` is also wrapped for the history fact solar-bias curtailment
+        # detection needs, so its requirement path rides along too -- the
+        # power reading and the history requirement are one composed answer.
         inspection = inspect_target(
             _Hass({"sensor.grid_power": _State("1400")}), _config(), POWER_PATH
         ).to_dict()
@@ -835,6 +1040,7 @@ class TestWhatARevertRestores(_HistoryTestCase):
             [
                 ["power_devices", "grid", "entities", "power"],
                 ["power_devices", "grid", "entities", "power_polarity"],
+                ["training", "solar_bias", "min_history_days"],
             ],
         )
 
@@ -847,16 +1053,23 @@ class TestWhatARevertRestores(_HistoryTestCase):
             POWER_PATH,
         )
         self.assertEqual(len(inspection.signature), len(inspection.depends_on))
-        self.assertEqual(inspection.signature, ("sensor.grid_power", "positive_is_import"))
+        self.assertEqual(
+            inspection.signature,
+            ("sensor.grid_power", "positive_is_import", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS),
+        )
 
 
 class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
     """The two halves of one measurement must not drift apart.
 
     ``_compute_history_days`` reduces rows a training run already fetched;
-    ``query_history_days`` asks the recorder from an entity id, for the editor,
-    which holds no rows. Same question, same arithmetic -- and if that stops
-    being true, a group will contradict the card that reads the same history.
+    ``query_history_depths`` asks the recorder from an entity id, for the
+    editor, which holds no rows. Same question, same arithmetic -- and if that
+    stops being true, a group will contradict the card that reads the same
+    history.
+
+    It is the *raw-states* depth that has to agree, because that is the table
+    the trainer whose rows ``_compute_history_days`` reduces actually read.
     """
 
     async def test_both_paths_report_the_same_depth_for_the_same_oldest_sample(self):
@@ -878,20 +1091,29 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                 ]
                 from_rows = _compute_history_days(rows, today_local=today)
 
-                async def _oldest(hass, ids, *, local_tz, _date=oldest):
+                async def _oldest(hass, entity_id, *, local_tz, _date=oldest):
                     return _date
 
+                async def _no_statistics(hass, ids, *, local_tz):
+                    return None
+
+                # Statistics are stubbed empty on purpose: the depth that has
+                # to agree with the trainer is the raw-states one, and pinning
+                # it here means a statistics table that disagreed could never
+                # be mistaken for agreement.
                 with unittest.mock.patch.object(
-                    span_mod, "query_oldest_statistics_date", _oldest
+                    span_mod, "_query_oldest_state_date", _oldest
+                ), unittest.mock.patch.object(
+                    span_mod, "query_oldest_statistics_date", _no_statistics
                 ):
-                    from_entity = await span_mod.query_history_days(
+                    depths = await span_mod.query_history_depths(
                         None,
                         "sensor.house_energy",
                         today_local=today,
                         local_tz=timezone.utc,
                     )
                 self.assertEqual(from_rows, days_back)
-                self.assertEqual(from_entity, from_rows)
+                self.assertEqual(depths.raw_states_days, from_rows)
 
     async def test_nothing_recorded_is_zero_days_on_both_paths(self):
         async def _nothing(hass, ids, *, local_tz):
@@ -903,20 +1125,26 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
         with unittest.mock.patch.object(
             span_mod, "query_oldest_statistics_date", _nothing
         ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _no_states):
-            from_entity = await span_mod.query_history_days(
+            depths = await span_mod.query_history_depths(
                 None,
                 "sensor.house_energy",
                 today_local=date(2026, 8, 26),
                 local_tz=timezone.utc,
             )
-        self.assertEqual(from_entity, 0)
+        self.assertEqual(depths.raw_states_days, 0)
         self.assertEqual(_compute_history_days([], today_local=date(2026, 8, 26)), 0)
 
 
-class TestHistoryDaysFallback(unittest.IsolatedAsyncioTestCase):
-    """Statistics answer where they exist; raw states answer where they do not."""
+class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
+    """``query_history_depths`` answers with both numbers, unconditionally.
 
-    async def _days(self, *, statistics, state_date, calls: list[str]):
+    Unlike the single-number fallback this replaced, which short-circuited
+    once statistics answered, it always asks both tables -- the whole point is
+    telling a reader where they disagree, and a caller that skipped the second
+    query could never say.
+    """
+
+    async def _depths(self, *, statistics, state_date, calls: list[str]):
         async def _stats(hass, ids, *, local_tz):
             calls.append("statistics")
             return statistics
@@ -928,37 +1156,40 @@ class TestHistoryDaysFallback(unittest.IsolatedAsyncioTestCase):
         with unittest.mock.patch.object(
             span_mod, "query_oldest_statistics_date", _stats
         ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _states):
-            return await span_mod.query_history_days(
+            return await span_mod.query_history_depths(
                 None,
                 "sensor.forecast_today",
                 today_local=date(2026, 8, 26),
                 local_tz=timezone.utc,
             )
 
-    async def test_statistics_answer_alone_when_there_are_any(self):
+    async def test_both_queries_run_even_when_statistics_answers(self):
         calls: list[str] = []
-        days = await self._days(
+        depths = await self._depths(
             statistics=date(2026, 7, 16), state_date=date(2020, 1, 1), calls=calls
         )
-        self.assertEqual(days, 41)
-        self.assertEqual(calls, ["statistics"])
-
-    async def test_an_entity_the_recorder_compiles_no_statistics_for_still_has_history(self):
-        # A forecast sensor with no ``state_class`` has no statistics at all,
-        # and calling that zero days would be a plain falsehood about an entity
-        # the recorder has been storing all year.
-        calls: list[str] = []
-        days = await self._days(
-            statistics=None, state_date=date(2026, 7, 16), calls=calls
-        )
-        self.assertEqual(days, 41)
+        self.assertEqual(depths.statistics_days, 41)
+        self.assertEqual(depths.raw_states_days, (date(2026, 8, 26) - date(2020, 1, 1)).days)
+        # Both tables asked, unlike the single-answer fallback -- this is the
+        # one extra query in the common case, and it is what buys the second
+        # number.
         self.assertEqual(calls, ["statistics", "states"])
 
-    async def test_neither_source_holding_anything_is_zero(self):
+    async def test_no_more_than_two_queries_in_the_worst_case(self):
+        # The recorder-query-count guard: the single-number fallback this
+        # replaced already issued two reads (statistics, then raw states) in
+        # its worst case -- no statistics at all -- so this must not cost more
+        # than that same worst case, however both probes answer.
         calls: list[str] = []
-        self.assertEqual(
-            await self._days(statistics=None, state_date=None, calls=calls), 0
-        )
+        await self._depths(statistics=None, state_date=None, calls=calls)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, ["statistics", "states"])
+
+    async def test_neither_table_holding_anything_is_zero_for_both(self):
+        calls: list[str] = []
+        depths = await self._depths(statistics=None, state_date=None, calls=calls)
+        self.assertEqual(depths.statistics_days, 0)
+        self.assertEqual(depths.raw_states_days, 0)
 
 
 class _Connection:

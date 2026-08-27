@@ -17,10 +17,12 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             "forecast", {}
         )["bias_correction"] = {
             "enabled": True,
-            "min_history_days": 10,
-            "max_training_window_days": 90,
             "clamp_min": 0.1,
             "clamp_max": 5.0,
+        }
+        config.setdefault("training", {})["solar_bias"] = {
+            "min_history_days": 10,
+            "max_training_window_days": 90,
         }
 
         report = validate_config_document(config)
@@ -41,105 +43,131 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_min_history_days_invalid_when_zero(self) -> None:
+    def test_a_minimum_above_the_max_training_window_is_refused(self) -> None:
+        # The solar floor is judged against *usable* days, which can only ever
+        # be fewer than the window fetched -- so a minimum above the window is
+        # unreachable and would omit every slot on every run.
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "min_history_days": 0,
+        config["training"] = {
+            "solar_bias": {"min_history_days": 120, "max_training_window_days": 90}
         }
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.min_history_days"
+                issue.path == "training.solar_bias.min_history_days"
+                and issue.code == "invalid_relation"
+                for issue in report.errors
+            )
+        )
+
+    def test_min_history_days_invalid_when_zero(self) -> None:
+        config = _valid_config()
+        config["training"] = {"solar_bias": {"min_history_days": 0}}
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training.solar_bias.min_history_days"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
 
     def test_min_history_days_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "min_history_days": 366,
-        }
+        config["training"] = {"solar_bias": {"min_history_days": 366}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.min_history_days"
+                issue.path == "training.solar_bias.min_history_days"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
 
     def test_max_training_window_days_invalid_when_zero(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "max_training_window_days": 0,
-        }
+        config["training"] = {"solar_bias": {"max_training_window_days": 0}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.max_training_window_days"
+                issue.path == "training.solar_bias.max_training_window_days"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
 
     def test_max_training_window_days_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "max_training_window_days": 366,
-        }
+        config["training"] = {"solar_bias": {"max_training_window_days": 366}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.max_training_window_days"
-                for issue in report.errors
-            )
-        )
-
-    def test_legacy_training_window_days_invalid_when_zero(self) -> None:
-        config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "training_window_days": 0,
-        }
-
-        report = validate_config_document(config)
-        self.assertFalse(report.valid)
-        self.assertTrue(
-            any(
-                issue.path == "power_devices.solar.forecast.bias_correction.training_window_days"
+                issue.path == "training.solar_bias.max_training_window_days"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
 
     def test_min_valid_slot_days_invalid_when_zero(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "min_valid_slot_days": 0,
-        }
+        config["training"] = {"solar_bias": {"min_valid_slot_days": 0}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path
-                == "power_devices.solar.forecast.bias_correction.min_valid_slot_days"
+                issue.path == "training.solar_bias.min_valid_slot_days"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
 
     def test_min_valid_slot_days_valid_when_positive(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "min_valid_slot_days": 5,
-        }
+        config["training"] = {"solar_bias": {"min_valid_slot_days": 5}}
 
         report = validate_config_document(config)
         self.assertTrue(report.valid)
+
+    def test_the_retired_bias_correction_paths_are_refused(self) -> None:
+        """Saving with any of the five old paths fails with retired_config_key.
+
+        Load migrates (see ``_migrate_v13_to_v14``); save refuses -- these keys
+        moved to ``training.solar_bias`` and are never accepted at their old
+        home again, including the legacy ``training_window_days`` alias.
+        """
+        for retired_key, value in (
+            ("min_history_days", 10),
+            ("max_training_window_days", 90),
+            ("training_window_days", 45),
+            ("min_valid_slot_days", 5),
+        ):
+            with self.subTest(retired_key=retired_key):
+                config = _valid_config()
+                config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+                    retired_key: value,
+                }
+
+                report = validate_config_document(config)
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path
+                        == f"power_devices.solar.forecast.bias_correction.{retired_key}"
+                        and issue.code == "retired_config_key"
+                        for issue in report.errors
+                    )
+                )
 
     def test_clamp_min_invalid_when_zero(self) -> None:
         config = _valid_config()

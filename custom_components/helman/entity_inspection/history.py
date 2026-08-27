@@ -14,6 +14,15 @@ window, a minimum valid-slot count) are simply other settings of the same
 entity. Moving one into a group's slot is a layout choice; consulting it would
 be a meaning choice, and meaning choices live here.
 
+**The fact carries both tables' depth, and severity is judged on the one that
+trains.** Long-term statistics and raw states can disagree by years on a stock
+recorder (``purge_keep_days`` prunes one and not the other), and every trainer
+in this integration reads raw states -- so a badge that judged "enough
+history" against statistics would read green for an entity training will find
+almost empty. ``available`` in the fact's params is always the raw-states
+depth for exactly that reason; ``statistics`` rides alongside it so a reader
+can see the gap the recorder-versus-statistics split (issue #169) is about.
+
 Two things make this evaluator different from :mod:`.power`, and both are about
 the recorder rather than about history:
 
@@ -35,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -55,9 +65,17 @@ HISTORY_CACHE_TTL = 60.0
 
 @dataclass(frozen=True)
 class _Measurement:
-    """What the last probe found, and when. ``days`` is ``None`` if it failed."""
+    """What the last probe found, and when.
 
-    days: int | None
+    ``raw_states`` and ``statistics`` are both ``None`` together if the probe
+    failed outright -- a recorder that is not set up, an import error, a query
+    that raised. A successful probe always fills both, with ``0`` meaning "the
+    recorder holds nothing in that table", the same convention
+    :func:`~.recorder_statistics_span.query_history_depths` uses.
+    """
+
+    raw_states: int | None
+    statistics: int | None
     at: float
 
 
@@ -78,42 +96,101 @@ def reset_history_cache() -> None:
 
 
 def history_evaluator(
-    required_days_key: str | None = None,
+    required_days_path: tuple[str, ...] | None = None,
     default_required_days: int | None = None,
+    governs: Callable[[InspectionRequest], bool] | None = None,
 ) -> Evaluator:
     """An evaluator for one entity whose worth depends on its recorder history.
 
-    ``required_days_key`` names the setting -- a sibling of the entity in the
-    document, the same way a polarity is -- that says how much history this
-    entity is expected to have. ``default_required_days`` is what the runtime
-    uses when that setting is absent, so an untouched draft is judged against
-    the threshold that will actually apply rather than against nothing.
+    ``required_days_path`` is the absolute document path to the setting that
+    says how much history this entity is expected to have. It used to be a key
+    resolved as a sibling of the entity, back when every requirement lived in
+    the same group as the entity it governed; the v14 relocation moved the
+    settings to a top-level ``training`` section, so the registry now names
+    where they live instead of leaving this module to infer it.
+    ``default_required_days`` is what the runtime uses when that setting is
+    absent, so an untouched draft is judged against the threshold that will
+    actually apply rather than against nothing.
 
     Both ``None`` for a path where no amount of history is required: the badge
     then simply states what there is.
+
+    ``governs`` is for a wildcard key whose matches are not all read by the
+    same trainer. It is asked, per request, whether the requirement applies to
+    *this* match; when it says no the entity is still measured and still shows
+    its depth, but against no requirement -- so it cannot go orange for a
+    window that never reads it, and the setting stays out of ``consulted``.
+    A key whose every match is governed leaves this ``None``.
     """
 
     def evaluate(request: InspectionRequest) -> Inspection:
-        return _evaluate(request, required_days_key, default_required_days)
+        if governs is not None and not governs(request):
+            return _evaluate(request, None, None)
+        return _evaluate(request, required_days_path, default_required_days)
+
+    return evaluate
+
+
+def history_aware(
+    base: Evaluator,
+    required_days_path: tuple[str, ...] | None = None,
+    default_required_days: int | None = None,
+) -> Evaluator:
+    """Another evaluator's answer, with a history fact appended to it.
+
+    A power device's power sensor already has an evaluator -- :func:`.power.
+    evaluate_power_entity` reads it, resolves its polarity and says which way
+    it is flowing -- and that reading is worth keeping even for an entity a
+    ``training`` window also governs (the grid meter feeds curtailment
+    detection, for instance). Rerunning :func:`history_evaluator`'s own state
+    read on top would just be a second, disagreeing opinion about the same
+    entity, so this wraps the existing evaluator instead: run it, then append
+    exactly the history fact :func:`history_evaluator` would have produced,
+    onto the facts and the ``consulted`` list it already returned.
+
+    The base evaluator's own read of the entity is the one this trusts for
+    "does this entity exist at all" -- an ``entity_id`` of ``None`` (unset, or
+    a path the base evaluator refuses) short-circuits before any recorder
+    read is scheduled.
+    """
+
+    def evaluate(request: InspectionRequest) -> Inspection:
+        inspection = base(request)
+        if inspection.entity_id is None:
+            return inspection
+        required = _required_days(request, required_days_path, default_required_days)
+        consulted = inspection.consulted
+        if required_days_path is not None:
+            consulted += ((tuple(required_days_path), required),)
+        fact = _history_fact_if_worth_probing(
+            request.hass, inspection.entity_id, required
+        )
+        facts = inspection.facts + ((fact,) if fact is not None else ())
+        return Inspection(
+            entity_id=inspection.entity_id,
+            status=inspection.status,
+            facts=facts,
+            consulted=consulted,
+        )
 
     return evaluate
 
 
 def _evaluate(
     request: InspectionRequest,
-    required_days_key: str | None,
+    required_days_path: tuple[str, ...] | None,
     default_required_days: int | None,
 ) -> Inspection:
-    required = _required_days(request, required_days_key, default_required_days)
+    required = _required_days(request, required_days_path, default_required_days)
     # Only the setting the badge is actually judged against is listed here. The
-    # training window and the valid-slot minimum ride in the same group's slot,
-    # but nothing below reads them -- so they must neither move the
+    # training window and the valid-slot minimum live in the same training
+    # group, but nothing below reads them -- so they must neither move the
     # draft-versus-saved comparison nor be reset by a revert.
     consulted: tuple[tuple[tuple[Any, ...], Any], ...] = (
         (request.path, request.target_value()),
     )
-    if required_days_key is not None:
-        consulted += (((*request.path[:-1], required_days_key), required),)
+    if required_days_path is not None:
+        consulted += ((tuple(required_days_path), required),)
 
     entity_id = request.entity_id()
     if entity_id is None:
@@ -127,11 +204,11 @@ def _evaluate(
     # An entity that is not in the state machine at all is a dead id, and its
     # history is not worth a database scan. One that exists but reads
     # ``unknown`` right now is a different matter: its history is exactly what
-    # the reader is asking about.
-    if reading.problem is None or reading.problem.token != "entity_missing":
-        days = _history_days(request.hass, entity_id)
-        if days is not None:
-            facts.append(_history_fact(days, required))
+    # the reader is asking about. ``_history_fact_if_worth_probing`` makes
+    # exactly this call itself, from the same reading rule.
+    fact = _history_fact_if_worth_probing(request.hass, entity_id, required)
+    if fact is not None:
+        facts.append(fact)
 
     return Inspection(
         entity_id=entity_id,
@@ -141,27 +218,57 @@ def _evaluate(
     )
 
 
-def _history_fact(available: int, required: int | None) -> Fact:
-    """The depth, judged against a requirement when there is one."""
+def _history_fact_if_worth_probing(
+    hass: Any, entity_id: str, required: int | None
+) -> Fact | None:
+    """The history fact for ``entity_id``, unless it is a dead id.
+
+    Shared between :func:`history_evaluator` and :func:`history_aware`, which
+    each already know their entity exists in some sense (a numeric reading, a
+    reading :mod:`.power` accepted) but neither has necessarily ruled out an
+    id the state machine has never heard of -- so this checks again, cheaply:
+    a state-machine lookup, not a recorder query.
+    """
+    reading = read_numeric_state(hass, entity_id)
+    if reading.problem is not None and reading.problem.token == "entity_missing":
+        return None
+    depths = _history_depths(hass, entity_id)
+    if depths is None:
+        return None
+    return _history_fact(depths, required)
+
+
+def _history_fact(depths: _Measurement, required: int | None) -> Fact:
+    """The depth in both tables, judged against a requirement when there is one.
+
+    ``available`` is always the raw-states depth -- what the training runs
+    that read ``recorder_hourly_series`` will actually find -- and
+    ``statistics`` rides alongside it so a reader can see where the two
+    disagree. Severity never looks at ``statistics``: a deep statistics table
+    behind a shallow, purged raw-states one is exactly the false green
+    #169 exists to remove.
+    """
+    raw_states = depths.raw_states or 0
+    statistics = depths.statistics or 0
     if required is None:
         return Fact(
             id="history",
             token="history_depth_only",
-            params={"available": available},
+            params={"available": raw_states, "statistics": statistics},
             severity="neutral",
         )
-    severity: Severity = "ok" if available >= required else "warn"
+    severity: Severity = "ok" if raw_states >= required else "warn"
     return Fact(
         id="history",
         token="history_depth",
-        params={"available": available, "required": required},
+        params={"available": raw_states, "statistics": statistics, "required": required},
         severity=severity,
     )
 
 
 def _required_days(
     request: InspectionRequest,
-    required_days_key: str | None,
+    required_days_path: tuple[str, ...] | None,
     default_required_days: int | None,
 ) -> int | None:
     """The threshold this entity is judged against, read from the draft.
@@ -171,9 +278,9 @@ def _required_days(
     would itself apply, because a half-typed number must not make the badge
     change its mind about what is being asked for.
     """
-    if required_days_key is None:
+    if required_days_path is None:
         return None
-    raw = request.value(*request.path[:-1], required_days_key)
+    raw = request.value(*required_days_path)
     if isinstance(raw, bool):
         return default_required_days
     if isinstance(raw, int) and raw > 0:
@@ -183,8 +290,8 @@ def _required_days(
     return default_required_days
 
 
-def _history_days(hass: Any, entity_id: str) -> int | None:
-    """The last measured depth for this entity, refreshing it when it is stale.
+def _history_depths(hass: Any, entity_id: str) -> _Measurement | None:
+    """The last measured depths for this entity, refreshing them when stale.
 
     ``None`` means "not measured yet, or the last attempt failed" -- which is a
     fact the editor is not told, because "we do not know" is not worth a badge
@@ -193,7 +300,9 @@ def _history_days(hass: Any, entity_id: str) -> int | None:
     measurement = _MEASUREMENTS.get(entity_id)
     if measurement is None or time.monotonic() - measurement.at >= HISTORY_CACHE_TTL:
         _schedule_measurement(hass, entity_id)
-    return measurement.days if measurement is not None else None
+    if measurement is None or measurement.raw_states is None:
+        return None
+    return measurement
 
 
 def _schedule_measurement(hass: Any, entity_id: str) -> None:
@@ -215,30 +324,35 @@ def _schedule_measurement(hass: Any, entity_id: str) -> None:
 
 async def _async_measure(hass: Any, entity_id: str) -> None:
     """Probe the recorder once and record what it said, success or failure."""
-    days: int | None = None
+    raw_states: int | None = None
+    statistics: int | None = None
     try:
-        days = await _query(hass, entity_id)
+        raw_states, statistics = await _query(hass, entity_id)
     except Exception as err:  # noqa: BLE001 - the recorder need not be there
         _LOGGER.debug("History depth probe failed for %s: %s", entity_id, err)
     finally:
         _IN_FLIGHT.discard(entity_id)
         # Cached either way: a failure that was not remembered would be retried
         # on every two-second tick.
-        _MEASUREMENTS[entity_id] = _Measurement(days=days, at=time.monotonic())
+        _MEASUREMENTS[entity_id] = _Measurement(
+            raw_states=raw_states, statistics=statistics, at=time.monotonic()
+        )
 
 
-async def _query(hass: Any, entity_id: str) -> int:
+async def _query(hass: Any, entity_id: str) -> tuple[int, int]:
     """The one recorder read, behind a name a test can replace.
 
-    The import is deferred because ``recorder_statistics_span`` reaches into the
-    recorder integration, which need not be set up -- an import error is one
-    more way the recorder cannot answer, not a reason to fail a poll.
+    Returns ``(raw_states_days, statistics_days)``. The import is deferred
+    because ``recorder_statistics_span`` reaches into the recorder integration,
+    which need not be set up -- an import error is one more way the recorder
+    cannot answer, not a reason to fail a poll.
     """
-    from ..recorder_statistics_span import query_history_days
+    from ..recorder_statistics_span import query_history_depths
 
-    return await query_history_days(
+    depths = await query_history_depths(
         hass,
         entity_id,
         today_local=dt_util.now().date(),
         local_tz=dt_util.DEFAULT_TIME_ZONE,
     )
+    return depths.raw_states_days, depths.statistics_days

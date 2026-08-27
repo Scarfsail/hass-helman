@@ -121,6 +121,7 @@ import {
   ENTITY_GROUP_CONNECTED,
   ENTITY_GROUP_REVERT,
   entityGroupKey,
+  type EntityFact,
   type EntityGroupRevertDetail,
   type EntityInspectionResult,
   type HelmanEntityGroup,
@@ -235,6 +236,16 @@ interface YamlEditorValueChangedDetail {
   value: unknown;
   isValid: boolean;
   errorMsg?: string;
+}
+
+/** One row of a training tab depth table -- see `_renderTrainingDepthTable`. */
+interface TrainingDepthRow {
+  /** Already localized, or (for a controllable) the reader's own name. */
+  label: string;
+  /** Where the entity id lives -- also the key `_entityInspections` is read by. */
+  path: PathSegment[];
+  /** i18n key for what the trainer takes from this entity. */
+  roleKey: string;
 }
 
 export class HelmanConfigEditorPanel
@@ -617,6 +628,115 @@ export class HelmanConfigEditorPanel
     .inline-note {
       color: var(--secondary-text-color);
       font-size: 0.9rem;
+    }
+
+    /*
+     * The training tab's per-entity depth tables.
+     *
+     * A horizontal scroller of its own -- a long entity id plus six numeric
+     * columns does not fit a narrow panel, and the page itself must never
+     * gain a horizontal scrollbar because of one table inside it.
+     */
+    .training-depth-table-wrap {
+      overflow-x: auto;
+      margin-top: 4px;
+    }
+
+    .training-depth-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+
+    .training-depth-table th,
+    .training-depth-table td {
+      padding: 6px 10px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--divider-color);
+    }
+
+    /* Only the digits hold a line. Everything else -- the prose, the entity
+       ids, and these columns' own two-word headings -- wraps, so a narrow
+       screen makes the table taller instead of pushing it sideways. */
+    .training-depth-table th.training-depth-number,
+    .training-depth-table td.training-depth-number {
+      text-align: right;
+    }
+
+    .training-depth-table td.training-depth-number {
+      white-space: nowrap;
+    }
+
+    .training-depth-table th {
+      color: var(--secondary-text-color);
+      font-weight: 600;
+    }
+
+    .training-depth-label {
+      font-weight: 600;
+    }
+
+    .training-depth-entity-id {
+      color: var(--secondary-text-color);
+      font-size: 0.82rem;
+      /* Entity ids are long and have no spaces to break at. */
+      overflow-wrap: anywhere;
+    }
+
+    /* The name and id, as one target for HA's more-info dialog. A button so
+       it is reachable by keyboard and announced as an action; styled back
+       down to the plain two-line cell it replaces. */
+    .training-depth-entity-button {
+      display: block;
+      width: 100%;
+      padding: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    /* The id is as much the target as the name -- it is the part a reader
+       recognises -- so both take the hover treatment, not just the heading. */
+    .training-depth-entity-button:hover .training-depth-label,
+    .training-depth-entity-button:hover .training-depth-entity-id,
+    .training-depth-entity-button:focus-visible .training-depth-label,
+    .training-depth-entity-button:focus-visible .training-depth-entity-id {
+      color: var(--primary-color);
+      text-decoration: underline;
+    }
+
+    .training-depth-entity-button:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+
+    .training-depth-unset {
+      font-style: italic;
+    }
+
+    /* Entity names and ids. A share of the table rather than a width in ch,
+       because the overflow-wrap: anywhere below drops the column's intrinsic
+       width to a single character -- auto layout would otherwise hand the
+       whole table to the prose column and break every id across four lines. */
+    .training-depth-table td:first-child,
+    .training-depth-table th:first-child {
+      width: 26%;
+    }
+
+    /* The one column that is prose: it takes what the rest leaves and wraps
+       inside it, so the table never needs horizontal scrolling. */
+    .training-depth-role {
+      color: var(--secondary-text-color);
+    }
+
+    /* Same hue the entity-group badge uses for a shallow raw-states depth. */
+    .training-depth-warn {
+      color: var(--warning-color, #ffa600);
+      font-weight: 600;
     }
 
     .section-footer {
@@ -1106,6 +1226,12 @@ export class HelmanConfigEditorPanel
               class=${this._activeTab === tab.id ? "active" : ""}
               @click=${() => {
                 this._activeTab = tab.id;
+                // The training tab's depth table asks about entities no
+                // mounted `helman-entity-group` announces -- nothing else
+                // triggers a poll on a plain tab switch, so this one does.
+                if (tab.id === "training") {
+                  this._requestEntityInspection();
+                }
               }}
             >
               ${this._renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
@@ -1133,6 +1259,8 @@ export class HelmanConfigEditorPanel
           TAB_SCOPE_IDS.power_devices,
           this._renderPowerDevicesTab(),
         );
+      case "training":
+        return this._renderTabScope(TAB_SCOPE_IDS.training, this._renderTrainingTab());
       case "automation":
         return this._renderTabScope(
           TAB_SCOPE_IDS.automation,
@@ -1667,22 +1795,6 @@ export class HelmanConfigEditorPanel
                 includeDomains: ["sensor"],
                 helpKey: "editor.help.house_forecast_total_energy_entity",
               },
-              html`
-                <div class="field-grid">
-                  ${this._renderOptionalNumberField(
-                    ["power_devices", "house", "forecast", "min_history_days"],
-                    "editor.fields.min_history_days",
-                    undefined,
-                    "editor.help.house_min_history_days",
-                  )}
-                  ${this._renderOptionalNumberField(
-                    ["power_devices", "house", "forecast", "training_window_days"],
-                    "editor.fields.training_window_days",
-                    undefined,
-                    "editor.help.house_training_window_days",
-                  )}
-                </div>
-              `,
             )}
           </div>
         `,
@@ -1791,28 +1903,6 @@ export class HelmanConfigEditorPanel
                             includeDomains: ["sensor"],
                             helpKey: "editor.help.bias_correction_total_energy_entity",
                           },
-                          html`
-                            <div class="field-grid">
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                                "editor.fields.bias_correction_min_history_days",
-                                "editor.helpers.bias_correction_min_history_days",
-                                "editor.help.bias_correction_min_history_days",
-                              )}
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                                "editor.fields.max_training_window_days",
-                                "editor.helpers.bias_correction_max_training_window_days",
-                                "editor.help.bias_correction_max_training_window_days",
-                              )}
-                              ${this._renderOptionalNumberField(
-                                ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
-                                "editor.fields.bias_correction_min_valid_slot_days",
-                                "editor.helpers.bias_correction_min_valid_slot_days",
-                                "editor.help.bias_correction_min_valid_slot_days",
-                              )}
-                            </div>
-                          `,
                         )}
                       </div>
 
@@ -2046,6 +2136,295 @@ export class HelmanConfigEditorPanel
         { initialOpen: false },
       )}
     `;
+  }
+
+  /**
+   * The five history-window settings, relocated here from the two entities
+   * that used to carry them. Same fields, same paths' meaning — only where
+   * they live in the document and in the editor moved.
+   *
+   * P2 (issue #172) is what makes this page worth opening: prose under each
+   * block says what the setting decides, and a table lists every entity the
+   * window governs against its configured window/minimum and its measured
+   * depth in both recorder tables. The table is fed by the same
+   * `helman/inspect_entities` poll the pickers elsewhere in the editor use —
+   * see `_trainingDepthTargets` — so it costs no second measurement path.
+   */
+  private _renderTrainingTab(): TemplateResult {
+    return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.house_consumption,
+        html`
+          <p class="inline-note">${this._t("editor.notes.training_house_consumption_what")}</p>
+          <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
+          <div class="field-grid">
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "min_history_days"],
+              "editor.fields.house_consumption_min_history_days",
+              "editor.helpers.house_consumption_min_history_days",
+              "editor.help.house_consumption_min_history_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "training_window_days"],
+              "editor.fields.house_consumption_training_window_days",
+              "editor.helpers.house_consumption_training_window_days",
+              "editor.help.house_consumption_training_window_days",
+            )}
+          </div>
+          ${this._renderTrainingDepthTable(this._houseConsumptionDepthRows())}
+        `,
+      )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.solar_bias,
+        html`
+          <p class="inline-note">${this._t("editor.notes.training_solar_bias_what")}</p>
+          <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
+          <div class="field-grid">
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "min_history_days"],
+              "editor.fields.solar_bias_min_history_days",
+              "editor.helpers.solar_bias_min_history_days",
+              "editor.help.solar_bias_min_history_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "max_training_window_days"],
+              "editor.fields.solar_bias_max_training_window_days",
+              "editor.helpers.solar_bias_max_training_window_days",
+              "editor.help.solar_bias_max_training_window_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "solar_bias", "min_valid_slot_days"],
+              "editor.fields.solar_bias_min_valid_slot_days",
+              "editor.helpers.solar_bias_min_valid_slot_days",
+              "editor.help.solar_bias_min_valid_slot_days",
+            )}
+          </div>
+          <p class="inline-note">${this._t("editor.notes.training_solar_bias_min_valid_slot_days")}</p>
+          ${this._renderTrainingDepthTable(this._solarBiasDepthRows())}
+        `,
+      )}
+    `;
+  }
+
+  /**
+   * The house meter, plus one row per controllable's own energy meter.
+   *
+   * `controllables.*.consumption.energy_entity_id` is the same path a
+   * controllable's picker already reads elsewhere in the editor — this is a
+   * second, read-only view of it, not a second control. Each row also carries
+   * that controllable's own `history_lookback_days` (really
+   * `consumption.projection.lookback_days`), a *different* per-appliance
+   * setting that happens to read the same entity: it governs only that one
+   * appliance's own consumption projection, never the house trainer.
+   */
+  private _houseConsumptionDepthRows(): TrainingDepthRow[] {
+    const controllables = asJsonArray(this._getValue(["controllables"])) ?? [];
+    return [
+      {
+        label: this._t("editor.training_depth.house_meter"),
+        path: ["power_devices", "house", "forecast", "total_energy_entity_id"],
+        roleKey: "editor.training_depth.role_house_meter",
+      },
+      ...controllables.flatMap((controllable, index): TrainingDepthRow[] => {
+        const entry = asJsonObject(controllable) ?? {};
+        // The trainer's list, not the config's: `read_deferrable_consumers`
+        // refuses the inverter (validation denies it a `consumption` block at
+        // all) and honours `deferrable: false`, so a row for either would
+        // claim the house window governs a meter it never reads.
+        const consumption = asJsonObject(entry.consumption) ?? {};
+        const deferrable = consumption.deferrable !== false;
+        if (this._stringValue(entry.kind) === "inverter" || !deferrable) return [];
+        const name =
+          this._stringValue(entry.name) ||
+          this._stringValue(entry.id) ||
+          `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`;
+        return [
+          {
+            label: name,
+            path: ["controllables", index, "consumption", "energy_entity_id"],
+            roleKey: "editor.training_depth.role_controllable",
+          },
+        ];
+      }),
+    ];
+  }
+
+   /**
+   * Both sides of the comparison this trainer makes, then the two entities
+   * that tell a capped slot from a genuinely poor one.
+   *
+   * The forecast side is `daily_energy_entity_ids[0]` and only that one:
+   * `load_trainer_samples` reads the first entry alone, recovering the
+   * forecast *as it was published* from that entity's recorded
+   * `wh_period_15m` attribute at each past midnight
+   * (`forecast_history.py:275`). Attributes live in recorder states and never
+   * in long-term statistics, so its statistics depth says nothing about
+   * whether this trainer can read it — the role text says so, because the
+   * number in that column would otherwise reassure.
+   *
+   * Curtailment detection reads grid power and the battery SoC sensor (which
+   * lives under the `capacity` key — see `actuals.py:411`). None of the three
+   * supporting entities has a requirement of its own; all are judged against
+   * the same `training.solar_bias.min_history_days` the production meter is.
+   */
+  private _solarBiasDepthRows(): TrainingDepthRow[] {
+    return [
+      {
+        label: this._t("editor.training_depth.bias_meter"),
+        path: [
+          "power_devices",
+          "solar",
+          "forecast",
+          "bias_correction",
+          "total_energy_entity_id",
+        ],
+        roleKey: "editor.training_depth.role_bias_meter",
+      },
+      {
+        label: this._t("editor.training_depth.forecast_source"),
+        path: ["power_devices", "solar", "forecast", "daily_energy_entity_ids", 0],
+        roleKey: "editor.training_depth.role_forecast_source",
+      },
+      {
+        label: this._t("editor.training_depth.grid_power"),
+        path: ["power_devices", "grid", "entities", "power"],
+        roleKey: "editor.training_depth.role_grid_power",
+      },
+      {
+        label: this._t("editor.training_depth.battery_soc"),
+        path: ["power_devices", "battery", "entities", "capacity"],
+        roleKey: "editor.training_depth.role_battery_soc",
+      },
+    ];
+  }
+
+  /**
+   * Every target the training tab's depth tables need, for the shared poll.
+   *
+   * Computed only while the training tab is active: the tables render
+   * nothing otherwise, and asking about entities nobody can see would be a
+   * poll that never pays for itself. `_pollEntityInspections` merges this
+   * list with the mounted `helman-entity-group` paths and de-duplicates by
+   * key, so this is not a second call and not a second cache.
+   */
+  private _trainingDepthTargets(): { key: string; path: PathSegment[] }[] {
+    if (this._activeTab !== "training") return [];
+    const rows = [...this._houseConsumptionDepthRows(), ...this._solarBiasDepthRows()];
+    return rows.map((row) => ({ key: entityGroupKey(row.path), path: row.path }));
+  }
+
+  /**
+   * One depth table: what the trainer reads, and how much of it there is.
+   *
+   * Deliberately *not* here: the configured window and minimum. Both are the
+   * same for every row -- they are this section's own settings, edited in the
+   * fields directly above -- so a column of them repeated down the table said
+   * nothing a reader could not already see. Nor is a controllable's own
+   * `consumption.projection.lookback_days`: that is a different trainer's
+   * setting, configured per appliance and not on this page, and putting it
+   * here invited the reading that the house window and the appliance lookback
+   * are alternatives rather than two unrelated reads of one sensor.
+   *
+   * What is left is what a reader cannot get anywhere else: which entities
+   * this trainer reads, what it takes from each, and how deep the recorder
+   * actually goes for them.
+   */
+  private _renderTrainingDepthTable(
+    rows: TrainingDepthRow[],
+  ): TemplateResult | typeof nothing {
+    if (rows.length === 0) return nothing;
+    return html`
+      <div class="training-depth-table-wrap">
+        <table class="training-depth-table">
+          <thead>
+            <tr>
+              <th>${this._t("editor.training_depth.column_entity")}</th>
+              <th>${this._t("editor.training_depth.column_role")}</th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_raw_states")}
+              </th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_statistics")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => this._renderTrainingDepthRow(row))}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
+    const entityId = this._stringValue(this._getValue(row.path));
+    const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
+    const historyFact: EntityFact | undefined = draft?.facts?.find(
+      (fact) => fact.id === "history",
+    );
+    const rawStates = historyFact?.params?.["available"];
+    const statistics = historyFact?.params?.["statistics"];
+    const name = html`<div class="training-depth-label">${row.label}</div>`;
+    const warnClass =
+      historyFact?.severity === "warn"
+        ? "training-depth-number training-depth-warn"
+        : "training-depth-number";
+    return html`
+      <tr>
+        <td>
+          ${entityId
+            ? html`<button
+                type="button"
+                class="training-depth-entity-button"
+                aria-label=${this._moreInfoLabel(entityId)}
+                title=${entityId}
+                @click=${() => this._showMoreInfo(entityId)}
+              >
+                ${name}
+                <div class="training-depth-entity-id">${entityId}</div>
+              </button>`
+            : html`${name}
+                <div class="training-depth-entity-id training-depth-unset">
+                  ${this._t("editor.training_depth.no_entity")}
+                </div>`}
+        </td>
+        <td class="training-depth-role">${this._t(row.roleKey)}</td>
+        <td class=${warnClass}>${this._trainingDepthCell(rawStates)}</td>
+        <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
+      </tr>
+    `;
+  }
+
+  /**
+   * Ask Home Assistant for its more-info dialog.
+   *
+   * `hass-more-info` is HA's own protocol, and its dialog manager listens on
+   * the root `home-assistant` element several shadow roots above this one --
+   * hence `composed`, without which the event stops at this panel's boundary.
+   * Same contract `entity-group.ts` uses for the badge that opens an entity.
+   */
+  private _showMoreInfo(entityId: string): void {
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** "Show details of sensor.x", with the id substituted if the string asks. */
+  private _moreInfoLabel(entityId: string): string {
+    const template = this._t("editor.entity_group.more_info_aria");
+    return template.includes("{entity}")
+      ? template.replace("{entity}", entityId)
+      : `${template} ${entityId}`;
+  }
+
+  /** A measured cell: the number, or a dash while it is unknown. */
+  private _trainingDepthCell(value: unknown): string {
+    return typeof value === "number" && Number.isFinite(value) ? String(value) : "—";
   }
 
   private _renderAutomationTab(): TemplateResult {
@@ -3649,8 +4028,20 @@ export class HelmanConfigEditorPanel
     if (!this.hass || !this._config) return;
     if (trigger === "idle" && this._inspectionInFlight > 0) return;
     const saved = this._savedConfig;
-    const targets = this._mountedEntityGroups()
-      .map((group) => ({ key: group.key, path: group.path }))
+    // The mounted groups plus the training tab's depth-table targets (empty
+    // outside that tab) -- one poll, one cache, deduplicated by key so a path
+    // both a group and the table care about is asked about once.
+    const seenKeys = new Set<string>();
+    const candidates = [
+      ...this._mountedEntityGroups().map((group) => ({ key: group.key, path: group.path })),
+      ...this._trainingDepthTargets(),
+    ];
+    const targets = candidates
+      .filter((target) => {
+        if (seenKeys.has(target.key)) return false;
+        seenKeys.add(target.key);
+        return true;
+      })
       .filter(
         ({ path }) =>
           stringValue(this._getValue(path)) !== "" ||
@@ -3746,6 +4137,7 @@ export class HelmanConfigEditorPanel
     const counts: Record<TabId, { errors: number; warnings: number }> = {
       general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
+      training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       controllables: { errors: 0, warnings: 0 },
     };

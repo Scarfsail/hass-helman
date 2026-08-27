@@ -59,18 +59,22 @@ def test_read_nested_config():
                 "forecast": {
                     "bias_correction": {
                         "enabled": False,
-                        "min_history_days": 5,
-                        "max_training_window_days": 45,
                         "training_time": "04:00",
                         "clamp_min": 0.5,
                         "clamp_max": 1.5,
-                        "min_valid_slot_days": 7,
                     },
                     "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
                     "total_energy_entity_id": "sensor.total",
                 }
             }
-        }
+        },
+        "training": {
+            "solar_bias": {
+                "min_history_days": 5,
+                "max_training_window_days": 45,
+                "min_valid_slot_days": 7,
+            }
+        },
     }
 
     bias = read_bias_config(config)
@@ -124,22 +128,43 @@ def test_the_retired_bias_training_time_still_wins_when_present():
     assert bias.training_time == "04:00"
 
 
-def test_legacy_training_window_days_is_still_accepted_as_fallback():
-    config = {
-        "power_devices": {
-            "solar": {
-                "forecast": {
-                    "bias_correction": {
-                        "training_window_days": 30,
-                    },
-                }
-            }
-        }
-    }
+def test_max_training_window_days_is_read_from_the_training_section():
+    # The legacy `training_window_days` alias was retired as a *read* concern
+    # by the v14 relocation: it is collapsed into `max_training_window_days`
+    # by `_migrate_v13_to_v14` on load, so read_bias_config never sees it --
+    # see tests/test_automation_migration.py::TrainingSectionRelocationTests
+    # for the alias-collapsing behaviour itself.
+    config = {"training": {"solar_bias": {"max_training_window_days": 30}}}
 
     bias = read_bias_config(config)
 
     assert bias.max_training_window_days == 30
+
+
+def test_a_non_mapping_training_section_falls_back_to_the_defaults():
+    import custom_components.helman.const as const
+
+    # `training:` typed bare in the whole-document YAML scope validates clean
+    # (`_validate_training_config` returns early on None), and read_bias_config
+    # runs unguarded from `HelmanCoordinator.async_setup` -- so a null or
+    # scalar section must not take the whole integration down with it.
+    for raw_training in (None, "nonsense", []):
+        bias = read_bias_config({"training": raw_training})
+
+        assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        assert (
+            bias.max_training_window_days
+            == const.SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+        )
+        assert bias.min_valid_slot_days == const.SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+
+
+def test_a_non_mapping_solar_bias_subsection_falls_back_to_the_defaults():
+    import custom_components.helman.const as const
+
+    bias = read_bias_config({"training": {"solar_bias": None}})
+
+    assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
 
 
 def test_slot_invalidation_fields_default_when_absent():

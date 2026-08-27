@@ -411,46 +411,61 @@ async def query_oldest_statistics_date(
     return datetime.fromtimestamp(oldest, tz=local_tz).date()
 
 
-async def query_history_days(
+@dataclass(frozen=True)
+class HistoryDepths:
+    """How much history the recorder holds for one entity, in both tables.
+
+    ``0`` in either field means "the recorder holds nothing there": there is
+    no meaningful difference, for a badge or a table, between "no rows" and
+    "zero days of rows".
+    """
+
+    statistics_days: int
+    raw_states_days: int
+
+
+async def query_history_depths(
     hass: HomeAssistant,
     entity_id: str,
     *,
     today_local: date,
     local_tz: tzinfo,
-) -> int:
-    """How many whole local days of history the recorder holds for one entity.
+) -> HistoryDepths:
+    """Both tables' depth for one entity, so a caller can show -- or judge -- either.
 
-    The same question :func:`~.consumption_forecast_profiles._compute_history_days`
-    answers, asked from the other end. That one is handed rows a training run has
-    already fetched and reduces them; this one starts from an entity id and asks
-    the recorder directly, which is what a config editor -- with nothing fetched
-    and no training run to wait for -- needs.
+    This used to be one number, picked by falling back from statistics to raw
+    states. That is the right answer for a caller that only wants to know "how
+    far back can this be shown", and the wrong one for a caller that has to say
+    how far back *training* can reach: every trainer reads raw states through
+    :mod:`recorder_hourly_series`, which ``purge_keep_days`` prunes, while
+    long-term statistics survive indefinitely -- so the fallback made a
+    shallow, pruned entity look perfectly deep (issue #169).
 
-    **The two must agree.** Same arithmetic, deliberately: whole days between the
-    local date the oldest sample falls on and ``today_local``, so an entity whose
-    first statistic is stamped yesterday reads as one day in both. They are two
-    functions only because neither call site can use the other's input without a
-    second round trip -- the trainer already holds the rows, and the editor holds
-    nothing. ``tests/test_entity_inspection.py`` pins the agreement.
+    So both probes run unconditionally rather than short-circuiting -- the same
+    two queries the fallback already issued in its worst case (no statistics),
+    just no longer conditional on the first coming back empty.
 
-    Statistics first, raw states second. Long-term statistics are the cheap
-    answer and the one that matches what the training runs actually read, but
-    they exist only for a sensor the recorder compiles -- a forecast entity with
-    no ``state_class`` has none, and reporting it as zero days would be a plain
-    falsehood about an entity the recorder has been storing all year. The state
-    probe is one indexed ``LIMIT 1`` read and only runs when the statistics
-    table had nothing.
-
-    ``0`` when the recorder holds neither, which is the ordinary answer for a
-    sensor picked a minute ago, and the same answer the rows-based path gives
-    for an empty window.
+    **The arithmetic matches the trainer's.** Whole days between the local date
+    the oldest sample falls on and ``today_local``, which is exactly what
+    :func:`~.consumption_forecast_profiles._compute_history_days` computes from
+    rows a training run already fetched. The two exist separately only because
+    neither call site can use the other's input without a second round trip --
+    the trainer already holds the rows, the editor holds nothing but an entity
+    id. ``tests/test_entity_inspection.py`` pins the agreement.
     """
-    oldest = await query_oldest_statistics_date(hass, [entity_id], local_tz=local_tz)
-    if oldest is None:
-        oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
-    if oldest is None:
-        return 0
-    return max(0, (today_local - oldest).days)
+    statistics_oldest = await query_oldest_statistics_date(
+        hass, [entity_id], local_tz=local_tz
+    )
+    states_oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
+    statistics_days = (
+        max(0, (today_local - statistics_oldest).days)
+        if statistics_oldest is not None
+        else 0
+    )
+    raw_states_days = (
+        max(0, (today_local - states_oldest).days) if states_oldest is not None else 0
+    )
+    return HistoryDepths(statistics_days=statistics_days, raw_states_days=raw_states_days)
 
 
 async def _query_oldest_state_date(

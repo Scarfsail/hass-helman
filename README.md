@@ -139,22 +139,28 @@ Devices inherit all labels assigned to any of their entities; the first matching
 determines the group. Per-device badges list all matching mappings across categories.
 
 #### House consumption forecast
-Driven by the shared Helman config under `power_devices.house.forecast` (not a Lovelace YAML option):
+Driven by the shared Helman config under `power_devices.house.forecast` for the entity, and under
+`training.house_consumption` for the history windows (not a Lovelace YAML option):
 
 ```yaml
 power_devices:
   house:
     forecast:
       total_energy_entity_id: sensor.house_energy_total
-      min_history_days: 14
-      training_window_days: 42
+
+training:
+  house_consumption:
+    min_history_days: 14
+    training_window_days: 42
 ```
 
-- `total_energy_entity_id`: required cumulative energy sensor used as the forecast source.
-- `min_history_days` (default 14): minimum history span (from the oldest hourly statistics row)
-  before charts can be shown.
-- `training_window_days` (default 56): Recorder lookback window; keep ≥ `min_history_days`. This is
-  the main driver of the nightly training cost — see [Scheduled work](#scheduled-work).
+- `power_devices.house.forecast.total_energy_entity_id`: required cumulative energy sensor used as
+  the forecast source.
+- `training.house_consumption.min_history_days` (default 14): minimum history span (from the oldest
+  hourly statistics row) before charts can be shown.
+- `training.house_consumption.training_window_days` (default 56): Recorder lookback window; keep ≥
+  `min_history_days`. This is the main driver of the nightly training cost — see
+  [Scheduled work](#scheduled-work).
 
 **Deferrable consumers** — the loads subtracted from the house total to leave the baseline
 (`house total - sum(deferrables)`) — are not listed here. They are read off `controllables`: a
@@ -217,9 +223,10 @@ The mechanism, the trace codes and the config migration are documented in [docs/
 - No devices shown under house: ensure Energy → Device consumption is configured and your power
   sensors feed the statistics used there.
 - House forecast not visible or only showing a status message: confirm
-  `power_devices.house.forecast.total_energy_entity_id` is set, `training_window_days` ≥
-  `min_history_days`, and Recorder has hourly statistics spanning at least `min_history_days` from
-  the oldest available row.
+  `power_devices.house.forecast.total_energy_entity_id` is set,
+  `training.house_consumption.training_window_days` ≥
+  `training.house_consumption.min_history_days`, and Recorder has hourly statistics spanning at
+  least `min_history_days` from the oldest available row.
 - Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
   sub-meter already included in the configured house total.
 - Card resource not auto-registering: auto-registration only works with storage-mode (UI) dashboards.
@@ -285,8 +292,9 @@ question you are now asking; that resolves as soon as the rebuild finishes.
    runs three jobs one after another (never at the same time — they share Recorder's worker
    thread): solar bias correction, which learns how your forecast provider is systematically wrong
    for your roof; the house consumption profile, which fits an hour-of-week model over
-   `training_window_days` of history; and the per-appliance energy estimates, which work out how
-   much each `history_average` appliance actually draws while it is running. All of it is stored, so
+   `training.house_consumption.training_window_days` of history; and the per-appliance energy
+   estimates, which work out how much each `history_average` appliance actually draws while it is
+   running. All of it is stored, so
    a restart reuses it instead of recomputing. Changing a relevant setting recomputes immediately
    rather than waiting for the next night, so you see your change take effect.
 7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast
@@ -300,13 +308,14 @@ question you are now asking; that resolves as soon as the rebuild finishes.
   more work; it is the only job on a seconds-level cadence.
 - `training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
   read a lot of Recorder history and you do not want them competing with anything.
-- `training_window_days` (default 56) — how much history the house consumption fit reads. This is
-  the single biggest driver of job #6's cost. It has no effect on the per-quarter-hour work.
+- `training.house_consumption.training_window_days` (default 56) — how much history the house
+  consumption fit reads. This is the single biggest driver of job #6's cost. It has no effect on the
+  per-quarter-hour work.
 - An appliance's `consumption.projection.lookback_days` (default 30) — how much history each such
   appliance's estimate reads: two Recorder queries over the window, one for its switch/climate
-  entity and one for its energy meter. Like `training_window_days`, this is a **job #6** cost paid
-  once a night, so it scales the nightly run rather than anything you wait for. With every appliance
-  on `strategy: fixed` (the default) the job has nothing to do at all.
+  entity and one for its energy meter. Like `training.house_consumption.training_window_days`, this
+  is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait
+  for. With every appliance on `strategy: fixed` (the default) the job has nothing to do at all.
 
 ### If Home Assistant feels sluggish
 
@@ -320,7 +329,8 @@ Things worth checking, roughly in order:
 
 - **Is it 03:00 (or your `training_time`)?** That is job #6, and it is meant to be heavy. If it is
   landing at an awkward time, move it.
-- **A very large `training_window_days`** makes job #6 proportionally more expensive.
+- **A very large `training.house_consumption.training_window_days`** makes job #6 proportionally
+  more expensive.
 - **A very low `history_bucket_duration`** makes job #1 run more often. It does no I/O, so this
   costs CPU rather than Recorder time.
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the

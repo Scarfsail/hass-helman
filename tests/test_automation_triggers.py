@@ -83,6 +83,11 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         (),
         {"_make_payload": staticmethod(lambda **kwargs: kwargs)},
     )
+    # Coordinator reads (min_history_days, training_window_days) via this
+    # shared helper since the v14 training-section relocation.
+    consumption_builder_mod.read_house_training_window_config = (
+        lambda config: (14, 56)
+    )
     sys.modules[consumption_builder_mod.__name__] = consumption_builder_mod
 
     forecast_builder_mod = types.ModuleType("custom_components.helman.forecast_builder")

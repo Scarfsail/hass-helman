@@ -78,8 +78,6 @@ def _valid_config() -> dict:
                 "unmeasured_power_title": "Unmeasured",
                 "forecast": {
                     "total_energy_entity_id": "sensor.house_energy_total",
-                    "min_history_days": 14,
-                    "training_window_days": 56,
                 },
             },
             "solar": {
@@ -122,6 +120,12 @@ def _valid_config() -> dict:
                         {"start": "06:00", "end": "00:00", "price": 3.5},
                     ],
                 },
+            },
+        },
+        "training": {
+            "house_consumption": {
+                "min_history_days": 14,
+                "training_window_days": 56,
             },
         },
         "controllables": [
@@ -932,6 +936,88 @@ class ConfigValidationTests(unittest.TestCase):
                 and issue.code == "retired_config_key"
                 for issue in report.errors
             )
+        )
+
+    def test_the_retired_house_forecast_history_window_keys_are_reported(self) -> None:
+        """min_history_days and training_window_days moved to training.house_consumption.
+
+        Load migrates (see ``_migrate_v13_to_v14`` in automation/migration.py);
+        save refuses these at their old home.
+        """
+        for retired_key in ("min_history_days", "training_window_days"):
+            with self.subTest(retired_key=retired_key):
+                config = _valid_config()
+                config["power_devices"]["house"]["forecast"][retired_key] = 30
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path
+                        == f"power_devices.house.forecast.{retired_key}"
+                        and issue.code == "retired_config_key"
+                        for issue in report.errors
+                    )
+                )
+
+    def test_training_house_consumption_settings_must_be_positive_ints(self) -> None:
+        for key in ("min_history_days", "training_window_days"):
+            with self.subTest(key=key):
+                config = _valid_config()
+                config["training"]["house_consumption"][key] = 0
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path == f"training.house_consumption.{key}"
+                        and issue.code == "invalid_positive_int"
+                        for issue in report.errors
+                    )
+                )
+
+    def test_a_minimum_above_the_training_window_is_refused(self) -> None:
+        # The window caps what the trainer fetches, so a minimum above it can
+        # never be met: the house trainer would report insufficient_history on
+        # every run for as long as the config stood.
+        config = _valid_config()
+        config["training"]["house_consumption"]["training_window_days"] = 8
+        config["training"]["house_consumption"]["min_history_days"] = 30
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training.house_consumption.min_history_days"
+                and issue.code == "invalid_relation"
+                for issue in report.errors
+            )
+        )
+
+    def test_a_minimum_equal_to_the_training_window_is_allowed(self) -> None:
+        # Reachable, if only just: every day the window returns has to count.
+        config = _valid_config()
+        config["training"]["house_consumption"]["training_window_days"] = 8
+        config["training"]["house_consumption"]["min_history_days"] = 8
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid, report.errors)
+
+    def test_the_window_relation_is_not_judged_when_one_side_is_absent(self) -> None:
+        # A blank field takes the const.py default, and pairing a typed value
+        # against a default the user never sees would be a confusing error.
+        config = _valid_config()
+        config["training"]["house_consumption"]["min_history_days"] = 30
+        config["training"]["house_consumption"].pop("training_window_days", None)
+
+        report = validate_config_document(config)
+
+        self.assertFalse(
+            any(issue.code == "invalid_relation" for issue in report.errors)
         )
 
     def test_climate_requires_climate_domain(self) -> None:

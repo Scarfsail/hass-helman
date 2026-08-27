@@ -27,7 +27,7 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const TABS = ["General", "Power devices", "Automation", "Controllables"];
+const TABS = ["General", "Power devices", "Training", "Automation", "Controllables"];
 
 /**
  * Enough optimizer schema for the Automation tab to render something.
@@ -74,7 +74,7 @@ const CONFIG = {
     power_devices: {
         house: {
             entities: { power: "sensor.house_power" },
-            forecast: { total_energy_entity_id: "sensor.house_energy", min_history_days: 30 },
+            forecast: { total_energy_entity_id: "sensor.house_energy" },
         },
         solar: {
             entities: {
@@ -100,6 +100,9 @@ const CONFIG = {
             entities: { power: "sensor.grid_power" },
             forecast: { sell_price_entity_id: "sensor.sell_price" },
         },
+    },
+    training: {
+        house_consumption: { min_history_days: 30 },
     },
     controllables: [
         {
