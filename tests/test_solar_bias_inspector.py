@@ -9,6 +9,7 @@ import types
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 from unittest.mock import patch, AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -353,218 +354,18 @@ def _make_cfg():
     )
 
 
-def test_load_forecast_points_for_day_reads_daily_entity_slots():
-    class _States:
-        def get(self, entity_id):
-            if entity_id == "sensor.solar_today":
-                return SimpleNamespace(
-                    attributes={
-                        "wh_period": {
-                            "2026-04-25T00:00:00+02:00": 0,
-                            "2026-04-25T01:00:00+02:00": 250,
-                        }
-                    }
-                )
-            return None
-
-    hass = SimpleNamespace(
-        states=_States(),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-25"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-        )
-    )
-
-    assert result == [
-        {"timestamp": "2026-04-25T00:00:00+02:00", "value": 0.0},
-        {"timestamp": "2026-04-25T00:15:00+02:00", "value": 0.0},
-        {"timestamp": "2026-04-25T00:30:00+02:00", "value": 0.0},
-        {"timestamp": "2026-04-25T00:45:00+02:00", "value": 0.0},
-        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 62.5},
-        {"timestamp": "2026-04-25T01:15:00+02:00", "value": 62.5},
-        {"timestamp": "2026-04-25T01:30:00+02:00", "value": 62.5},
-        {"timestamp": "2026-04-25T01:45:00+02:00", "value": 62.5},
-    ]
-
-
-def test_load_forecast_points_for_day_selects_entity_by_day_offset():
-    requested_entities = []
-
-    class _States:
-        def get(self, entity_id):
-            requested_entities.append(entity_id)
-            if entity_id == "sensor.solar_tomorrow":
-                return SimpleNamespace(
-                    attributes={
-                        "wh_period": {
-                            "2026-04-26T00:00:00+02:00": 1,
-                            "2026-04-26T01:00:00+02:00": 2,
-                        }
-                    }
-                )
-            return None
-
-    hass = SimpleNamespace(
-        states=_States(),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-26"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-        )
-    )
-
-    assert requested_entities == ["sensor.solar_tomorrow"]
-    assert result == [
-        {"timestamp": "2026-04-26T00:00:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-26T00:15:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-26T00:30:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-26T00:45:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-26T01:00:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-26T01:15:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-26T01:30:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-26T01:45:00+02:00", "value": 0.5},
-    ]
-
-
-def test_load_forecast_points_for_day_sorts_attribute_timestamps_by_utc():
-    class _States:
-        def get(self, entity_id):
-            if entity_id == "sensor.solar_today":
-                return SimpleNamespace(
-                    attributes={
-                        "wh_period": {
-                            "2026-04-25T01:00:00+02:00": 2,
-                            "2026-04-25T00:00:00+02:00": 1,
-                        }
-                    }
-                )
-            return None
-
-    hass = SimpleNamespace(
-        states=_States(),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-25"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-        )
-    )
-
-    assert result == [
-        {"timestamp": "2026-04-25T00:00:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-25T00:15:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-25T00:30:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-25T00:45:00+02:00", "value": 0.25},
-        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-25T01:15:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-25T01:30:00+02:00", "value": 0.5},
-        {"timestamp": "2026-04-25T01:45:00+02:00", "value": 0.5},
-    ]
-
-
-def test_load_forecast_points_for_day_uses_watts_weighting_when_available():
-    """When the entity exposes upstream `watts`, expansion must follow the watts shape, not equal split."""
-    class _States:
-        def get(self, entity_id):
-            if entity_id == "sensor.solar_today":
-                return SimpleNamespace(
-                    attributes={
-                        "wh_period": {
-                            "2026-04-25T08:00:00+02:00": 400,
-                        },
-                        "watts": {
-                            "08:00": 100,
-                            "08:15": 200,
-                            "08:30": 300,
-                            "08:45": 400,
-                        },
-                    }
-                )
-            return None
-
-    hass = SimpleNamespace(
-        states=_States(),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-25"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-        )
-    )
-
-    # Total watts = 1000; per-slot share = 400 * watt/1000.
-    assert result == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "value": 40.0},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "value": 80.0},
-        {"timestamp": "2026-04-25T08:30:00+02:00", "value": 120.0},
-        {"timestamp": "2026-04-25T08:45:00+02:00", "value": 160.0},
-    ]
-
-
-def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon():
-    hass = SimpleNamespace(
-        states=SimpleNamespace(get=lambda entity_id: None),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-29"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-        )
-    )
-
-    assert result == []
-
-
-def test_load_forecast_points_for_day_reads_the_archive_for_past_days():
-    """A past day is drawn from what the trainer was fitted to, not the entity."""
+def test_load_archived_forecast_points_reads_the_whole_archived_day():
+    """The day is drawn from what the trainer was fitted to, not the entity."""
 
     class _FakeStore:
         def slots_for_day(self, target_date):
             assert str(target_date) == "2026-04-24"
             return {"06:00": 25.0, "06:45": 25.0, "07:00": 50.0}
 
-    hass = SimpleNamespace(
-        states=SimpleNamespace(
-            get=lambda entity_id: (_ for _ in ()).throw(
-                AssertionError("a past day must not read the live entity")
-            )
-        ),
-        config=SimpleNamespace(time_zone="Europe/Prague"),
-    )
-    cfg = _make_cfg()
-    cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
-
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            cfg,
-            date.fromisoformat("2026-04-24"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
-            store=_FakeStore(),
-        )
+    result = forecast_history.load_archived_forecast_points(
+        _FakeStore(),
+        date.fromisoformat("2026-04-24"),
+        ZoneInfo("Europe/Prague"),
     )
 
     assert result == [
@@ -572,6 +373,17 @@ def test_load_forecast_points_for_day_reads_the_archive_for_past_days():
         {"timestamp": "2026-04-24T06:45:00+02:00", "value": 25.0},
         {"timestamp": "2026-04-24T07:00:00+02:00", "value": 50.0},
     ]
+
+
+def test_load_archived_forecast_points_without_a_store_is_empty():
+    result = forecast_history.load_archived_forecast_points(
+        None,
+        date.fromisoformat("2026-04-24"),
+        ZoneInfo("Europe/Prague"),
+    )
+
+    assert result == []
+
 
 
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
@@ -610,7 +422,39 @@ class _DummyStore:
         self.saved = payload
 
 
-def _make_service(canonical_provider=None):
+class _ArchiveStore:
+    """The forecast archive, keyed the way `SolarForecastHistoryStore` keys it."""
+
+    def __init__(self, points_by_date: dict[str, list[dict]]) -> None:
+        self._days = {
+            day: {
+                datetime.fromisoformat(point["timestamp"]).strftime("%H:%M"): float(
+                    point["value"]
+                )
+                for point in points
+            }
+            for day, points in points_by_date.items()
+        }
+
+    def slots_for_day(self, target_date):
+        return dict(self._days.get(str(target_date), {}))
+
+
+def _archive_of(points: list[dict]) -> _ArchiveStore:
+    """An archive holding exactly these points, on the day they fall on.
+
+    Today's elapsed slots come from the archive now, so a test about today has
+    to have been running before those slots elapsed -- which in production is
+    the ordinary case, the rebuild having archived each slot at its boundary.
+    """
+    by_date: dict[str, list[dict]] = {}
+    for point in points:
+        day = datetime.fromisoformat(point["timestamp"]).date().isoformat()
+        by_date.setdefault(day, []).append(point)
+    return _ArchiveStore(by_date)
+
+
+def _make_service(canonical_provider=None, archive=None):
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
@@ -620,6 +464,7 @@ def _make_service(canonical_provider=None):
         _DummyStore(),
         _make_cfg(),
         canonical_solar_forecast_provider=canonical_provider,
+        solar_forecast_history=archive,
     )
 
 
@@ -654,7 +499,9 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"timestamp": "2026-04-25T09:30:00+02:00", "value": 43.75},
         {"timestamp": "2026-04-25T09:45:00+02:00", "value": 43.75},
     ]
-    service = _make_service(_canonical_provider(raw_15min, corrected_15min))
+    service = _make_service(
+        _canonical_provider(raw_15min, corrected_15min), _archive_of(raw_15min)
+    )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 1.5, "09:00": 0.5},
         omitted_slots=[],
@@ -716,15 +563,19 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 50.0},
         {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 50.0},
     ]
+    # Every slot here has elapsed, so the whole curve comes from the archive and
+    # is corrected by applying the current profile -- exactly as the same day
+    # will be drawn tomorrow. The snapshot's own correctedPoints cover only the
+    # slots the clock has not reached, of which this day has none.
     assert payload["series"]["corrected"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 31.25},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 31.25},
-        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 31.25},
-        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 31.25},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 43.75},
-        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 43.75},
-        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 43.75},
-        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 43.75},
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 37.5},
+        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 50.0},
+        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 50.0},
+        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 50.0},
     ]
     assert payload["series"]["actual"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 90.0}
@@ -735,7 +586,7 @@ def test_inspector_day_applies_current_profile_and_totals():
     ]
     assert payload["totals"] == {
         "rawWh": 300.0,
-        "correctedWh": 300.0,
+        "correctedWh": 287.5,
         "actualWh": 90.0,
         "houseForecastWh": None,
         "houseActualWh": None,
@@ -875,22 +726,22 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
         error_reason=None,
     )
 
-    async def fake_forecast_points(*args, **kwargs):
+    def fake_forecast_points(*args, **kwargs):
         return []
 
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_forecast = service_mod.load_forecast_points_for_day
+    old_forecast = service_mod.load_archived_forecast_points
     old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_archived_forecast_points = fake_forecast_points
         service_mod.load_actuals_for_day = fake_actuals
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_archived_forecast_points = old_forecast
         service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
@@ -898,12 +749,94 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
     assert payload["range"]["canGoPrevious"] is True
 
 
-def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
+def test_inspector_day_splices_today_at_the_current_slot():
+    """Elapsed slots from the archive, the rest from the live snapshot.
+
+    The source republishes the whole day and revises slots after they run, so
+    the snapshot's 09:00 value is what it believes at 10:07, not what it said
+    at 09:00. Drawing that beside the 09:00 actual compares a measurement with
+    a forecast issued after it -- and the same bar would change height once the
+    day became yesterday and the archive took over.
+    """
+    archived = [
+        {"timestamp": "2026-04-25T09:00:00+02:00", "value": 100.0},
+        {"timestamp": "2026-04-25T10:00:00+02:00", "value": 200.0},
+    ]
+    revised_snapshot = [
+        # The same two slots, re-read after the fact, plus the day's remainder.
+        {"timestamp": "2026-04-25T09:00:00+02:00", "value": 146.0},
+        {"timestamp": "2026-04-25T10:00:00+02:00", "value": 250.0},
+        {"timestamp": "2026-04-25T10:15:00+02:00", "value": 300.0},
+        {"timestamp": "2026-04-25T11:00:00+02:00", "value": 400.0},
+    ]
+    service = _make_service(
+        _canonical_provider(revised_snapshot), _archive_of(archived)
+    )
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:07:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    # 09:00 and 10:00 have started, so they keep their archived values; 10:15
+    # onward has not, so it comes from the snapshot. No slot is repeated and
+    # none is lost across the seam.
+    assert payload["series"]["raw"] == [
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 100.0},
+        {"timestamp": "2026-04-25T10:00:00+02:00", "valueWh": 200.0},
+        {"timestamp": "2026-04-25T10:15:00+02:00", "valueWh": 300.0},
+        {"timestamp": "2026-04-25T11:00:00+02:00", "valueWh": 400.0},
+    ]
+
+
+def test_inspector_day_leaves_a_hole_where_today_was_never_archived():
+    """Helman started at 10:00, so nothing earlier today was ever recorded.
+
+    The snapshot still has those slots, but only as the provider re-reads them
+    now. Drawing them would put a forecast issued after the fact beside the
+    actual it is supposed to be judged against, and nothing on the chart would
+    say which bars are honest. The gap is self-healing: it only ever covers the
+    part of today that elapsed before Helman came up.
+    """
     service = _make_service(
         _canonical_provider(
-            [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
-        )
+            [
+                {"timestamp": "2026-04-25T08:00:00+02:00", "value": 146.0},
+                {"timestamp": "2026-04-25T10:15:00+02:00", "value": 300.0},
+            ]
+        ),
+        _archive_of([]),
     )
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:07:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["series"]["raw"] == [
+        {"timestamp": "2026-04-25T10:15:00+02:00", "valueWh": 300.0}
+    ]
+
+
+def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
+    points = [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
+    service = _make_service(_canonical_provider(points), _archive_of(points))
 
     async def fake_actuals(*args, **kwargs):
         return {}
@@ -970,11 +903,13 @@ def test_inspector_day_stale_profile_shows_factors_but_uses_raw_variant():
 
 
 def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
+    points = [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
     service = _make_service(
         _canonical_provider(
-            [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}],
+            points,
             [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 200.0}],
-        )
+        ),
+        _archive_of(points),
     )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 2.0},
@@ -1036,7 +971,7 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
         error_reason=None,
     )
 
-    async def fake_forecast_points(*args, **kwargs):
+    def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-24T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-24T09:00:00+02:00", "value": 200.0},
@@ -1045,16 +980,16 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
     async def fake_actuals(*args, **kwargs):
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
-    old_forecast = service_mod.load_forecast_points_for_day
+    old_forecast = service_mod.load_archived_forecast_points
     old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_archived_forecast_points = fake_forecast_points
         service_mod.load_actuals_for_day = fake_actuals
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-24"))
     finally:
-        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_archived_forecast_points = old_forecast
         service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
@@ -1097,7 +1032,7 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
         error_reason=None,
     )
 
-    async def fake_forecast_points(*args, **kwargs):
+    def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-24T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-24T09:00:00+02:00", "value": 200.0},
@@ -1106,16 +1041,16 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
     async def fake_actuals(*args, **kwargs):
         return {"07:45": 30.0, "08:00": 40.0}
 
-    old_forecast = service_mod.load_forecast_points_for_day
+    old_forecast = service_mod.load_archived_forecast_points
     old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_archived_forecast_points = fake_forecast_points
         service_mod.load_actuals_for_day = fake_actuals
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-24"))
     finally:
-        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_archived_forecast_points = old_forecast
         service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
@@ -1148,7 +1083,7 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
         error_reason=None,
     )
 
-    async def fake_forecast_points(*args, **kwargs):
+    def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
@@ -1157,16 +1092,16 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
     async def fake_actuals(*args, **kwargs):
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
-    old_forecast = service_mod.load_forecast_points_for_day
+    old_forecast = service_mod.load_archived_forecast_points
     old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_archived_forecast_points = fake_forecast_points
         service_mod.load_actuals_for_day = fake_actuals
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_archived_forecast_points = old_forecast
         service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
@@ -1203,8 +1138,8 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
         error_reason=None,
     )
 
-    async def fake_forecast_points(*args, **kwargs):
-        target_date = args[2]
+    def fake_forecast_points(*args, **kwargs):
+        target_date = args[1]
         return [
             {"timestamp": f"{target_date.isoformat()}T08:00:00+02:00", "value": 100.0},
             {"timestamp": f"{target_date.isoformat()}T09:00:00+02:00", "value": 200.0},
@@ -1213,18 +1148,18 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
     async def fake_actuals(*args, **kwargs):
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
-    old_forecast = service_mod.load_forecast_points_for_day
+    old_forecast = service_mod.load_archived_forecast_points
     old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_archived_forecast_points = fake_forecast_points
         service_mod.load_actuals_for_day = fake_actuals
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
 
         today_payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
         future_payload = asyncio.run(service.async_get_inspector_day("2026-04-26"))
     finally:
-        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_archived_forecast_points = old_forecast
         service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
@@ -1241,17 +1176,19 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
 
 
 def test_inspector_day_returns_selected_day_impact_and_training_explainability():
+    points = [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
+    ]
     service = _make_service(
         _canonical_provider(
-            [
-                {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
-                {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
-            ],
+            points,
             [
                 {"timestamp": "2026-04-25T08:00:00+02:00", "value": 150.0},
                 {"timestamp": "2026-04-25T09:00:00+02:00", "value": 100.0},
             ],
-        )
+        ),
+        _archive_of(points),
     )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 1.5, "09:00": 0.5},

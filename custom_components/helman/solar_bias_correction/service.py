@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
-from .forecast_history import load_forecast_points_for_day, load_trainer_samples
+from .forecast_history import load_archived_forecast_points, load_trainer_samples
 from .house_forecast_history import load_house_forecast_points_for_day
 from .models import (
     BatterySocBoundsPoint,
@@ -979,7 +979,40 @@ class SolarBiasCorrectionService:
                 slot_energy_by_entity = statistics_day.energy_kwh_by_entity
                 actuals_by_slot = statistics_day.solar_actuals_by_slot
 
-        if target_date >= today:
+        current_slot_start = _current_slot_start(local_now) if target_date == today else None
+        next_slot = (
+            None if current_slot_start is None else current_slot_start + timedelta(minutes=15)
+        )
+
+        # --- Solar forecast ---
+        # Spliced at the current slot exactly like the battery, house and price
+        # series below. An elapsed slot comes from the archive, which holds what
+        # the provider said before that slot ran; the source republishes the
+        # whole day and revises slots after the fact, so taking today's elapsed
+        # half from the live snapshot would draw each actual beside a forecast
+        # issued after it -- and redraw the same bar differently once the day
+        # became yesterday. Slots the clock has not reached have no history to
+        # prefer, so they come from the snapshot the rest of the system is
+        # acting on.
+        raw_points: list[dict[str, Any]] = []
+        corrected_points: list[dict[str, Any]] = []
+        if need_past:
+            archived_points = _points_before(
+                load_archived_forecast_points(
+                    self._solar_forecast_history, target_date, timezone
+                ),
+                cutoff=next_slot,
+            )
+            raw_points += archived_points
+            # Corrected the same way a past day is corrected -- by applying the
+            # profile in force now, not the one that happened to be in force
+            # when the slot ran. The snapshot's own correctedPoints cover the
+            # future half only.
+            if effective_variant == "adjusted" and self._profile is not None:
+                corrected_points += adjust(archived_points, self._profile)
+            else:
+                corrected_points += _copy_points(archived_points)
+        if need_future:
             provider = self._canonical_solar_forecast_provider
             if provider is not None:
                 canonical_snapshot = await provider(reference_time=local_now)
@@ -987,31 +1020,29 @@ class SolarBiasCorrectionService:
                 canonical_snapshot = None
             if not isinstance(canonical_snapshot, dict):
                 canonical_snapshot = {}
-            raw_points = _filter_points_to_local_date(
-                canonical_snapshot.get("rawPoints") or canonical_snapshot.get("points") or [],
-                target_date,
-                timezone,
-            )
-            canonical_corrected = canonical_snapshot.get("correctedPoints") or []
-            if effective_variant == "adjusted" and canonical_corrected:
-                corrected_points = _filter_points_to_local_date(
-                    canonical_corrected,
+            future_raw = _points_from(
+                _filter_points_to_local_date(
+                    canonical_snapshot.get("rawPoints")
+                    or canonical_snapshot.get("points")
+                    or [],
                     target_date,
                     timezone,
+                ),
+                start=next_slot,
+            )
+            raw_points += future_raw
+            canonical_corrected = canonical_snapshot.get("correctedPoints") or []
+            if effective_variant == "adjusted" and canonical_corrected:
+                corrected_points += _points_from(
+                    _filter_points_to_local_date(
+                        canonical_corrected,
+                        target_date,
+                        timezone,
+                    ),
+                    start=next_slot,
                 )
             else:
-                corrected_points = _copy_points(raw_points)
-        else:
-            raw_points = await load_forecast_points_for_day(
-                self._hass,
-                self._cfg,
-                target_date,
-                local_now=local_now,
-                store=self._solar_forecast_history,
-            )
-            corrected_points = _copy_points(raw_points)
-            if effective_variant == "adjusted" and self._profile is not None:
-                corrected_points = adjust(raw_points, self._profile)
+                corrected_points += _copy_points(future_raw)
 
         has_profile = self._has_usable_profile()
 
@@ -1039,10 +1070,6 @@ class SolarBiasCorrectionService:
         # between them, in the snapshot's "currentSlot" field rather than its
         # "series", and is served from the live composition — total and parts from
         # the one vintage.
-        current_slot_start = _current_slot_start(local_now) if target_date == today else None
-        next_slot = (
-            None if current_slot_start is None else current_slot_start + timedelta(minutes=15)
-        )
         # How far the price recorder reads go: to the end of an elapsed day, and
         # on today only as far as the slot in progress, whose start already
         # carries the rate that applies to it. Everything past that is the live
@@ -3209,6 +3236,27 @@ def _minutes_into_day(cutoff: datetime | None, target_date: date) -> int:
     if cutoff is None or cutoff.date() > target_date:
         return 24 * 60
     return cutoff.hour * 60 + cutoff.minute
+
+
+def _points_from(points: list[dict], *, start: datetime | None) -> list[dict]:
+    """Keep timestamped points that start at or after ``start``.
+
+    The mirror of :func:`_points_before`, so a day spliced with both loses no
+    slot and repeats none.
+    """
+    if start is None:
+        return points
+    kept: list[dict] = []
+    for point in points:
+        try:
+            ts = datetime.fromisoformat(point["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        if ts >= start.replace(tzinfo=None):
+            kept.append(point)
+    return kept
 
 
 def _points_before(points: list[dict], *, cutoff: datetime | None) -> list[dict]:
