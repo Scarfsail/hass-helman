@@ -113,16 +113,12 @@ EVALUATORS: dict[str, Evaluator] = {
             SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
         )
     ),
-    # Index 0 only, and declared ahead of the wildcard for that reason. The
-    # bias trainer compares actuals against the forecast *as it was published*,
-    # which it recovers from this entity's recorded ``wh_period_15m`` attribute
-    # at each past midnight (``forecast_history.py:275``) -- and
-    # ``load_trainer_samples`` reads ``daily_energy_entity_ids[0]`` alone, so
-    # the rest of the list is no more governed by the window than before.
-    "power_devices.solar.forecast.daily_energy_entity_ids.0": history_evaluator(
-        ("training", "solar_bias", "min_history_days"),
-        SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
-    ),
+    # No index is singled out any more. The bias trainer used to recover the
+    # forecast *as it was published* from index 0's recorded ``wh_period_15m``
+    # attribute at each past midnight, which made that one entity's recorder
+    # depth a training requirement. It now reads the archive Helman writes as
+    # each day runs (``solar_forecast_history.py``), so no entry in this list
+    # is governed by the training window.
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }
 

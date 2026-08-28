@@ -981,5 +981,95 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             sys.modules.pop("custom_components.helman.coordinator", None)
 
 
+class SolarForecastHistoryRecordingTests(unittest.IsolatedAsyncioTestCase):
+    """Only a rebuild that actually read the source may reach the archive."""
+
+    _load_coordinator_module = (
+        CoordinatorSolarForecastCacheTests._load_coordinator_module
+    )
+    _make_build_coordinator = DegradedSolarRebuildTests._make_build_coordinator
+    _patched_builders = DegradedSolarRebuildTests._patched_builders
+
+    class _RecordingStore:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def record_points(self, points, *, local_now, timezone):
+            self.calls.append((points, local_now))
+
+    async def test_a_fresh_rebuild_archives_its_raw_points(self) -> None:
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=None
+            )
+            coordinator._hass = SimpleNamespace(
+                config=SimpleNamespace(time_zone="Europe/Prague")
+            )
+            store = self._RecordingStore()
+            coordinator._solar_forecast_history = store
+            raw_points = [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 1200.0}
+            ]
+            coordinator._build_canonical_solar_forecast = Mock(
+                return_value={
+                    "status": "available",
+                    "generatedAt": REFERENCE_TIME.isoformat(),
+                    "points": raw_points,
+                    "rawPoints": raw_points,
+                }
+            )
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot={"status": "available"}
+            ):
+                await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            self.assertEqual(len(store.calls), 1)
+            # The pre-correction curve, not the adjusted one: fitting the next
+            # profile to an already adjusted forecast would fold the previous
+            # profile into it.
+            self.assertEqual(store.calls[0][0], raw_points)
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_a_degraded_rebuild_archives_nothing(self) -> None:
+        """The preserved snapshot's points are as old as it is."""
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            cached = DegradedSolarRebuildTests._good_solar_snapshot()
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=cached
+            )
+            coordinator._hass = SimpleNamespace(
+                config=SimpleNamespace(time_zone="Europe/Prague")
+            )
+            store = self._RecordingStore()
+            coordinator._solar_forecast_history = store
+            coordinator._build_canonical_solar_forecast = Mock(
+                return_value={
+                    "status": "unavailable",
+                    "generatedAt": REFERENCE_TIME.isoformat(),
+                    "points": [],
+                    "rawPoints": [],
+                }
+            )
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot={"status": "unavailable"}
+            ):
+                await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            self.assertEqual(store.calls, [])
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+
 if __name__ == "__main__":
     unittest.main()

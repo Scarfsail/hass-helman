@@ -153,11 +153,13 @@ This gives the trainer one stable input contract while keeping source-specific l
 
 ### Capture-selection rule
 
-For each target day, use the **earliest forecast capture after local midnight** of that day. One forecast capture per target sample.
+For each slot, use the forecast for that slot **as last published before the slot began**. One capture per slot, not one per day.
 
-This is a **same-day, day-start** capture (the `energy_production_today` entity for day D, read at the start of D), not a day-ahead capture. V1 learns the bias of the forecast available at the start of the target day; day-ahead learning (using the prior day's `energy_production_tomorrow` state) is a future extension that the trainer contract already accommodates.
+V1 used the earliest capture after local midnight, one per day, on the reasoning that a single capture keeps the model explainable. It does not: the source republishes the whole day's curve every few hours and revises slots that have already elapsed, so a day-start capture scores the morning at a near-zero horizon and the evening at half a day, and books the day's weather revisions as this array's local bias. See #178 for the measurement.
 
-One capture per day keeps the model explainable and avoids overweighting periods that happened to refresh more often.
+The capture is therefore live. `SolarForecastHistoryStore` (`solar_forecast_history.py`) archives each slot's value from the last canonical rebuild that happened while the slot had not yet begun; the rebuild is slot-aligned, so every slot is recorded at a horizon of 0-15 minutes. The trainer, curtailment invalidation and the inspector all read that archive, which is what makes the drawn curve the one the fit was computed from.
+
+The consequence is that the archive cannot be back-filled -- no record of past publications exists -- so the correction stays off until `min_history_days` worth of days have accumulated.
 
 ## Current integration seam
 

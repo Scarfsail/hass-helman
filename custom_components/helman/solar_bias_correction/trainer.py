@@ -5,6 +5,7 @@ import hashlib
 import logging
 from typing import Dict, List
 
+from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .models import (
     BiasConfig,
     TrainerSample,
@@ -22,7 +23,9 @@ _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
-_ALGORITHM_VERSION = "configurable_aggregation_v1+15min_v1+curtailment_inference_v1"
+_ALGORITHM_VERSION = (
+    "configurable_aggregation_v1+15min_v1+curtailment_inference_v1+live_horizon_v1"
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -86,19 +89,41 @@ def _slot_to_minutes(slot: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _forecast_grid_step_minutes(forecast_slot_keys: list[str]) -> int:
+    """How wide one slot of this forecast map is, in minutes.
+
+    The smallest gap between consecutive keys, because that is the only one a
+    hole cannot fake: an hourly map has every gap at 60, while a canonical map
+    with a hole in it still has fifteen-minute gaps either side of the hole.
+    """
+    minutes = [_slot_to_minutes(slot) for slot in forecast_slot_keys]
+    gaps = [b - a for a, b in zip(minutes, minutes[1:]) if b > a]
+    if not gaps:
+        return FORECAST_CANONICAL_GRANULARITY_MINUTES
+    return min(gaps)
+
+
 def _aggregate_actuals_into_forecast_slot(
     day_actuals: dict[str, float],
     *,
     forecast_slot: str,
     forecast_slot_keys: list[str],
 ) -> float:
-    """Sum every actual whose slot start falls in [forecast_slot, next_forecast_slot)."""
+    """Sum every actual whose slot start falls inside this forecast slot.
+
+    A forecast slot reaches to the next one -- an hourly forecast has to be
+    scored against four quarters of actuals -- but never further than one slot
+    of its own grid. Without that cap a hole in the archive, which means only
+    that Helman was not running for a while, would hand every actual in the
+    hole to the slot before it and score one slot against hours of production.
+    """
     start = _slot_to_minutes(forecast_slot)
+    step = _forecast_grid_step_minutes(forecast_slot_keys)
     idx = forecast_slot_keys.index(forecast_slot)
     if idx + 1 < len(forecast_slot_keys):
-        end = _slot_to_minutes(forecast_slot_keys[idx + 1])
+        end = min(_slot_to_minutes(forecast_slot_keys[idx + 1]), start + step)
     else:
-        end = 24 * 60  # last forecast slot of day extends to end of day
+        end = min(24 * 60, start + step)
     total = 0.0
     for actual_slot, value in day_actuals.items():
         try:

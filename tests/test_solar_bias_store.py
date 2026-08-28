@@ -174,7 +174,7 @@ def _install_service_import_stubs() -> None:
     async def _load_forecast_points_for_day(*args, **kwargs):
         return []
 
-    async def _load_trainer_samples(*args, **kwargs):
+    def _load_trainer_samples(*args, **kwargs):
         return []
 
     forecast_history_mod.load_forecast_points_for_day = _load_forecast_points_for_day
@@ -579,7 +579,7 @@ def test_async_train_saves_version_2_payload():
         )()
         service = service_mod.SolarBiasCorrectionService(hass, store, cfg)
 
-        async def _samples(*args, **kwargs):
+        def _samples(*args, **kwargs):
             return ["sample"]
 
         async def _actuals(*args, **kwargs):

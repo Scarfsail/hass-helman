@@ -55,7 +55,7 @@ sys.modules[actuals_mod.__name__] = actuals_mod
 forecast_history_mod = types.ModuleType("custom_components.helman.solar_bias_correction.forecast_history")
 async def _load_forecast_points_for_day(*args, **kwargs):
     return []
-async def _load_trainer_samples(*args, **kwargs):
+def _load_trainer_samples(*args, **kwargs):
     return []
 forecast_history_mod.load_forecast_points_for_day = _load_forecast_points_for_day
 forecast_history_mod.load_trainer_samples = _load_trainer_samples
@@ -350,7 +350,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
             now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
             service_mod.dt_util.now = lambda: now
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return ["sample"]
 
             async def _actuals(*args, **kwargs):
@@ -432,7 +432,7 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
             now = datetime.fromisoformat("2026-04-25T03:00:00+02:00")
             service_mod.dt_util.now = lambda: now
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return ["sample"]
 
             async def _actuals(*args, **kwargs):
@@ -515,7 +515,7 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
             now = datetime.fromisoformat("2026-04-25T03:00:00+02:00")
             service_mod.dt_util.now = lambda: now
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return ["sample"]
 
             async def _actuals(*args, **kwargs):
@@ -595,7 +595,7 @@ def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
             now = datetime.fromisoformat("2026-04-25T04:00:00+02:00")
             service_mod.dt_util.now = lambda: now
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return ["sample"]
 
             async def _actuals(*args, **kwargs):
@@ -661,10 +661,10 @@ def test_async_train_uses_configured_max_training_window_days_for_actuals():
             now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
             service_mod.dt_util.now = lambda: now
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return []
 
-            async def _actuals(hass, cfg_arg, days):
+            async def _actuals(hass, cfg_arg, days, **kwargs):
                 assert days == 12
                 return models.SolarActualsWindow(slot_actuals_by_date={})
 
@@ -747,7 +747,7 @@ def test_async_train_save_failure_keeps_previous_profile_active():
                 "2026-04-24T03:00:00+02:00"
             )
 
-            async def _samples(*args, **kwargs):
+            def _samples(*args, **kwargs):
                 return ["sample"]
 
             async def _actuals(*args, **kwargs):

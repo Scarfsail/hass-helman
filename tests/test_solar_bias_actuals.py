@@ -79,6 +79,18 @@ _install_import_stubs()
 from custom_components.helman.solar_bias_correction import actuals  # noqa: E402
 
 
+class _FakeForecastStore:
+    """Stands in for ``SolarForecastHistoryStore``: only ``slots_for_day`` is read."""
+
+    def __init__(self, slots: dict[str, float]) -> None:
+        self._slots = slots
+        self.days_read: list[str] = []
+
+    def slots_for_day(self, target_date):
+        self.days_read.append(str(target_date))
+        return dict(self._slots)
+
+
 class _FixedDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
@@ -158,6 +170,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -170,7 +183,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals,
             "compute_invalidated_slots_for_window",
         ) as compute_invalidated:
-            window = await actuals.load_actuals_window(hass, cfg, days=1)
+            window = await actuals.load_actuals_window(
+                hass, cfg, days=1, forecast_history=forecast_history
+            )
 
         self.assertEqual(
             window.slot_actuals_by_date,
@@ -212,14 +227,11 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidated = {"2026-04-15": {"12:00"}, "2026-04-16": {"23:45"}}
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
-        ), patch.object(
-            actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -229,7 +241,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             "compute_invalidated_slots_for_window",
             return_value=invalidated,
         ) as compute_invalidated:
-            window = await actuals.load_actuals_window(hass, cfg, days=2)
+            window = await actuals.load_actuals_window(
+                hass, cfg, days=2, forecast_history=forecast_history
+            )
 
         self.assertEqual(window.invalidated_slots_by_date, invalidated)
         self.assertEqual(load_state_samples.await_count, 2)
@@ -281,14 +295,11 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals.StateSample(timestamp=datetime(2026, 4, 15, 12, 30, tzinfo=TZ), value=None),
         ]
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(side_effect=[{"12:00": 600.0}, {"23:45": 50.0}]),
-        ), patch.object(
-            actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -298,7 +309,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             "compute_invalidated_slots_for_window",
             return_value={},
         ) as compute_invalidated:
-            await actuals.load_actuals_window(hass, cfg, days=2)
+            await actuals.load_actuals_window(
+                hass, cfg, days=2, forecast_history=forecast_history
+            )
 
         return compute_invalidated.call_args.args[0].grid_power_samples_utc
 
@@ -341,14 +354,11 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
-        ), patch.object(
-            actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -357,7 +367,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals,
             "compute_invalidated_slots_for_window",
         ) as compute_invalidated:
-            window = await actuals.load_actuals_window(hass, cfg, days=1)
+            window = await actuals.load_actuals_window(
+                hass, cfg, days=1, forecast_history=forecast_history
+            )
 
         self.assertEqual(window.invalidated_slots_by_date, {})
         load_state_samples.assert_not_awaited()
@@ -378,12 +390,15 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
         ), self.assertLogs(actuals.__name__, level="WARNING") as captured_logs:
-            await actuals.load_actuals_window(hass, cfg, days=1)
+            await actuals.load_actuals_window(
+                hass, cfg, days=1, forecast_history=forecast_history
+            )
 
         self.assertTrue(
             any("battery" in message and "slot invalidation" in message for message in captured_logs.output)
@@ -418,15 +433,12 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
         ), patch.object(
-            actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 900.0}),
-        ) as load_forecast, patch.object(
             actuals,
             "_load_state_samples_for_entity",
             AsyncMock(),
@@ -436,14 +448,16 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         ) as compute_invalidated, self.assertLogs(
             actuals.__name__, level="WARNING"
         ) as captured_logs:
-            window = await actuals.load_actuals_window(hass, cfg, days=1)
+            window = await actuals.load_actuals_window(
+                hass, cfg, days=1, forecast_history=forecast_history
+            )
 
         self.assertEqual(window.invalidated_slots_by_date, {})
         load_state_samples.assert_not_awaited()
         compute_invalidated.assert_not_called()
         # Nothing needs the forecast once curtailment has stood down and the
         # data-glitch neighbour rule is off.
-        load_forecast.assert_not_awaited()
+        self.assertEqual(forecast_history.days_read, [])
         self.assertTrue(
             any("grid.entities.power" in message for message in captured_logs.output)
         )
@@ -478,14 +492,11 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        forecast_history = _FakeForecastStore({"12:00": 900.0})
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
-        ), patch.object(
-            actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -495,7 +506,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             "compute_invalidated_slots_for_window",
             return_value={"2026-04-16": {"12:00"}},
         ) as compute_invalidated:
-            window = await actuals.load_actuals_window(hass, cfg, days=1)
+            window = await actuals.load_actuals_window(
+                hass, cfg, days=1, forecast_history=forecast_history
+            )
 
         self.assertEqual(window.invalidated_slots_by_date, {"2026-04-16": {"12:00"}})
         self.assertEqual(load_state_samples.await_args_list[0].args[1], "sensor.battery_soc")

@@ -538,43 +538,40 @@ def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon()
     assert result == []
 
 
-def test_load_forecast_points_for_day_reads_history_for_past_days():
-    wh_period = {
-        f"2026-04-24T{h:02d}:00:00+02:00": (100 if h == 6 else 200 if h == 7 else 0)
-        for h in range(24)
-    }
-    mock_state = SimpleNamespace(attributes={"wh_period": wh_period})
+def test_load_forecast_points_for_day_reads_the_archive_for_past_days():
+    """A past day is drawn from what the trainer was fitted to, not the entity."""
 
-    with patch.object(
-        forecast_history,
-        "_read_historical_forecast_state",
-        new=AsyncMock(return_value=mock_state),
-    ):
-        hass = SimpleNamespace(
-            states=SimpleNamespace(get=lambda entity_id: None),
-            config=SimpleNamespace(time_zone="Europe/Prague"),
-        )
-        cfg = _make_cfg()
-        cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
+    class _FakeStore:
+        def slots_for_day(self, target_date):
+            assert str(target_date) == "2026-04-24"
+            return {"06:00": 25.0, "06:45": 25.0, "07:00": 50.0}
 
-        result = asyncio.run(
-            forecast_history.load_forecast_points_for_day(
-                hass,
-                cfg,
-                date.fromisoformat("2026-04-24"),
-                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+    hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: (_ for _ in ()).throw(
+                AssertionError("a past day must not read the live entity")
             )
-        )
+        ),
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+    )
+    cfg = _make_cfg()
+    cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
 
-    assert len(result) == 96
-    # 06:00 hour = 100 Wh -> equal split into four 15-min sub-slots = 25 each.
-    assert result[24]["timestamp"] == "2026-04-24T06:00:00+02:00"
-    assert result[24]["value"] == 25.0
-    assert result[27]["timestamp"] == "2026-04-24T06:45:00+02:00"
-    assert result[27]["value"] == 25.0
-    # 07:00 hour = 200 Wh -> equal split = 50 each.
-    assert result[28]["timestamp"] == "2026-04-24T07:00:00+02:00"
-    assert result[28]["value"] == 50.0
+    result = asyncio.run(
+        forecast_history.load_forecast_points_for_day(
+            hass,
+            cfg,
+            date.fromisoformat("2026-04-24"),
+            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            store=_FakeStore(),
+        )
+    )
+
+    assert result == [
+        {"timestamp": "2026-04-24T06:00:00+02:00", "value": 25.0},
+        {"timestamp": "2026-04-24T06:45:00+02:00", "value": 25.0},
+        {"timestamp": "2026-04-24T07:00:00+02:00", "value": 50.0},
+    ]
 
 
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
@@ -1328,7 +1325,7 @@ def test_service_saves_training_explainability_after_training():
         slot_forecast_wh={"12:00": 1000.0},
     )
 
-    async def fake_samples(*args, **kwargs):
+    def fake_samples(*args, **kwargs):
         return [sample]
 
     async def fake_actuals_window(*args, **kwargs):

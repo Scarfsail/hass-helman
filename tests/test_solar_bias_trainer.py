@@ -408,7 +408,8 @@ def test_compute_fingerprint_includes_algorithm_version():
     fp = trainer.compute_fingerprint(cfg)
     assert fp.startswith("sha256:")
     expected_payload = (
-        "algo=configurable_aggregation_v1+15min_v1+curtailment_inference_v1;"
+        "algo=configurable_aggregation_v1+15min_v1+curtailment_inference_v1"
+        "+live_horizon_v1;"
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
@@ -1133,3 +1134,63 @@ def test_interpolation_does_not_apply_to_forecast_floor_omissions():
     assert "11:00" in outcome.profile.omitted_slots
     assert "11:00" not in outcome.profile.factors
     assert outcome.metadata.interpolated_slot_count == 0
+
+
+def test_a_hole_in_the_archive_does_not_feed_the_slot_before_it():
+    """Helman was down over 12:15-12:45, so the archive has only 12:00.
+
+    Those three quarters of production belong to no forecast slot. Handing
+    them to 12:00, which is what reaching to "the next forecast key" would do,
+    scores a fifteen-minute forecast against an hour of actuals and books the
+    outage as this array over-producing at noon.
+    """
+    cfg = make_cfg(min_history_days=1, clamp_min=0.5, clamp_max=2.0)
+
+    samples = [
+        models.TrainerSample(
+            date="2026-04-15",
+            forecast_wh=2000.0,
+            slot_forecast_wh={"12:00": 2000.0},
+        )
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2026-04-15": {
+                "12:00": 2000.0,
+                "12:15": 2100.0,
+                "12:30": 2200.0,
+                "12:45": 2300.0,
+            }
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.profile.factors["12:00"] == 1.0
+
+
+def test_an_hourly_forecast_still_reaches_across_its_four_quarters():
+    """The cap is one slot of the forecast's own grid, not a flat fifteen."""
+    cfg = make_cfg(min_history_days=1, clamp_min=0.5, clamp_max=2.0)
+
+    samples = [
+        models.TrainerSample(
+            date="2026-04-15",
+            forecast_wh=8000.0,
+            slot_forecast_wh={"11:00": 0.0, "12:00": 8000.0, "13:00": 0.0},
+        )
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2026-04-15": {
+                "12:00": 2000.0,
+                "12:15": 2000.0,
+                "12:30": 2000.0,
+                "12:45": 2000.0,
+            }
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.profile.factors["12:00"] == 1.0

@@ -266,10 +266,10 @@ test("the forecast the actuals are compared against has a row of its own", async
 
     const forecastRow = allRows.find((row) => row[0].includes("sensor.solcast_today"));
     expect(forecastRow).toBeDefined();
-    // Its attributes are what the trainer reads, and attributes never reach
-    // long-term statistics -- the role has to say so, because the statistics
-    // column will happily show a deep and irrelevant number.
-    expect(forecastRow![1]).toContain("statistics");
+    // Helman archives this entity's prediction as each day runs, so neither
+    // depth column governs training -- the role has to say so, because both
+    // will happily show a deep and irrelevant number.
+    expect(forecastRow![1]).toContain("archive");
 });
 
 test("each row says what the trainer takes from that entity", async ({ page }) => {

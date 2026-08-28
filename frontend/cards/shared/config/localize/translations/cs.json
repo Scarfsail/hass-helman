@@ -128,7 +128,7 @@
       "role_grid_power": "Rozpozná sloty, kdy se nic neexportovalo; spolu s plnou baterií to znamená, že výroba byla oříznutá, ne nízká.",
       "role_battery_soc": "Rozpozná plnou baterii, druhou polovinu rozpoznání oříznutého slotu.",
       "forecast_source": "Zveřejněná solární prognóza",
-      "role_forecast_source": "Prognostická strana porovnání: predikce po slotech tak, jak byla zveřejněna o půlnoci, načtená ze zaznamenaných atributů entity. Ty jsou jen v podrobných datech, ve statistikách nikdy."
+      "role_forecast_source": "Prognostická strana porovnání. Helman si predikci každého slotu ukládá ještě před jeho začátkem, takže trénink čte vlastní archiv, ne historii této entity -- jak daleko zpět ji recorder drží, tady nic neurčuje."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",

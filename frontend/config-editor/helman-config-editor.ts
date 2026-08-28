@@ -2254,14 +2254,13 @@ export class HelmanConfigEditorPanel
    * Both sides of the comparison this trainer makes, then the two entities
    * that tell a capped slot from a genuinely poor one.
    *
-   * The forecast side is `daily_energy_entity_ids[0]` and only that one:
-   * `load_trainer_samples` reads the first entry alone, recovering the
-   * forecast *as it was published* from that entity's recorded
-   * `wh_period_15m` attribute at each past midnight
-   * (`forecast_history.py:275`). Attributes live in recorder states and never
-   * in long-term statistics, so its statistics depth says nothing about
-   * whether this trainer can read it — the role text says so, because the
-   * number in that column would otherwise reassure.
+   * The forecast side is `daily_energy_entity_ids[0]`, still listed because it
+   * is what a reader needs named — but it is no longer read historically at
+   * all. Helman archives each slot's prediction before that slot begins
+   * (`solar_forecast_history.py`) and the trainer reads that archive, so
+   * neither this entity's recorder depth nor its statistics depth governs
+   * anything here. The role text says so, because a number in either column
+   * would otherwise read as a requirement.
    *
    * Curtailment detection reads grid power and the battery SoC sensor (which
    * lives under the `capacity` key — see `actuals.py:411`). None of the three
