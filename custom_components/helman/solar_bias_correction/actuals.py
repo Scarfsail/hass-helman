@@ -109,7 +109,6 @@ async def load_actuals_window(
         hass,
         cfg,
         slot_actuals_by_date,
-        local_now=local_now,
         forecast_history=forecast_history,
     )
     return SolarActualsWindow(
@@ -158,7 +157,6 @@ async def _load_invalidated_slots_for_window(
     cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
     *,
-    local_now: datetime,
     forecast_history: SolarForecastHistoryStore | None,
 ) -> dict[str, set[str]]:
     forecast_slot_starts_by_date, slot_keys_by_date = _build_day_grid_slot_inputs(

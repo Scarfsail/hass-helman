@@ -89,41 +89,41 @@ def _slot_to_minutes(slot: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def _forecast_grid_step_minutes(forecast_slot_keys: list[str]) -> int:
-    """How wide one slot of this forecast map is, in minutes.
-
-    The smallest gap between consecutive keys, because that is the only one a
-    hole cannot fake: an hourly map has every gap at 60, while a canonical map
-    with a hole in it still has fifteen-minute gaps either side of the hole.
-    """
-    minutes = [_slot_to_minutes(slot) for slot in forecast_slot_keys]
-    gaps = [b - a for a, b in zip(minutes, minutes[1:]) if b > a]
-    if not gaps:
-        return FORECAST_CANONICAL_GRANULARITY_MINUTES
-    return min(gaps)
-
-
-def _aggregate_actuals_into_forecast_slot(
-    day_actuals: dict[str, float],
-    *,
-    forecast_slot: str,
-    forecast_slot_keys: list[str],
-) -> float:
-    """Sum every actual whose slot start falls inside this forecast slot.
+def _forecast_slot_ends(forecast_slot_keys: list[str]) -> Dict[str, int]:
+    """Where each forecast slot stops, in minutes into the day.
 
     A forecast slot reaches to the next one -- an hourly forecast has to be
     scored against four quarters of actuals -- but never further than one slot
     of its own grid. Without that cap a hole in the archive, which means only
     that Helman was not running for a while, would hand every actual in the
     hole to the slot before it and score one slot against hours of production.
+
+    The grid step is the smallest gap between consecutive keys, because that is
+    the only one a hole cannot fake: an hourly map has every gap at 60, while a
+    canonical map with a hole in it still has fifteen-minute gaps either side
+    of the hole. That reading needs the keys in order, which is why the map is
+    built once here rather than re-derived per slot from a list whose sortedness
+    each caller would have to keep promising.
     """
+    minutes = [_slot_to_minutes(slot) for slot in sorted(forecast_slot_keys, key=_slot_to_minutes)]
+    gaps = [b - a for a, b in zip(minutes, minutes[1:]) if b > a]
+    step = min(gaps) if gaps else FORECAST_CANONICAL_GRANULARITY_MINUTES
+    ends: Dict[str, int] = {}
+    for index, start in enumerate(minutes):
+        following = minutes[index + 1] if index + 1 < len(minutes) else 24 * 60
+        ends[f"{start // 60:02d}:{start % 60:02d}"] = min(following, start + step)
+    return ends
+
+
+def _aggregate_actuals_into_forecast_slot(
+    day_actuals: dict[str, float],
+    *,
+    forecast_slot: str,
+    slot_ends: Dict[str, int],
+) -> float:
+    """Sum every actual whose slot start falls inside this forecast slot."""
     start = _slot_to_minutes(forecast_slot)
-    step = _forecast_grid_step_minutes(forecast_slot_keys)
-    idx = forecast_slot_keys.index(forecast_slot)
-    if idx + 1 < len(forecast_slot_keys):
-        end = min(_slot_to_minutes(forecast_slot_keys[idx + 1]), start + step)
-    else:
-        end = min(24 * 60, start + step)
+    end = slot_ends.get(forecast_slot, start + FORECAST_CANONICAL_GRANULARITY_MINUTES)
     total = 0.0
     for actual_slot, value in day_actuals.items():
         try:
@@ -155,6 +155,7 @@ def _training_day_totals(
     if not forecast_slot_keys:
         return sample.forecast_wh, sum(day_actuals.values())
 
+    slot_ends = _forecast_slot_ends(forecast_slot_keys)
     forecast_total = 0.0
     actual_total = 0.0
     for slot in forecast_slot_keys:
@@ -164,7 +165,7 @@ def _training_day_totals(
         actual_total += _aggregate_actuals_into_forecast_slot(
             day_actuals,
             forecast_slot=slot,
-            forecast_slot_keys=forecast_slot_keys,
+            slot_ends=slot_ends,
         )
     return forecast_total, actual_total
 
@@ -265,6 +266,7 @@ def _build_training_explainability(
 ) -> SolarBiasTrainingExplainability:
     slots: dict[str, SolarBiasSlotExplainability] = {}
     omitted_slot_set = set(omitted_slots)
+    slot_ends = _forecast_slot_ends(forecast_slot_keys)
 
     for slot in forecast_slot_keys:
         rows: list[SolarBiasContributionRow] = []
@@ -298,7 +300,7 @@ def _build_training_explainability(
             day_actual = _aggregate_actuals_into_forecast_slot(
                 actuals.slot_actuals_by_date.get(sample.date, {}),
                 forecast_slot=slot,
-                forecast_slot_keys=forecast_slot_keys,
+                slot_ends=slot_ends,
             )
             rows.append(
                 SolarBiasContributionRow(
@@ -495,6 +497,7 @@ def train(
         }
 
     sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
+    slot_ends = _forecast_slot_ends(sorted_forecast_slots)
     for s in usable_samples:
         day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
         invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
@@ -509,7 +512,7 @@ def train(
             day_actual = _aggregate_actuals_into_forecast_slot(
                 day_actuals,
                 forecast_slot=slot,
-                forecast_slot_keys=sorted_forecast_slots,
+                slot_ends=slot_ends,
             )
             slot_actual_sums[slot] += day_actual
             if cfg.aggregation_method == "trimmed_mean":
