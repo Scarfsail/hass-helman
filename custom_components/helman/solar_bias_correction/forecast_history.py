@@ -174,18 +174,19 @@ async def load_forecast_points_for_day(
     would show a curve the trainer never saw. Today and the days ahead still
     come from the live entities, which are the only place they exist.
     """
-    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=None)
-    if not entity_ids:
-        return []
-
     local_tz = ZoneInfo(str(hass.config.time_zone))
     today = dt_util.as_local(local_now).date()
     offset = (target_date - today).days
 
     if offset < 0:
+        # Deliberately ahead of the entity check: the archive owes the entity
+        # list nothing, so renaming or clearing it must not blank the days
+        # already recorded under the old name.
         if store is None:
             return []
         return _points_from_slot_map(store.slots_for_day(target_date), target_date, local_tz)
+
+    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=None)
     if offset >= len(entity_ids):
         return []
     state = hass.states.get(entity_ids[offset])

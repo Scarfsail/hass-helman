@@ -298,6 +298,25 @@ class LoadForecastPointsForDayTests(unittest.IsolatedAsyncioTestCase):
             {"timestamp": "2026-08-20T07:15:00+00:00", "value": 20.0},
         ]
 
+    async def test_a_past_day_survives_the_entity_list_being_cleared(self):
+        """The archive owes the entity list nothing, including its name."""
+        from datetime import date as date_cls
+
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="UTC"),
+            states=SimpleNamespace(get=lambda entity_id: None),
+        )
+
+        points = await forecast_history.load_forecast_points_for_day(
+            hass,
+            _cfg(daily_energy_entity_ids=[]),
+            date_cls(2026, 8, 20),
+            local_now=datetime(2026, 8, 25, 10, 0, tzinfo=TZ),
+            store=_FakeStore({"2026-08-20": {"07:00": 10.0}}),
+        )
+
+        assert points == [{"timestamp": "2026-08-20T07:00:00+00:00", "value": 10.0}]
+
     async def test_a_past_day_with_nothing_archived_draws_nothing(self):
         from datetime import date as date_cls
 

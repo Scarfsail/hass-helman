@@ -34,7 +34,10 @@ from .controllables.spec import (
     appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
-from .const import SOLAR_BIAS_AGGREGATION_METHODS
+from .const import (
+    SOLAR_BIAS_AGGREGATION_METHODS,
+    SOLAR_FORECAST_HISTORY_RETENTION_DAYS,
+)
 from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
 
 #: The config keys config version 7 retired. Named here so the save path can
@@ -307,6 +310,12 @@ def _validate_training_config(
                 window=solar_bias_map.get("max_training_window_days"),
                 window_path="training.solar_bias.max_training_window_days",
             )
+            _validate_minimum_within_forecast_archive(
+                report,
+                section,
+                minimum=solar_bias_map.get("min_history_days"),
+                minimum_path="training.solar_bias.min_history_days",
+            )
 
 
 def _validate_window_covers_minimum(
@@ -345,6 +354,39 @@ def _validate_window_covers_minimum(
             f"{minimum_path} ({minimum}) must not exceed {window_path} ({window}); "
             "the trainer never sees history older than its window, so a higher "
             "minimum can never be met"
+        ),
+    )
+
+
+def _validate_minimum_within_forecast_archive(
+    report: ValidationReport,
+    section: str,
+    *,
+    minimum: object,
+    minimum_path: str,
+) -> None:
+    """The solar trainer's real ceiling is the archive, not the window.
+
+    Its forecast side comes from Helman's own per-slot archive rather than the
+    recorder, so no window reaches further back than that archive's retention
+    however large it is set. A minimum above it is the same silent no-op
+    :func:`_validate_window_covers_minimum` refuses -- every run reports
+    ``insufficient_history`` -- but the relation that would betray it is
+    against a constant, not against a sibling field, so nothing else sees it.
+    """
+    if not isinstance(minimum, int) or isinstance(minimum, bool):
+        return
+    if minimum <= SOLAR_FORECAST_HISTORY_RETENTION_DAYS:
+        return
+    report.add_error(
+        section=section,
+        path=minimum_path,
+        code="invalid_relation",
+        message=(
+            f"{minimum_path} ({minimum}) must not exceed "
+            f"{SOLAR_FORECAST_HISTORY_RETENTION_DAYS}; the trainer reads the "
+            "forecast from Helman's own archive, which keeps that many days, "
+            "so a higher minimum can never be met"
         ),
     )
 

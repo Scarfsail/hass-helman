@@ -62,6 +62,35 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_a_minimum_above_the_forecast_archive_is_refused(self) -> None:
+        # The window is not the real ceiling any more: the forecast side comes
+        # from Helman's own archive, so a minimum past its retention can never
+        # be met no matter how wide the window is set.
+        config = _valid_config()
+        config["training"] = {
+            "solar_bias": {"min_history_days": 200, "max_training_window_days": 365}
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training.solar_bias.min_history_days"
+                and issue.code == "invalid_relation"
+                and "archive" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_a_minimum_at_the_archive_retention_is_allowed(self) -> None:
+        config = _valid_config()
+        config["training"] = {
+            "solar_bias": {"min_history_days": 90, "max_training_window_days": 365}
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(report.valid)
+
     def test_min_history_days_invalid_when_zero(self) -> None:
         config = _valid_config()
         config["training"] = {"solar_bias": {"min_history_days": 0}}
