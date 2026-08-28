@@ -466,6 +466,7 @@ class HelmanCoordinator:
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
         self._house_consumption_forecast_current_sensor = None
+        self._solar_forecast_current_sensors: list[Any] = []
         self._grid_import_price_sensor = None
         # The import rate in force right now, refreshed with the forecast
         # snapshots. Nothing else records it, so this is what the published
@@ -714,6 +715,18 @@ class HelmanCoordinator:
         if hcfc_sensor is not None:
             if getattr(hcfc_sensor, "hass", None) is not None:
                 hcfc_sensor.async_write_ha_state()
+        # The two current-slot forecast entities ride the same slot-aligned
+        # beat, which is what makes their recorded history a stair-step of what
+        # was believed about each slot before it began.
+        for solar_sensor in getattr(self, "_solar_forecast_current_sensors", []):
+            if getattr(solar_sensor, "hass", None) is not None:
+                try:
+                    solar_sensor.async_write_ha_state()
+                except Exception:
+                    _LOGGER.exception(
+                        "Error publishing solar forecast sensor state: %s",
+                        getattr(solar_sensor, "entity_id", "<unknown>"),
+                    )
         # Published on the same beat, though it is neither solar nor a forecast:
         # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
         # import windows align to the same grid, so a price change and its
@@ -2063,6 +2076,55 @@ class HelmanCoordinator:
 
     def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
         self._house_consumption_forecast_current_sensor = sensor
+
+    def register_solar_forecast_current_sensors(self, sensors) -> None:
+        self._solar_forecast_current_sensors = list(sensors)
+
+    def get_solar_forecast_current_w(self, *, corrected: bool) -> float | None:
+        """The current slot's solar forecast as average power, or None.
+
+        Reads the canonical snapshot's own series -- ``rawPoints`` for the
+        pre-correction curve, ``correctedPoints`` for the adjusted one. When no
+        profile is being applied there is no corrected series, and the corrected
+        sensor reports the raw value rather than going unavailable: "no
+        correction yet" is honestly the same number, and a gap in the chart
+        would read as missing data instead.
+
+        Wh per fifteen-minute slot becomes W by dividing by a quarter hour.
+        """
+        snapshot = getattr(self, "_cached_solar_forecast", None)
+        if not isinstance(snapshot, dict):
+            return None
+        points = None
+        if corrected:
+            points = snapshot.get("correctedPoints")
+        if not points:
+            points = snapshot.get("rawPoints") or snapshot.get("points")
+        if not isinstance(points, list) or not points:
+            return None
+
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+        slot_start = get_local_current_slot_start(
+            dt_util.as_local(dt_util.now()), interval_minutes=15
+        )
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            raw_ts = point.get("timestamp")
+            if not isinstance(raw_ts, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                continue
+            ts = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
+            if ts != slot_start:
+                continue
+            try:
+                return float(point.get("value")) / 0.25
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def register_grid_import_price_sensor(self, sensor) -> None:
         self._grid_import_price_sensor = sensor

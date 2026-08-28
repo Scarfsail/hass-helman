@@ -98,6 +98,13 @@ async def async_setup_entry(
         house_consumption_forecast_current_sensor,
     )
 
+    solar_forecast_current_sensors = [
+        HelmanSolarForecastCurrentSensor(coordinator, entry),
+        HelmanSolarForecastCurrentCorrectedSensor(coordinator, entry),
+    ]
+    async_add_entities(solar_forecast_current_sensors)
+    coordinator.register_solar_forecast_current_sensors(solar_forecast_current_sensors)
+
     grid_import_price_sensor = HelmanGridImportPriceSensor(coordinator, entry)
     async_add_entities([grid_import_price_sensor])
     coordinator.register_grid_import_price_sensor(grid_import_price_sensor)
@@ -419,6 +426,79 @@ class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
         if value is None:
             return None
         return round(value, 1)
+
+
+class _HelmanSolarForecastCurrentSensorBase(SensorEntity):
+    """The solar forecast for the *current* 15-minute slot, as power.
+
+    Published in W rather than the slot's Wh, for the same reason
+    ``HelmanHouseConsumptionForecastCurrentSensor`` is: a slot forecast of
+    250 Wh becomes 1000 because 250 Wh / 0.25 h = 1000 Wh/h. That is what makes
+    the recorder's hourly statistics mean meaningful — the hour's average
+    forecast power, which multiplied by an hour is the hour's forecast energy.
+    Publishing Wh per slot would give an hourly mean of "a quarter of an hour's
+    energy", which is not a quantity anything wants.
+
+    The value is written on the slot-aligned refresh, so the recorded history is
+    a stair-step of what the provider said about each slot *while that slot had
+    not yet begun* — the same measurement the bias trainer is fitted to, and the
+    reason this entity can replace a Helman-owned archive of it.
+    """
+
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "W"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry, key: str) -> None:
+        self._coordinator = coordinator
+        self.entity_id = f"sensor.helman_solar_forecast_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_solar_forecast_{key}"
+        self._attr_translation_key = f"solar_forecast_{key}"
+
+    def _read(self) -> float | None:
+        raise NotImplementedError
+
+    @property
+    def available(self) -> bool:
+        return self._read() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._read()
+        return None if value is None else round(value, 1)
+
+
+class HelmanSolarForecastCurrentSensor(_HelmanSolarForecastCurrentSensorBase):
+    """The raw, pre-correction forecast for the current slot.
+
+    This is the entity the bias trainer reads its own past from. It must stay
+    raw: fitting a profile against an already corrected forecast folds the
+    previous profile into the next one and the correction compounds run over
+    run.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "current")
+
+    def _read(self) -> float | None:
+        return self._coordinator.get_solar_forecast_current_w(corrected=False)
+
+
+class HelmanSolarForecastCurrentCorrectedSensor(_HelmanSolarForecastCurrentSensorBase):
+    """The same slot after the bias profile is applied.
+
+    Exists so raw and corrected can be drawn against each other, and against
+    actual production, in a plain Home Assistant history card. Deliberately not
+    an input to anything Helman computes.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "current_corrected")
+
+    def _read(self) -> float | None:
+        return self._coordinator.get_solar_forecast_current_w(corrected=True)
 
 
 class HelmanGridImportPriceSensor(SensorEntity):

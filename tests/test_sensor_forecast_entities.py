@@ -131,6 +131,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             set_sensors=Mock(),
             set_entity_factory=Mock(),
             register_house_consumption_forecast_current_sensor=Mock(),
+            register_solar_forecast_current_sensors=Mock(),
             register_grid_import_price_sensor=Mock(),
             register_grid_export_price_sensor=Mock(),
         )
@@ -153,21 +154,33 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             forecast_sensors[-1].entity_id,
             "sensor.helman_energy_production_today_remaining",
         )
-        # The forecast sensors, then the three coordinator-pushed singletons that
-        # follow them: the house consumption forecast and the two price sensors.
+        # The forecast sensors, then the five coordinator-pushed singletons that
+        # follow them: the house consumption forecast, the two current-slot solar
+        # forecasts, and the two price sensors.
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-12:-3]],
+            [entity.entity_id for entity in added_entities[-14:-5]],
             [entity.entity_id for entity in forecast_sensors],
         )
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-3:]],
+            [entity.entity_id for entity in added_entities[-5:]],
             [
                 "sensor.helman_house_consumption_forecast_current",
+                "sensor.helman_solar_forecast_current",
+                "sensor.helman_solar_forecast_current_corrected",
                 "sensor.helman_grid_import_price",
                 "sensor.helman_grid_export_price",
             ],
         )
         coordinator.register_grid_import_price_sensor.assert_called_once()
+        # Raw and corrected, both published on the slot-aligned beat.
+        (registered,) = coordinator.register_solar_forecast_current_sensors.call_args.args
+        self.assertEqual(
+            [s.entity_id for s in registered],
+            [
+                "sensor.helman_solar_forecast_current",
+                "sensor.helman_solar_forecast_current_corrected",
+            ],
+        )
         coordinator.register_grid_export_price_sensor.assert_called_once()
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
@@ -433,6 +446,70 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator._absorb_grid_export_price({"export": {"status": "unavailable"}})
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertIsNone(coordinator.get_grid_export_price_unit())
+
+    async def test_current_slot_solar_forecast_is_published_as_power(self) -> None:
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague")
+        )
+        # REFERENCE_TIME is 21:16, so 21:15 is the slot in progress. The
+        # neighbouring slots carry values that would be obvious if picked.
+        coordinator._cached_solar_forecast = {
+            "rawPoints": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 999.0},
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 250.0},
+                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 999.0},
+            ],
+            "correctedPoints": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 300.0},
+            ],
+        }
+        now = coordinator_module.dt_util.now
+        try:
+            coordinator_module.dt_util.now = lambda: REFERENCE_TIME
+            # 250 Wh over a quarter hour is 1000 W -- the form that makes the
+            # recorder's hourly mean the hour's average forecast power.
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_w(corrected=False), 1000.0
+            )
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_w(corrected=True), 1200.0
+            )
+
+            # No profile applied means no corrected series; the corrected sensor
+            # reports the raw number rather than going unavailable, because "not
+            # corrected yet" is honestly the same value.
+            coordinator._cached_solar_forecast.pop("correctedPoints")
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_w(corrected=True), 1000.0
+            )
+
+            # A snapshot that does not cover the current slot reports nothing
+            # rather than the nearest slot it does have.
+            coordinator._cached_solar_forecast = {
+                "rawPoints": [
+                    {"timestamp": "2026-03-20T23:00:00+01:00", "value": 250.0}
+                ]
+            }
+            self.assertIsNone(
+                coordinator.get_solar_forecast_current_w(corrected=False)
+            )
+            coordinator._cached_solar_forecast = None
+            self.assertIsNone(
+                coordinator.get_solar_forecast_current_w(corrected=False)
+            )
+        finally:
+            coordinator_module.dt_util.now = now
 
     async def test_the_backfill_waits_for_a_unit_before_it_writes_metadata(self) -> None:
         # The first import writes the mirror's statistics metadata. Writing it
