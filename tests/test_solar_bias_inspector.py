@@ -354,38 +354,6 @@ def _make_cfg():
     )
 
 
-def test_load_archived_forecast_points_reads_the_whole_archived_day():
-    """The day is drawn from what the trainer was fitted to, not the entity."""
-
-    class _FakeStore:
-        def slots_for_day(self, target_date):
-            assert str(target_date) == "2026-04-24"
-            return {"06:00": 25.0, "06:45": 25.0, "07:00": 50.0}
-
-    result = forecast_history.load_archived_forecast_points(
-        _FakeStore(),
-        date.fromisoformat("2026-04-24"),
-        ZoneInfo("Europe/Prague"),
-    )
-
-    assert result == [
-        {"timestamp": "2026-04-24T06:00:00+02:00", "value": 25.0},
-        {"timestamp": "2026-04-24T06:45:00+02:00", "value": 25.0},
-        {"timestamp": "2026-04-24T07:00:00+02:00", "value": 50.0},
-    ]
-
-
-def test_load_archived_forecast_points_without_a_store_is_empty():
-    result = forecast_history.load_archived_forecast_points(
-        None,
-        date.fromisoformat("2026-04-24"),
-        ZoneInfo("Europe/Prague"),
-    )
-
-    assert result == []
-
-
-
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
     captured = {}
 
@@ -422,49 +390,37 @@ class _DummyStore:
         self.saved = payload
 
 
-class _ArchiveStore:
-    """The forecast archive, keyed the way `SolarForecastHistoryStore` keys it."""
+def _recorded_points_of(points: list[dict]):
+    """Stand in for reading the forecast sensor's own recorded history.
 
-    def __init__(self, points_by_date: dict[str, list[dict]]) -> None:
-        self._days = {
-            day: {
-                datetime.fromisoformat(point["timestamp"]).strftime("%H:%M"): float(
-                    point["value"]
-                )
-                for point in points
-            }
-            for day, points in points_by_date.items()
-        }
-
-    def slots_for_day(self, target_date):
-        return dict(self._days.get(str(target_date), {}))
-
-
-def _archive_of(points: list[dict]) -> _ArchiveStore:
-    """An archive holding exactly these points, on the day they fall on.
-
-    Today's elapsed slots come from the archive now, so a test about today has
-    to have been running before those slots elapsed -- which in production is
-    the ordinary case, the rebuild having archived each slot at its boundary.
+    Today's elapsed slots come from that history now, so a test about today has
+    to have been publishing before those slots elapsed -- which in production is
+    the ordinary case, the sensor writing on each slot boundary.
     """
     by_date: dict[str, list[dict]] = {}
     for point in points:
         day = datetime.fromisoformat(point["timestamp"]).date().isoformat()
-        by_date.setdefault(day, []).append(point)
-    return _ArchiveStore(by_date)
+        by_date.setdefault(day, []).append(dict(point))
+
+    async def _load(hass, target_date, timezone):
+        return sorted(
+            by_date.get(str(target_date), []), key=lambda item: item["timestamp"]
+        )
+
+    return _load
 
 
-def _make_service(canonical_provider=None, archive=None):
+def _make_service(canonical_provider=None, recorded=None):
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
     )
+    service_mod.load_archived_forecast_points = _recorded_points_of(recorded or [])
     return service_mod.SolarBiasCorrectionService(
         hass,
         _DummyStore(),
         _make_cfg(),
         canonical_solar_forecast_provider=canonical_provider,
-        solar_forecast_history=archive,
     )
 
 
@@ -500,7 +456,7 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"timestamp": "2026-04-25T09:45:00+02:00", "value": 43.75},
     ]
     service = _make_service(
-        _canonical_provider(raw_15min, corrected_15min), _archive_of(raw_15min)
+        _canonical_provider(raw_15min, corrected_15min), raw_15min
     )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 1.5, "09:00": 0.5},
@@ -726,7 +682,7 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
         error_reason=None,
     )
 
-    def fake_forecast_points(*args, **kwargs):
+    async def fake_forecast_points(*args, **kwargs):
         return []
 
     async def fake_actuals(*args, **kwargs):
@@ -770,7 +726,7 @@ def test_inspector_day_splices_today_at_the_current_slot():
         {"timestamp": "2026-04-25T11:00:00+02:00", "value": 400.0},
     ]
     service = _make_service(
-        _canonical_provider(revised_snapshot), _archive_of(archived)
+        _canonical_provider(revised_snapshot), archived
     )
 
     async def fake_actuals(*args, **kwargs):
@@ -813,7 +769,7 @@ def test_inspector_day_leaves_a_hole_where_today_was_never_archived():
                 {"timestamp": "2026-04-25T10:15:00+02:00", "value": 300.0},
             ]
         ),
-        _archive_of([]),
+        [],
     )
 
     async def fake_actuals(*args, **kwargs):
@@ -836,7 +792,7 @@ def test_inspector_day_leaves_a_hole_where_today_was_never_archived():
 
 def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
     points = [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
-    service = _make_service(_canonical_provider(points), _archive_of(points))
+    service = _make_service(_canonical_provider(points), points)
 
     async def fake_actuals(*args, **kwargs):
         return {}
@@ -909,7 +865,7 @@ def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
             points,
             [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 200.0}],
         ),
-        _archive_of(points),
+        points,
     )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 2.0},
@@ -971,7 +927,7 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
         error_reason=None,
     )
 
-    def fake_forecast_points(*args, **kwargs):
+    async def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-24T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-24T09:00:00+02:00", "value": 200.0},
@@ -1032,7 +988,7 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
         error_reason=None,
     )
 
-    def fake_forecast_points(*args, **kwargs):
+    async def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-24T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-24T09:00:00+02:00", "value": 200.0},
@@ -1083,7 +1039,7 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
         error_reason=None,
     )
 
-    def fake_forecast_points(*args, **kwargs):
+    async def fake_forecast_points(*args, **kwargs):
         return [
             {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
             {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
@@ -1138,7 +1094,7 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
         error_reason=None,
     )
 
-    def fake_forecast_points(*args, **kwargs):
+    async def fake_forecast_points(*args, **kwargs):
         target_date = args[1]
         return [
             {"timestamp": f"{target_date.isoformat()}T08:00:00+02:00", "value": 100.0},
@@ -1188,7 +1144,7 @@ def test_inspector_day_returns_selected_day_impact_and_training_explainability()
                 {"timestamp": "2026-04-25T09:00:00+02:00", "value": 100.0},
             ],
         ),
-        _archive_of(points),
+        points,
     )
     service._profile = models.SolarBiasProfile(
         factors={"08:00": 1.5, "09:00": 0.5},
@@ -1262,7 +1218,7 @@ def test_service_saves_training_explainability_after_training():
         slot_forecast_wh={"12:00": 1000.0},
     )
 
-    def fake_samples(*args, **kwargs):
+    async def fake_samples(*args, **kwargs):
         return [sample]
 
     async def fake_actuals_window(*args, **kwargs):

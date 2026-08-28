@@ -117,8 +117,9 @@ EVALUATORS: dict[str, Evaluator] = {
     # forecast *as it was published* from index 0's recorded ``wh_period_15m``
     # attribute at each past midnight, which made that one entity's recorder
     # depth a training requirement. It now reads the archive Helman writes as
-    # each day runs (``solar_forecast_history.py``), so no entry in this list
-    # is governed by the training window.
+    # each day runs and reads it back from that entity's own recorded history
+    # (``forecast_slot_history.py``), so no entry in this list is governed by
+    # the training window.
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
 }
 

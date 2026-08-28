@@ -210,7 +210,6 @@ if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
     from .battery_forecast_history import BatteryForecastHistoryStore
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
-    from .solar_forecast_history import SolarForecastHistoryStore
 
 
 def _resolve_runtime_entity_and_states(
@@ -485,7 +484,6 @@ class HelmanCoordinator:
         self._grid_export_price_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
-        self._solar_forecast_history: SolarForecastHistoryStore | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
         self._cached_battery_forecast: dict | None = None
@@ -750,15 +748,12 @@ class HelmanCoordinator:
         """Register event listeners that invalidate the cached tree."""
         self._active_config = deepcopy(self._storage.config)
         from .battery_forecast_history import BatteryForecastHistoryStore
-        from .solar_forecast_history import SolarForecastHistoryStore
         from .storage import SolarBiasCorrectionStore
 
         self._solar_bias_store = SolarBiasCorrectionStore(self._hass)
         await self._solar_bias_store.async_load()
         self._battery_forecast_history = BatteryForecastHistoryStore(self._hass)
         await self._battery_forecast_history.async_load()
-        self._solar_forecast_history = SolarForecastHistoryStore(self._hass)
-        await self._solar_forecast_history.async_load()
         bias_config = read_bias_config(self._active_config)
         self._solar_bias_service = SolarBiasCorrectionService(
             self._hass,
@@ -767,7 +762,6 @@ class HelmanCoordinator:
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
             battery_forecast_history=self._battery_forecast_history,
-            solar_forecast_history=self._solar_forecast_history,
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
             house_forecast_composition_provider=self._get_house_forecast_composition,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
@@ -2664,13 +2658,6 @@ class HelmanCoordinator:
                     "previous snapshot"
                 )
                 solar_snapshot = self._cached_solar_forecast
-            else:
-                # Only a rebuild that actually read the source gets archived: a
-                # degraded one reinstates the previous snapshot, whose points
-                # are as old as it is.
-                self._record_solar_forecast_history(
-                    solar_snapshot, started_at=request_now
-                )
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
             self._invalidate_battery_forecast_cache()
@@ -3672,27 +3659,6 @@ class HelmanCoordinator:
             rebuild.battery_forecast, started_at=started_at
         )
         return pipeline
-
-    def _record_solar_forecast_history(
-        self, solar_snapshot: dict[str, Any] | None, *, started_at: datetime
-    ) -> None:
-        """Archive today's not-yet-started forecast slots at their own horizon.
-
-        ``rawPoints`` is the pre-correction curve, which is what the bias
-        trainer must be fitted against -- adjusting an already adjusted forecast
-        would fold the previous profile into the next one.
-        """
-        store = getattr(self, "_solar_forecast_history", None)
-        if store is None or not isinstance(solar_snapshot, dict):
-            return
-        try:
-            store.record_points(
-                solar_snapshot.get("rawPoints"),
-                local_now=dt_util.as_local(started_at),
-                timezone=ZoneInfo(str(self._hass.config.time_zone)),
-            )
-        except Exception:
-            _LOGGER.exception("Failed to record solar forecast history")
 
     def _record_battery_forecast_history(
         self, battery_forecast: dict[str, Any] | None, *, started_at: datetime

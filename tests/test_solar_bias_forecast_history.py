@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,107 +93,122 @@ def _cfg(**overrides) -> BiasConfig:
     return BiasConfig(**kwargs)
 
 
-class _FakeStore:
-    """Stands in for ``SolarForecastHistoryStore``: only ``slots_for_day`` is read."""
+class _Recorded:
+    """Stands in for the recorder read `forecast_slot_history` performs."""
 
     def __init__(self, days: dict[str, dict[str, float]]) -> None:
         self._days = days
+        self.windows: list[tuple[str, str]] = []
 
-    def slots_for_day(self, target_date):
-        return dict(self._days.get(str(target_date), {}))
+    async def __call__(self, hass, *, first_date, last_date):
+        self.windows.append((str(first_date), str(last_date)))
+        return {
+            day: dict(slots)
+            for day, slots in self._days.items()
+            if str(first_date) <= day <= str(last_date)
+        }
 
 
-class LoadArchivedForecastPointsTests(unittest.TestCase):
-    def test_a_day_comes_back_as_chronological_points(self):
+def _patch_window(recorded):
+    return patch.object(
+        forecast_history, "load_forecast_slots_for_window", new=recorded
+    )
+
+
+class LoadArchivedForecastPointsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_day_comes_back_as_chronological_points(self):
         from datetime import date as date_cls
 
-        points = forecast_history.load_archived_forecast_points(
-            _FakeStore({"2026-08-20": {"07:15": 20.0, "07:00": 10.0}}),
-            date_cls(2026, 8, 20),
-            TZ,
-        )
+        async def _day(hass, target_date):
+            assert str(target_date) == "2026-08-20"
+            return {"07:15": 20.0, "07:00": 10.0}
+
+        with patch.object(
+            forecast_history, "load_forecast_slots_for_day", new=_day
+        ):
+            points = await forecast_history.load_archived_forecast_points(
+                object(), date_cls(2026, 8, 20), TZ
+            )
 
         assert points == [
             {"timestamp": "2026-08-20T07:00:00+00:00", "value": 10.0},
             {"timestamp": "2026-08-20T07:15:00+00:00", "value": 20.0},
         ]
 
-    def test_a_day_with_nothing_archived_is_empty(self):
+    async def test_a_day_with_nothing_recorded_is_empty(self):
         from datetime import date as date_cls
 
-        assert (
-            forecast_history.load_archived_forecast_points(
-                _FakeStore({}), date_cls(2026, 8, 20), TZ
+        async def _day(hass, target_date):
+            return {}
+
+        with patch.object(
+            forecast_history, "load_forecast_slots_for_day", new=_day
+        ):
+            assert (
+                await forecast_history.load_archived_forecast_points(
+                    object(), date_cls(2026, 8, 20), TZ
+                )
+                == []
             )
-            == []
-        )
-
-    def test_no_store_is_empty(self):
-        from datetime import date as date_cls
-
-        assert (
-            forecast_history.load_archived_forecast_points(
-                None, date_cls(2026, 8, 20), TZ
-            )
-            == []
-        )
 
 
-class LoadTrainerSamplesTests(unittest.TestCase):
-    def test_samples_carry_the_archived_slots_and_their_sum(self):
-        store = _FakeStore(
+class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_samples_carry_the_recorded_slots_and_their_sum(self):
+        recorded = _Recorded(
             {
                 "2026-04-23": {"12:00": 9000.0, "13:00": 9100.0},
                 "2026-04-24": {"12:00": 8000.0, "13:00": 8100.0},
             }
         )
-
-        samples = forecast_history.load_trainer_samples(
-            store,
-            _cfg(min_history_days=2, max_training_window_days=2),
-            datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-        )
+        with _patch_window(recorded):
+            samples = await forecast_history.load_trainer_samples(
+                object(),
+                _cfg(min_history_days=2, max_training_window_days=2),
+                datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+            )
 
         assert [s.date for s in samples] == ["2026-04-23", "2026-04-24"]
         assert samples[0].slot_forecast_wh == {"12:00": 9000.0, "13:00": 9100.0}
-        # The day total is the archived slots summed, not a second entity read.
+        # The day total is the recorded slots summed, not a second entity read.
         assert samples[0].forecast_wh == 18100.0
 
-    def test_a_day_with_nothing_archived_yields_no_sample(self):
-        store = _FakeStore({"2026-04-24": {"12:00": 9000.0}})
+    async def test_the_whole_window_is_one_recorder_read(self):
+        recorded = _Recorded({"2026-04-24": {"12:00": 100.0}})
+        with _patch_window(recorded):
+            await forecast_history.load_trainer_samples(
+                object(),
+                _cfg(max_training_window_days=30),
+                datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+            )
 
-        samples = forecast_history.load_trainer_samples(
-            store,
-            _cfg(min_history_days=2, max_training_window_days=2),
-            datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-        )
+        assert recorded.windows == [("2026-03-26", "2026-04-24")]
+
+    async def test_a_day_with_nothing_recorded_yields_no_sample(self):
+        recorded = _Recorded({"2026-04-24": {"12:00": 9000.0}})
+        with _patch_window(recorded):
+            samples = await forecast_history.load_trainer_samples(
+                object(),
+                _cfg(min_history_days=2, max_training_window_days=2),
+                datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+            )
 
         assert [s.date for s in samples] == ["2026-04-24"]
 
-    def test_the_window_is_the_configured_length(self):
-        store = _FakeStore(
+    async def test_the_window_is_the_configured_length(self):
+        recorded = _Recorded(
             {
                 f"2026-04-{day}": {"12:00": 100.0}
                 for day in ("20", "21", "22", "23", "24")
             }
         )
-
-        samples = forecast_history.load_trainer_samples(
-            store,
-            _cfg(min_history_days=2, max_training_window_days=2),
-            datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-        )
+        with _patch_window(recorded):
+            samples = await forecast_history.load_trainer_samples(
+                object(),
+                _cfg(min_history_days=2, max_training_window_days=2),
+                datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+            )
 
         assert [s.date for s in samples] == ["2026-04-23", "2026-04-24"]
-
-    def test_no_store_means_no_samples(self):
-        samples = forecast_history.load_trainer_samples(
-            None,
-            _cfg(),
-            datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-        )
-
-        assert samples == []
 
 
 if __name__ == "__main__":

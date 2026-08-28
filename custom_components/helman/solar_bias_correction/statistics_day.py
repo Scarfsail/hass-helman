@@ -32,9 +32,10 @@ The solar forecast for a past day is no longer among what a statistics-only
 day loses. It used to be read back from the daily-energy entity's
 ``wh_period_15m`` attribute, and attributes are never compiled into
 statistics, so a day past recorder retention came back as an actuals day --
-what happened, without the forecast it was compared against. Helman now keeps
-its own archive of that curve (``solar_forecast_history.py``), which owes the
-recorder nothing and reaches as far back as its own retention.
+what happened, without the forecast it was compared against. Helman now
+publishes that curve as an entity of its own
+(``sensor.helman_solar_forecast_current``), so the recorder keeps it like any
+other series and it reaches exactly as far back as raw states do.
 """
 
 from __future__ import annotations

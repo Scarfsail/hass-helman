@@ -171,10 +171,10 @@ def _install_service_import_stubs() -> None:
         "custom_components.helman.solar_bias_correction.forecast_history"
     )
 
-    def _load_archived_forecast_points(*args, **kwargs):
+    async def _load_archived_forecast_points(*args, **kwargs):
         return []
 
-    def _load_trainer_samples(*args, **kwargs):
+    async def _load_trainer_samples(*args, **kwargs):
         return []
 
     forecast_history_mod.load_archived_forecast_points = _load_archived_forecast_points
@@ -579,7 +579,7 @@ def test_async_train_saves_version_2_payload():
         )()
         service = service_mod.SolarBiasCorrectionService(hass, store, cfg)
 
-        def _samples(*args, **kwargs):
+        async def _samples(*args, **kwargs):
             return ["sample"]
 
         async def _actuals(*args, **kwargs):

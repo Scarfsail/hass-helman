@@ -105,7 +105,6 @@ class SolarBiasCorrectionService:
         canonical_solar_forecast_provider=None,
         battery_forecast_provider=None,
         battery_forecast_history=None,
-        solar_forecast_history=None,
         house_forecast_snapshot_provider=None,
         house_forecast_composition_provider=None,
         house_energy_entity_id_provider=None,
@@ -130,7 +129,6 @@ class SolarBiasCorrectionService:
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._battery_forecast_provider = battery_forecast_provider
         self._battery_forecast_history = battery_forecast_history
-        self._solar_forecast_history = solar_forecast_history
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_forecast_composition_provider = house_forecast_composition_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
@@ -234,14 +232,11 @@ class SolarBiasCorrectionService:
         await self._training_lock.acquire()
         try:
             now = dt_util.now()
-            samples = load_trainer_samples(
-                self._solar_forecast_history, self._cfg, now
-            )
+            samples = await load_trainer_samples(self._hass, self._cfg, now)
             actuals = await load_actuals_window(
                 self._hass,
                 self._cfg,
                 days=self._cfg.max_training_window_days,
-                forecast_history=self._solar_forecast_history,
             )
             outcome = train(samples, actuals, self._cfg, now=now)
             payload = {
@@ -998,8 +993,9 @@ class SolarBiasCorrectionService:
         corrected_points: list[dict[str, Any]] = []
         if need_past:
             archived_points = _points_before(
-                load_archived_forecast_points(
-                    self._solar_forecast_history, target_date, timezone
+                await self._guarded_points(
+                    load_archived_forecast_points(self._hass, target_date, timezone),
+                    "solar forecast history",
                 ),
                 cutoff=next_slot,
             )
