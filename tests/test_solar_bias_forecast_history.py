@@ -76,6 +76,9 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.solar_bias_correction import forecast_history  # noqa: E402
+from custom_components.helman.solar_bias_correction.forecast_slot_history import (  # noqa: E402
+    ForecastSlotWindow,
+)
 from custom_components.helman.solar_bias_correction.models import BiasConfig  # noqa: E402
 
 
@@ -94,24 +97,36 @@ def _cfg(**overrides) -> BiasConfig:
 
 
 class _Recorded:
-    """Stands in for the recorder read `forecast_slot_history` performs."""
+    """Stands in for the spliced read `forecast_slot_history` performs.
 
-    def __init__(self, days: dict[str, dict[str, float]]) -> None:
+    ``hourly`` names the days it serves from the statistics tail, which is what
+    the sample carries through to the trainer as ``hourly_grain``.
+    """
+
+    def __init__(
+        self,
+        days: dict[str, dict[str, float]],
+        hourly: set[str] | None = None,
+    ) -> None:
         self._days = days
+        self._hourly = hourly or set()
         self.windows: list[tuple[str, str]] = []
 
     async def __call__(self, hass, *, first_date, last_date):
         self.windows.append((str(first_date), str(last_date)))
-        return {
-            day: dict(slots)
-            for day, slots in self._days.items()
-            if str(first_date) <= day <= str(last_date)
-        }
+        return ForecastSlotWindow(
+            slots_by_date={
+                day: dict(slots)
+                for day, slots in self._days.items()
+                if str(first_date) <= day <= str(last_date)
+            },
+            hourly_grain_dates=set(self._hourly),
+        )
 
 
 def _patch_window(recorded):
     return patch.object(
-        forecast_history, "load_forecast_slots_for_window", new=recorded
+        forecast_history, "load_spliced_forecast_slots_for_window", new=recorded
     )
 
 

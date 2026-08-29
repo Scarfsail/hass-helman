@@ -1132,7 +1132,7 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                 # it here means a statistics table that disagreed could never
                 # be mistaken for agreement.
                 with unittest.mock.patch.object(
-                    span_mod, "_query_oldest_state_date", _oldest
+                    span_mod, "query_oldest_state_date", _oldest
                 ), unittest.mock.patch.object(
                     span_mod, "query_oldest_statistics_date", _no_statistics
                 ):
@@ -1154,7 +1154,7 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
 
         with unittest.mock.patch.object(
             span_mod, "query_oldest_statistics_date", _nothing
-        ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _no_states):
+        ), unittest.mock.patch.object(span_mod, "query_oldest_state_date", _no_states):
             depths = await span_mod.query_history_depths(
                 None,
                 "sensor.house_energy",
@@ -1185,7 +1185,7 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
 
         with unittest.mock.patch.object(
             span_mod, "query_oldest_statistics_date", _stats
-        ), unittest.mock.patch.object(span_mod, "_query_oldest_state_date", _states):
+        ), unittest.mock.patch.object(span_mod, "query_oldest_state_date", _states):
             return await span_mod.query_history_depths(
                 None,
                 "sensor.forecast_today",

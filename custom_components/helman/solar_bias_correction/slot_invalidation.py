@@ -114,14 +114,25 @@ def _resolve_slot_end(
     slot_starts: list[datetime],
     index: int,
 ) -> datetime:
+    """Where a slot stops, half-open.
+
+    The day's last slot has no successor to stop at, so it stops one grid step
+    after itself -- the step read off the grid rather than assumed, because the
+    caller builds a 24-hour grid for a day served from hourly statistics and a
+    96-slot one for a day served from raw states. Falling back to the next UTC
+    midnight instead, as this did, hands the last slot of a day everything up to
+    two hours of the *next* day's samples in any zone east of UTC, so an evening
+    slot is judged on the following midnight's state.
+    """
     if index + 1 < len(slot_starts):
         return slot_starts[index + 1]
-    next_midnight = datetime.combine(
+    if len(slot_starts) >= 2:
+        return slot_starts[-1] + (slot_starts[-1] - slot_starts[-2])
+    return datetime.combine(
         date.fromisoformat(day) + timedelta(days=1),
         datetime.min.time(),
         tzinfo=timezone.utc,
     )
-    return next_midnight
 
 
 def _peak_numeric_value(

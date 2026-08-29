@@ -110,10 +110,10 @@ class HouseConsumptionTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         )
         self.trained_calls = 0
 
-        async def _query(entity_id, window, *, reference_time):
+        async def _query(entity_ids, window, *, reference_time):
             if error is not None:
                 raise error
-            return rows or []
+            return {entity_id: list(rows or []) for entity_id in entity_ids}
 
         job._async_query_hourly_history = _query
         return job

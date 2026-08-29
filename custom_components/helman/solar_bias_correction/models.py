@@ -50,12 +50,33 @@ class TrainerSample:
     date: str
     forecast_wh: float
     slot_forecast_wh: dict[str, float]
+    #: The forecast for this day was recovered from hourly statistics rather
+    #: than from the forecast sensor's own 15-minute states, so the four slots
+    #: of an hour each carry a quarter of that hour's forecast energy and not a
+    #: measurement of their own. The trainer reads it to know that the day's
+    #: ratio can only be computed per hour; see ``forecast_slot_history``.
+    hourly_grain: bool = False
 
 
 @dataclass
 class SolarActualsWindow:
+    """The training window's measured production, day by day.
+
+    ``slot_actuals_by_date`` is keyed ``HH:MM`` on the 15-minute grid for every
+    day raw states still cover. Past that horizon a day is served from hourly
+    long-term statistics instead (#173), and then it carries one entry per hour
+    keyed ``HH:00`` holding the whole hour's energy. Which days those are is
+    carried here rather than inferred from the keys: a day whose production
+    happened to land on the hour is indistinguishable from an hourly one by
+    shape alone, and reading a fifteen-minute measurement as an hourly one
+    quadruples it.
+    """
+
     slot_actuals_by_date: dict[str, dict[str, float]]
     invalidated_slots_by_date: dict[str, set[str]] = field(default_factory=dict)
+    #: Dates whose actuals are hour-keyed. Never a subset of anything the
+    #: trainer can re-derive: it has to be told.
+    hourly_grain_dates: set[str] = field(default_factory=set)
 
 
 @dataclass

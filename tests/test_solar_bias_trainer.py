@@ -409,7 +409,7 @@ def test_compute_fingerprint_includes_algorithm_version():
     assert fp.startswith("sha256:")
     expected_payload = (
         "algo=configurable_aggregation_v1+15min_v1+curtailment_inference_v1"
-        "+live_horizon_v1;"
+        "+live_horizon_v1+hourly_statistics_tail_v1;"
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"

@@ -59,19 +59,28 @@ against a finer table -- not a second data source. The tail rows are folded onto
 their containing hour and merged in *before* energy is differenced, so nothing
 downstream learns that the split happened: :class:`SpanStatistics` keeps its
 shape and its hourly keys.
+
+This module also owns the other direction, in
+:func:`query_spliced_hourly_energy`: a window deeper than ``purge_keep_days``,
+served from the statistics table where the raw states have been purged and from
+the raw states where they survive. It belongs here because the splice is this
+module's read joined to its sibling's, and because the seam is a question about
+statistics keys -- see that function for where the two meet and why.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+
+from .recorder_hourly_series import query_cumulative_hourly_energy_changes
 
 #: What a span read asks for.
 #:
@@ -306,6 +315,143 @@ async def query_hourly_statistics(
     return SpanStatistics(rows=rows, energy_kwh=energy)
 
 
+async def query_spliced_hourly_energy(
+    hass: HomeAssistant,
+    entity_ids: Sequence[str | None],
+    *,
+    local_start: datetime,
+    local_end: datetime,
+) -> dict[str, dict[datetime, float]]:
+    """Hourly energy over a window that outlives the raw states, per entity.
+
+    Same shape as :func:`~.recorder_hourly_series.query_cumulative_hourly_energy_changes`
+    -- ``{hour_start: kwh}``, keyed by the hour's UTC instant -- for callers that
+    ask for more history than ``purge_keep_days`` leaves behind. A trainer
+    configured for 56 days reads eight from raw states on a stock recorder and
+    calls the result "not enough history", while the same entity's hourly
+    long-term statistics still hold every one of the other forty-eight (issue
+    #173). This splices the two: statistics for the tail, raw states for the
+    recent part, one map per entity as if a single table had held it all.
+
+    **Where the two meet is probed, never assumed.**
+    :func:`query_oldest_state_date` is one indexed ``LIMIT 1`` read per entity
+    and it answers the only question that matters -- where this entity's raw
+    states actually begin. ``recorder.keep_days`` is *not* that date: a recreated
+    database, a late-added entity or ``auto_purge: false`` each break the
+    correspondence, and on the instance this was written for all eight days of
+    raw history come from the database's creation date rather than from any
+    purge.
+
+    **The splice lands on the local midnight after that date, not on it.** Raw
+    states begin part-way through their first day, and an hour whose opening
+    reading predates them has no delta to be computed from -- it would come back
+    missing, not wrong, leaving a ragged hole up to a day wide exactly at the
+    seam. Statistics were compiled for that day while its states still existed,
+    so handing the whole day to them costs nothing and closes the hole. From the
+    next midnight on, raw states are complete, and they win every hour they
+    cover: they see every meter tick, and the recent window is where resets and
+    glitches actually happen.
+
+    **The tail is one read for every entity together.** ``statistics_during_period``
+    takes a set of ids, so a training run's tail costs one round trip on the
+    recorder's single DB thread however many consumers it has. Only the recent
+    part stays per-entity, because the raw reader is.
+
+    Keys are normalised here rather than by the caller, because the two sources
+    disagree about them: :class:`SpanStatistics` is keyed by the hour's **UTC**
+    instant on purpose (see its docstring) and the raw reader keys by the UTC
+    instant of each local slot start. Both are instants, so the autumn fall-back
+    day's repeated local hour stays two distinct keys on both sides of the
+    splice and all twenty-five hours survive -- which is exactly what folding
+    either side to local wall-clock time would destroy.
+
+    An entity the recorder has no statistics for -- one with no ``state_class``
+    -- contributes an empty tail and is served entirely from raw states, which is
+    today's behaviour unchanged.
+    """
+    unique_ids = list(dict.fromkeys(entity_id for entity_id in entity_ids if entity_id))
+    if not unique_ids or local_end <= local_start:
+        return {entity_id: {} for entity_id in unique_ids}
+
+    local_tz = dt_util.as_local(local_start).tzinfo or timezone.utc
+    splice_by_entity: dict[str, datetime] = {}
+    for entity_id in unique_ids:
+        oldest = await query_oldest_state_date(hass, entity_id, local_tz=local_tz)
+        splice_by_entity[entity_id] = _splice_instant(
+            oldest, local_start=local_start, local_end=local_end, local_tz=local_tz
+        )
+
+    # One statistics read, spanning as far forward as the deepest splice needs;
+    # each entity keeps only the hours before its own. When every entity's raw
+    # states already cover the whole window the deepest splice is the window's
+    # own start, and there is no tail to read -- skipping the call keeps the
+    # recorder round trip off the common case of a short window.
+    statistics_end = max(splice_by_entity.values())
+    statistics = (
+        await query_hourly_statistics(
+            hass, unique_ids, local_start=local_start, local_end=statistics_end
+        )
+        if statistics_end > local_start
+        else None
+    )
+
+    spliced: dict[str, dict[datetime, float]] = {}
+    for entity_id in unique_ids:
+        splice = splice_by_entity[entity_id]
+        merged = (
+            {
+                _as_utc(hour): kwh
+                for hour, kwh in statistics.energy_for(entity_id).items()
+                if hour < splice
+            }
+            if statistics is not None
+            else {}
+        )
+        if splice < local_end:
+            recent = await query_cumulative_hourly_energy_changes(
+                hass, entity_id, local_start=splice, local_end=local_end
+            )
+            # Raw states win outright, so an hour both sources carry is counted
+            # once, with the reading that saw every tick of it.
+            merged.update({_as_utc(hour): kwh for hour, kwh in recent.items()})
+        spliced[entity_id] = merged
+
+    return spliced
+
+
+def _splice_instant(
+    oldest_state_date: date | None,
+    *,
+    local_start: datetime,
+    local_end: datetime,
+    local_tz: tzinfo,
+) -> datetime:
+    """The instant raw states take over from statistics, clamped to the window.
+
+    ``None`` -- the recorder holds no raw state at all for this entity -- puts
+    the splice at the window's end, which is the honest reading of it: there is
+    no recent part, and statistics serve the whole window.
+    """
+    if oldest_state_date is None:
+        return local_end
+    splice = datetime.combine(
+        oldest_state_date + timedelta(days=1), time.min, tzinfo=local_tz
+    )
+    return min(max(splice, local_start), local_end)
+
+
+def _as_utc(hour: datetime) -> datetime:
+    """One hour key, as the UTC instant both sources really mean.
+
+    The two readers hand back aware datetimes in different zones for the same
+    hour. Aware datetimes compare and hash by their instant, so a merged dict
+    would already behave -- but it would hold keys in two zones and hand the
+    caller whichever one arrived first, which is a trap for the next reader of
+    the map rather than a bug in this one.
+    """
+    return hour.astimezone(timezone.utc)
+
+
 def prefer_rows(
     preferred: dict[datetime, dict[str, Any]],
     fallback: dict[datetime, dict[str, Any]],
@@ -456,7 +602,7 @@ async def query_history_depths(
     statistics_oldest = await query_oldest_statistics_date(
         hass, [entity_id], local_tz=local_tz
     )
-    states_oldest = await _query_oldest_state_date(hass, entity_id, local_tz=local_tz)
+    states_oldest = await query_oldest_state_date(hass, entity_id, local_tz=local_tz)
     statistics_days = (
         max(0, (today_local - statistics_oldest).days)
         if statistics_oldest is not None
@@ -468,7 +614,7 @@ async def query_history_depths(
     return HistoryDepths(statistics_days=statistics_days, raw_states_days=raw_states_days)
 
 
-async def _query_oldest_state_date(
+async def query_oldest_state_date(
     hass: HomeAssistant,
     entity_id: str,
     *,
@@ -476,11 +622,16 @@ async def _query_oldest_state_date(
 ) -> date | None:
     """The local date of the oldest raw state the recorder still holds.
 
-    The fallback for an entity with no long-term statistics. ``limit=1`` on an
-    ascending scan from the epoch is a single indexed row -- the query does not
-    grow with how much history there is -- and ``include_start_time_state`` is
-    off because there is nothing before the epoch to carry in and asking for it
-    costs a second lookup.
+    Two callers, one question. :func:`query_history_depths` reports it, and
+    :func:`query_spliced_hourly_energy` splices on it -- which is why this is
+    public and why it is a probe rather than an inference from
+    ``recorder.keep_days``: that setting says when rows are deleted, not when
+    this entity's first row was written.
+
+    ``limit=1`` on an ascending scan from the epoch is a single indexed row --
+    the query does not grow with how much history there is -- and
+    ``include_start_time_state`` is off because there is nothing before the
+    epoch to carry in and asking for it costs a second lookup.
 
     The import is deferred like every other reach into the recorder: it need not
     be set up, and the caller treats a failure as "the recorder cannot say".
