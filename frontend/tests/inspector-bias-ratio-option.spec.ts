@@ -77,11 +77,22 @@ function rawTileShown(page: Page): Promise<boolean> {
     });
 }
 
+/** Whether the correction-impact strip is currently drawn under the chart. */
+function impactStripShown(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        return !!root?.querySelector(".impact-strip-wrap");
+    });
+}
+
 test("the raw diagnostic stays hidden when the option is unset", async ({ page }) => {
     await mountCard(page, {});
 
     expect(await rawVisible(page)).toBe(false);
     expect(await rawTileShown(page)).toBe(false);
+    expect(await impactStripShown(page)).toBe(false);
 });
 
 test("show_bias_ratio: true opens the card with the raw diagnostic visible", async ({ page }) => {
@@ -89,4 +100,5 @@ test("show_bias_ratio: true opens the card with the raw diagnostic visible", asy
 
     expect(await rawVisible(page)).toBe(true);
     expect(await rawTileShown(page)).toBe(true);
+    expect(await impactStripShown(page)).toBe(true);
 });

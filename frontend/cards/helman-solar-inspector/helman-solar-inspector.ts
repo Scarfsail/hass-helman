@@ -582,10 +582,11 @@ export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) slotMinutesDefault?: number;
   /**
    * Whether the bias-correction diagnostics start visible: the uncorrected
-   * ("raw") forecast overlay, and with it the correction impact, the fitted
-   * per-slot factor (the actual-over-forecast bias ratio) and the
-   * training-contribution table in the slot detail. The chart legend still hides
-   * the overlay again at runtime, so this only seeds the opening state.
+   * ("raw") forecast overlay, the correction-impact strip below the chart, and
+   * with them the fitted per-slot factor (the actual-over-forecast bias ratio)
+   * and the training-contribution table in the slot detail. The chart legend and
+   * the strip's own switch still hide them again at runtime, so this only seeds
+   * the opening state.
    */
   @property({ attribute: false }) biasRatioDefault = false;
 
@@ -1531,8 +1532,8 @@ export class HelmanSolarInspector extends LitElement {
     }
     // Seed the raw-forecast diagnostic's visibility from config. Like the
     // daylight default, this only fires when the config value changes, so the
-    // legend toggle — which edits `_hiddenSeries` directly — keeps the last word
-    // at runtime.
+    // legend toggle — which edits `_hiddenSeries` directly — and the impact
+    // strip's own switch keep the last word at runtime.
     if (changed.has("biasRatioDefault")) {
       const next = new Set(this._hiddenSeries);
       if (this.biasRatioDefault) {
@@ -1541,6 +1542,9 @@ export class HelmanSolarInspector extends LitElement {
         next.add("raw");
       }
       this._hiddenSeries = next;
+      // The impact strip is part of the same diagnostic set, so it opens with
+      // the raw overlay rather than needing its checkbox flipped separately.
+      this._impactStripVisible = this.biasRatioDefault;
     }
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
@@ -1758,14 +1762,14 @@ export class HelmanSolarInspector extends LitElement {
                  in, so moving between the two is not a re-read. -->
             ${this._renderTooltip()}
             <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
+            ${this._impactStripVisible && this._lastLayoutForStrip
+              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
+              : ""}
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
               : ""}
             ${this._renderPriceStrip(view, layout)}
             ${this._renderScheduleActionsStrip(view, layout)}
-            ${this._impactStripVisible && this._lastLayoutForStrip
-              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
-              : ""}
             ${this._renderSelectedSlotDetails(view)}
             ${this._renderTotals(view)}
           `
