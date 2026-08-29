@@ -299,6 +299,19 @@ class SplicedWindowTests(unittest.IsolatedAsyncioTestCase):
             min(hours).astimezone(PRAGUE), _hours_ago(WINDOW_DAYS - 1)
         )
 
+    async def test_a_fully_covered_window_costs_no_statistics_read(self) -> None:
+        """Raw states reaching past the window's start leave nothing to splice."""
+        recorder = _FakeRecorder()
+        recorder.statistics[HOUSE_METER] = (_hours_ago(STATISTICS_DAYS), 5.0)
+        recorder.raw_states[HOUSE_METER] = (_hours_ago(WINDOW_DAYS + 2, hour=6), 1.0)
+
+        spliced = await _spliced(
+            recorder, [HOUSE_METER], local_start=_hours_ago(WINDOW_DAYS)
+        )
+
+        self.assertEqual(recorder.statistics_calls, [])
+        self.assertEqual(set(spliced[HOUSE_METER].values()), {1.0})
+
     async def test_a_fall_back_day_keeps_all_twenty_five_hours(self) -> None:
         """25 local hours survive the splice from whichever side they fall on.
 

@@ -382,20 +382,31 @@ async def query_spliced_hourly_energy(
         )
 
     # One statistics read, spanning as far forward as the deepest splice needs;
-    # each entity keeps only the hours before its own.
+    # each entity keeps only the hours before its own. When every entity's raw
+    # states already cover the whole window the deepest splice is the window's
+    # own start, and there is no tail to read -- skipping the call keeps the
+    # recorder round trip off the common case of a short window.
     statistics_end = max(splice_by_entity.values())
-    statistics = await query_hourly_statistics(
-        hass, unique_ids, local_start=local_start, local_end=statistics_end
+    statistics = (
+        await query_hourly_statistics(
+            hass, unique_ids, local_start=local_start, local_end=statistics_end
+        )
+        if statistics_end > local_start
+        else None
     )
 
     spliced: dict[str, dict[datetime, float]] = {}
     for entity_id in unique_ids:
         splice = splice_by_entity[entity_id]
-        merged = {
-            _as_utc(hour): kwh
-            for hour, kwh in statistics.energy_for(entity_id).items()
-            if hour < splice
-        }
+        merged = (
+            {
+                _as_utc(hour): kwh
+                for hour, kwh in statistics.energy_for(entity_id).items()
+                if hour < splice
+            }
+            if statistics is not None
+            else {}
+        )
         if splice < local_end:
             recent = await query_cumulative_hourly_energy_changes(
                 hass, entity_id, local_start=splice, local_end=local_end
