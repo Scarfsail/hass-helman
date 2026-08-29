@@ -482,6 +482,9 @@ class HelmanCoordinator:
         #: The one-shot statistics back-fill for the export price mirror.
         self._grid_export_price_backfill_task: Any | None = None
         self._grid_export_price_backfill_started = False
+        #: The one-shot walk that recovers the forecast's past publications.
+        self._solar_forecast_backfill_task: Any | None = None
+        self._solar_forecast_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
@@ -743,6 +746,7 @@ class HelmanCoordinator:
         ):
             export_price_sensor.async_write_ha_state()
         self._maybe_start_grid_export_price_backfill()
+        self._maybe_start_solar_forecast_backfill()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1637,6 +1641,68 @@ class HelmanCoordinator:
         unit = channel.get("unit")
         self._grid_export_price_current = float(raw_price)
         self._grid_export_price_unit = unit if isinstance(unit, str) and unit else None
+
+    def _maybe_start_solar_forecast_backfill(self) -> None:
+        """Start the one-shot walk that recovers the forecast's past publications.
+
+        Triggered from the publish beat rather than from setup, for the same
+        reason the export-price walk is: the first import writes the target
+        entity's statistics metadata, so it must not run before that entity has
+        published a value of its own and the compiler owns an hour to stop
+        before.
+
+        Unprompted rather than on request, because what it reads is perishable.
+        The source's states carry the only surviving record of what each past
+        slot was forecast at before it ran, and they purge on
+        ``purge_keep_days`` -- by the time #173 makes anything read these rows,
+        waiting to be asked would mean there was nothing left to write.
+
+        Runs at most once per Home Assistant start; the task keeps a persisted
+        cursor, so a run cut short by a restart resumes rather than restarting.
+        """
+        # ``getattr`` throughout, like the sensor lookups above it: this runs
+        # off the publish beat, which several tests and the recovery path reach
+        # with a partially built coordinator.
+        if getattr(self, "_solar_forecast_backfill_started", True):
+            return
+        if self.get_solar_forecast_current_w(corrected=False) is None:
+            # No value published yet, so the sensor has no series to write into
+            # and no compiled hour to stop before.
+            return
+        source_entity_id = self._get_solar_forecast_source_entity_id()
+        if not source_entity_id:
+            return
+
+        from .solar_forecast_backfill import async_backfill_solar_forecast_statistics
+
+        self._solar_forecast_backfill_started = True
+        # Tracked so it can be cancelled on unload, for the reason the
+        # export-price task is: a reload builds a fresh coordinator whose
+        # "started" flag is False, and a second walk would trample the first's
+        # cursor. The imports upsert, so nothing corrupts -- but progress is
+        # lost and the region is walked again.
+        self._solar_forecast_backfill_task = self._hass.async_create_background_task(
+            async_backfill_solar_forecast_statistics(
+                self._hass, source_entity_id=source_entity_id
+            ),
+            "helman_solar_forecast_backfill",
+        )
+
+    def _get_solar_forecast_source_entity_id(self) -> str | None:
+        """``daily_energy_entity_ids[0]``, the entity whose curve is recovered."""
+        config = getattr(self, "_active_config", None)
+        if not isinstance(config, dict):
+            return None
+        forecast = (
+            config.get("power_devices", {})
+            .get("solar", {})
+            .get("forecast", {})
+        )
+        entity_ids = forecast.get("daily_energy_entity_ids")
+        if not isinstance(entity_ids, list) or not entity_ids:
+            return None
+        first = entity_ids[0]
+        return first.strip() if isinstance(first, str) and first.strip() else None
 
     def _maybe_start_grid_export_price_backfill(self) -> None:
         """Start the one-shot statistics back-fill, once the mirror has a value.
@@ -4689,6 +4755,10 @@ class HelmanCoordinator:
         if backfill_task is not None:
             backfill_task.cancel()
             self._grid_export_price_backfill_task = None
+        solar_backfill_task = getattr(self, "_solar_forecast_backfill_task", None)
+        if solar_backfill_task is not None:
+            solar_backfill_task.cancel()
+            self._solar_forecast_backfill_task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
