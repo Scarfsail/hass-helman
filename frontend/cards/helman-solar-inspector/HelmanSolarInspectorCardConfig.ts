@@ -21,4 +21,13 @@ export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
      * at 60, a laptop at 30.
      */
     slot_minutes?: 15 | 30 | 60;
+    /**
+     * When true, the bias-correction diagnostics are visible from the moment the
+     * card opens: the uncorrected ("raw") forecast overlay on the chart, and in
+     * the selected-slot detail the correction impact, the fitted per-slot factor
+     * (the actual-over-forecast bias ratio) and the training-contribution table.
+     * The chart legend can still hide the overlay again at runtime. Default:
+     * false.
+     */
+    show_bias_ratio?: boolean;
 }

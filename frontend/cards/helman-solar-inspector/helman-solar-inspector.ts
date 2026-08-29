@@ -580,6 +580,14 @@ export class HelmanSolarInspector extends LitElement {
    * (60) than a laptop (30) — so this is only for pinning an explicit default.
    */
   @property({ attribute: false }) slotMinutesDefault?: number;
+  /**
+   * Whether the bias-correction diagnostics start visible: the uncorrected
+   * ("raw") forecast overlay, and with it the correction impact, the fitted
+   * per-slot factor (the actual-over-forecast bias ratio) and the
+   * training-contribution table in the slot detail. The chart legend still hides
+   * the overlay again at runtime, so this only seeds the opening state.
+   */
+  @property({ attribute: false }) biasRatioDefault = false;
 
   @state() private _selectedDate = "";
   /**
@@ -1520,6 +1528,19 @@ export class HelmanSolarInspector extends LitElement {
         this._slotMinutes = defaultSlotMinutesForViewport();
       }
       this._slotMinutesInitialized = true;
+    }
+    // Seed the raw-forecast diagnostic's visibility from config. Like the
+    // daylight default, this only fires when the config value changes, so the
+    // legend toggle — which edits `_hiddenSeries` directly — keeps the last word
+    // at runtime.
+    if (changed.has("biasRatioDefault")) {
+      const next = new Set(this._hiddenSeries);
+      if (this.biasRatioDefault) {
+        next.delete("raw");
+      } else {
+        next.add("raw");
+      }
+      this._hiddenSeries = next;
     }
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {

@@ -44,6 +44,10 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                         },
                     },
                 },
+                {
+                    name: "show_bias_ratio",
+                    selector: { boolean: {} },
+                },
             ],
         };
     }
@@ -142,6 +146,7 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
             transparent_background: false,
             daylight_threshold_w: 100,
             daylight_only_default: true,
+            show_bias_ratio: false,
             ...config,
         };
     }
@@ -162,6 +167,7 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                         .daylightThresholdW=${this._config?.daylight_threshold_w ?? 100}
                         .daylightOnlyDefault=${this._config?.daylight_only_default ?? true}
                         .slotMinutesDefault=${this._config?.slot_minutes != null ? Number(this._config.slot_minutes) : undefined}
+                        .biasRatioDefault=${this._config?.show_bias_ratio ?? false}
                     ></helman-solar-inspector>
                 </div>
             </ha-card>
