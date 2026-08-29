@@ -4155,28 +4155,31 @@ export class HelmanSolarInspector extends LitElement {
    * charts aren't drawing.
    */
   /**
-   * Every slot of the day that can be selected, in chronological order.
+   * Every slot of the day, in chronological order. The day's grid, not a
+   * summary of what happens to have data.
    *
-   * Deliberately not the impact series alone, though that is where it started.
-   * Impact is built per *forecast* slot, and the forecast no longer necessarily
-   * spans the day: it is read from the recorded forecast entity, so a restart
-   * at noon leaves the morning without one. Those slots still have actuals, a
-   * house curve, a battery curve and a detail panel that renders them — so
-   * deriving the selection from impact made real, populated slots silently
-   * unclickable, `applySlotSelection` dropping a click on a slot it did not
-   * recognise.
+   * Deliberately not derived from any series, though it once was. Impact is
+   * built per *forecast* slot, and the forecast no longer necessarily spans the
+   * day: it is read back from Helman's own recorded entity, so a restart at
+   * noon leaves the morning without one. Selecting from impact made those slots
+   * silently unclickable -- `applySlotSelection` drops a click on a slot it
+   * does not recognise, so the selection just stayed put.
    *
-   * The union of impact and actuals is the day as it exists: a future day has
-   * only impact, an elapsed morning only actuals, and today has each over its
-   * own half. `HH:MM` sorts chronologically, so no comparator is needed.
+   * Widening it to "impact plus actuals" fixed that case and left the rule
+   * wrong: a slot is selectable because it is a slot of the day, not because
+   * some series reaches it. A reader clicks a gap precisely to ask what is in
+   * it, and the detail panel answers that honestly with dashes.
    */
-  private _orderedSlots(payload: InspectorPayload | null): string[] {
-    const source = payload ?? (this._payload ? this._viewForSlot(this._payload) : null);
-    if (!source) return [];
-    const slots = new Set<string>();
-    for (const point of source.series.impact) slots.add(point.slot);
-    for (const point of source.series.actual) slots.add(point.timestamp.slice(11, 16));
-    return [...slots].sort();
+  private _orderedSlots(_payload: InspectorPayload | null): string[] {
+    const width = this._slotMinutes;
+    if (!(width > 0)) return [];
+    const slots: string[] = [];
+    for (let minutes = 0; minutes < 24 * 60; minutes += width) {
+      const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
+      const mm = String(minutes % 60).padStart(2, "0");
+      slots.push(`${hh}:${mm}`);
+    }
+    return slots;
   }
 
   private _selectSlot(

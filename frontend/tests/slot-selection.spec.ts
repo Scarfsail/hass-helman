@@ -270,7 +270,7 @@ test.describe("solar inspector selection on a partly forecast day", () => {
      * Asserted on the card's own selection rather than through the plot, so it
      * pins the rule and not the axis the chart happens to draw.
      */
-    test("a morning slot with actuals but no forecast is still selectable", async ({
+    test("every slot of the day is selectable, series or no series", async ({
         page,
     }) => {
         await loadCardBundle(page);
@@ -294,20 +294,27 @@ test.describe("solar inspector selection on a partly forecast day", () => {
             );
             el._payload = payload;
 
+            // Strip every series, so nothing at all reaches these slots.
+            for (const key of Object.keys(payload.series)) {
+                payload.series[key] = [];
+            }
+            el._payload = payload;
+
             const ordered = el._orderedSlots(null) as string[];
             el._selectSlot("09:00");
             return {
+                count: ordered.length,
+                width: el._slotMinutes,
                 hasMorning: ordered.includes("09:00"),
-                hasAfternoon: ordered.includes("12:00"),
                 inOrder: ordered.join(",") === [...ordered].sort().join(","),
                 selected: el._slotSelection.focusSlot,
             };
         });
 
-        // The morning has actuals and no forecast; the afternoon the reverse.
-        // Both are real slots of the day and both must be selectable.
+        // A slot is selectable because it is a slot of the day, not because a
+        // series reaches it -- a reader clicks a gap to ask what is in it.
+        expect(result.count).toBe((24 * 60) / result.width);
         expect(result.hasMorning).toBe(true);
-        expect(result.hasAfternoon).toBe(true);
         expect(result.inOrder).toBe(true);
         expect(result.selected).toBe("09:00");
     });
