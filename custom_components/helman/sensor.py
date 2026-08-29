@@ -98,6 +98,13 @@ async def async_setup_entry(
         house_consumption_forecast_current_sensor,
     )
 
+    solar_forecast_current_sensors = [
+        HelmanSolarForecastCurrentSensor(coordinator, entry),
+        HelmanSolarForecastCurrentCorrectedSensor(coordinator, entry),
+    ]
+    async_add_entities(solar_forecast_current_sensors)
+    coordinator.register_solar_forecast_current_sensors(solar_forecast_current_sensors)
+
     grid_import_price_sensor = HelmanGridImportPriceSensor(coordinator, entry)
     async_add_entities([grid_import_price_sensor])
     coordinator.register_grid_import_price_sensor(grid_import_price_sensor)
@@ -419,6 +426,97 @@ class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
         if value is None:
             return None
         return round(value, 1)
+
+
+class _HelmanSolarForecastCurrentSensorBase(SensorEntity):
+    """The solar forecast for the *current* 15-minute slot, as energy.
+
+    The number is the slot's own Wh — the same quantity, and the same figure,
+    the inspector draws for that slot. It deliberately carries **no device
+    class**, which looks like an omission and is not: Home Assistant permits
+    ``SensorDeviceClass.ENERGY`` only alongside ``TOTAL`` or
+    ``TOTAL_INCREASING`` (``sensor/const.py``), both of which describe a
+    cumulative meter. This value rises and falls with the sun, so declaring one
+    would have the recorder read every decrease as a meter reset and every
+    increase as consumption.
+
+    Nothing is lost by leaving it off. Statistics are gated on ``state_class``,
+    and the recorder's ``_get_unit_class`` falls back to the *unit* when there
+    is no device class, so ``Wh`` still resolves to the energy unit class and
+    the series still converts.
+
+    The alternative was to publish average power instead — a slot's 250 Wh is
+    1000 W held for a quarter hour — which is what
+    ``HelmanHouseConsumptionForecastCurrentSensor`` does and what this did
+    first. It buys an overlay against live inverter
+    power and costs the thing that matters more here: a reader comparing this
+    against the inspector, or against the forecast attribute it comes from,
+    would find neither number anywhere.
+
+    The value is written on the slot-aligned refresh, so the recorded history is
+    a stair-step of what the provider said about each slot *while that slot had
+    not yet begun* — the same measurement the bias trainer is fitted to, and the
+    reason this entity can replace a Helman-owned archive of it.
+    """
+
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "Wh"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry, key: str) -> None:
+        self._coordinator = coordinator
+        self.entity_id = f"sensor.helman_solar_forecast_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_solar_forecast_{key}"
+        self._attr_translation_key = f"solar_forecast_{key}"
+
+    def _read(self) -> float | None:
+        raise NotImplementedError
+
+    @property
+    def available(self) -> bool:
+        return self._read() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._read()
+        # Two decimals, not one: the source publishes slot energies like
+        # 1244.25 Wh, and this entity is what the trainer reads its own past
+        # from. Rounding harder here would quietly move the numbers the fit is
+        # built on -- which publishing as power did not, a watt being a quarter
+        # the size of a watt-hour per slot and so one decimal further along.
+        return None if value is None else round(value, 2)
+
+
+class HelmanSolarForecastCurrentSensor(_HelmanSolarForecastCurrentSensorBase):
+    """The raw, pre-correction forecast for the current slot.
+
+    This is the entity the bias trainer reads its own past from. It must stay
+    raw: fitting a profile against an already corrected forecast folds the
+    previous profile into the next one and the correction compounds run over
+    run.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "current")
+
+    def _read(self) -> float | None:
+        return self._coordinator.get_solar_forecast_current_wh(corrected=False)
+
+
+class HelmanSolarForecastCurrentCorrectedSensor(_HelmanSolarForecastCurrentSensorBase):
+    """The same slot after the bias profile is applied.
+
+    Exists so raw and corrected can be drawn against each other, and against
+    actual production, in a plain Home Assistant history card. Deliberately not
+    an input to anything Helman computes.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "current_corrected")
+
+    def _read(self) -> float | None:
+        return self._coordinator.get_solar_forecast_current_wh(corrected=True)
 
 
 class HelmanGridImportPriceSensor(SensorEntity):

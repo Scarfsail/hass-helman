@@ -769,11 +769,42 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             inspection["dependsOn"],
         )
 
-    def test_the_first_daily_forecast_entity_is_judged_against_solar_bias(self):
-        # The forecast side of the comparison: `load_trainer_samples` recovers
-        # the published per-slot prediction from this entity's recorded
-        # attributes, so its history is as much a requirement as the actual
-        # production meter's.
+    def test_the_recorded_forecast_entity_resolves_and_is_judged(self):
+        # Helman publishes this one, so no config path points at it and the
+        # generic fallback would answer "unset". The registry key has to match
+        # the path the editor sends -- segment for segment -- or the row the
+        # training page exists for renders empty with no error anywhere.
+        hass = _ProbingHass(
+            {"sensor.helman_solar_forecast_current": _State("1400", unit="W")}
+        )
+        _, inspection = self.inspect_twice(
+            hass, {}, ("helman", "solar_forecast_current")
+        )
+
+        self.assertEqual(
+            inspection["entityId"], "sensor.helman_solar_forecast_current"
+        )
+        self.assertEqual(inspection["status"], "ok")
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        )
+
+    def test_the_recorded_forecast_entity_reports_when_it_is_missing(self):
+        # It always exists in a running installation, so "ok regardless" would
+        # look right forever and be wrong exactly when a reader needs telling.
+        _, inspection = self.inspect_twice(
+            _ProbingHass({}), {}, ("helman", "solar_forecast_current")
+        )
+
+        self.assertEqual(inspection["status"], "unavailable")
+
+    def test_the_first_daily_forecast_entity_carries_no_requirement(self):
+        # The forecast side of the comparison used to be recovered from this
+        # entity's recorded attributes, which made its depth a training
+        # requirement. Helman now archives each slot's prediction as the day
+        # runs, so nothing here is read historically and a requirement badge
+        # would name a dependency that no longer exists.
         hass = _ProbingHass({"sensor.solcast_today": _State("18.2", unit="kWh")})
         config = {
             "power_devices": {
@@ -785,13 +816,12 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         _, inspection = self.inspect_twice(hass, config, FORECAST_SOURCE_HISTORY_PATH)
 
         fact = _fact(inspection, "history")
-        self.assertEqual(
-            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
-        )
+        self.assertIsNotNone(fact)
+        self.assertNotIn("required", fact["params"])
 
     def test_the_later_daily_forecast_entities_carry_no_requirement(self):
-        # Only index 0 is read for training; the rest keep the plain depth
-        # badge the wildcard already gave them.
+        # No index is singled out any more; every entry keeps the plain depth
+        # badge the wildcard gives it.
         hass = _ProbingHass({"sensor.solcast_tomorrow": _State("14.0", unit="kWh")})
         config = {
             "power_devices": {

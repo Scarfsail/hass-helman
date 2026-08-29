@@ -465,6 +465,7 @@ class HelmanCoordinator:
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
         self._house_consumption_forecast_current_sensor = None
+        self._solar_forecast_current_sensors: list[Any] = []
         self._grid_import_price_sensor = None
         # The import rate in force right now, refreshed with the forecast
         # snapshots. Nothing else records it, so this is what the published
@@ -481,6 +482,9 @@ class HelmanCoordinator:
         #: The one-shot statistics back-fill for the export price mirror.
         self._grid_export_price_backfill_task: Any | None = None
         self._grid_export_price_backfill_started = False
+        #: The one-shot walk that recovers the forecast's past publications.
+        self._solar_forecast_backfill_task: Any | None = None
+        self._solar_forecast_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
@@ -712,6 +716,18 @@ class HelmanCoordinator:
         if hcfc_sensor is not None:
             if getattr(hcfc_sensor, "hass", None) is not None:
                 hcfc_sensor.async_write_ha_state()
+        # The two current-slot forecast entities ride the same slot-aligned
+        # beat, which is what makes their recorded history a stair-step of what
+        # was believed about each slot before it began.
+        for solar_sensor in getattr(self, "_solar_forecast_current_sensors", []):
+            if getattr(solar_sensor, "hass", None) is not None:
+                try:
+                    solar_sensor.async_write_ha_state()
+                except Exception:
+                    _LOGGER.exception(
+                        "Error publishing solar forecast sensor state: %s",
+                        getattr(solar_sensor, "entity_id", "<unknown>"),
+                    )
         # Published on the same beat, though it is neither solar nor a forecast:
         # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
         # import windows align to the same grid, so a price change and its
@@ -730,6 +746,7 @@ class HelmanCoordinator:
         ):
             export_price_sensor.async_write_ha_state()
         self._maybe_start_grid_export_price_backfill()
+        self._maybe_start_solar_forecast_backfill()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1625,6 +1642,70 @@ class HelmanCoordinator:
         self._grid_export_price_current = float(raw_price)
         self._grid_export_price_unit = unit if isinstance(unit, str) and unit else None
 
+    def _maybe_start_solar_forecast_backfill(self) -> None:
+        """Start the one-shot walk that recovers the forecast's past publications.
+
+        Triggered from the publish beat rather than from setup, for the same
+        reason the export-price walk is: the first import writes the target
+        entity's statistics metadata, so it must not run before that entity has
+        published a value of its own and the compiler owns an hour to stop
+        before.
+
+        Unprompted rather than on request, because what it reads is perishable.
+        The source's states carry the only surviving record of what each past
+        slot was forecast at before it ran, and they purge on
+        ``purge_keep_days`` -- by the time #173 makes anything read these rows,
+        waiting to be asked would mean there was nothing left to write.
+
+        Runs at most once per Home Assistant start; the task keeps a persisted
+        cursor, so a run cut short by a restart resumes rather than restarting.
+        """
+        # ``getattr`` throughout, like the sensor lookups above it: this runs
+        # off the publish beat, which several tests and the recovery path reach
+        # with a partially built coordinator.
+        if getattr(self, "_solar_forecast_backfill_started", True):
+            return
+        if self.get_solar_forecast_current_wh(corrected=False) is None:
+            # No value published yet, so the sensor has no series to write into
+            # and no compiled hour to stop before.
+            return
+        source_entity_id = self._get_solar_forecast_source_entity_id()
+        if not source_entity_id:
+            return
+
+        from .solar_forecast_backfill import async_backfill_solar_forecast_statistics
+
+        self._solar_forecast_backfill_started = True
+        # Tracked so it can be cancelled on unload, for the reason the
+        # export-price task is: a reload builds a fresh coordinator whose
+        # "started" flag is False, and a second walk would trample the first's
+        # cursor. The imports upsert, so nothing corrupts -- but progress is
+        # lost and the region is walked again.
+        self._solar_forecast_backfill_task = self._hass.async_create_background_task(
+            async_backfill_solar_forecast_statistics(
+                self._hass, source_entity_id=source_entity_id
+            ),
+            "helman_solar_forecast_backfill",
+        )
+
+    def _get_solar_forecast_source_entity_id(self) -> str | None:
+        """``daily_energy_entity_ids[0]``, the entity whose curve is recovered."""
+        config = getattr(self, "_active_config", None)
+        if not isinstance(config, dict):
+            return None
+        # Each level guarded, like ``_get_grid_sell_price_entity_id``: a key
+        # present with a null value returns None rather than {}, and chaining
+        # ``.get`` through it raises inside the try that wraps the whole
+        # refresh -- so one null node would report every beat as a failed
+        # forecast rebuild.
+        read = ConsumptionForecastBuilder._read_dict
+        forecast = read(read(read(config.get("power_devices")).get("solar")).get("forecast"))
+        entity_ids = forecast.get("daily_energy_entity_ids")
+        if not isinstance(entity_ids, list) or not entity_ids:
+            return None
+        first = entity_ids[0]
+        return first.strip() if isinstance(first, str) and first.strip() else None
+
     def _maybe_start_grid_export_price_backfill(self) -> None:
         """Start the one-shot statistics back-fill, once the mirror has a value.
 
@@ -2057,6 +2138,56 @@ class HelmanCoordinator:
 
     def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
         self._house_consumption_forecast_current_sensor = sensor
+
+    def register_solar_forecast_current_sensors(self, sensors) -> None:
+        self._solar_forecast_current_sensors = list(sensors)
+
+    def get_solar_forecast_current_wh(self, *, corrected: bool) -> float | None:
+        """The current slot's forecast energy in Wh, or None.
+
+        Reads the canonical snapshot's own series -- ``rawPoints`` for the
+        pre-correction curve, ``correctedPoints`` for the adjusted one. When no
+        profile is being applied there is no corrected series, and the corrected
+        sensor reports the raw value rather than going unavailable: "no
+        correction yet" is honestly the same number, and a gap in the chart
+        would read as missing data instead.
+
+        The snapshot's points are already the slot's Wh, so nothing is
+        converted here: the entity publishes the figure the inspector draws.
+        """
+        snapshot = getattr(self, "_cached_solar_forecast", None)
+        if not isinstance(snapshot, dict):
+            return None
+        points = None
+        if corrected:
+            points = snapshot.get("correctedPoints")
+        if not points:
+            points = snapshot.get("rawPoints") or snapshot.get("points")
+        if not isinstance(points, list) or not points:
+            return None
+
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+        slot_start = get_local_current_slot_start(
+            dt_util.as_local(dt_util.now()), interval_minutes=15
+        )
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            raw_ts = point.get("timestamp")
+            if not isinstance(raw_ts, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                continue
+            ts = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
+            if ts != slot_start:
+                continue
+            try:
+                return float(point.get("value"))
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def register_grid_import_price_sensor(self, sensor) -> None:
         self._grid_import_price_sensor = sensor
@@ -4627,6 +4758,10 @@ class HelmanCoordinator:
         if backfill_task is not None:
             backfill_task.cancel()
             self._grid_export_price_backfill_task = None
+        solar_backfill_task = getattr(self, "_solar_forecast_backfill_task", None)
+        if solar_backfill_task is not None:
+            solar_backfill_task.cancel()
+            self._solar_forecast_backfill_task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()

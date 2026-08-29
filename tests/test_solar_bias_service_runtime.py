@@ -53,11 +53,11 @@ actuals_mod.load_actuals_for_day = _load_actuals_for_day
 sys.modules[actuals_mod.__name__] = actuals_mod
 
 forecast_history_mod = types.ModuleType("custom_components.helman.solar_bias_correction.forecast_history")
-async def _load_forecast_points_for_day(*args, **kwargs):
+async def _load_archived_forecast_points(*args, **kwargs):
     return []
 async def _load_trainer_samples(*args, **kwargs):
     return []
-forecast_history_mod.load_forecast_points_for_day = _load_forecast_points_for_day
+forecast_history_mod.load_archived_forecast_points = _load_archived_forecast_points
 forecast_history_mod.load_trainer_samples = _load_trainer_samples
 sys.modules[forecast_history_mod.__name__] = forecast_history_mod
 

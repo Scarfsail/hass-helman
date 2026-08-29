@@ -19,8 +19,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
 from ..power_polarity import is_power_inverted
+from .forecast_slot_history import load_forecast_slots_for_window
 from .models import BiasConfig, SolarActualsWindow
-from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
     InvalidationInputs,
     StateSample,
@@ -78,7 +78,9 @@ async def load_actuals_for_day(
 
 
 async def load_actuals_window(
-    hass: HomeAssistant, cfg: BiasConfig, days: int
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    days: int,
 ) -> SolarActualsWindow:
     entity_id = _read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None or days <= 0:
@@ -103,7 +105,6 @@ async def load_actuals_window(
         hass,
         cfg,
         slot_actuals_by_date,
-        local_now=local_now,
     )
     return SolarActualsWindow(
         slot_actuals_by_date=slot_actuals_by_date,
@@ -150,8 +151,6 @@ async def _load_invalidated_slots_for_window(
     hass: HomeAssistant,
     cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
-    *,
-    local_now: datetime,
 ) -> dict[str, set[str]]:
     forecast_slot_starts_by_date, slot_keys_by_date = _build_day_grid_slot_inputs(
         hass,
@@ -164,13 +163,12 @@ async def _load_invalidated_slots_for_window(
     # its entities needs no forecast window either.
     curtailment_entities = _resolve_curtailment_entities(hass, cfg)
 
-    # Both layers test actuals against the forecast as it was published at the
-    # start of each day, so the window is read once and shared.
-    forecast_slot_wh_by_date = await _load_historical_forecast_window(
+    # Both layers test actuals against the same archived forecast the trainer
+    # is fitted to, so the window is gathered once and shared.
+    forecast_slot_wh_by_date = await _load_recorded_forecast_window(
         hass,
         cfg,
         slot_actuals_by_date,
-        local_now=local_now,
         curtailment_entities=curtailment_entities,
     )
 
@@ -234,19 +232,24 @@ def _resolve_curtailment_entities(
     return (soc_entity_id, grid_power_entity_id)
 
 
-async def _load_historical_forecast_window(
+async def _load_recorded_forecast_window(
     hass: HomeAssistant,
     cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
     *,
-    local_now: datetime,
     curtailment_entities: tuple[str, str] | None,
 ) -> dict[str, dict[str, float]]:
-    """Per-slot forecast as published at the start of each day in the window.
+    """Per-slot forecast for each day in the window, at the slot's own horizon.
 
     Read only when a rule actually needs it: curtailment's underdelivery test
-    and the data-glitch zero-with-neighbour rule. Neither on means one recorder
-    query per training day for nothing.
+    and the data-glitch zero-with-neighbour rule. One recorder read spans the
+    whole window rather than one per day.
+
+    It is the same *data* the trainer is fitted from -- so a capped slot is
+    judged against the number the fit used -- but a second query for it:
+    ``load_trainer_samples`` runs its own, and the two are reached from
+    different call sites of ``async_train``. Worth folding into one read if the
+    training run's query count ever matters; it is two reads a day today.
     """
     needed = (
         curtailment_entities is not None
@@ -255,21 +258,18 @@ async def _load_historical_forecast_window(
     if not needed:
         return {}
 
-    forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
-    for day in sorted(slot_actuals_by_date):
+    dates: list[date] = []
+    for day in slot_actuals_by_date:
         try:
-            target_date = date.fromisoformat(day)
+            dates.append(date.fromisoformat(day))
         except ValueError:
             continue
-        day_forecast = await load_historical_per_slot_forecast(
-            hass,
-            cfg,
-            target_date,
-            local_now=local_now,
-        )
-        if day_forecast:
-            forecast_slot_wh_by_date[day] = day_forecast
-    return forecast_slot_wh_by_date
+    if not dates:
+        return {}
+
+    return await load_forecast_slots_for_window(
+        hass, first_date=min(dates), last_date=max(dates)
+    )
 
 
 async def _load_curtailment_invalidations(
@@ -288,7 +288,7 @@ async def _load_curtailment_invalidations(
 
     if not forecast_slot_wh_by_date:
         _LOGGER.warning(
-            "Solar bias slot invalidation is configured, but no historical per-slot forecast is available for the training window; curtailment invalidation cannot tell clipping from a cloudy slot and is skipped"
+            "Solar bias slot invalidation is configured, but no archived per-slot forecast is available for the training window; curtailment invalidation cannot tell clipping from a cloudy slot and is skipped"
         )
         return {}
 

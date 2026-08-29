@@ -28,11 +28,19 @@ thread, so a query per meter is a serial round-trip per meter however the awaits
 are arranged -- the same reasoning the span read and the batched slot-energy
 read are both built on. Every id the day needs goes into one call.
 
-What statistics cannot bring back is anything held in state *attributes*: the
-archived solar forecast for a past day lives in the daily-energy entity's
-``wh_period_15m`` attribute, and attributes are never compiled into statistics.
-A statistics-only day is therefore an actuals day -- what happened, without the
-forecast it was compared against. That is accepted rather than worked around.
+A statistics-only day still comes back without its solar forecast, and the
+reason has changed rather than gone away. It used to be that the curve lived
+in the daily-energy entity's ``wh_period_15m`` attribute and attributes are
+never compiled into statistics. Helman now publishes the curve as an entity
+of its own (``sensor.helman_solar_forecast_current``), which the recorder
+does compile -- but ``load_archived_forecast_points`` reads that entity's
+*raw states*, and a day is statistics-only precisely because its raw states
+are gone. So the day is still an actuals day: what happened, without the
+forecast it was compared against.
+
+#173 is what closes this, by teaching the readers to splice a states window
+with a statistics tail. Until then the back-filled statistics
+(``solar_forecast_backfill``) are written and unread.
 """
 
 from __future__ import annotations

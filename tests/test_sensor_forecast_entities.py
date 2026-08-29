@@ -131,6 +131,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             set_sensors=Mock(),
             set_entity_factory=Mock(),
             register_house_consumption_forecast_current_sensor=Mock(),
+            register_solar_forecast_current_sensors=Mock(),
             register_grid_import_price_sensor=Mock(),
             register_grid_export_price_sensor=Mock(),
         )
@@ -153,21 +154,33 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             forecast_sensors[-1].entity_id,
             "sensor.helman_energy_production_today_remaining",
         )
-        # The forecast sensors, then the three coordinator-pushed singletons that
-        # follow them: the house consumption forecast and the two price sensors.
+        # The forecast sensors, then the five coordinator-pushed singletons that
+        # follow them: the house consumption forecast, the two current-slot solar
+        # forecasts, and the two price sensors.
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-12:-3]],
+            [entity.entity_id for entity in added_entities[-14:-5]],
             [entity.entity_id for entity in forecast_sensors],
         )
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-3:]],
+            [entity.entity_id for entity in added_entities[-5:]],
             [
                 "sensor.helman_house_consumption_forecast_current",
+                "sensor.helman_solar_forecast_current",
+                "sensor.helman_solar_forecast_current_corrected",
                 "sensor.helman_grid_import_price",
                 "sensor.helman_grid_export_price",
             ],
         )
         coordinator.register_grid_import_price_sensor.assert_called_once()
+        # Raw and corrected, both published on the slot-aligned beat.
+        (registered,) = coordinator.register_solar_forecast_current_sensors.call_args.args
+        self.assertEqual(
+            [s.entity_id for s in registered],
+            [
+                "sensor.helman_solar_forecast_current",
+                "sensor.helman_solar_forecast_current_corrected",
+            ],
+        )
         coordinator.register_grid_export_price_sensor.assert_called_once()
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
@@ -203,6 +216,45 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             "energy_production_today_remaining",
         )
         self.assertTrue(remaining_entity._attr_has_entity_name)
+
+    async def test_current_slot_entities_publish_wh_with_no_device_class(self) -> None:
+        # The device class is off deliberately, and the reason is easy to undo
+        # by accident: Home Assistant allows SensorDeviceClass.ENERGY only with
+        # TOTAL or TOTAL_INCREASING, which describe a cumulative meter. This
+        # value rises and falls with the sun, so declaring one would have the
+        # recorder read every decrease as a meter reset. Statistics survive the
+        # omission because they are gated on state_class, and the recorder
+        # derives the unit class from "Wh" alone.
+        sensor_module = _load_sensor_module()
+
+        for entity, key in (
+            (
+                sensor_module.HelmanSolarForecastCurrentSensor(
+                    SimpleNamespace(), _FakeEntry()
+                ),
+                "solar_forecast_current",
+            ),
+            (
+                sensor_module.HelmanSolarForecastCurrentCorrectedSensor(
+                    SimpleNamespace(), _FakeEntry()
+                ),
+                "solar_forecast_current_corrected",
+            ),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(entity._attr_native_unit_of_measurement, "Wh")
+                # The source publishes slot energies at two decimals, and the
+                # trainer reads its past from this entity, so the published
+                # figure must not be rounded harder than the source's own.
+                entity._read = lambda: 1244.25
+                self.assertEqual(entity.native_value, 1244.25)
+                self.assertIsNone(getattr(entity, "_attr_device_class", None))
+                self.assertEqual(
+                    entity._attr_state_class,
+                    sensor_module.SensorStateClass.MEASUREMENT,
+                )
+                self.assertEqual(entity._attr_translation_key, key)
+                self.assertTrue(entity._attr_has_entity_name)
 
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
@@ -433,6 +485,71 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator._absorb_grid_export_price({"export": {"status": "unavailable"}})
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertIsNone(coordinator.get_grid_export_price_unit())
+
+    async def test_current_slot_solar_forecast_is_published_as_power(self) -> None:
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague")
+        )
+        # REFERENCE_TIME is 21:16, so 21:15 is the slot in progress. The
+        # neighbouring slots carry values that would be obvious if picked.
+        coordinator._cached_solar_forecast = {
+            "rawPoints": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 999.0},
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 250.0},
+                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 999.0},
+            ],
+            "correctedPoints": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 300.0},
+            ],
+        }
+        now = coordinator_module.dt_util.now
+        try:
+            coordinator_module.dt_util.now = lambda: REFERENCE_TIME
+            # The snapshot's points are already the slot's Wh, so the entity
+            # publishes the figure the inspector draws rather than an encoding
+            # of it.
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_wh(corrected=False), 250.0
+            )
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_wh(corrected=True), 300.0
+            )
+
+            # No profile applied means no corrected series; the corrected sensor
+            # reports the raw number rather than going unavailable, because "not
+            # corrected yet" is honestly the same value.
+            coordinator._cached_solar_forecast.pop("correctedPoints")
+            self.assertEqual(
+                coordinator.get_solar_forecast_current_wh(corrected=True), 250.0
+            )
+
+            # A snapshot that does not cover the current slot reports nothing
+            # rather than the nearest slot it does have.
+            coordinator._cached_solar_forecast = {
+                "rawPoints": [
+                    {"timestamp": "2026-03-20T23:00:00+01:00", "value": 250.0}
+                ]
+            }
+            self.assertIsNone(
+                coordinator.get_solar_forecast_current_wh(corrected=False)
+            )
+            coordinator._cached_solar_forecast = None
+            self.assertIsNone(
+                coordinator.get_solar_forecast_current_wh(corrected=False)
+            )
+        finally:
+            coordinator_module.dt_util.now = now
 
     async def test_the_backfill_waits_for_a_unit_before_it_writes_metadata(self) -> None:
         # The first import writes the mirror's statistics metadata. Writing it

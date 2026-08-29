@@ -89,8 +89,8 @@ New package: `custom_components/helman/solar_bias_correction/`
 | Module | Responsibility | Key exports |
 |---|---|---|
 | `models.py` | Dataclasses: `TrainerSample`, `SolarActualsWindow`, `SolarBiasProfile`, `SolarBiasExplainability`, `SolarBiasAdjustmentResult`, `TrainingOutcome` | dataclasses |
-| `forecast_history.py` | Read historical `sensor.energy_production_today` states from Recorder, reconstruct `wh_period` per past day, normalize to canonical 15-min `TrainerSample` list. Implements Option A capture rule (first state after local midnight per past day). | `async load_trainer_samples(hass, cfg, now)` |
-| `actuals.py` | Read per-slot actuals from Recorder deltas of `total_energy_entity_id`. Returns `SolarActualsWindow` aligned to local 15-min slots. | `async load_actuals_window(hass, cfg, days)` |
+| `forecast_history.py` | Build the `TrainerSample` list from the live archive (`solar_forecast_history.py`), one per past day, and the inspector's forecast curve for today or any earlier day -- the days ahead come from the canonical snapshot, which already carries them. The v1 Option A capture rule -- first Recorder state after local midnight -- was retired by #178. | `load_trainer_samples(store, cfg, now)`, `load_archived_forecast_points(store, target_date, timezone)` |
+| `actuals.py` | Read per-slot actuals from Recorder deltas of `total_energy_entity_id`. Returns `SolarActualsWindow` aligned to local 15-min slots, with slot invalidation judged against the same archive. | `async load_actuals_window(hass, cfg, days, *, forecast_history)` |
 | `trainer.py` | Pure function. Takes normalized samples + actuals + config, returns `SolarBiasProfile` or a fallback outcome. Implements model-design.md exactly. No I/O. | `train(samples, actuals, cfg) -> TrainingOutcome` |
 | `adjuster.py` | Pure function. Apply profile factors to raw points, preserve raw series, clamp non-negative. | `adjust(raw_points, profile) -> adjusted_points` |
 | `scheduler.py` | HA-aware "fire training at configured local time-of-day" scheduler. Uses `async_track_time_change`. Handles reschedule on config change and cancel on teardown. | `SolarBiasTrainingScheduler` |
@@ -151,7 +151,7 @@ New package: `custom_components/helman/solar_bias_correction/`
 
 ### On scheduled training run
 
-1. Call `forecast_history.load_trainer_samples` — reconstruct per-past-day day-start captures from Recorder history of `sensor.energy_production_today`.
+1. Call `forecast_history.load_trainer_samples` — read each past day's slots from the archive, every one captured before its own slot began.
 2. Call `actuals.load_actuals_window` — Recorder deltas of `total_energy_entity_id` aligned to local 15-min slots.
 3. Call pure `trainer.train(samples, actuals, cfg)` ⇒ `TrainingOutcome`.
 4. Persist profile + metadata (fresh `trained_at`, fresh fingerprint). Persist even when outcome is fallback so the status UI can show what happened.

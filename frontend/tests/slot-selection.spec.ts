@@ -257,3 +257,50 @@ test.describe("solar inspector slot selection alignment", () => {
         }
     });
 });
+
+test.describe("solar inspector selection on a partly forecast day", () => {
+    /**
+     * Any restart after sunrise leaves this shape: the forecast is read back
+     * from Helman's own recorded entity, so slots that elapsed before it began
+     * publishing have actuals and no forecast. The impact series is built per
+     * forecast slot, so it is short too.
+     *
+     * A chart click used to resolve through `_findClosestImpactSlot`, which
+     * collapsed every earlier click onto the first slot impact reached — click
+     * 07:00, 08:00 or 09:00 and all three selected the same late slot, which
+     * reads as "the selection is stuck on the current slot".
+     */
+    test("a morning click selects its own slot when only the afternoon has forecast", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+
+        await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const payload = JSON.parse(JSON.stringify(el._payload));
+            const minutesOf = (label: string) =>
+                Number(label.slice(0, 2)) * 60 + Number(label.slice(3, 5));
+            // Forecast and impact from noon on; the morning keeps actuals only.
+            payload.series.actual = payload.series.corrected.filter(
+                (p: any) => minutesOf(p.timestamp.slice(11, 16)) < 720,
+            );
+            payload.series.corrected = payload.series.corrected.filter(
+                (p: any) => minutesOf(p.timestamp.slice(11, 16)) >= 720,
+            );
+            payload.series.impact = payload.series.impact.filter(
+                (p: any) => minutesOf(p.slot) >= 720,
+            );
+            el._payload = payload;
+            el.requestUpdate();
+        });
+        await page.waitForTimeout(100);
+
+        const geom = await chartGeom(page);
+        for (const minutes of [7 * 60, 8 * 60, 9 * 60]) {
+            const { x, y } = pagePoint(geom, xForMinutes(geom, minutes) + 2);
+            await page.mouse.click(x, y);
+            expect(await selectedSlot(page)).toBe(slotLabel(minutes));
+        }
+    });
+});

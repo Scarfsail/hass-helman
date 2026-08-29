@@ -44,6 +44,12 @@
       },
       "energy_production_today_remaining": {
         "name": "Zbývající výroba energie dnes"
+      },
+      "solar_forecast_current": {
+        "name": "Solární prognóza aktuální slot"
+      },
+      "solar_forecast_current_corrected": {
+        "name": "Solární prognóza aktuální slot (korigovaná)"
       }
     }
   }

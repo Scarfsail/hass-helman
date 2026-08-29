@@ -246,6 +246,14 @@ interface TrainingDepthRow {
   path: PathSegment[];
   /** i18n key for what the trainer takes from this entity. */
   roleKey: string;
+  /**
+   * True for an entity Helman publishes rather than one the config points at.
+   *
+   * Its `path` names nothing in the document, so the "is this picker actually
+   * set" filter on the poll would drop it -- correctly for every other row, and
+   * wrongly for this one, whose entity exists whatever the draft says.
+   */
+  ownEntity?: boolean;
 }
 
 export class HelmanConfigEditorPanel
@@ -2254,14 +2262,20 @@ export class HelmanConfigEditorPanel
    * Both sides of the comparison this trainer makes, then the two entities
    * that tell a capped slot from a genuinely poor one.
    *
-   * The forecast side is `daily_energy_entity_ids[0]` and only that one:
-   * `load_trainer_samples` reads the first entry alone, recovering the
-   * forecast *as it was published* from that entity's recorded
-   * `wh_period_15m` attribute at each past midnight
-   * (`forecast_history.py:275`). Attributes live in recorder states and never
-   * in long-term statistics, so its statistics depth says nothing about
-   * whether this trainer can read it — the role text says so, because the
-   * number in that column would otherwise reassure.
+   * The forecast side is two rows, and which one carries the requirement is
+   * the point. `daily_energy_entity_ids[0]` is where the numbers come *from*
+   * and is listed because a reader needs it named, but nothing reads its
+   * history any more, so neither of its depth columns governs anything.
+   * Helman republishes each slot's prediction as
+   * `sensor.helman_solar_forecast_current` before that slot begins and the
+   * trainer reads *that* entity's recorded history, so it is the one whose
+   * depth decides how far back the fit can reach — and the only entity on this
+   * page that is not a config path, its id being a constant Helman owns.
+   *
+   * Both of its columns matter and they mean different things: raw states are
+   * the 15-minute detail the fit is built from and stop at `purge_keep_days`,
+   * while statistics are hourly and kept forever. Until #173 teaches the
+   * trainer to splice the two, only the states column binds.
    *
    * Curtailment detection reads grid power and the battery SoC sensor (which
    * lives under the `capacity` key — see `actuals.py:411`). None of the three
@@ -2287,6 +2301,13 @@ export class HelmanConfigEditorPanel
         roleKey: "editor.training_depth.role_forecast_source",
       },
       {
+        label: this._t("editor.training_depth.forecast_recorded"),
+        // Two segments, because the registry matches on dot-separated depth.
+        path: ["helman", "solar_forecast_current"],
+        roleKey: "editor.training_depth.role_forecast_recorded",
+        ownEntity: true,
+      },
+      {
         label: this._t("editor.training_depth.grid_power"),
         path: ["power_devices", "grid", "entities", "power"],
         roleKey: "editor.training_depth.role_grid_power",
@@ -2308,10 +2329,18 @@ export class HelmanConfigEditorPanel
    * list with the mounted `helman-entity-group` paths and de-duplicates by
    * key, so this is not a second call and not a second cache.
    */
-  private _trainingDepthTargets(): { key: string; path: PathSegment[] }[] {
+  private _trainingDepthTargets(): {
+    key: string;
+    path: PathSegment[];
+    ownEntity: boolean;
+  }[] {
     if (this._activeTab !== "training") return [];
     const rows = [...this._houseConsumptionDepthRows(), ...this._solarBiasDepthRows()];
-    return rows.map((row) => ({ key: entityGroupKey(row.path), path: row.path }));
+    return rows.map((row) => ({
+      key: entityGroupKey(row.path),
+      path: row.path,
+      ownEntity: row.ownEntity === true,
+    }));
   }
 
   /**
@@ -2358,8 +2387,15 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
-    const entityId = this._stringValue(this._getValue(row.path));
     const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
+    // The config document first, then whatever the backend resolved. For every
+    // row but one those are the same string. The exception is a row for an
+    // entity Helman publishes: its path names nothing in the document, so only
+    // the inspection knows the id, and without this the row renders as "no
+    // entity configured" and is not clickable — while reporting a depth.
+    const entityId =
+      this._stringValue(this._getValue(row.path)) ||
+      this._stringValue(draft?.entityId);
     const historyFact: EntityFact | undefined = draft?.facts?.find(
       (fact) => fact.id === "history",
     );
@@ -4033,7 +4069,11 @@ export class HelmanConfigEditorPanel
     // both a group and the table care about is asked about once.
     const seenKeys = new Set<string>();
     const candidates = [
-      ...this._mountedEntityGroups().map((group) => ({ key: group.key, path: group.path })),
+      ...this._mountedEntityGroups().map((group) => ({
+        key: group.key,
+        path: group.path,
+        ownEntity: false,
+      })),
       ...this._trainingDepthTargets(),
     ];
     const targets = candidates
@@ -4043,7 +4083,8 @@ export class HelmanConfigEditorPanel
         return true;
       })
       .filter(
-        ({ path }) =>
+        ({ path, ownEntity }) =>
+          ownEntity ||
           stringValue(this._getValue(path)) !== "" ||
           (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
       );
@@ -4065,7 +4106,10 @@ export class HelmanConfigEditorPanel
         type: "helman/inspect_entities",
         config: this._config,
         ...(saved ? { saved_config: saved } : {}),
-        targets,
+        // ``ownEntity`` is this element's own bookkeeping about which rows
+        // survive the "is the picker set" filter. The request carries paths and
+        // nothing else, so it is dropped here rather than sent and ignored.
+        targets: targets.map(({ key, path }) => ({ key, path })),
       });
       // A slower earlier request must never repaint over a newer answer: that
       // would put the stale reading back on screen, which is the whole defect
