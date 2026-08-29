@@ -326,22 +326,30 @@ async def _load_invalidated_slots_for_window(
     forecast_slot_wh_by_date = _forecast_at_day_grain(
         forecast.slots_by_date, hourly_days
     )
+    # Both sides of every test are put on the day's own grid, the actuals
+    # included: a day the *forecast* is hourly for still has fifteen-minute
+    # actuals whenever the meter's states outlive the forecast sensor's, which
+    # is the common case rather than a corner. Left unfolded, one quarter of the
+    # hour would be tested against the whole hour's forecast and read as an
+    # hour that delivered a quarter of what it promised.
+    actuals_at_grain = _actuals_at_day_grain(slot_actuals_by_date, hourly_days)
 
     curtailment = await _load_curtailment_invalidations(
         hass,
         cfg,
         curtailment_entities,
-        slot_actuals_by_date,
+        actuals_at_grain,
         forecast_slot_wh_by_date,
         forecast_slot_starts_by_date,
         slot_keys_by_date,
         hourly_days=hourly_days,
+        statistics_days=hourly_grain_dates,
         tail=tail,
     )
     data_glitch = _load_data_glitch_invalidations(
         hass,
         cfg,
-        slot_actuals_by_date,
+        actuals_at_grain,
         forecast_slot_wh_by_date,
         hourly_days=hourly_days,
     )
@@ -367,6 +375,37 @@ def _forecast_at_day_grain(
     """
     at_grain: dict[str, dict[str, float]] = {}
     for day, slots in forecast_slot_wh_by_date.items():
+        if day not in hourly_days:
+            at_grain[day] = slots
+            continue
+        hours: dict[str, float] = {}
+        for slot_key, value in slots.items():
+            try:
+                hour = int(slot_key.split(":", 1)[0])
+            except (AttributeError, ValueError):
+                continue
+            hours[f"{hour:02d}:00"] = hours.get(f"{hour:02d}:00", 0.0) + value
+        at_grain[day] = hours
+    return at_grain
+
+
+def _actuals_at_day_grain(
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    hourly_days: set[str],
+) -> dict[str, dict[str, float]]:
+    """Sum an hour-grain day's actuals into one ``HH:00`` entry per hour.
+
+    The twin of :func:`_forecast_at_day_grain`, and needed for the same reason:
+    a day is judged at hour grain when *either* side of its ratio is hourly, so
+    a day whose actuals are still fifteen-minute can be one of them. Folding is
+    exact -- the hour's four slots hold the hour's energy between them -- and a
+    day already keyed by the hour folds to itself.
+
+    Only the invalidation layers see this. ``SolarActualsWindow`` keeps the
+    actuals at the grain they were measured at, because that is what they are.
+    """
+    at_grain: dict[str, dict[str, float]] = {}
+    for day, slots in slot_actuals_by_date.items():
         if day not in hourly_days:
             at_grain[day] = slots
             continue
@@ -507,6 +546,7 @@ async def _load_curtailment_invalidations(
     slot_keys_by_date: dict[str, list[str]],
     *,
     hourly_days: set[str],
+    statistics_days: set[str],
     tail: _StatisticsTail,
 ) -> dict[str, set[str]]:
     """Curtailment, on whichever evidence each day of the window still has.
@@ -517,6 +557,16 @@ async def _load_curtailment_invalidations(
     bounds of the sensor over exactly that hour, so the peak the rule wants is
     read rather than approximated. Both kinds go into one list: they never
     overlap in time, the splice being a date boundary.
+
+    **Which evidence a day has is ``statistics_days``, not ``hourly_days``.**
+    The two part company on every day the forecast sensor is hourly for while
+    the meter is not -- the common case, the forecast sensor being the younger
+    entity -- and those days are judged per hour but still have raw states for
+    every sensor. Splitting on the grid instead would look them up in a
+    statistics read that stops at the meter's splice, find nothing, and retire
+    curtailment invalidation for exactly the days it is most likely to matter
+    on. A raw sample stream needs no help from the grid it is tested against:
+    the rules take each slot's peak of whatever samples fall inside it.
 
     Hour grain is coarser in both directions -- an hour's peak SoC is at least
     any of its slots' (more hours pass rule 1) and its peak export is at least
@@ -547,7 +597,7 @@ async def _load_curtailment_invalidations(
     grid_power_samples_utc: list[StateSample] = []
 
     state_days = [
-        day for day in forecast_slot_starts_by_date if day not in hourly_days
+        day for day in forecast_slot_starts_by_date if day not in statistics_days
     ]
     if state_days:
         window_start_utc = min(
@@ -581,7 +631,7 @@ async def _load_curtailment_invalidations(
     hour_starts_utc = [
         hour_start
         for day in forecast_slot_starts_by_date
-        if day in hourly_days
+        if day in statistics_days
         for hour_start in forecast_slot_starts_by_date[day]
     ]
     if hour_starts_utc and tail.statistics is not None:

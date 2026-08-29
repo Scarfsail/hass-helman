@@ -111,6 +111,10 @@ class _Recorder:
         self.actual_scale: dict[int, float] = {}
         #: Hourly rows for the curtailment sensors: ``{entity: (min, max)}``.
         self.sensor_rows: dict[str, tuple[float, float]] = {}
+        #: Raw states for the same sensors, flat: ``{entity: value}``. They
+        #: begin where the meter's do, which is what makes a day the forecast
+        #: sensor is hourly for still have state-grain evidence.
+        self.sensor_states: dict[str, float] = {}
         self.statistics_calls: list[set[str]] = []
         self.state_reads: list[str] = []
 
@@ -230,6 +234,8 @@ class _Recorder:
             readings = list(self._meter_readings(self.meter_states_from, step_minutes=15))
         elif entity_id == FORECAST:
             readings = list(self._forecast_states())
+        elif entity_id in self.sensor_states:
+            readings = list(self._flat_states(self.sensor_states[entity_id]))
         else:
             return []
 
@@ -247,6 +253,14 @@ class _Recorder:
             instant, value = carried[-1]
             states.insert(0, _FakeState(value, instant))
         return states
+
+    def _flat_states(self, value: float):
+        """One reading per slot, unchanging, from where the meter's states do."""
+        cursor = self.meter_states_from.astimezone(timezone.utc)
+        end = NOW.astimezone(timezone.utc)
+        while cursor <= end:
+            yield cursor, value
+            cursor += timedelta(minutes=15)
 
     def _forecast_states(self):
         """The forecast sensor's own history: the current slot's Wh, per slot."""
@@ -613,6 +627,93 @@ class HourGrainCurtailmentTests(unittest.IsolatedAsyncioTestCase):
         window = await self._window(inverted=True, export_w=4000.0)
 
         self.assertEqual(window.invalidated_slots_by_date, {})
+
+
+class SplitHorizonTests(unittest.IsolatedAsyncioTestCase):
+    """The two horizons need not agree, and the younger one is the forecast's.
+
+    Helman's forecast sensor is typically the newer entity, so the ordinary
+    shape of the window is a band of days whose actuals are still fifteen-minute
+    while their forecast is already hourly. Those days are judged per hour --
+    the coarser side wins -- but they still have raw states for every sensor,
+    and both halves of that have gone wrong before.
+    """
+
+    #: Where the forecast sensor's own states begin: four days back, against the
+    #: meter's eight. Days 7 through 4 are the split band.
+    FORECAST_STATE_DAYS = 4
+    SPLIT_BAND_DAY = 5
+
+    def _hass(self):
+        return _make_hass(
+            {
+                "power_devices": {
+                    "battery": {"entities": {"capacity": SOC}},
+                    "grid": {"entities": {"power": GRID}},
+                }
+            }
+        )
+
+    async def _window(self, *, export_w: float, actual_scale: float):
+        recorder = _Recorder()
+        recorder.forecast_states_from = _local_midnight(
+            self.FORECAST_STATE_DAYS
+        ) + timedelta(hours=6)
+        # A battery at the threshold and a grid exporting whatever the case
+        # under test needs, as raw states rather than as statistics rows.
+        recorder.sensor_states = {SOC: 96.0, GRID: export_w}
+        recorder.sensor_rows = {SOC: (95.0, 96.0), GRID: (0.0, export_w)}
+        recorder.actual_scale = {hour: actual_scale for hour in range(24)}
+
+        cfg = _cfg(
+            slot_invalidation_max_battery_soc_percent=90.0,
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
+        )
+        started = _patches(recorder)
+        for item in started:
+            item.start()
+        try:
+            return await actuals_mod.load_actuals_window(
+                self._hass(), cfg, days=WINDOW_DAYS
+            )
+        finally:
+            for item in started:
+                item.stop()
+
+    def _split_band_day(self) -> str:
+        return str(NOW.date() - timedelta(days=self.SPLIT_BAND_DAY))
+
+    async def test_a_split_band_day_is_judged_per_hour_but_read_from_states(self):
+        """Its evidence is raw states; looking for statistics rows finds none.
+
+        The tail read stops at the *meter's* splice, so a day past it has no row
+        for any sensor. Sourcing the samples off the grid the day is judged on
+        would find nothing here and quietly retire curtailment for the whole
+        band.
+        """
+        window = await self._window(export_w=10.0, actual_scale=0.4)
+
+        day = self._split_band_day()
+        self.assertNotIn(day, window.hourly_grain_dates)
+        self.assertTrue(
+            {"11:00", "11:15", "11:30", "11:45"}
+            <= window.invalidated_slots_by_date.get(day, set()),
+            window.invalidated_slots_by_date.get(day),
+        )
+
+    async def test_a_healthy_split_band_day_is_left_alone(self):
+        """The fold, pinned: an hour's actual against an hour's forecast.
+
+        The day's actuals are fifteen-minute and its forecast is hourly, so
+        without folding the actuals onto the same grid rule (3) would compare
+        one quarter of the hour against the whole of it, read every hour as
+        having delivered a quarter of its forecast, and invalidate a day on
+        which nothing whatsoever happened.
+        """
+        window = await self._window(export_w=10.0, actual_scale=1.0)
+
+        self.assertEqual(window.invalidated_slots_by_date.get(self._split_band_day()), None)
 
 
 class HourlyPeakLookupTests(unittest.TestCase):
