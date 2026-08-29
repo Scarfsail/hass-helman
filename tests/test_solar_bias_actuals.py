@@ -77,13 +77,17 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.solar_bias_correction import actuals  # noqa: E402
+from custom_components.helman.solar_bias_correction.forecast_slot_history import (  # noqa: E402
+    ForecastSlotWindow,
+)
 
 
 class _FakeForecastWindow:
     """Stands in for the one recorder read `forecast_slot_history` performs."""
 
-    def __init__(self, slots: dict[str, float]) -> None:
+    def __init__(self, slots: dict[str, float], hourly: set[str] | None = None) -> None:
         self._slots = slots
+        self._hourly = hourly or set()
         self.windows: list[tuple[str, str]] = []
 
     async def __call__(self, hass, *, first_date, last_date):
@@ -93,7 +97,9 @@ class _FakeForecastWindow:
         while day <= last_date:
             days[day.isoformat()] = dict(self._slots)
             day += timedelta(days=1)
-        return days
+        return ForecastSlotWindow(
+            slots_by_date=days, hourly_grain_dates=set(self._hourly)
+        )
 
 
 class _FixedDateTime(datetime):
@@ -177,7 +183,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -234,7 +240,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -302,7 +308,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -361,7 +367,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -397,7 +403,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -440,7 +446,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",
@@ -499,7 +505,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
-            actuals, "load_forecast_slots_for_window", new=forecast_window
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
             "_read_day_slot_actuals",

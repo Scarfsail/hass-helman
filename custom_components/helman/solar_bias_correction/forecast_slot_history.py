@@ -40,6 +40,7 @@ once rather than thirty times for one.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from functools import partial
 from typing import Any
@@ -55,12 +56,33 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
     get_instance = None  # type: ignore[assignment]
     get_significant_states = None  # type: ignore[assignment]
 
+try:
+    from ..recorder_statistics_span import (
+        query_hourly_statistics,
+        query_oldest_state_date,
+    )
+except Exception:  # pragma: no cover - Home Assistant API compatibility
+    query_hourly_statistics = None  # type: ignore[assignment]
+    query_oldest_state_date = None  # type: ignore[assignment]
+
 #: The entity this module reads. Helman publishes it; see
 #: ``HelmanSolarForecastCurrentSensor``.
 SOLAR_FORECAST_CURRENT_ENTITY = "sensor.helman_solar_forecast_current"
 
 _SLOT_MINUTES = 15
 _SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES
+_SLOTS_PER_HOUR = 60 // _SLOT_MINUTES
+
+#: What the statistics tail's ``mean`` is multiplied by to reach one slot's Wh.
+#:
+#: The rows come back from ``statistics_during_period`` converted to the unit
+#: class's display unit, and :data:`~..recorder_statistics_span.STATISTICS_UNITS`
+#: asks for kWh; the sensor records Wh. Both halves of that -- the ask and the
+#: metadata's ``unit_class: "energy"`` -- have to hold for the factor to be
+#: right, which is why ``test_solar_forecast_statistics_tail`` pins it against
+#: what ``solar_forecast_backfill`` actually writes rather than asserting it
+#: here.
+_KWH_TO_WH = 1000.0
 
 
 async def load_forecast_slots_for_window(
@@ -119,6 +141,140 @@ async def load_forecast_slots_for_window(
         if slots:
             days[day.isoformat()] = slots
         day += timedelta(days=1)
+    return days
+
+
+@dataclass(frozen=True)
+class ForecastSlotWindow:
+    """A window's recorded forecast, and which of its days are hour-grain.
+
+    ``hourly_grain_dates`` is the honesty in the payload: for those days the
+    four slots of an hour each carry a **quarter of the hour's forecast**, which
+    is a weight rather than a measurement. Nothing here knows how the hour's
+    energy was really distributed inside itself, and the readers must not read
+    the quarters as if it did.
+    """
+
+    slots_by_date: dict[str, dict[str, float]]
+    hourly_grain_dates: set[str] = field(default_factory=set)
+
+
+async def load_spliced_forecast_slots_for_window(
+    hass: HomeAssistant,
+    *,
+    first_date: date,
+    last_date: date,
+) -> ForecastSlotWindow:
+    """The recorded forecast for a window deeper than ``purge_keep_days``.
+
+    The sensor's raw states are what this module reads, and raw states are what
+    the recorder purges -- eight days on the instance #173 was written from. A
+    ninety-day training window would therefore find a forecast for eight of its
+    days and, since a day with no forecast is no sample at all, train on eight.
+
+    ``solar_forecast_backfill`` has been writing this same entity's hourly
+    statistics since long before anything read them, precisely for this. So the
+    tail comes from there: one wide statistics read for every day before the
+    sensor's own states begin, and the existing per-slot state reader for every
+    day after.
+
+    **Where the two meet is probed, not assumed** --
+    :func:`~..recorder_statistics_span.query_oldest_state_date`, the same probe
+    the house window splices on, and the splice lands on the local midnight
+    *after* the oldest state's date because states begin part-way through their
+    first day.
+
+    **What the tail's ``mean`` means.** The sensor's state is the *current
+    slot's* energy in Wh, and the back-fill writes each hour's time-weighted
+    mean of it. Four equal-length slots make up an hour, so that mean is the
+    hour's average slot -- the hour's forecast energy is ``mean x 4``, and one
+    slot's share of it is the mean itself. That is the whole conversion, and
+    getting it wrong is invisible: a constant factor on every tail day's
+    forecast, which the fit absorbs into factors that then misprice every future
+    slot. The unit is the other half of it -- see :data:`_KWH_TO_WH`.
+
+    **The quarters are weights, not shape.** Splitting the hour evenly is not a
+    claim about within-hour production, and no reader may take it as one: it is
+    what lets an hour's *one* ratio reach the four slots it covers with equal
+    weight (#173's G3). ``hourly_grain_dates`` names every day it was done to.
+    """
+    if query_hourly_statistics is None or query_oldest_state_date is None:
+        return ForecastSlotWindow(
+            slots_by_date=await load_forecast_slots_for_window(
+                hass, first_date=first_date, last_date=last_date
+            )
+        )
+    if last_date < first_date:
+        return ForecastSlotWindow(slots_by_date={})
+
+    local_tz = ZoneInfo(str(hass.config.time_zone))
+    oldest_state_date = await query_oldest_state_date(
+        hass, SOLAR_FORECAST_CURRENT_ENTITY, local_tz=local_tz
+    )
+    # No raw state at all means the whole window is tail, which is the honest
+    # reading of it rather than an error: the back-fill may still hold it.
+    splice_date = (
+        min(max(oldest_state_date + timedelta(days=1), first_date), last_date + timedelta(days=1))
+        if oldest_state_date is not None
+        else last_date + timedelta(days=1)
+    )
+
+    slots_by_date: dict[str, dict[str, float]] = {}
+    hourly_grain_dates: set[str] = set()
+    if splice_date > first_date:
+        tail = await query_hourly_statistics(
+            hass,
+            [SOLAR_FORECAST_CURRENT_ENTITY],
+            local_start=datetime.combine(first_date, time.min, tzinfo=local_tz),
+            local_end=datetime.combine(splice_date, time.min, tzinfo=local_tz),
+        )
+        slots_by_date.update(
+            _slots_from_hourly_rows(
+                tail.rows_for(SOLAR_FORECAST_CURRENT_ENTITY), local_tz=local_tz
+            )
+        )
+        hourly_grain_dates.update(slots_by_date)
+
+    if splice_date <= last_date:
+        slots_by_date.update(
+            await load_forecast_slots_for_window(
+                hass, first_date=splice_date, last_date=last_date
+            )
+        )
+
+    return ForecastSlotWindow(
+        slots_by_date=slots_by_date, hourly_grain_dates=hourly_grain_dates
+    )
+
+
+def _slots_from_hourly_rows(
+    rows_by_utc_hour: dict[datetime, dict[str, Any]],
+    *,
+    local_tz: ZoneInfo,
+) -> dict[str, dict[str, float]]:
+    """Hourly statistics rows as the same ``{day: {"HH:MM": wh}}`` map.
+
+    Rows are keyed by the hour's UTC instant, so the local date and hour are
+    resolved per row rather than assumed -- and the autumn fall-back day's two
+    01:00 hours are *added* into one set of slot keys rather than one silently
+    replacing the other. The actuals side folds its repeated hour the same way,
+    so the day's ratio is unchanged by the doubling; the slots of that one hour
+    simply carry twice the weight of their neighbours.
+    """
+    days: dict[str, dict[str, float]] = {}
+    for utc_hour, row in sorted(rows_by_utc_hour.items()):
+        mean = row.get("mean")
+        if mean is None:
+            continue
+        try:
+            slot_wh = float(mean) * _KWH_TO_WH
+        except (TypeError, ValueError):
+            continue
+        local_hour = utc_hour.astimezone(local_tz)
+        slots = days.setdefault(local_hour.date().isoformat(), {})
+        for index in range(_SLOTS_PER_HOUR):
+            slot_key = f"{local_hour.hour:02d}:{index * _SLOT_MINUTES:02d}"
+            slots[slot_key] = round(slots.get(slot_key, 0.0) + slot_wh, 4)
     return days
 
 

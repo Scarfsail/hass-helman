@@ -22,9 +22,12 @@ _DAY_FORECAST_FLOOR_WH = 100.0
 _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
+#: What a contribution row says when its ratio was measured over the whole hour.
+_HOURLY_GRAIN_REASON = "hourly_statistics_grain"
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
 _ALGORITHM_VERSION = (
     "configurable_aggregation_v1+15min_v1+curtailment_inference_v1+live_horizon_v1"
+    "+hourly_statistics_tail_v1"
 )
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,6 +136,112 @@ def _aggregate_actuals_into_forecast_slot(
         if start <= minutes < end:
             total += value
     return total
+
+
+def _hour_of(slot: str) -> int:
+    return _slot_to_minutes(slot) // 60
+
+
+def _hour_actual_wh(day_actuals: dict[str, float], hour: int) -> float:
+    """Everything the day's actuals put inside one hour.
+
+    Serves both grains without being told which it has: a fifteen-minute day
+    contributes the hour's four slots and an hour-grain day its single ``HH:00``
+    entry, and both come to the hour's whole energy.
+    """
+    total = 0.0
+    for slot_key, value in day_actuals.items():
+        try:
+            minutes = _slot_to_minutes(slot_key)
+        except (ValueError, AttributeError):
+            continue
+        if hour * 60 <= minutes < (hour + 1) * 60:
+            total += value
+    return total
+
+
+def _hour_ratios(
+    slot_forecast_wh: dict[str, float],
+    day_actuals: dict[str, float],
+) -> Dict[int, float]:
+    """One actual-over-forecast ratio per hour, for a day trained at hour grain.
+
+    This is the whole of #175's answer to the grain question. Past the raw
+    states' horizon a day is known per hour on at least one side of the ratio,
+    and the hour's one ratio is what each of its slots is trained on -- weighted
+    by the slot's own forecast, so the fit still knows which quarter of the hour
+    carried the energy without anything claiming to know how the *measurement*
+    was distributed inside it.
+
+    The alternatives were both worse than losing the resolution. Splitting the
+    hour's actual across the slots by the forecast's own shape drives every
+    slot's ratio toward 1.0 -- which is precisely the signal being measured --
+    and splitting it evenly biases sunrise and sunset, where production inside
+    an hour is steeply ramped. Neither buys resolution that is really there.
+
+    Invalidation is deliberately not consulted: it arrives per hour for these
+    days, so the caller skipping an invalidated slot removes the whole hour
+    anyway, and computing the ratio from the hour as measured keeps it a
+    property of the hour rather than of which slots survived.
+    """
+    forecast_by_hour: Dict[int, float] = {}
+    for slot, value in slot_forecast_wh.items():
+        try:
+            hour = _hour_of(slot)
+        except (ValueError, AttributeError):
+            continue
+        forecast_by_hour[hour] = forecast_by_hour.get(hour, 0.0) + value
+
+    return {
+        hour: _hour_actual_wh(day_actuals, hour) / hour_forecast
+        for hour, hour_forecast in forecast_by_hour.items()
+        if hour_forecast > 0.0
+    }
+
+
+def _day_slot_actual_wh(
+    slot: str,
+    *,
+    day_forecast: float,
+    day_actuals: dict[str, float],
+    slot_ends: Dict[str, int],
+    hour_ratios: Dict[int, float] | None,
+) -> float:
+    """What this day contributes to this slot's actual, at the day's own grain.
+
+    ``hour_ratios`` of ``None`` is the fifteen-minute case: the actuals falling
+    inside the slot, summed. Otherwise the day is known per hour, and the slot
+    is credited with its own forecast scaled by the hour's ratio -- which is the
+    same thing as "this slot's ratio is the hour's ratio", written so that
+    ``ratio_of_sums`` weights it by the slot's forecast automatically.
+
+    One helper for both the fit and its explainability, so the number the
+    inspector shows is arrived at by the code that fitted it.
+    """
+    if hour_ratios is None:
+        return _aggregate_actuals_into_forecast_slot(
+            day_actuals,
+            forecast_slot=slot,
+            slot_ends=slot_ends,
+        )
+    return day_forecast * hour_ratios.get(_hour_of(slot), 0.0)
+
+
+def _hourly_grain_dates(
+    samples: list[TrainerSample],
+    actuals: SolarActualsWindow,
+) -> set[str]:
+    """Every date where either side of the ratio is known only per hour.
+
+    Two independent horizons meet here. The meter's raw states and the forecast
+    sensor's are purged on their own schedules -- and Helman's forecast sensor is
+    typically the younger entity, so the common case is a day whose actuals are
+    still fifteen-minute while its forecast is not. Either one being hourly makes
+    the day's ratio an hourly measurement, so both are asked.
+    """
+    return set(actuals.hourly_grain_dates) | {
+        sample.date for sample in samples if sample.hourly_grain
+    }
 
 
 def _serialize_invalidated_slots_by_date(
@@ -262,11 +371,20 @@ def _build_training_explainability(
     slot_forecast_sums: dict[str, float],
     slot_actual_sums: dict[str, float],
     slot_raw_ratios: dict[str, float | None],
+    hourly_dates: set[str],
     interpolated_anchors: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> SolarBiasTrainingExplainability:
     slots: dict[str, SolarBiasSlotExplainability] = {}
     omitted_slot_set = set(omitted_slots)
     slot_ends = _forecast_slot_ends(forecast_slot_keys)
+    hour_ratios_by_date = {
+        sample.date: _hour_ratios(
+            sample.slot_forecast_wh,
+            actuals.slot_actuals_by_date.get(sample.date, {}),
+        )
+        for sample in usable_samples
+        if sample.date in hourly_dates
+    }
 
     for slot in forecast_slot_keys:
         rows: list[SolarBiasContributionRow] = []
@@ -297,10 +415,13 @@ def _build_training_explainability(
                     )
                 )
                 continue
-            day_actual = _aggregate_actuals_into_forecast_slot(
-                actuals.slot_actuals_by_date.get(sample.date, {}),
-                forecast_slot=slot,
+            hour_ratios = hour_ratios_by_date.get(sample.date)
+            day_actual = _day_slot_actual_wh(
+                slot,
+                day_forecast=day_forecast,
+                day_actuals=actuals.slot_actuals_by_date.get(sample.date, {}),
                 slot_ends=slot_ends,
+                hour_ratios=hour_ratios,
             )
             rows.append(
                 SolarBiasContributionRow(
@@ -309,7 +430,11 @@ def _build_training_explainability(
                     actual_wh=day_actual,
                     ratio=day_actual / day_forecast,
                     status="included",
-                    reason=None,
+                    # The row is real but it is not a fifteen-minute
+                    # measurement: this slot and the other three of its hour all
+                    # carry that hour's one ratio. Said here so the inspector
+                    # cannot present it as anything finer.
+                    reason=_HOURLY_GRAIN_REASON if hour_ratios is not None else None,
                 )
             )
 
@@ -428,6 +553,7 @@ def train(
         invalidated_slot_count,
     )
 
+    hourly_dates = _hourly_grain_dates(samples, actuals)
     usable_samples: List[TrainerSample] = []
     dropped_days: List[Dict[str, str]] = []
 
@@ -501,6 +627,15 @@ def train(
     for s in usable_samples:
         day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
         invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
+        # An hour-grain day has one ratio per hour and every slot of that hour
+        # is trained on it; ``slot_valid_day_counts`` still counts the day once
+        # per slot, so ``min_valid_slot_days`` keeps meaning "days that
+        # contributed".
+        hour_ratios = (
+            _hour_ratios(s.slot_forecast_wh, day_actuals)
+            if s.date in hourly_dates
+            else None
+        )
         for slot in sorted_forecast_slots:
             if slot in invalidated_slots:
                 continue
@@ -509,10 +644,12 @@ def train(
             if day_forecast <= 0.0:
                 continue
             slot_valid_day_counts[slot] += 1
-            day_actual = _aggregate_actuals_into_forecast_slot(
-                day_actuals,
-                forecast_slot=slot,
+            day_actual = _day_slot_actual_wh(
+                slot,
+                day_forecast=day_forecast,
+                day_actuals=day_actuals,
                 slot_ends=slot_ends,
+                hour_ratios=hour_ratios,
             )
             slot_actual_sums[slot] += day_actual
             if cfg.aggregation_method == "trimmed_mean":
@@ -594,6 +731,7 @@ def train(
         slot_forecast_sums=slot_forecast_sums,
         slot_actual_sums=slot_actual_sums,
         slot_raw_ratios=slot_raw_ratios,
+        hourly_dates=hourly_dates,
         interpolated_anchors=interpolated_anchors,
     )
 

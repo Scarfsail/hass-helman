@@ -9,7 +9,7 @@ from homeassistant.util import dt as dt_util
 
 from .forecast_slot_history import (
     load_forecast_slots_for_day,
-    load_forecast_slots_for_window,
+    load_spliced_forecast_slots_for_window,
 )
 from .models import BiasConfig, TrainerSample
 
@@ -76,18 +76,20 @@ async def load_trainer_samples(
     source entity, so both sides of the day-ratio gate describe the same
     measurement.
 
-    How far back this reaches is ``purge_keep_days``, not a Helman constant.
-    Days beyond it are absent until #173 teaches the trainer to splice the
-    statistics tail; the training page reports both depths so the limit is
-    visible rather than inferred.
+    How far back this reaches is no longer ``purge_keep_days``: past where the
+    sensor's own states begin the window is served from the hourly statistics
+    ``solar_forecast_backfill`` wrote for it. Those days come back at hour
+    grain, which ``TrainerSample.hourly_grain`` says out loud so the trainer
+    scores them per hour instead of pretending to fifteen-minute resolution.
     """
     local_now = dt_util.as_local(now)
     today = local_now.date()
-    days = await load_forecast_slots_for_window(
+    window = await load_spliced_forecast_slots_for_window(
         hass,
         first_date=today - timedelta(days=cfg.max_training_window_days),
         last_date=today - timedelta(days=1),
     )
+    days = window.slots_by_date
 
     samples: list[TrainerSample] = []
     for offset in range(cfg.max_training_window_days, 0, -1):
@@ -100,6 +102,7 @@ async def load_trainer_samples(
                 date=str(target_date),
                 forecast_wh=sum(slot_forecast_wh.values()),
                 slot_forecast_wh=slot_forecast_wh,
+                hourly_grain=target_date.isoformat() in window.hourly_grain_dates,
             )
         )
     return samples
