@@ -3437,7 +3437,7 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** Resolve a strip click to the nearest impact slot, or clear the selection. */
+  /** Resolve a strip click to the slot it lands in, or clear the selection. */
   private _handleStripSlotPick(
     event: CustomEvent<SlotPickDetail>,
     payload: InspectorPayload,
@@ -3447,12 +3447,11 @@ export class HelmanSolarInspector extends LitElement {
       this._deselectSlot();
       return;
     }
-    const slot = this._findClosestImpactSlot(minutes, payload.series.impact);
-    if (slot) {
-      this._selectSlot(slot, event.detail?.mode ?? "replace", payload);
-    } else {
-      this._deselectSlot();
-    }
+    this._selectSlot(
+      this._slotLabelForMinutes(minutes),
+      event.detail?.mode ?? "replace",
+      payload,
+    );
   }
 
   /** The battery SoC strip, behind a collapse toggle that starts expanded. */
@@ -5589,20 +5588,25 @@ export class HelmanSolarInspector extends LitElement {
     return [...dated, ...synthetic];
   }
 
-  private _findClosestImpactSlot(minutes: number, impacts: ImpactPoint[]): string | null {
-    let best: string | null = null;
-    let bestDist = Infinity;
-    for (const point of impacts) {
-      const m = /^(\d{2}):(\d{2})$/.exec(point.slot);
-      if (!m) continue;
-      const slotMinutes = Number(m[1]) * 60 + Number(m[2]);
-      const dist = Math.abs(slotMinutes - minutes);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = point.slot;
-      }
-    }
-    return best;
+  /**
+   * The slot of the day a pointer minute falls in, as an `HH:MM` label.
+   *
+   * This used to snap to the nearest *impact* slot, which was invisible while
+   * impact spanned every day whole. It does not any more -- impact is built per
+   * forecast slot, and the forecast is read back from Helman's own recorded
+   * entity, so a restart at noon leaves the morning without one. Snapping then
+   * collapsed every morning click onto the first slot that had impact: clicking
+   * 07:00, 08:00 or 09:00 all selected 09:30, which reads as "selection is
+   * stuck on the current slot".
+   *
+   * A pointer minute already names its slot; nothing needs to be searched for.
+   */
+  private _slotLabelForMinutes(minutes: number): string {
+    const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
+    const start = Math.floor(minutes / width) * width;
+    const hh = String(Math.floor(start / 60)).padStart(2, "0");
+    const mm = String(start % 60).padStart(2, "0");
+    return `${hh}:${mm}`;
   }
 
   private _handleChartClick(event: MouseEvent, payload: InspectorPayload) {
@@ -5620,13 +5624,11 @@ export class HelmanSolarInspector extends LitElement {
     // Resolving the raw pointer minute to the nearest slot *start* instead biased
     // the right half of every slot onto the next slot's start.
     const minutes = this._minutesForSvgX(layout, svgX);
-    const slotStart = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
-    const slot = this._findClosestImpactSlot(slotStart, payload.series.impact);
-    if (slot) {
-      this._selectSlot(slot, slotSelectionModeForEvent(event), payload);
-    } else {
-      this._deselectSlot();
-    }
+    this._selectSlot(
+      this._slotLabelForMinutes(minutes),
+      slotSelectionModeForEvent(event),
+      payload,
+    );
   }
 
   /**
