@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -16,7 +16,7 @@ from ..consumption_forecast_profiles import (
     profile_to_dict,
     rows_to_dict,
 )
-from ..recorder_hourly_series import query_cumulative_hourly_energy_changes
+from ..recorder_statistics_span import query_spliced_hourly_energy
 from ..storage import TrainingArtifactsStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,16 +98,37 @@ class HouseConsumptionTrainingJob:
 
     async def _async_fit_and_store(self, request: HouseTrainingRequest) -> str:
         local_now = dt_util.now()
-        house_rows = await self._async_query_hourly_history(
-            request.total_energy_entity_id,
+        # One read for the meter and every consumer together. They share a
+        # window and a grid, and the tail of that window is a single statistics
+        # query for the whole set -- so asking per entity would multiply the
+        # expensive half of the read by the number of consumers to get the same
+        # rows back.
+        rows_by_entity = await self._async_query_hourly_history(
+            [
+                request.total_energy_entity_id,
+                *(
+                    consumer["energy_entity_id"]
+                    for consumer in request.consumers_config
+                ),
+            ],
             request.training_window_days,
             reference_time=local_now,
         )
-        consumer_histories = await self._async_query_consumer_histories(
-            request.consumers_config,
-            request.training_window_days,
-            reference_time=local_now,
-        )
+        house_rows = rows_by_entity.get(request.total_energy_entity_id) or []
+        consumer_histories = [
+            ConsumerHistoryData(
+                entity_id=consumer["energy_entity_id"],
+                label=consumer["label"],
+                values_by_ts=rows_to_dict(
+                    rows_by_entity.get(consumer["energy_entity_id"]) or []
+                ),
+                # The read either happened for all of them or for none: a
+                # failure raises out of ``async_train``, which records
+                # ``training_failed`` and keeps the previous profile.
+                query_succeeded=True,
+            )
+            for consumer in request.consumers_config
+        ]
         profile = await self._hass.async_add_executor_job(
             functools.partial(
                 fit_house_profile,
@@ -133,72 +154,41 @@ class HouseConsumptionTrainingJob:
         )
         return outcome
 
-    async def _async_query_consumer_histories(
-        self,
-        consumers_config: list[dict[str, Any]],
-        training_window_days: int,
-        *,
-        reference_time,
-    ) -> list[ConsumerHistoryData]:
-        consumer_histories: list[ConsumerHistoryData] = []
-        for consumer in consumers_config:
-            entity_id = consumer["energy_entity_id"]
-            try:
-                rows = await self._async_query_hourly_history(
-                    entity_id,
-                    training_window_days,
-                    reference_time=reference_time,
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to query history for deferrable consumer %s, using empty",
-                    entity_id,
-                )
-                consumer_histories.append(
-                    ConsumerHistoryData(
-                        entity_id=entity_id,
-                        label=consumer["label"],
-                        values_by_ts={},
-                        query_succeeded=False,
-                    )
-                )
-                continue
-
-            consumer_histories.append(
-                ConsumerHistoryData(
-                    entity_id=entity_id,
-                    label=consumer["label"],
-                    values_by_ts=rows_to_dict(rows),
-                    query_succeeded=True,
-                )
-            )
-
-        return consumer_histories
-
     async def _async_query_hourly_history(
         self,
-        entity_id: str,
+        entity_ids: Sequence[str],
         training_window_days: int,
         *,
         reference_time,
-    ) -> list[dict]:
-        """Query Recorder-backed hourly cumulative deltas and return raw rows."""
+    ) -> dict[str, list[dict]]:
+        """Every entity's hourly energy over the training window, as raw rows.
+
+        The window is spliced -- raw states for the recent part, hourly
+        long-term statistics for whatever the recorder has already purged --
+        because a configured ``training_window_days`` is a statement about how
+        much history to fit on, not about how much of it survived
+        ``purge_keep_days``. The row shape is unchanged: ``fit_house_profile``
+        cannot tell which table an hour came from, and must not have to.
+        """
         local_current_hour = reference_time.replace(
             minute=0,
             second=0,
             microsecond=0,
         )
         local_midnight = local_current_hour.replace(hour=0)
-        values_by_hour = await query_cumulative_hourly_energy_changes(
+        energy_by_entity = await query_spliced_hourly_energy(
             self._hass,
-            entity_id,
+            entity_ids,
             local_start=local_midnight - timedelta(days=training_window_days),
             local_end=local_current_hour,
         )
-        return [
-            {
-                "start": hour_start.timestamp(),
-                "change": change,
-            }
-            for hour_start, change in sorted(values_by_hour.items())
-        ]
+        return {
+            entity_id: [
+                {
+                    "start": hour_start.timestamp(),
+                    "change": change,
+                }
+                for hour_start, change in sorted(values_by_hour.items())
+            ]
+            for entity_id, values_by_hour in energy_by_entity.items()
+        }

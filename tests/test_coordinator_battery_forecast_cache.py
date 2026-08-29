@@ -308,6 +308,15 @@ def _install_import_stubs() -> None:
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     history_mod.get_significant_states = lambda *args, **kwargs: {}
 
+    # The house consumption trainer splices its window's tail out of hourly
+    # long-term statistics, so importing the coordinator now reaches this
+    # module too. Nothing here exercises that read; it answers with nothing.
+    statistics_mod = sys.modules.get("homeassistant.components.recorder.statistics")
+    if statistics_mod is None:
+        statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+        sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
+
     energy_pkg = sys.modules.get("homeassistant.components.energy")
     if energy_pkg is None:
         energy_pkg = types.ModuleType("homeassistant.components.energy")
@@ -434,6 +443,7 @@ def _cleanup_stubbed_modules() -> None:
         "homeassistant.components.energy.data",
     "homeassistant.components.recorder",
     "homeassistant.components.recorder.history",
+    "homeassistant.components.recorder.statistics",
         "homeassistant.helpers",
         "homeassistant.helpers.event",
         "homeassistant.helpers.entity_registry",
