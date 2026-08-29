@@ -615,5 +615,32 @@ class HourGrainCurtailmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(window.invalidated_slots_by_date, {})
 
 
+class HourlyPeakLookupTests(unittest.TestCase):
+    """The hour asked about is local; the rows are stamped on whole UTC hours."""
+
+    def _samples(self, local_tz: str):
+        hour_start = datetime(
+            2026, 6, 1, 11, 0, tzinfo=ZoneInfo(local_tz)
+        ).astimezone(timezone.utc)
+        rows = {
+            hour_start.replace(minute=0) + timedelta(hours=offset): {
+                "max": 10.0 * (offset + 1)
+            }
+            for offset in (0, 1)
+        }
+        return actuals_mod._hourly_peak_samples(
+            rows, [hour_start], peak=actuals_mod._row_max
+        )
+
+    def test_a_whole_hour_offset_reads_its_one_row(self):
+        self.assertEqual(self._samples("Europe/Prague")[0].value, 10.0)
+
+    def test_a_half_hour_offset_reads_both_rows_it_lies_across(self):
+        """India, Nepal and parts of Australia. Looking the hour up by its own
+        instant finds no row there at all, so every tail hour reads as no
+        evidence and curtailment invalidation silently stops firing."""
+        self.assertEqual(self._samples("Asia/Kolkata")[0].value, 20.0)
+
+
 if __name__ == "__main__":
     unittest.main()

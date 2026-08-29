@@ -617,6 +617,10 @@ async def _load_curtailment_invalidations(
     )
 
 
+#: How much of the clock one hourly statistics row describes.
+_STATISTICS_ROW_SPAN = timedelta(hours=1)
+
+
 def _row_max(row: dict[str, Any]) -> Any:
     return row.get("max")
 
@@ -641,15 +645,45 @@ def _hourly_peak_samples(
     """
     samples: list[StateSample] = []
     for hour_start in hour_starts_utc:
-        row = rows_by_utc_hour.get(hour_start)
-        raw_value = peak(row) if row is not None else None
+        peaks = [
+            value
+            for row in _rows_covering(rows_by_utc_hour, hour_start)
+            for value in (_parse_numeric_state_value(peak(row)),)
+            if value is not None
+        ]
         samples.append(
             StateSample(
                 timestamp=hour_start,
-                value=_parse_numeric_state_value(raw_value),
+                value=max(peaks) if peaks else None,
             )
         )
     return samples
+
+
+def _rows_covering(
+    rows_by_utc_hour: dict[datetime, dict[str, Any]],
+    hour_start: datetime,
+) -> list[dict[str, Any]]:
+    """Every statistics row covering any part of one local hour.
+
+    Rows are stamped on whole *UTC* hours while the hour asked about is a local
+    one, so a zone whose offset is not a whole number of hours -- India, Nepal,
+    parts of Australia -- lays each local hour across two rows and none of them
+    starts where the lookup looks. Asking for the hour's own instant there finds
+    nothing at all, every tail hour comes back as no evidence, and curtailment
+    invalidation quietly stops firing for the whole statistics tail without one
+    number looking wrong. Where the offset is whole this is the single row it
+    has always been.
+    """
+    floor = hour_start.replace(minute=0, second=0, microsecond=0)
+    hour_end = hour_start + _STATISTICS_ROW_SPAN
+    return [
+        row
+        for candidate in (floor, floor + _STATISTICS_ROW_SPAN)
+        if candidate < hour_end and candidate + _STATISTICS_ROW_SPAN > hour_start
+        for row in (rows_by_utc_hour.get(candidate),)
+        if row is not None
+    ]
 
 
 def _load_data_glitch_invalidations(
