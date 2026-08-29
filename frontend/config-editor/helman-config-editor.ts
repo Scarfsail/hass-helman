@@ -246,6 +246,14 @@ interface TrainingDepthRow {
   path: PathSegment[];
   /** i18n key for what the trainer takes from this entity. */
   roleKey: string;
+  /**
+   * True for an entity Helman publishes rather than one the config points at.
+   *
+   * Its `path` names nothing in the document, so the "is this picker actually
+   * set" filter on the poll would drop it -- correctly for every other row, and
+   * wrongly for this one, whose entity exists whatever the draft says.
+   */
+  ownEntity?: boolean;
 }
 
 export class HelmanConfigEditorPanel
@@ -2254,13 +2262,20 @@ export class HelmanConfigEditorPanel
    * Both sides of the comparison this trainer makes, then the two entities
    * that tell a capped slot from a genuinely poor one.
    *
-   * The forecast side is `daily_energy_entity_ids[0]`, still listed because it
-   * is what a reader needs named — but it is no longer read historically at
-   * all. Helman archives each slot's prediction before that slot begins
-   * (`solar_forecast_history.py`) and the trainer reads that archive, so
-   * neither this entity's recorder depth nor its statistics depth governs
-   * anything here. The role text says so, because a number in either column
-   * would otherwise read as a requirement.
+   * The forecast side is two rows, and which one carries the requirement is
+   * the point. `daily_energy_entity_ids[0]` is where the numbers come *from*
+   * and is listed because a reader needs it named, but nothing reads its
+   * history any more, so neither of its depth columns governs anything.
+   * Helman republishes each slot's prediction as
+   * `sensor.helman_solar_forecast_current` before that slot begins and the
+   * trainer reads *that* entity's recorded history, so it is the one whose
+   * depth decides how far back the fit can reach — and the only entity on this
+   * page that is not a config path, its id being a constant Helman owns.
+   *
+   * Both of its columns matter and they mean different things: raw states are
+   * the 15-minute detail the fit is built from and stop at `purge_keep_days`,
+   * while statistics are hourly and kept forever. Until #173 teaches the
+   * trainer to splice the two, only the states column binds.
    *
    * Curtailment detection reads grid power and the battery SoC sensor (which
    * lives under the `capacity` key — see `actuals.py:411`). None of the three
@@ -2284,6 +2299,12 @@ export class HelmanConfigEditorPanel
         label: this._t("editor.training_depth.forecast_source"),
         path: ["power_devices", "solar", "forecast", "daily_energy_entity_ids", 0],
         roleKey: "editor.training_depth.role_forecast_source",
+      },
+      {
+        label: this._t("editor.training_depth.forecast_recorded"),
+        path: ["helman.solar_forecast_current"],
+        roleKey: "editor.training_depth.role_forecast_recorded",
+        ownEntity: true,
       },
       {
         label: this._t("editor.training_depth.grid_power"),
@@ -2310,7 +2331,11 @@ export class HelmanConfigEditorPanel
   private _trainingDepthTargets(): { key: string; path: PathSegment[] }[] {
     if (this._activeTab !== "training") return [];
     const rows = [...this._houseConsumptionDepthRows(), ...this._solarBiasDepthRows()];
-    return rows.map((row) => ({ key: entityGroupKey(row.path), path: row.path }));
+    return rows.map((row) => ({
+      key: entityGroupKey(row.path),
+      path: row.path,
+      ownEntity: row.ownEntity === true,
+    }));
   }
 
   /**
@@ -4032,7 +4057,11 @@ export class HelmanConfigEditorPanel
     // both a group and the table care about is asked about once.
     const seenKeys = new Set<string>();
     const candidates = [
-      ...this._mountedEntityGroups().map((group) => ({ key: group.key, path: group.path })),
+      ...this._mountedEntityGroups().map((group) => ({
+        key: group.key,
+        path: group.path,
+        ownEntity: false,
+      })),
       ...this._trainingDepthTargets(),
     ];
     const targets = candidates
@@ -4042,7 +4071,8 @@ export class HelmanConfigEditorPanel
         return true;
       })
       .filter(
-        ({ path }) =>
+        ({ path, ownEntity }) =>
+          ownEntity ||
           stringValue(this._getValue(path)) !== "" ||
           (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
       );
@@ -4064,7 +4094,10 @@ export class HelmanConfigEditorPanel
         type: "helman/inspect_entities",
         config: this._config,
         ...(saved ? { saved_config: saved } : {}),
-        targets,
+        // ``ownEntity`` is this element's own bookkeeping about which rows
+        // survive the "is the picker set" filter. The request carries paths and
+        // nothing else, so it is dropped here rather than sent and ignored.
+        targets: targets.map(({ key, path }) => ({ key, path })),
       });
       // A slower earlier request must never repaint over a newer answer: that
       // would put the stale reading back on screen, which is the whole defect

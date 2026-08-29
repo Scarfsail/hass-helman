@@ -27,9 +27,16 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
 )
 from ..controllables.config import read_deferrable_consumers
+from ..solar_bias_correction.forecast_slot_history import (
+    SOLAR_FORECAST_CURRENT_ENTITY,
+)
 from .context import InspectionRequest, PathSegment
 from .fallback import evaluate_entity_value
-from .history import history_aware, history_evaluator
+from .history import (
+    fixed_entity_history_evaluator,
+    history_aware,
+    history_evaluator,
+)
 from .model import Inspection
 from .power import evaluate_power_entity
 
@@ -86,6 +93,12 @@ def _meter_feeds_the_house_trainer(request: InspectionRequest) -> bool:
     )
 
 
+#: The path the editor asks about for Helman's own forecast entity. Not a
+#: location in the config document -- nothing there points at this entity --
+#: but the request protocol is path-shaped, so it needs a name.
+SOLAR_FORECAST_CURRENT_INSPECTION_PATH = "helman.solar_forecast_current"
+
+
 EVALUATORS: dict[str, Evaluator] = {
     "power_devices.grid.entities.power": history_aware(
         evaluate_power_entity,
@@ -116,11 +129,19 @@ EVALUATORS: dict[str, Evaluator] = {
     # No index is singled out any more. The bias trainer used to recover the
     # forecast *as it was published* from index 0's recorded ``wh_period_15m``
     # attribute at each past midnight, which made that one entity's recorder
-    # depth a training requirement. It now reads the archive Helman writes as
-    # each day runs and reads it back from that entity's own recorded history
-    # (``forecast_slot_history.py``), so no entry in this list is governed by
-    # the training window.
+    # depth a training requirement. It now reads its own published forecast
+    # entity instead (``forecast_slot_history.py``), so no entry in this list
+    # governs anything -- the requirement moved to the row below.
     "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
+    # Not a config path: Helman publishes this entity, so its id is a constant.
+    # It is the forecast side of the bias comparison now, and the only entity
+    # whose depth decides how far back the solar fit can reach -- which is why
+    # it is judged against the same minimum the production meter is.
+    SOLAR_FORECAST_CURRENT_INSPECTION_PATH: fixed_entity_history_evaluator(
+        SOLAR_FORECAST_CURRENT_ENTITY,
+        ("training", "solar_bias", "min_history_days"),
+        SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    ),
 }
 
 #: What speaks for a path no key claims: the value, and no interpretation. It

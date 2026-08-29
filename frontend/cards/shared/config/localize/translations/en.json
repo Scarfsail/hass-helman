@@ -128,7 +128,9 @@
       "role_grid_power": "Spots the slots where nothing was being exported, which together with a full battery means production was capped rather than low.",
       "role_battery_soc": "Spots a full battery, the other half of recognising a capped slot.",
       "forecast_source": "Published solar forecast",
-      "role_forecast_source": "The forecast side of the comparison. Helman archives each slot's prediction before that slot begins, so training reads its own archive rather than this entity's history -- how far back the recorder holds it does not govern anything here."
+      "role_forecast_source": "The forecast side of the comparison. Helman archives each slot's prediction before that slot begins, so training reads its own archive rather than this entity's history -- how far back the recorder holds it does not govern anything here.",
+      "forecast_recorded": "Recorded forecast",
+      "role_forecast_recorded": "What the fit is actually built from: Helman republishes each slot's prediction before that slot runs, and reads its own recorded history back. Raw states are the 15-minute detail and stop at the recorder's retention; statistics are hourly and kept for good."
     },
     "fields": {
       "history_buckets": "History buckets",

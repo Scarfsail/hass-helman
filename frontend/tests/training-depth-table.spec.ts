@@ -37,6 +37,9 @@ const GRID_KEY = GRID_PATH.join(".");
 const BATTERY_KEY = BATTERY_PATH.join(".");
 const CONTROLLABLE_KEY = CONTROLLABLE_PATH.join(".");
 const FORECAST_SOURCE_KEY = FORECAST_SOURCE_PATH.join(".");
+// Helman publishes this one, so its "path" is a constant rather than a
+// location in the config document.
+const FORECAST_RECORDED_KEY = "helman.solar_forecast_current";
 
 /** Which window governs which entity, mirroring `EVALUATORS` in the registry. */
 const REQUIRED_BY_KEY: Record<string, number> = {
@@ -44,6 +47,7 @@ const REQUIRED_BY_KEY: Record<string, number> = {
     [CONTROLLABLE_KEY]: 14,
     [BIAS_KEY]: 10,
     [FORECAST_SOURCE_KEY]: 10,
+    [FORECAST_RECORDED_KEY]: 10,
     [GRID_KEY]: 10,
     [BATTERY_KEY]: 10,
 };
@@ -87,6 +91,10 @@ const DEPTHS: Record<string, { available: number; statistics: number }> = {
     // Attribute history lives only in recorder states, so a deep statistics
     // number here is exactly the reassurance the role text warns against.
     [FORECAST_SOURCE_KEY]: { available: 12, statistics: 730 },
+    // The shape the real instance has: shallow states against deep statistics.
+    // Only the states column binds until #173 splices the two, so this row is
+    // the one that goes orange while every other number looks reassuring.
+    [FORECAST_RECORDED_KEY]: { available: 6, statistics: 210 },
 };
 
 async function mountEditor(page: Page, configOverride?: unknown): Promise<void> {
@@ -199,14 +207,15 @@ async function waitForRows(page: Page, minRows: number): Promise<string[][][]> {
 
 test("every governed entity in #172's table gets a row, fed by the shared poll", async ({ page }) => {
     await mountEditor(page);
-    // House meter + one controllable, then the two sides of the solar
-    // comparison plus grid and battery.
-    const tables = await waitForRows(page, 6);
+    // House meter + one controllable, then the solar comparison -- whose
+    // forecast side is two rows, the source and what Helman records from it --
+    // plus grid and battery.
+    const tables = await waitForRows(page, 7);
 
     const allRows = tables.flat();
-    // Five rows, five entities -- one target sent, one row rendered, no more
+    // Seven rows, seven entities -- one target sent, one row rendered, no more
     // and no fewer.
-    expect(allRows.length).toBe(6);
+    expect(allRows.length).toBe(7);
 
     const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
     const requestedKeys = request.targets.map((target: any) => target.key).sort();
@@ -215,6 +224,7 @@ test("every governed entity in #172's table gets a row, fed by the shared poll",
             HOUSE_KEY,
             BIAS_KEY,
             FORECAST_SOURCE_KEY,
+            FORECAST_RECORDED_KEY,
             GRID_KEY,
             BATTERY_KEY,
             CONTROLLABLE_KEY,
@@ -224,7 +234,7 @@ test("every governed entity in #172's table gets a row, fed by the shared poll",
 
 test("the numbers in each row match what inspect_entities answered for it", async ({ page }) => {
     await mountEditor(page);
-    const tables = await waitForRows(page, 6);
+    const tables = await waitForRows(page, 7);
     const allRows = tables.flat();
 
     // Four columns: the entity, what the trainer takes from it, and the two
@@ -262,7 +272,7 @@ test("the forecast the actuals are compared against has a row of its own", async
     // Without it the section showed only the actual production and left a
     // reader asking what it was measured against.
     await mountEditor(page);
-    const allRows = (await waitForRows(page, 6)).flat();
+    const allRows = (await waitForRows(page, 7)).flat();
 
     const forecastRow = allRows.find((row) => row[0].includes("sensor.solcast_today"));
     expect(forecastRow).toBeDefined();
@@ -276,7 +286,7 @@ test("each row says what the trainer takes from that entity", async ({ page }) =
     // The column the page exists for: a reader who cannot tell why the grid
     // meter is listed under a *solar* trainer gets the answer in the row.
     await mountEditor(page);
-    const allRows = (await waitForRows(page, 6)).flat();
+    const allRows = (await waitForRows(page, 7)).flat();
 
     const roleOf = (entityId: string) =>
         allRows.find((row) => row[0].includes(entityId))![1];
@@ -318,7 +328,7 @@ test("clicking an entity asks Home Assistant for its more-info dialog", async ({
     page,
 }) => {
     await mountEditor(page);
-    await waitForRows(page, 6);
+    await waitForRows(page, 7);
 
     const detail = await page.evaluate(async () => {
         const panel = document.querySelector("helman-config-editor-panel")!;
@@ -345,7 +355,7 @@ test("a row with no entity configured is not clickable", async ({ page }) => {
     delete config.power_devices.battery.entities.capacity;
 
     await mountEditor(page, config);
-    await waitForRows(page, 6);
+    await waitForRows(page, 7);
 
     const buttonCount = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -362,7 +372,7 @@ test("the entity column keeps its width on a wide screen", async ({ page }) => {
     // lines while the prose sat in whitespace.
     await page.setViewportSize({ width: 1280, height: 900 });
     await mountEditor(page);
-    await waitForRows(page, 6);
+    await waitForRows(page, 7);
 
     const widths = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -381,7 +391,7 @@ test("the entity column keeps its width on a wide screen", async ({ page }) => {
 test("the table fits a narrow viewport instead of scrolling sideways", async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await mountEditor(page);
-    await waitForRows(page, 6);
+    await waitForRows(page, 7);
 
     const overflow = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -411,10 +421,11 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     });
 
     await mountEditor(page, config);
-    const tables = await waitForRows(page, 6);
+    const tables = await waitForRows(page, 7);
     const allRows = tables.flat();
 
-    expect(allRows.length).toBe(6);
+    // The seven of the base config, and neither of the two just added.
+    expect(allRows.length).toBe(7);
     expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
 });
@@ -426,7 +437,7 @@ test("a raw-states depth below the requirement is marked, even deep in statistic
     // below its requirement (10) while its statistics depth (400) is not --
     // and the row has to read as a warning regardless.
     await mountEditor(page);
-    await waitForRows(page, 6);
+    await waitForRows(page, 7);
 
     const warnCell = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;

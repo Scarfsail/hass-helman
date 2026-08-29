@@ -131,6 +131,46 @@ def history_evaluator(
     return evaluate
 
 
+def fixed_entity_history_evaluator(
+    entity_id: str,
+    required_days_path: tuple[str, ...] | None = None,
+    default_required_days: int | None = None,
+) -> Evaluator:
+    """:func:`history_evaluator` for an entity Helman publishes itself.
+
+    Every other key here names a *config path* and resolves the entity from the
+    draft document, which is what keeps "which entity, judged against which
+    setting" on this side of the websocket. An entity Helman owns has no
+    config path to resolve — its id is a constant — but the question the row
+    answers is the same one, so it is answered here rather than by teaching the
+    editor to ask about entities directly.
+
+    Nothing about it is draft-dependent, so the path contributes no
+    ``consulted`` entry of its own: a revert cannot change which entity this
+    is, and a draft that differs from the saved document does not make this row
+    read differently.
+    """
+
+    def evaluate(request: InspectionRequest) -> Inspection:
+        required = _required_days(request, required_days_path, default_required_days)
+        consulted: tuple[tuple[tuple[Any, ...], Any], ...] = ()
+        if required_days_path is not None:
+            consulted = ((tuple(required_days_path), required),)
+        reading = read_numeric_state(request.hass, entity_id)
+        facts: list[Fact] = []
+        fact = _history_fact_if_worth_probing(request.hass, entity_id, required)
+        if fact is not None:
+            facts.append(fact)
+        return Inspection(
+            entity_id=entity_id,
+            status="ok" if reading is not None else "unavailable",
+            facts=tuple(facts),
+            consulted=consulted,
+        )
+
+    return evaluate
+
+
 def history_aware(
     base: Evaluator,
     required_days_path: tuple[str, ...] | None = None,
