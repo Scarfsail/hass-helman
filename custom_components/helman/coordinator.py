@@ -1693,11 +1693,13 @@ class HelmanCoordinator:
         config = getattr(self, "_active_config", None)
         if not isinstance(config, dict):
             return None
-        forecast = (
-            config.get("power_devices", {})
-            .get("solar", {})
-            .get("forecast", {})
-        )
+        # Each level guarded, like ``_get_grid_sell_price_entity_id``: a key
+        # present with a null value returns None rather than {}, and chaining
+        # ``.get`` through it raises inside the try that wraps the whole
+        # refresh -- so one null node would report every beat as a failed
+        # forecast rebuild.
+        read = ConsumptionForecastBuilder._read_dict
+        forecast = read(read(read(config.get("power_devices")).get("solar")).get("forecast"))
         entity_ids = forecast.get("daily_energy_entity_ids")
         if not isinstance(entity_ids, list) or not entity_ids:
             return None

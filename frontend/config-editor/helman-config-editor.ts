@@ -2302,7 +2302,8 @@ export class HelmanConfigEditorPanel
       },
       {
         label: this._t("editor.training_depth.forecast_recorded"),
-        path: ["helman.solar_forecast_current"],
+        // Two segments, because the registry matches on dot-separated depth.
+        path: ["helman", "solar_forecast_current"],
         roleKey: "editor.training_depth.role_forecast_recorded",
         ownEntity: true,
       },
@@ -2328,7 +2329,11 @@ export class HelmanConfigEditorPanel
    * list with the mounted `helman-entity-group` paths and de-duplicates by
    * key, so this is not a second call and not a second cache.
    */
-  private _trainingDepthTargets(): { key: string; path: PathSegment[] }[] {
+  private _trainingDepthTargets(): {
+    key: string;
+    path: PathSegment[];
+    ownEntity: boolean;
+  }[] {
     if (this._activeTab !== "training") return [];
     const rows = [...this._houseConsumptionDepthRows(), ...this._solarBiasDepthRows()];
     return rows.map((row) => ({

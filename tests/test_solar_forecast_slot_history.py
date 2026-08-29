@@ -123,6 +123,73 @@ class SlotSamplingTests(unittest.TestCase):
         self.assertEqual(slots["09:30"], 500.0)
 
 
+    def test_an_unavailable_row_ends_the_hold(self):
+        """Otherwise an outage mints forecast the trainer then fits to.
+
+        Home Assistant writes an ``unavailable`` when the integration stops, so
+        carrying 09:00's value across the rest of the day would put a number on
+        every slot nothing was ever believed about.
+        """
+        days = _read(
+            [
+                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:20:00+02:00", "unavailable"),
+                _state("2026-04-24T14:00:00.380+02:00", "2000"),
+            ],
+            date(2026, 4, 24),
+        )
+
+        slots = days["2026-04-24"]
+        self.assertEqual(slots["09:00"], 250.0)
+        # 09:15 holds only the unavailable, so nothing was published for it.
+        for missing in ("09:15", "09:30", "11:00", "13:45"):
+            self.assertNotIn(missing, slots)
+        self.assertEqual(slots["14:00"], 500.0)
+
+    def test_a_restart_blip_inside_a_slot_still_resolves_it(self):
+        """An unavailable followed a second later by the value is not a gap.
+
+        The slot takes its first *numeric* row, so only a slot whose every row
+        is non-numeric goes missing.
+        """
+        days = _read(
+            [
+                _state("2026-04-24T09:15:00+02:00", "unavailable"),
+                _state("2026-04-24T09:15:01+02:00", "2000"),
+            ],
+            date(2026, 4, 24),
+        )
+
+        self.assertEqual(days["2026-04-24"]["09:15"], 500.0)
+
+    def test_a_slow_boundary_write_still_belongs_to_its_slot(self):
+        """The publish happens at the end of a long rebuild, not at the tick.
+
+        A fixed sampling offset would hand this slot the previous slot's value
+        and lag the whole training series by one slot, silently.
+        """
+        days = _read(
+            [
+                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:17:40+02:00", "2000"),
+            ],
+            date(2026, 4, 24),
+        )
+
+        self.assertEqual(days["2026-04-24"]["09:15"], 500.0)
+
+    def test_a_mid_slot_republication_does_not_win_over_the_boundary_write(self):
+        days = _read(
+            [
+                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:02:53+02:00", "9999"),
+            ],
+            date(2026, 4, 24),
+        )
+
+        self.assertEqual(days["2026-04-24"]["09:00"], 250.0)
+
+
 class WindowTests(unittest.TestCase):
     def test_one_read_serves_every_day_in_the_window(self):
         days = _read(

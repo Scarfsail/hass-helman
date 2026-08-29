@@ -242,11 +242,13 @@ async def _chunk_statistics(
 ) -> list[StatisticData] | None:
     """One chunk's hourly rows, or ``None`` where the source has no history.
 
-    ``None`` is the walk's stopping condition and means the recorder holds no
-    state for this entity inside the chunk *and* none before it either --
-    ``include_start_time_state`` would have carried one in otherwise. An empty
-    list is different: states that carried no usable forecast map, which is odd
-    but not evidence the history has ended.
+    ``None`` is the walk's stopping condition, and there are two ways to reach
+    it. The recorder holds no state for this entity inside the chunk and none
+    before it either -- ``include_start_time_state`` would have carried one in
+    otherwise. Or it holds states that carry no ``wh_period_15m`` at all, which
+    is what the history looks like before the upstream integration began
+    publishing that attribute: real rows, no recoverable curve, and nothing
+    older that could have one.
     """
     recorder = get_instance(hass)
 
@@ -274,7 +276,14 @@ async def _chunk_statistics(
         return None
     publications = _publications(states, timezone)
     if not publications:
-        return []
+        # States, but none carrying a curve. The upstream integration only began
+        # publishing ``wh_period_15m`` on 2026-08-19, and the hourly ``wh_period``
+        # it published before that cannot be split into slots without inventing
+        # the shape -- which is the one thing this measurement must not do. So
+        # this is the walk's other ending, not a chunk to step over: continuing
+        # would read every remaining week to the 1100-day guard, with attributes,
+        # importing nothing.
+        return None
     samples = _slot_samples(publications, utc_start=utc_start, utc_end=utc_end)
     if not samples:
         return []

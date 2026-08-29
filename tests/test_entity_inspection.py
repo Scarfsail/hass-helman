@@ -769,6 +769,36 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             inspection["dependsOn"],
         )
 
+    def test_the_recorded_forecast_entity_resolves_and_is_judged(self):
+        # Helman publishes this one, so no config path points at it and the
+        # generic fallback would answer "unset". The registry key has to match
+        # the path the editor sends -- segment for segment -- or the row the
+        # training page exists for renders empty with no error anywhere.
+        hass = _ProbingHass(
+            {"sensor.helman_solar_forecast_current": _State("1400", unit="W")}
+        )
+        _, inspection = self.inspect_twice(
+            hass, {}, ("helman", "solar_forecast_current")
+        )
+
+        self.assertEqual(
+            inspection["entityId"], "sensor.helman_solar_forecast_current"
+        )
+        self.assertEqual(inspection["status"], "ok")
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        )
+
+    def test_the_recorded_forecast_entity_reports_when_it_is_missing(self):
+        # It always exists in a running installation, so "ok regardless" would
+        # look right forever and be wrong exactly when a reader needs telling.
+        _, inspection = self.inspect_twice(
+            _ProbingHass({}), {}, ("helman", "solar_forecast_current")
+        )
+
+        self.assertEqual(inspection["status"], "unavailable")
+
     def test_the_first_daily_forecast_entity_carries_no_requirement(self):
         # The forecast side of the comparison used to be recovered from this
         # entity's recorded attributes, which made its depth a training

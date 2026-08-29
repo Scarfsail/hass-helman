@@ -6,21 +6,31 @@ is therefore a stair-step of what the provider said about each slot *while that
 slot had not yet begun* — the measurement the bias trainer is fitted to. This
 module turns that history back into ``HH:MM -> Wh`` maps.
 
-Two things about the read are easy to get wrong, and both produce plausible
-numbers rather than an error:
+Three things about the read are easy to get wrong, and each produces
+plausible numbers rather than an error:
 
-* **Sample a moment into the slot, not at its boundary.** The refresh fires at
-  ``:00/:15/:30/:45`` and the write lands milliseconds later, so a timeline
-  sampled exactly at the boundary still holds the *previous* slot's value.
-  Sampling :01 into the slot catches the boundary write while staying clear of
-  the provider's mid-slot republications, which arrive hours apart. It is the
-  same rule the writer uses from the other side, where ``record_points``
-  floored ``now`` to the minute so a boundary write counted for the slot
-  starting then.
-* **Hold the last value forward.** Home Assistant records a row only when the
-  state actually changes, so two consecutive slots forecast alike share one
-  row. Treating a slot with no row of its own as missing would blank every
-  flat stretch of the curve — most of the night, and every overcast hour.
+* **Prefer the slot's own write to a sampled instant.** The refresh fires at
+  ``:00/:15/:30/:45`` but publishes at the *end* of a long rebuild, so how
+  late the row lands is not knowable in advance. Taking the first numeric row
+  inside the slot tolerates a slow write of up to a full slot, and still
+  prefers the boundary write over the provider's mid-slot republications,
+  which land later in the same slot and carry the revision this whole
+  measurement exists to avoid.
+* **Hold the last value forward when a slot has no row.** Home Assistant
+  records a row only when the state actually changes — measured on this
+  instance, a flat overnight stretch is one row for twelve slots. Treating a
+  slot with no row of its own as missing would blank most of the night and
+  every overcast hour.
+* **Stop holding at an ``unavailable``.** Home Assistant writes one when the
+  integration stops or the entity drops out, and carrying the last numeric
+  value across that gap would mint forecast data for slots nothing was ever
+  believed about — which the trainer would then fit to. A non-numeric row ends
+  the hold; the next numeric one starts it again.
+
+  A crash hard enough to leave no ``unavailable`` behind defeats this, because
+  from the state history alone that gap is indistinguishable from a flat night.
+  The residue is bounded by the day gates in the trainer rather than by
+  anything here.
 
 One recorder read serves a whole window. The trainer asks for thirty days at
 once rather than thirty times for one.
@@ -50,8 +60,6 @@ SOLAR_FORECAST_CURRENT_ENTITY = "sensor.helman_solar_forecast_current"
 _SLOT_MINUTES = 15
 _SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES
 _SLOT_FRACTION_OF_HOUR = _SLOT_MINUTES / 60
-#: How far into a slot the timeline is sampled. See the module docstring.
-_SAMPLE_OFFSET = timedelta(minutes=1)
 
 
 async def load_forecast_slots_for_window(
@@ -80,21 +88,34 @@ async def load_forecast_slots_for_window(
 
     days: dict[str, dict[str, float]] = {}
     cursor = 0
-    current_value: float | None = None
+    standing: float | None = None
     day = first_date
     while day <= last_date:
         day_start = datetime.combine(day, time.min, tzinfo=local_tz)
         slots: dict[str, float] = {}
         for slot_index in range(_SLOTS_PER_DAY):
             slot_start = day_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
-            sample_at = slot_start + _SAMPLE_OFFSET
-            while cursor < len(timeline) and timeline[cursor][0] <= sample_at:
-                current_value = timeline[cursor][1]
+            slot_end = slot_start + timedelta(minutes=_SLOT_MINUTES)
+            # Everything before this slot only updates what is standing; an
+            # ``unavailable`` among them clears it rather than being skipped.
+            while cursor < len(timeline) and timeline[cursor][0] < slot_start:
+                standing = timeline[cursor][1]
                 cursor += 1
-            if current_value is None:
+            # The slot's own writes. The first numeric one is the boundary
+            # write, however late the rebuild published it; a republication
+            # later in the same slot carries a revision and is passed over.
+            slot_value: float | None = None
+            while cursor < len(timeline) and timeline[cursor][0] < slot_end:
+                value = timeline[cursor][1]
+                if slot_value is None and value is not None:
+                    slot_value = value
+                standing = value
+                cursor += 1
+            resolved = slot_value if slot_value is not None else standing
+            if resolved is None:
                 continue
             slots[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = (
-                current_value * _SLOT_FRACTION_OF_HOUR
+                resolved * _SLOT_FRACTION_OF_HOUR
             )
         if slots:
             days[day.isoformat()] = slots
@@ -117,8 +138,12 @@ async def _load_timeline(
     hass: HomeAssistant,
     window_start: datetime,
     window_end: datetime,
-) -> list[tuple[datetime, float]]:
-    """(instant, W) pairs across the window, oldest first.
+) -> list[tuple[datetime, float | None]]:
+    """(instant, W or None) pairs across the window, oldest first.
+
+    ``None`` is an ``unavailable`` or otherwise non-numeric row, kept rather
+    than dropped so it can end a hold-forward instead of silently extending
+    one across a stretch nothing was published in.
 
     ``include_start_time_state`` matters: a window opening mid-flat-stretch has
     no row of its own until the value next moves, and without the synthesised
@@ -138,17 +163,20 @@ async def _load_timeline(
             [SOLAR_FORECAST_CURRENT_ENTITY],
             include_start_time_state=True,
             significant_changes_only=False,
+            # Only the state and its timestamp are read; this entity carries no
+            # attributes worth materialising across a month of rows.
+            no_attributes=True,
         )
     )
     states = _states_for_entity(states_by_entity)
-    timeline: list[tuple[datetime, float]] = []
+    timeline: list[tuple[datetime, float | None]] = []
     for state in states:
         try:
-            value_w = float(getattr(state, "state", None))
+            value_w: float | None = float(getattr(state, "state", None))
         except (TypeError, ValueError):
-            continue
-        stamp = getattr(state, "last_changed", None) or getattr(
-            state, "last_updated", None
+            value_w = None
+        stamp = getattr(state, "last_updated", None) or getattr(
+            state, "last_changed", None
         )
         if stamp is None:
             continue

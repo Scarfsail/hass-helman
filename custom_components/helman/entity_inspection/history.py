@@ -158,12 +158,18 @@ def fixed_entity_history_evaluator(
             consulted = ((tuple(required_days_path), required),)
         reading = read_numeric_state(request.hass, entity_id)
         facts: list[Fact] = []
+        if reading.problem is not None:
+            facts.append(reading.problem)
+        else:
+            value_fact = reading.value_fact()
+            if value_fact is not None:
+                facts.append(value_fact)
         fact = _history_fact_if_worth_probing(request.hass, entity_id, required)
         if fact is not None:
             facts.append(fact)
         return Inspection(
             entity_id=entity_id,
-            status="ok" if reading is not None else "unavailable",
+            status="ok" if reading.problem is None else "unavailable",
             facts=tuple(facts),
             consulted=consulted,
         )
