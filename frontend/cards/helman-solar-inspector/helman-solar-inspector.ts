@@ -4234,9 +4234,9 @@ export class HelmanSolarInspector extends LitElement {
       this._selectedTrainingDate = next.focusSlot === null
         ? null
         : this._resolveSelectedTrainingDate(next.focusSlot);
-      if (next.focusSlot !== null) {
-        this._trainingTableCollapsed = true;
-      }
+      // The contribution table's open state is the reader's to keep: once it is
+      // expanded, moving to another slot swaps the rows underneath rather than
+      // folding it shut and making them re-open it every slot.
     }
   }
 

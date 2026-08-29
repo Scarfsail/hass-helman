@@ -94,6 +94,18 @@ async function mountPurgedPastDay(
                         interpolated: false,
                         interpolationAnchors: null,
                     },
+                    "13:00": {
+                        factor: 0.92,
+                        rawRatio: 0.92,
+                        clamped: false,
+                        forecastSumWh: 11000,
+                        actualSumWh: 10120,
+                        rows: [
+                            { date: "2026-07-05", forecastWh: 1800, actualWh: 1650, ratio: 0.917, status: "included", reason: null },
+                        ],
+                        interpolated: false,
+                        interpolationAnchors: null,
+                    },
                 },
             },
         };
@@ -135,24 +147,47 @@ function contributionToggleText(page: Page): Promise<string | null> {
     });
 }
 
-test("a purged past day still shows a slot's training contribution", async ({ page }) => {
-    await mountPurgedPastDay(page, { biasRatioDefault: true });
-    await selectSlot(page, "12:00");
-
-    expect(await contributionToggleText(page)).toContain("Training contribution");
-
-    // The rows come through and the table expands.
+/** Click the contribution toggle, then let the card re-render. */
+async function toggleContribution(page: Page): Promise<void> {
     await page.evaluate(async () => {
         const el = document.querySelector("helman-solar-inspector") as any;
         el.shadowRoot.querySelector(".contribution-toggle").click();
         await el.updateComplete;
     });
-    const rowDates = await page.evaluate(() => {
+}
+
+/** The first cell of every contribution row currently drawn, or null if collapsed. */
+function contributionRowDates(page: Page): Promise<string[] | null> {
+    return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return [...el.shadowRoot.querySelectorAll(".contribution-table tbody tr td:first-child")]
-            .map((td) => td.textContent?.trim());
+        const table = el.shadowRoot?.querySelector(".contribution-table");
+        if (!table) return null;
+        return [...table.querySelectorAll("tbody tr td:first-child")]
+            .map((td) => td.textContent?.trim() ?? "");
     });
-    expect([...rowDates].sort()).toEqual(["2026-07-03", "2026-07-04"]);
+}
+
+test("a purged past day still shows a slot's training contribution", async ({ page }) => {
+    await mountPurgedPastDay(page, { biasRatioDefault: true });
+    await selectSlot(page, "12:00");
+
+    expect(await contributionToggleText(page)).toContain("Training contribution");
+    expect(await contributionRowDates(page)).toBeNull(); // starts collapsed
+
+    await toggleContribution(page);
+    expect([...(await contributionRowDates(page))!].sort()).toEqual(["2026-07-03", "2026-07-04"]);
+});
+
+test("the contribution table stays expanded across slot changes", async ({ page }) => {
+    await mountPurgedPastDay(page, { biasRatioDefault: true });
+    await selectSlot(page, "12:00");
+    await toggleContribution(page);
+    expect(await contributionRowDates(page)).not.toBeNull();
+
+    await selectSlot(page, "13:00");
+
+    // Still open, and showing the new slot's rows rather than the old ones.
+    expect(await contributionRowDates(page)).toEqual(["2026-07-05"]);
 });
 
 test("the contribution table stays behind the raw diagnostic", async ({ page }) => {
