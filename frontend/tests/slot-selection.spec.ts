@@ -257,3 +257,58 @@ test.describe("solar inspector slot selection alignment", () => {
         }
     });
 });
+
+test.describe("solar inspector selection on a partly forecast day", () => {
+    /**
+     * Any restart after noon leaves this shape behind: the forecast is read
+     * back from Helman's own recorded entity, so slots that elapsed before it
+     * started publishing have actuals and no forecast. The impact series is
+     * built per forecast slot, so it is short too — and deriving the selectable
+     * slots from impact alone made those morning slots silently unclickable,
+     * a click on one leaving the selection exactly where it was.
+     *
+     * Asserted on the card's own selection rather than through the plot, so it
+     * pins the rule and not the axis the chart happens to draw.
+     */
+    test("a morning slot with actuals but no forecast is still selectable", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+
+        const result = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const payload = JSON.parse(JSON.stringify(el._payload));
+            const minutesOf = (label: string) =>
+                Number(label.slice(0, 2)) * 60 + Number(label.slice(3, 5));
+            const all = payload.series.corrected;
+            // Forecast and impact from noon on; actuals before it.
+            payload.series.actual = all.filter(
+                (p: any) => minutesOf(p.timestamp.slice(11, 16)) < 720,
+            );
+            payload.series.corrected = all.filter(
+                (p: any) => minutesOf(p.timestamp.slice(11, 16)) >= 720,
+            );
+            payload.series.impact = payload.series.impact.filter(
+                (p: any) => minutesOf(p.slot) >= 720,
+            );
+            el._payload = payload;
+
+            const ordered = el._orderedSlots(null) as string[];
+            el._selectSlot("09:00");
+            return {
+                hasMorning: ordered.includes("09:00"),
+                hasAfternoon: ordered.includes("12:00"),
+                inOrder: ordered.join(",") === [...ordered].sort().join(","),
+                selected: el._slotSelection.focusSlot,
+            };
+        });
+
+        // The morning has actuals and no forecast; the afternoon the reverse.
+        // Both are real slots of the day and both must be selectable.
+        expect(result.hasMorning).toBe(true);
+        expect(result.hasAfternoon).toBe(true);
+        expect(result.inOrder).toBe(true);
+        expect(result.selected).toBe("09:00");
+    });
+});

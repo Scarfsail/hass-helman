@@ -4154,9 +4154,29 @@ export class HelmanSolarInspector extends LitElement {
    * Always on the active slot width, so a selection can never hold a slot the
    * charts aren't drawing.
    */
+  /**
+   * Every slot of the day that can be selected, in chronological order.
+   *
+   * Deliberately not the impact series alone, though that is where it started.
+   * Impact is built per *forecast* slot, and the forecast no longer necessarily
+   * spans the day: it is read from the recorded forecast entity, so a restart
+   * at noon leaves the morning without one. Those slots still have actuals, a
+   * house curve, a battery curve and a detail panel that renders them — so
+   * deriving the selection from impact made real, populated slots silently
+   * unclickable, `applySlotSelection` dropping a click on a slot it did not
+   * recognise.
+   *
+   * The union of impact and actuals is the day as it exists: a future day has
+   * only impact, an elapsed morning only actuals, and today has each over its
+   * own half. `HH:MM` sorts chronologically, so no comparator is needed.
+   */
   private _orderedSlots(payload: InspectorPayload | null): string[] {
     const source = payload ?? (this._payload ? this._viewForSlot(this._payload) : null);
-    return source?.series.impact.map((point) => point.slot) ?? [];
+    if (!source) return [];
+    const slots = new Set<string>();
+    for (const point of source.series.impact) slots.add(point.slot);
+    for (const point of source.series.actual) slots.add(point.timestamp.slice(11, 16));
+    return [...slots].sort();
   }
 
   private _selectSlot(
