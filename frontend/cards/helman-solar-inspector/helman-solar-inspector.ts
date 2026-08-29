@@ -4286,9 +4286,20 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** The selection, narrowed to slots the day actually has, in chronological order. */
-  private _selectedSlotsIn(payload: InspectorPayload): string[] {
-    const available = new Set(payload.series.impact.map((point) => point.slot));
+  /**
+   * The selection, narrowed to slots of the day's own grid, in chronological
+   * order.
+   *
+   * Narrowed against `_orderedSlots`, not `series.impact`: a slot belongs to the
+   * day because the day has that slot, not because some series reaches it. Past
+   * a few days back the forecast curve — and with it impact — is gone (the
+   * recorded entity is purged), but the per-slot training contributions are
+   * keyed by slot-of-day and are there for every date. Filtering on impact hid
+   * the whole slot detail, the contribution table included, on exactly the days
+   * a reader opens to see what a slot contributed to the fit.
+   */
+  private _selectedSlotsIn(_payload: InspectorPayload): string[] {
+    const available = new Set(this._orderedSlots(null));
     return this._slotSelection.selectedSlots.filter((slot) => available.has(slot));
   }
 
@@ -4327,6 +4338,7 @@ export class HelmanSolarInspector extends LitElement {
   private _renderSelectedSlotDetails(payload: InspectorPayload) {
     const slots = this._selectedSlotsIn(payload);
     const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot)
+      ?? this._selectedSlot
       ?? slots[0]
       ?? null;
     if (!selectedSlot || slots.length === 0) return "";
