@@ -20,12 +20,20 @@ def _utc(local_iso: str) -> datetime:
     return datetime.fromisoformat(local_iso).astimezone(timezone.utc)
 
 
-def _publication(published_local: str, curve: dict[str, float]):
-    """A recorded state carrying the whole day's curve as it stood then."""
+def _publication(published_local: str, curve: dict[str, float], *, changed=None):
+    """A recorded state carrying the whole day's curve as it stood then.
+
+    ``last_changed`` defaults to an *earlier* instant than ``last_updated``,
+    which is what Home Assistant records for an attribute-only update -- the
+    republished curve under an unchanged day total. Reading the earlier stamp
+    would date a revision before it was published.
+    """
+    updated = datetime.fromisoformat(published_local)
     return SimpleNamespace(
         state="55.3",
         attributes={"wh_period_15m": dict(curve)},
-        last_changed=datetime.fromisoformat(published_local),
+        last_updated=updated,
+        last_changed=changed if changed is not None else updated - timedelta(hours=6),
     )
 
 
@@ -52,7 +60,7 @@ class PublicationSelectionTests(unittest.TestCase):
         # today would give 1593; the retired trainer took 1244. Neither is what
         # was knowable at 11:00.
         self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0][1], 1301.0 / 0.25)
+        self.assertEqual(samples[0][1], 1301.0)
 
     def test_a_slot_no_publication_covers_is_omitted(self):
         """The source had not published that day yet, so nothing was believed."""
@@ -70,6 +78,35 @@ class PublicationSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(samples, [])
+
+    def test_a_publication_is_dated_by_last_updated(self):
+        """An attribute-only republication leaves ``last_changed`` behind.
+
+        The curve moves while the headline state -- a rounded day total --
+        does not, so ``last_changed`` still points hours earlier. Dating the
+        publication by it would let a curve published *after* a slot win the
+        "last publication before this slot" test.
+        """
+        states = [
+            _publication("2026-08-27T13:32:00+02:00", {"2026-08-27T11:00:00+02:00": 1593.0}),
+        ]
+        publications = mod._publications(states, TZ)
+
+        self.assertEqual(len(publications), 1)
+        self.assertEqual(
+            publications[0][0],
+            _utc("2026-08-27T13:32:00+02:00"),
+        )
+
+        # And so it does not win a slot that ran before it.
+        self.assertEqual(
+            mod._slot_samples(
+                publications,
+                utc_start=_utc("2026-08-27T11:00:00+02:00"),
+                utc_end=_utc("2026-08-27T11:15:00+02:00"),
+            ),
+            [],
+        )
 
     def test_states_without_a_usable_curve_are_skipped(self):
         states = [
@@ -130,15 +167,17 @@ class HourlyRowTests(unittest.TestCase):
 
 
 class MetadataTests(unittest.TestCase):
-    def test_metadata_names_the_recorder_and_the_power_unit_class(self):
+    def test_metadata_names_the_recorder_and_the_energy_unit_class(self):
         meta = mod._metadata("sensor.helman_solar_forecast_current")
 
         # An entity-id-shaped series belongs to the recorder's own table, and
         # async_import_statistics rejects any other source.
         self.assertEqual(meta["source"], "recorder")
         self.assertEqual(meta["statistic_id"], "sensor.helman_solar_forecast_current")
-        self.assertEqual(meta["unit_of_measurement"], "W")
-        self.assertEqual(meta["unit_class"], "power")
+        self.assertEqual(meta["unit_of_measurement"], "Wh")
+        # Stated rather than inferred: the target entity carries no device
+        # class, so nothing would derive this for the imported rows.
+        self.assertEqual(meta["unit_class"], "energy")
         self.assertIs(meta["has_sum"], False)
 
 

@@ -243,8 +243,13 @@ async def _load_recorded_forecast_window(
 
     Read only when a rule actually needs it: curtailment's underdelivery test
     and the data-glitch zero-with-neighbour rule. One recorder read spans the
-    whole window, and it is the same read the trainer is fitted from, so a
-    capped slot is judged against the number the fit used.
+    whole window rather than one per day.
+
+    It is the same *data* the trainer is fitted from -- so a capped slot is
+    judged against the number the fit used -- but a second query for it:
+    ``load_trainer_samples`` runs its own, and the two are reached from
+    different call sites of ``async_train``. Worth folding into one read if the
+    training run's query count ever matters; it is two reads a day today.
     """
     needed = (
         curtailment_entities is not None

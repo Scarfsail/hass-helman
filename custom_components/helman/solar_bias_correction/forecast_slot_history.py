@@ -1,10 +1,12 @@
 """Read the per-slot solar forecast back out of Helman's own forecast sensor.
 
 ``sensor.helman_solar_forecast_current`` publishes the raw forecast for the
-slot in progress, in W, on the slot-aligned refresh beat. Its recorder history
+slot in progress, in Wh, on the slot-aligned refresh beat. Its recorder history
 is therefore a stair-step of what the provider said about each slot *while that
 slot had not yet begun* — the measurement the bias trainer is fitted to. This
-module turns that history back into ``HH:MM -> Wh`` maps.
+module turns that history back into ``HH:MM -> Wh`` maps, which is a regrouping
+by day and slot rather than a conversion: the entity already carries the slot's
+own energy.
 
 Three things about the read are easy to get wrong, and each produces
 plausible numbers rather than an error:
@@ -59,7 +61,6 @@ SOLAR_FORECAST_CURRENT_ENTITY = "sensor.helman_solar_forecast_current"
 
 _SLOT_MINUTES = 15
 _SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES
-_SLOT_FRACTION_OF_HOUR = _SLOT_MINUTES / 60
 
 
 async def load_forecast_slots_for_window(
@@ -114,9 +115,7 @@ async def load_forecast_slots_for_window(
             resolved = slot_value if slot_value is not None else standing
             if resolved is None:
                 continue
-            slots[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = (
-                resolved * _SLOT_FRACTION_OF_HOUR
-            )
+            slots[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = resolved
         if slots:
             days[day.isoformat()] = slots
         day += timedelta(days=1)
@@ -139,7 +138,7 @@ async def _load_timeline(
     window_start: datetime,
     window_end: datetime,
 ) -> list[tuple[datetime, float | None]]:
-    """(instant, W or None) pairs across the window, oldest first.
+    """(instant, Wh or None) pairs across the window, oldest first.
 
     ``None`` is an ``unavailable`` or otherwise non-numeric row, kept rather
     than dropped so it can end a hold-forward instead of silently extending
@@ -172,15 +171,15 @@ async def _load_timeline(
     timeline: list[tuple[datetime, float | None]] = []
     for state in states:
         try:
-            value_w: float | None = float(getattr(state, "state", None))
+            value_wh: float | None = float(getattr(state, "state", None))
         except (TypeError, ValueError):
-            value_w = None
+            value_wh = None
         stamp = getattr(state, "last_updated", None) or getattr(
             state, "last_changed", None
         )
         if stamp is None:
             continue
-        timeline.append((dt_util.as_local(stamp), value_w))
+        timeline.append((dt_util.as_local(stamp), value_wh))
     timeline.sort(key=lambda pair: pair[0])
     return timeline
 

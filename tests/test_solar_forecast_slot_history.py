@@ -51,14 +51,13 @@ class SlotSamplingTests(unittest.TestCase):
         """
         days = _read(
             [
-                _state("2026-04-24T09:00:00.412+02:00", "1000"),
-                _state("2026-04-24T09:15:00.380+02:00", "2000"),
+                _state("2026-04-24T09:00:00.412+02:00", "250"),
+                _state("2026-04-24T09:15:00.380+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
 
         slots = days["2026-04-24"]
-        # 1000 W over a quarter hour is 250 Wh.
         self.assertEqual(slots["09:00"], 250.0)
         self.assertEqual(slots["09:15"], 500.0)
 
@@ -70,9 +69,9 @@ class SlotSamplingTests(unittest.TestCase):
         """
         days = _read(
             [
-                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:00:00.412+02:00", "250"),
                 _state("2026-04-24T09:07:30+02:00", "9999"),
-                _state("2026-04-24T09:15:00.380+02:00", "2000"),
+                _state("2026-04-24T09:15:00.380+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
@@ -88,7 +87,7 @@ class SlotSamplingTests(unittest.TestCase):
         missing would blank most of the night and every overcast hour.
         """
         days = _read(
-            [_state("2026-04-24T09:00:00.412+02:00", "1000")],
+            [_state("2026-04-24T09:00:00.412+02:00", "250")],
             date(2026, 4, 24),
         )
 
@@ -100,7 +99,7 @@ class SlotSamplingTests(unittest.TestCase):
     def test_slots_before_the_first_write_are_absent(self):
         """Helman started mid-day: nothing was believed about the morning."""
         days = _read(
-            [_state("2026-04-24T09:00:00.412+02:00", "1000")],
+            [_state("2026-04-24T09:00:00.412+02:00", "250")],
             date(2026, 4, 24),
         )
 
@@ -113,7 +112,7 @@ class SlotSamplingTests(unittest.TestCase):
             [
                 _state("2026-04-24T09:00:00.412+02:00", "unavailable"),
                 _state("2026-04-24T09:15:00.380+02:00", None),
-                _state("2026-04-24T09:30:00.400+02:00", "2000"),
+                _state("2026-04-24T09:30:00.400+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
@@ -132,9 +131,9 @@ class SlotSamplingTests(unittest.TestCase):
         """
         days = _read(
             [
-                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:00:00.412+02:00", "250"),
                 _state("2026-04-24T09:20:00+02:00", "unavailable"),
-                _state("2026-04-24T14:00:00.380+02:00", "2000"),
+                _state("2026-04-24T14:00:00.380+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
@@ -155,7 +154,7 @@ class SlotSamplingTests(unittest.TestCase):
         days = _read(
             [
                 _state("2026-04-24T09:15:00+02:00", "unavailable"),
-                _state("2026-04-24T09:15:01+02:00", "2000"),
+                _state("2026-04-24T09:15:01+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
@@ -170,8 +169,8 @@ class SlotSamplingTests(unittest.TestCase):
         """
         days = _read(
             [
-                _state("2026-04-24T09:00:00.412+02:00", "1000"),
-                _state("2026-04-24T09:17:40+02:00", "2000"),
+                _state("2026-04-24T09:00:00.412+02:00", "250"),
+                _state("2026-04-24T09:17:40+02:00", "500"),
             ],
             date(2026, 4, 24),
         )
@@ -181,7 +180,7 @@ class SlotSamplingTests(unittest.TestCase):
     def test_a_mid_slot_republication_does_not_win_over_the_boundary_write(self):
         days = _read(
             [
-                _state("2026-04-24T09:00:00.412+02:00", "1000"),
+                _state("2026-04-24T09:00:00.412+02:00", "250"),
                 _state("2026-04-24T09:02:53+02:00", "9999"),
             ],
             date(2026, 4, 24),
@@ -194,8 +193,8 @@ class WindowTests(unittest.TestCase):
     def test_one_read_serves_every_day_in_the_window(self):
         days = _read(
             [
-                _state("2026-04-23T09:00:00.412+02:00", "1000"),
-                _state("2026-04-24T09:00:00.380+02:00", "2000"),
+                _state("2026-04-23T09:00:00.412+02:00", "250"),
+                _state("2026-04-24T09:00:00.380+02:00", "500"),
             ],
             date(2026, 4, 23),
             date(2026, 4, 24),
@@ -212,7 +211,7 @@ class WindowTests(unittest.TestCase):
 
     def test_an_inverted_window_is_empty(self):
         self.assertEqual(
-            _read([_state("2026-04-24T09:00:00+02:00", "1000")], date(2026, 4, 24), date(2026, 4, 23)),
+            _read([_state("2026-04-24T09:00:00+02:00", "250")], date(2026, 4, 24), date(2026, 4, 23)),
             {},
         )
 
@@ -233,7 +232,7 @@ class SingleDayTests(unittest.TestCase):
             async def async_add_executor_job(func):
                 return {
                     mod.SOLAR_FORECAST_CURRENT_ENTITY: [
-                        _state("2026-04-24T09:00:00.412+02:00", "1000")
+                        _state("2026-04-24T09:00:00.412+02:00", "250")
                     ]
                 }
 

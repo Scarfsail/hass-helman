@@ -1665,7 +1665,7 @@ class HelmanCoordinator:
         # with a partially built coordinator.
         if getattr(self, "_solar_forecast_backfill_started", True):
             return
-        if self.get_solar_forecast_current_w(corrected=False) is None:
+        if self.get_solar_forecast_current_wh(corrected=False) is None:
             # No value published yet, so the sensor has no series to write into
             # and no compiled hour to stop before.
             return
@@ -2142,8 +2142,8 @@ class HelmanCoordinator:
     def register_solar_forecast_current_sensors(self, sensors) -> None:
         self._solar_forecast_current_sensors = list(sensors)
 
-    def get_solar_forecast_current_w(self, *, corrected: bool) -> float | None:
-        """The current slot's solar forecast as average power, or None.
+    def get_solar_forecast_current_wh(self, *, corrected: bool) -> float | None:
+        """The current slot's forecast energy in Wh, or None.
 
         Reads the canonical snapshot's own series -- ``rawPoints`` for the
         pre-correction curve, ``correctedPoints`` for the adjusted one. When no
@@ -2152,7 +2152,8 @@ class HelmanCoordinator:
         correction yet" is honestly the same number, and a gap in the chart
         would read as missing data instead.
 
-        Wh per fifteen-minute slot becomes W by dividing by a quarter hour.
+        The snapshot's points are already the slot's Wh, so nothing is
+        converted here: the entity publishes the figure the inspector draws.
         """
         snapshot = getattr(self, "_cached_solar_forecast", None)
         if not isinstance(snapshot, dict):
@@ -2183,7 +2184,7 @@ class HelmanCoordinator:
             if ts != slot_start:
                 continue
             try:
-                return float(point.get("value")) / 0.25
+                return float(point.get("value"))
             except (TypeError, ValueError):
                 return None
         return None

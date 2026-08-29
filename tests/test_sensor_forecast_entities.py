@@ -217,6 +217,45 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(remaining_entity._attr_has_entity_name)
 
+    async def test_current_slot_entities_publish_wh_with_no_device_class(self) -> None:
+        # The device class is off deliberately, and the reason is easy to undo
+        # by accident: Home Assistant allows SensorDeviceClass.ENERGY only with
+        # TOTAL or TOTAL_INCREASING, which describe a cumulative meter. This
+        # value rises and falls with the sun, so declaring one would have the
+        # recorder read every decrease as a meter reset. Statistics survive the
+        # omission because they are gated on state_class, and the recorder
+        # derives the unit class from "Wh" alone.
+        sensor_module = _load_sensor_module()
+
+        for entity, key in (
+            (
+                sensor_module.HelmanSolarForecastCurrentSensor(
+                    SimpleNamespace(), _FakeEntry()
+                ),
+                "solar_forecast_current",
+            ),
+            (
+                sensor_module.HelmanSolarForecastCurrentCorrectedSensor(
+                    SimpleNamespace(), _FakeEntry()
+                ),
+                "solar_forecast_current_corrected",
+            ),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(entity._attr_native_unit_of_measurement, "Wh")
+                # The source publishes slot energies at two decimals, and the
+                # trainer reads its past from this entity, so the published
+                # figure must not be rounded harder than the source's own.
+                entity._read = lambda: 1244.25
+                self.assertEqual(entity.native_value, 1244.25)
+                self.assertIsNone(getattr(entity, "_attr_device_class", None))
+                self.assertEqual(
+                    entity._attr_state_class,
+                    sensor_module.SensorStateClass.MEASUREMENT,
+                )
+                self.assertEqual(entity._attr_translation_key, key)
+                self.assertTrue(entity._attr_has_entity_name)
+
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
         try:
@@ -477,13 +516,14 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         now = coordinator_module.dt_util.now
         try:
             coordinator_module.dt_util.now = lambda: REFERENCE_TIME
-            # 250 Wh over a quarter hour is 1000 W -- the form that makes the
-            # recorder's hourly mean the hour's average forecast power.
+            # The snapshot's points are already the slot's Wh, so the entity
+            # publishes the figure the inspector draws rather than an encoding
+            # of it.
             self.assertEqual(
-                coordinator.get_solar_forecast_current_w(corrected=False), 1000.0
+                coordinator.get_solar_forecast_current_wh(corrected=False), 250.0
             )
             self.assertEqual(
-                coordinator.get_solar_forecast_current_w(corrected=True), 1200.0
+                coordinator.get_solar_forecast_current_wh(corrected=True), 300.0
             )
 
             # No profile applied means no corrected series; the corrected sensor
@@ -491,7 +531,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             # corrected yet" is honestly the same value.
             coordinator._cached_solar_forecast.pop("correctedPoints")
             self.assertEqual(
-                coordinator.get_solar_forecast_current_w(corrected=True), 1000.0
+                coordinator.get_solar_forecast_current_wh(corrected=True), 250.0
             )
 
             # A snapshot that does not cover the current slot reports nothing
@@ -502,11 +542,11 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 ]
             }
             self.assertIsNone(
-                coordinator.get_solar_forecast_current_w(corrected=False)
+                coordinator.get_solar_forecast_current_wh(corrected=False)
             )
             coordinator._cached_solar_forecast = None
             self.assertIsNone(
-                coordinator.get_solar_forecast_current_w(corrected=False)
+                coordinator.get_solar_forecast_current_wh(corrected=False)
             )
         finally:
             coordinator_module.dt_util.now = now

@@ -48,7 +48,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.models import (
     StatisticData,
     StatisticMeanType,
@@ -69,7 +69,6 @@ _LOGGER = logging.getLogger(__name__)
 _RECORDER_DOMAIN = "recorder"
 #: The slot grid the source publishes on, and the sensor's own.
 _SLOT_MINUTES = 15
-_SLOT_FRACTION_OF_HOUR = _SLOT_MINUTES / 60
 #: How much history one pass reads and writes before yielding. The source
 #: publishes a handful of times a day, so a week is tens of state rows -- but
 #: each carries a 96-entry attribute map, which is why the chunk is not larger.
@@ -154,6 +153,7 @@ async def async_backfill_solar_forecast_statistics(
         )
         floor = dt_util.as_utc(dt_util.now()) - _MAX_SPAN
         written = 0
+        found_any = False
 
         while cursor > floor:
             chunk_start = max(cursor - _CHUNK, floor)
@@ -166,11 +166,21 @@ async def async_backfill_solar_forecast_statistics(
             )
             exhausted = rows is None
             if rows:
+                found_any = True
                 async_import_statistics(hass, _metadata(target_entity_id), rows)
                 written += len(rows)
             cursor = chunk_start
+            # ``done`` only once something was actually recovered. A walk that
+            # finds nothing at all is far more likely to mean the recorder has
+            # never held this entity -- an ``exclude:`` filter, a rename, an
+            # instance restored without its database -- than that its history
+            # is genuinely exhausted. Latching on that would mean the past is
+            # unrecoverable the moment the user fixes their config, since the
+            # cursor is keyed on the source id and would never be walked again.
             await store.async_record(
-                source_entity_id=source_entity_id, oldest_hour=cursor, done=exhausted
+                source_entity_id=source_entity_id,
+                oldest_hour=cursor,
+                done=exhausted and found_any,
             )
             if exhausted:
                 break
@@ -253,16 +263,26 @@ async def _chunk_statistics(
     recorder = get_instance(hass)
 
     def _query() -> list[Any]:
-        history = state_changes_during_period(
+        # ``get_significant_states`` with ``significant_changes_only=False``,
+        # not ``state_changes_during_period``, and the difference is the whole
+        # module. The latter filters to
+        # ``last_changed_ts == last_updated_ts``, which keeps only rows whose
+        # *state value* moved -- and the value here is a rounded day total that
+        # frequently does not, while the curve underneath it is republished
+        # anyway. Every such republication would be dropped, and the slots it
+        # covers would silently fall back to an older publication, so a
+        # back-filled hour would disagree with the row the live sensor recorded
+        # for the same slot. ``forecast_slot_history`` reads its own entity the
+        # same way for the same reason.
+        history = get_significant_states(
             hass,
             utc_start,
             utc_end,
-            source_entity_id,
+            [source_entity_id],
             # The forecast map *is* the data here, which is the one place this
             # walk parts company with the export-price one.
             no_attributes=False,
-            descending=False,
-            limit=None,
+            significant_changes_only=False,
             include_start_time_state=True,
         )
         return (
@@ -318,8 +338,12 @@ def _publications(
                 continue
         if not curve:
             continue
-        stamp = getattr(state, "last_changed", None) or getattr(
-            state, "last_updated", None
+        # ``last_updated``, never ``last_changed``: an attribute-only
+        # republication leaves ``last_changed`` at the earlier value, which
+        # would date the revision before it was published and let a
+        # *post*-slot curve win the "last publication before this slot" test.
+        stamp = getattr(state, "last_updated", None) or getattr(
+            state, "last_changed", None
         )
         if stamp is None:
             continue
@@ -346,7 +370,7 @@ def _slot_samples(
     utc_start: datetime,
     utc_end: datetime,
 ) -> list[tuple[datetime, float]]:
-    """``(slot_start, watts)`` for each slot, at the horizon the sensor records.
+    """``(slot_start, wh)`` for each slot, at the horizon the sensor records.
 
     A slot takes the value held by the last publication that predates it, which
     is what was knowable when the slot began. A slot no such publication covers
@@ -354,7 +378,9 @@ def _slot_samples(
     so nothing was believed about it, and the live sensor would have recorded
     nothing either.
 
-    Wh per slot becomes W, matching what the target entity publishes.
+    The value is the slot's Wh as published, which is what the target entity
+    carries too -- so a back-filled row and a recorded one are the same number
+    for the same slot, not two encodings of it.
     """
     if not publications:
         return []
@@ -371,7 +397,7 @@ def _slot_samples(
             latest = publications[index][1]
             index += 1
         if latest is not None and slot in latest:
-            samples.append((slot, latest[slot] / _SLOT_FRACTION_OF_HOUR))
+            samples.append((slot, latest[slot]))
         slot += timedelta(minutes=_SLOT_MINUTES)
     return samples
 
@@ -455,9 +481,12 @@ def _metadata(target_entity_id: str) -> StatisticMetaData:
     ``source`` is the recorder's own domain rather than ``helman``: the series
     belongs to an entity and lives in the recorder's table, and
     ``async_import_statistics`` rejects anything else. ``unit_class`` is
-    ``power`` because that is what watts convert within -- naming none where one
-    applies leaves the series unconvertible for a reader whose display unit
-    differs.
+    ``energy`` because that is what watt-hours convert within -- naming none
+    where one applies leaves the series unconvertible for a reader whose
+    display unit differs. It is stated here rather than inferred from a device
+    class, the target entity deliberately carrying none: see
+    ``_HelmanSolarForecastCurrentSensorBase`` for why, and note that the
+    recorder reaches the same answer from the unit alone.
     """
     return StatisticMetaData(
         mean_type=StatisticMeanType.ARITHMETIC,
@@ -465,6 +494,6 @@ def _metadata(target_entity_id: str) -> StatisticMetaData:
         name=None,
         source=_RECORDER_DOMAIN,
         statistic_id=target_entity_id,
-        unit_class="power",
-        unit_of_measurement="W",
+        unit_class="energy",
+        unit_of_measurement="Wh",
     )

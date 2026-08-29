@@ -2387,8 +2387,15 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
-    const entityId = this._stringValue(this._getValue(row.path));
     const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
+    // The config document first, then whatever the backend resolved. For every
+    // row but one those are the same string. The exception is a row for an
+    // entity Helman publishes: its path names nothing in the document, so only
+    // the inspection knows the id, and without this the row renders as "no
+    // entity configured" and is not clickable — while reporting a depth.
+    const entityId =
+      this._stringValue(this._getValue(row.path)) ||
+      this._stringValue(draft?.entityId);
     const historyFact: EntityFact | undefined = draft?.facts?.find(
       (fact) => fact.id === "history",
     );

@@ -362,8 +362,11 @@ test("a row with no entity configured is not clickable", async ({ page }) => {
         return root?.querySelectorAll(".training-depth-entity-button").length ?? -1;
     });
 
-    // Five of the six rows have an entity; the unset one renders plain text.
-    expect(buttonCount).toBe(5);
+    // Six of the seven rows have an entity and are clickable; only the unset
+    // battery one renders plain text. The recorded-forecast row counts here
+    // even though no config path points at it -- the inspection resolves its
+    // id, which is exactly what makes it clickable.
+    expect(buttonCount).toBe(6);
 });
 
 test("the entity column keeps its width on a wide screen", async ({ page }) => {
