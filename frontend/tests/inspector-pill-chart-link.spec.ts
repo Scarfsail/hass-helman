@@ -440,7 +440,20 @@ test.describe("the month row and the month columns", () => {
  * day, so it has to draw it the same way round.
  */
 test.describe("the pill row's border says which days have happened", () => {
+    // Both kinds of day have to be on screen at once for this test to say
+    // anything, and it reads them off the expanded calendar of the month the
+    // page believes it is in. The real clock does not reliably supply that: on
+    // the last day of a month every pill in the month is history and the test
+    // fails on a card that is working perfectly. So the day of the month is
+    // pinned, and only that -- the year and month stay the real ones, because
+    // the harness derives its fixtures and its `minDate` floor from the same
+    // real year and the two must agree.
+    const midMonth = new Date();
+    midMonth.setUTCDate(15);
+    midMonth.setUTCHours(12, 0, 0, 0);
+
     test.beforeEach(async ({ page }) => {
+        await page.clock.setFixedTime(midMonth);
         await loadCardBundle(page);
     });
 
@@ -456,8 +469,8 @@ test.describe("the pill row's border says which days have happened", () => {
                 .style.setProperty("--divider-color", "#d4d4d8");
         });
 
-        // The expanded calendar of the current month, which straddles today and
-        // so holds both kinds of day at once.
+        // The expanded calendar of the current month, which straddles the
+        // pinned today and so holds both kinds of day at once.
         await toggleMore(page);
         const styles = await pillBorderStyles(page);
         expect(styles.some((pill) => pill.history)).toBe(true);
@@ -468,7 +481,7 @@ test.describe("the pill row's border says which days have happened", () => {
 
         // Today is measured -- it has already partly happened -- and it stays
         // measured when the picker closes. Its window changes; the day does not.
-        const today = new Date().toISOString().slice(0, 10);
+        const today = midMonth.toISOString().slice(0, 10);
         expect(styles.find((pill) => pill.day === today)?.border).toBe("solid");
         await toggleMore(page);
         const closed = await pillBorderStyles(page);
