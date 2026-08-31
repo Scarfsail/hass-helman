@@ -160,11 +160,11 @@ IMPORT_PRICE = "sensor.helman_grid_import_price"
 HELMAN_EXPORT_PRICE = "sensor.helman_grid_export_price"
 EXPORT_PRICE = "sensor.spot_sell_price"
 HOUSE_FORECAST = "sensor.helman_house_consumption_forecast_current"
-BATTERY_FORECAST_SOC = "sensor.helman_battery_forecast_soc_current"
-BATTERY_FORECAST_GRID_NET = "sensor.helman_battery_forecast_grid_net_current"
-BATTERY_FORECAST_GRID_IMPORT = "sensor.helman_battery_forecast_grid_import_current"
-BATTERY_FORECAST_GRID_EXPORT = "sensor.helman_battery_forecast_grid_export_current"
-BATTERY_FORECAST_BATTERY_NET = "sensor.helman_battery_forecast_battery_net_current"
+BATTERY_SOC_FORECAST = "sensor.helman_battery_soc_forecast_current"
+BATTERY_NET_FORECAST = "sensor.helman_battery_net_forecast_current"
+GRID_NET_FORECAST = "sensor.helman_grid_net_forecast_current"
+GRID_IMPORT_FORECAST = "sensor.helman_grid_import_forecast_current"
+GRID_EXPORT_FORECAST = "sensor.helman_grid_export_forecast_current"
 
 #: A day well past any horizon these tests set, and far enough from a DST
 #: changeover to have twenty-four ordinary hours.
@@ -445,13 +445,13 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         # kWh -> Wh, at hour grain.
         _set_rows(
             {
-                BATTERY_FORECAST_SOC: [
+                BATTERY_SOC_FORECAST: [
                     _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=54.0),
                 ],
-                BATTERY_FORECAST_GRID_NET: [
+                GRID_NET_FORECAST: [
                     _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=-0.12),
                 ],
-                BATTERY_FORECAST_BATTERY_NET: [
+                BATTERY_NET_FORECAST: [
                     _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=0.3),
                 ],
             }
@@ -576,11 +576,11 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
                 WASHER_METER,
                 BATTERY_SOC,
                 HOUSE_FORECAST,
-                BATTERY_FORECAST_SOC,
-                BATTERY_FORECAST_GRID_NET,
-                BATTERY_FORECAST_GRID_IMPORT,
-                BATTERY_FORECAST_GRID_EXPORT,
-                BATTERY_FORECAST_BATTERY_NET,
+                BATTERY_SOC_FORECAST,
+                GRID_NET_FORECAST,
+                GRID_IMPORT_FORECAST,
+                GRID_EXPORT_FORECAST,
+                BATTERY_NET_FORECAST,
                 IMPORT_PRICE,
                 HELMAN_EXPORT_PRICE,
                 EXPORT_PRICE,

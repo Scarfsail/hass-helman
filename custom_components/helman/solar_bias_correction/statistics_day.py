@@ -116,11 +116,11 @@ async def load_statistics_day(
     meter_entity_ids: list[str],
     battery_soc_entity_id: str | None,
     house_forecast_entity_id: str,
-    battery_forecast_soc_entity_id: str,
-    battery_forecast_grid_net_entity_id: str,
-    battery_forecast_grid_import_entity_id: str,
-    battery_forecast_grid_export_entity_id: str,
-    battery_forecast_battery_net_entity_id: str,
+    battery_soc_forecast_entity_id: str,
+    grid_net_forecast_entity_id: str,
+    grid_import_forecast_entity_id: str,
+    grid_export_forecast_entity_id: str,
+    battery_net_forecast_entity_id: str,
     import_price_entity_id: str | None,
     export_price_entity_id: str | None,
     export_price_fallback_entity_id: str | None,
@@ -157,11 +157,11 @@ async def load_statistics_day(
                 *meter_entity_ids,
                 battery_soc_entity_id,
                 house_forecast_entity_id,
-                battery_forecast_soc_entity_id,
-                battery_forecast_grid_net_entity_id,
-                battery_forecast_grid_import_entity_id,
-                battery_forecast_grid_export_entity_id,
-                battery_forecast_battery_net_entity_id,
+                battery_soc_forecast_entity_id,
+                grid_net_forecast_entity_id,
+                grid_import_forecast_entity_id,
+                grid_export_forecast_entity_id,
+                battery_net_forecast_entity_id,
                 import_price_entity_id,
                 export_price_entity_id,
                 export_price_fallback_entity_id,
@@ -192,20 +192,20 @@ async def load_statistics_day(
         battery_soc_forecast_points=[
             {"slot": slot, "pct": value}
             for slot, value in _mean_by_slot(
-                span.rows_for(battery_forecast_soc_entity_id), target_date
+                span.rows_for(battery_soc_forecast_entity_id), target_date
             ).items()
         ],
         grid_net_forecast_points=_forecast_wh_points(
-            span.rows_for(battery_forecast_grid_net_entity_id), target_date
+            span.rows_for(grid_net_forecast_entity_id), target_date
         ),
         grid_import_forecast_points=_forecast_wh_points(
-            span.rows_for(battery_forecast_grid_import_entity_id), target_date
+            span.rows_for(grid_import_forecast_entity_id), target_date
         ),
         grid_export_forecast_points=_forecast_wh_points(
-            span.rows_for(battery_forecast_grid_export_entity_id), target_date
+            span.rows_for(grid_export_forecast_entity_id), target_date
         ),
         battery_net_forecast_points=_forecast_wh_points(
-            span.rows_for(battery_forecast_battery_net_entity_id), target_date
+            span.rows_for(battery_net_forecast_entity_id), target_date
         ),
         import_price_points=_rail_points(
             span.rows_for(import_price_entity_id), target_date

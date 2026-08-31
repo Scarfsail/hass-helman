@@ -377,8 +377,8 @@ class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
         battery_history = importlib.import_module(
             "custom_components.helman.solar_bias_correction.battery_forecast_history"
         )
-        soc_entity = battery_history.BATTERY_FORECAST_SOC_CURRENT_ENTITY
-        net_entity = battery_history.BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY
+        soc_entity = battery_history.BATTERY_SOC_FORECAST_CURRENT_ENTITY
+        net_entity = battery_history.GRID_NET_FORECAST_CURRENT_ENTITY
         soc, grid_net, *_ = await self._load(
             {
                 soc_entity: [
@@ -407,7 +407,7 @@ class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
         battery_history = importlib.import_module(
             "custom_components.helman.solar_bias_correction.battery_forecast_history"
         )
-        soc_entity = battery_history.BATTERY_FORECAST_SOC_CURRENT_ENTITY
+        soc_entity = battery_history.BATTERY_SOC_FORECAST_CURRENT_ENTITY
         soc, *_ = await self._load(
             {
                 soc_entity: [

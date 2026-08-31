@@ -51,20 +51,20 @@
       "solar_forecast_current_corrected": {
         "name": "Solární prognóza aktuální slot (korigovaná)"
       },
-      "battery_forecast_soc_current": {
-        "name": "Prognóza baterie SoC aktuální slot"
+      "battery_soc_forecast_current": {
+        "name": "Prognóza SoC baterie aktuální slot"
       },
-      "battery_forecast_grid_net_current": {
-        "name": "Prognóza baterie čistá síť aktuální slot"
+      "battery_net_forecast_current": {
+        "name": "Prognóza čisté energie baterie aktuální slot"
       },
-      "battery_forecast_grid_import_current": {
-        "name": "Prognóza baterie odběr ze sítě aktuální slot"
+      "grid_net_forecast_current": {
+        "name": "Prognóza čistého toku sítě aktuální slot"
       },
-      "battery_forecast_grid_export_current": {
-        "name": "Prognóza baterie dodávka do sítě aktuální slot"
+      "grid_import_forecast_current": {
+        "name": "Prognóza odběru ze sítě aktuální slot"
       },
-      "battery_forecast_battery_net_current": {
-        "name": "Prognóza baterie čistá baterie aktuální slot"
+      "grid_export_forecast_current": {
+        "name": "Prognóza dodávky do sítě aktuální slot"
       }
     }
   }

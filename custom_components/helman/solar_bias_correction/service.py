@@ -17,11 +17,11 @@ from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .battery_forecast_history import (
-    BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY,
-    BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY,
-    BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY,
-    BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY,
-    BATTERY_FORECAST_SOC_CURRENT_ENTITY,
+    BATTERY_NET_FORECAST_CURRENT_ENTITY,
+    BATTERY_SOC_FORECAST_CURRENT_ENTITY,
+    GRID_EXPORT_FORECAST_CURRENT_ENTITY,
+    GRID_IMPORT_FORECAST_CURRENT_ENTITY,
+    GRID_NET_FORECAST_CURRENT_ENTITY,
     load_battery_forecast_points_for_day,
 )
 from .forecast_history import load_archived_forecast_points, load_trainer_samples
@@ -857,19 +857,11 @@ class SolarBiasCorrectionService:
             house_forecast_entity_id=HOUSE_FORECAST_CURRENT_ENTITY,
             # The five battery-forecast entities are Helman's own, pinned by id
             # like the house forecast above rather than resolved from config.
-            battery_forecast_soc_entity_id=BATTERY_FORECAST_SOC_CURRENT_ENTITY,
-            battery_forecast_grid_net_entity_id=(
-                BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY
-            ),
-            battery_forecast_grid_import_entity_id=(
-                BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY
-            ),
-            battery_forecast_grid_export_entity_id=(
-                BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY
-            ),
-            battery_forecast_battery_net_entity_id=(
-                BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY
-            ),
+            battery_soc_forecast_entity_id=BATTERY_SOC_FORECAST_CURRENT_ENTITY,
+            battery_net_forecast_entity_id=BATTERY_NET_FORECAST_CURRENT_ENTITY,
+            grid_net_forecast_entity_id=GRID_NET_FORECAST_CURRENT_ENTITY,
+            grid_import_forecast_entity_id=GRID_IMPORT_FORECAST_CURRENT_ENTITY,
+            grid_export_forecast_entity_id=GRID_EXPORT_FORECAST_CURRENT_ENTITY,
             import_price_entity_id=GRID_IMPORT_PRICE_ENTITY_ID,
             export_price_entity_id=GRID_EXPORT_PRICE_ENTITY_ID,
             export_price_fallback_entity_id=_entity_id(

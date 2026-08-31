@@ -106,11 +106,11 @@ async def async_setup_entry(
     coordinator.register_solar_forecast_current_sensors(solar_forecast_current_sensors)
 
     battery_forecast_current_sensors = [
-        HelmanBatteryForecastSocCurrentSensor(coordinator, entry),
-        HelmanBatteryForecastGridNetCurrentSensor(coordinator, entry),
-        HelmanBatteryForecastGridImportCurrentSensor(coordinator, entry),
-        HelmanBatteryForecastGridExportCurrentSensor(coordinator, entry),
-        HelmanBatteryForecastBatteryNetCurrentSensor(coordinator, entry),
+        HelmanBatterySocForecastCurrentSensor(coordinator, entry),
+        HelmanBatteryNetForecastCurrentSensor(coordinator, entry),
+        HelmanGridNetForecastCurrentSensor(coordinator, entry),
+        HelmanGridImportForecastCurrentSensor(coordinator, entry),
+        HelmanGridExportForecastCurrentSensor(coordinator, entry),
     ]
     async_add_entities(battery_forecast_current_sensors)
     coordinator.register_battery_forecast_current_sensors(
@@ -532,7 +532,7 @@ class HelmanSolarForecastCurrentCorrectedSensor(_HelmanSolarForecastCurrentSenso
 
 
 class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
-    """One of the five battery-forecast series for the *current* 15-minute slot.
+    """One of the five battery-simulation forecast series for the *current* slot.
 
     Together these retire ``BatteryForecastHistoryStore``: the battery forecast
     snapshot only ever spans from the current slot forward, so once a slot has
@@ -540,6 +540,15 @@ class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
     written on the slot-aligned refresh, so its recorder history *is* that
     archive — exactly the move ``_HelmanSolarForecastCurrentSensorBase`` makes
     for the solar forecast.
+
+    **The entity ids name the quantity, not this subsystem** — ``grid_export``,
+    not ``battery_forecast_grid_export`` — following the repo convention
+    (``solar_forecast_current``, ``house_consumption_forecast_current``). Three
+    of the five are grid flows that only fall out of the battery simulation, and
+    a ``battery_forecast_`` prefix on those tells a user nothing they can act on
+    (and ``battery_forecast_battery_net`` stutters). The class names and the
+    coordinator accessor keep the source-describing prefix because they are not
+    a public contract; the ids are, so do not re-prefix them.
 
     The four Wh members carry **no device class** for the reason that base class
     sets out in full: ``SensorDeviceClass.ENERGY`` is permitted only alongside
@@ -560,11 +569,11 @@ class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
     #: The key this sensor reads out of the coordinator accessor's map.
     _snapshot_key: str
 
-    def __init__(self, coordinator, entry: ConfigEntry, key: str) -> None:
+    def __init__(self, coordinator, entry: ConfigEntry, entity_key: str) -> None:
         self._coordinator = coordinator
-        self.entity_id = f"sensor.helman_battery_forecast_{key}"
-        self._attr_unique_id = f"{entry.entry_id}_battery_forecast_{key}"
-        self._attr_translation_key = f"battery_forecast_{key}"
+        self.entity_id = f"sensor.helman_{entity_key}"
+        self._attr_unique_id = f"{entry.entry_id}_{entity_key}"
+        self._attr_translation_key = entity_key
 
     def _read(self) -> float | None:
         values = self._coordinator.get_battery_forecast_current()
@@ -585,7 +594,7 @@ class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
         return None if value is None else round(value, 2)
 
 
-class HelmanBatteryForecastSocCurrentSensor(_HelmanBatteryForecastCurrentSensorBase):
+class HelmanBatterySocForecastCurrentSensor(_HelmanBatteryForecastCurrentSensorBase):
     """The forecast state of charge at the current slot."""
 
     _attr_device_class = SensorDeviceClass.BATTERY
@@ -593,10 +602,22 @@ class HelmanBatteryForecastSocCurrentSensor(_HelmanBatteryForecastCurrentSensorB
     _snapshot_key = "socPct"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "soc_current")
+        super().__init__(coordinator, entry, "battery_soc_forecast_current")
 
 
-class HelmanBatteryForecastGridNetCurrentSensor(
+class HelmanBatteryNetForecastCurrentSensor(
+    _HelmanBatteryForecastCurrentSensorBase
+):
+    """Net battery energy forecast for the current slot, positive when charging."""
+
+    _attr_native_unit_of_measurement = "Wh"
+    _snapshot_key = "batteryNetWh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "battery_net_forecast_current")
+
+
+class HelmanGridNetForecastCurrentSensor(
     _HelmanBatteryForecastCurrentSensorBase
 ):
     """Net grid energy forecast for the current slot, positive when exporting."""
@@ -605,10 +626,10 @@ class HelmanBatteryForecastGridNetCurrentSensor(
     _snapshot_key = "gridNetWh"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "grid_net_current")
+        super().__init__(coordinator, entry, "grid_net_forecast_current")
 
 
-class HelmanBatteryForecastGridImportCurrentSensor(
+class HelmanGridImportForecastCurrentSensor(
     _HelmanBatteryForecastCurrentSensorBase
 ):
     """Forecast grid import for the current slot, kept beside the net so a slot
@@ -619,10 +640,10 @@ class HelmanBatteryForecastGridImportCurrentSensor(
     _snapshot_key = "gridImportWh"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "grid_import_current")
+        super().__init__(coordinator, entry, "grid_import_forecast_current")
 
 
-class HelmanBatteryForecastGridExportCurrentSensor(
+class HelmanGridExportForecastCurrentSensor(
     _HelmanBatteryForecastCurrentSensorBase
 ):
     """Forecast grid export for the current slot, the counterpart of the import
@@ -632,19 +653,7 @@ class HelmanBatteryForecastGridExportCurrentSensor(
     _snapshot_key = "gridExportWh"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "grid_export_current")
-
-
-class HelmanBatteryForecastBatteryNetCurrentSensor(
-    _HelmanBatteryForecastCurrentSensorBase
-):
-    """Net battery energy forecast for the current slot, positive when charging."""
-
-    _attr_native_unit_of_measurement = "Wh"
-    _snapshot_key = "batteryNetWh"
-
-    def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "battery_net_current")
+        super().__init__(coordinator, entry, "grid_export_forecast_current")
 
 
 class HelmanGridImportPriceSensor(SensorEntity):

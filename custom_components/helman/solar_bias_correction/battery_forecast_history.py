@@ -26,26 +26,24 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 #: ``sensor.helman_solar_forecast_current`` makes, and the reason the four Wh
 #: entities carry no device class is set out on
 #: :class:`~..sensor._HelmanBatteryForecastCurrentSensorBase`.
-BATTERY_FORECAST_SOC_CURRENT_ENTITY = "sensor.helman_battery_forecast_soc_current"
-BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY = (
-    "sensor.helman_battery_forecast_grid_net_current"
-)
-BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY = (
-    "sensor.helman_battery_forecast_grid_import_current"
-)
-BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY = (
-    "sensor.helman_battery_forecast_grid_export_current"
-)
-BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY = (
-    "sensor.helman_battery_forecast_battery_net_current"
-)
+#:
+#: The ids name the quantity, not this subsystem: three of the five are grid
+#: flows that only fall out of the battery simulation, and a user reading a
+#: history card has no way to interpret a ``battery_forecast_`` prefix on them.
+#: The module keeps its source-describing name because module names are not a
+#: public contract; entity ids are.
+BATTERY_SOC_FORECAST_CURRENT_ENTITY = "sensor.helman_battery_soc_forecast_current"
+BATTERY_NET_FORECAST_CURRENT_ENTITY = "sensor.helman_battery_net_forecast_current"
+GRID_NET_FORECAST_CURRENT_ENTITY = "sensor.helman_grid_net_forecast_current"
+GRID_IMPORT_FORECAST_CURRENT_ENTITY = "sensor.helman_grid_import_forecast_current"
+GRID_EXPORT_FORECAST_CURRENT_ENTITY = "sensor.helman_grid_export_forecast_current"
 
 #: The Wh entities in the order this module returns their point lists.
 _WH_ENTITIES = (
-    BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY,
-    BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY,
-    BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY,
-    BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY,
+    GRID_NET_FORECAST_CURRENT_ENTITY,
+    BATTERY_NET_FORECAST_CURRENT_ENTITY,
+    GRID_IMPORT_FORECAST_CURRENT_ENTITY,
+    GRID_EXPORT_FORECAST_CURRENT_ENTITY,
 )
 
 _SLOT_MINUTES = 15
@@ -89,7 +87,7 @@ async def load_battery_forecast_points_for_day(
 
     day_start_local = datetime.combine(target_date, time(0, 0), tzinfo=timezone)
     day_end_local = day_start_local + timedelta(days=1)
-    entity_ids = [BATTERY_FORECAST_SOC_CURRENT_ENTITY, *_WH_ENTITIES]
+    entity_ids = [BATTERY_SOC_FORECAST_CURRENT_ENTITY, *_WH_ENTITIES]
 
     states_by_entity = await get_instance(hass).async_add_executor_job(
         partial(
@@ -107,7 +105,7 @@ async def load_battery_forecast_points_for_day(
     soc_points = [
         {"slot": slot_start.strftime("%H:%M"), "pct": value}
         for slot_start, value in _hold_forward(
-            states_by_entity.get(BATTERY_FORECAST_SOC_CURRENT_ENTITY), day_start_local
+            states_by_entity.get(BATTERY_SOC_FORECAST_CURRENT_ENTITY), day_start_local
         ).items()
     ]
 

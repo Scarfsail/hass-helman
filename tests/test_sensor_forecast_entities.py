@@ -174,11 +174,11 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 "sensor.helman_house_consumption_forecast_current",
                 "sensor.helman_solar_forecast_current",
                 "sensor.helman_solar_forecast_current_corrected",
-                "sensor.helman_battery_forecast_soc_current",
-                "sensor.helman_battery_forecast_grid_net_current",
-                "sensor.helman_battery_forecast_grid_import_current",
-                "sensor.helman_battery_forecast_grid_export_current",
-                "sensor.helman_battery_forecast_battery_net_current",
+                "sensor.helman_battery_soc_forecast_current",
+                "sensor.helman_battery_net_forecast_current",
+                "sensor.helman_grid_net_forecast_current",
+                "sensor.helman_grid_import_forecast_current",
+                "sensor.helman_grid_export_forecast_current",
                 "sensor.helman_grid_import_price",
                 "sensor.helman_grid_export_price",
             ],
@@ -200,11 +200,11 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [s.entity_id for s in battery_registered],
             [
-                "sensor.helman_battery_forecast_soc_current",
-                "sensor.helman_battery_forecast_grid_net_current",
-                "sensor.helman_battery_forecast_grid_import_current",
-                "sensor.helman_battery_forecast_grid_export_current",
-                "sensor.helman_battery_forecast_battery_net_current",
+                "sensor.helman_battery_soc_forecast_current",
+                "sensor.helman_battery_net_forecast_current",
+                "sensor.helman_grid_net_forecast_current",
+                "sensor.helman_grid_import_forecast_current",
+                "sensor.helman_grid_export_forecast_current",
             ],
         )
         coordinator.register_grid_export_price_sensor.assert_called_once()
@@ -298,22 +298,22 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         cases = [
-            (sensor_module.HelmanBatteryForecastSocCurrentSensor, "soc_current", "%",
-             "battery", 54.0),
-            (sensor_module.HelmanBatteryForecastGridNetCurrentSensor,
-             "grid_net_current", "Wh", None, -123.46),
-            (sensor_module.HelmanBatteryForecastGridImportCurrentSensor,
-             "grid_import_current", "Wh", None, 200.0),
-            (sensor_module.HelmanBatteryForecastGridExportCurrentSensor,
-             "grid_export_current", "Wh", None, 76.54),
-            (sensor_module.HelmanBatteryForecastBatteryNetCurrentSensor,
-             "battery_net_current", "Wh", None, 312.5),
+            (sensor_module.HelmanBatterySocForecastCurrentSensor,
+             "battery_soc_forecast_current", "%", "battery", 54.0),
+            (sensor_module.HelmanBatteryNetForecastCurrentSensor,
+             "battery_net_forecast_current", "Wh", None, 312.5),
+            (sensor_module.HelmanGridNetForecastCurrentSensor,
+             "grid_net_forecast_current", "Wh", None, -123.46),
+            (sensor_module.HelmanGridImportForecastCurrentSensor,
+             "grid_import_forecast_current", "Wh", None, 200.0),
+            (sensor_module.HelmanGridExportForecastCurrentSensor,
+             "grid_export_forecast_current", "Wh", None, 76.54),
         ]
         for cls, key, unit, device_class, expected in cases:
             with self.subTest(key=key):
                 entity = cls(coordinator, _FakeEntry())
-                self.assertEqual(entity.entity_id, f"sensor.helman_battery_forecast_{key}")
-                self.assertEqual(entity._attr_translation_key, f"battery_forecast_{key}")
+                self.assertEqual(entity.entity_id, f"sensor.helman_{key}")
+                self.assertEqual(entity._attr_translation_key, key)
                 self.assertEqual(entity._attr_native_unit_of_measurement, unit)
                 self.assertEqual(
                     getattr(entity, "_attr_device_class", None), device_class
@@ -335,13 +335,13 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(
             get_battery_forecast_current=lambda: {"socPct": 40.0}
         )
-        entity = sensor_module.HelmanBatteryForecastGridImportCurrentSensor(
+        entity = sensor_module.HelmanGridImportForecastCurrentSensor(
             coordinator, _FakeEntry()
         )
         self.assertFalse(entity.available)
         self.assertIsNone(entity.native_value)
 
-        none_entity = sensor_module.HelmanBatteryForecastSocCurrentSensor(
+        none_entity = sensor_module.HelmanBatterySocForecastCurrentSensor(
             SimpleNamespace(get_battery_forecast_current=lambda: None), _FakeEntry()
         )
         self.assertFalse(none_entity.available)
