@@ -50,6 +50,21 @@
       },
       "solar_forecast_current_corrected": {
         "name": "Solar forecast current slot (corrected)"
+      },
+      "battery_forecast_soc_current": {
+        "name": "Battery forecast SoC current slot"
+      },
+      "battery_forecast_grid_net_current": {
+        "name": "Battery forecast grid net current slot"
+      },
+      "battery_forecast_grid_import_current": {
+        "name": "Battery forecast grid import current slot"
+      },
+      "battery_forecast_grid_export_current": {
+        "name": "Battery forecast grid export current slot"
+      },
+      "battery_forecast_battery_net_current": {
+        "name": "Battery forecast battery net current slot"
       }
     }
   }

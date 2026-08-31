@@ -6,6 +6,7 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -241,27 +242,51 @@ class TestLoadBatteryActual(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(points, [])
 
 
-class TestRecordedBatteryForecastPoints(unittest.TestCase):
-    def _make_service(self, slots):
+class TestRecordedBatteryForecastPoints(unittest.IsolatedAsyncioTestCase):
+    """The reader now reads the five published entities' recorder history.
+
+    The store is gone, so these pin the branch and the trim rather than the
+    ``.storage`` derivation (which moved to
+    ``coordinator._battery_forecast_slot_values`` with the accessor).
+    """
+
+    def _make_service(self):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        history = SimpleNamespace(slots_for_day=lambda target_date: slots)
         return service_mod.SolarBiasCorrectionService(
             hass,
             _DummyStore(),
             _make_cfg(),
-            battery_forecast_history=history,
         )
 
-    def test_reads_battery_net_alongside_soc_and_grid(self):
-        service = self._make_service(
-            {"08:00": {"socPct": 40.0, "gridNetWh": -100.0, "batteryNetWh": 250.0}}
+    def _loader(self, *, soc=None, grid_net=None, battery_net=None):
+        return AsyncMock(
+            return_value=(
+                soc or [],
+                grid_net or [],
+                battery_net or [],
+                [],
+                [],
+            )
         )
-        soc, grid, battery, _, _ = service._recorded_battery_forecast_points(
-            date(2026, 5, 10), cutoff=None, timezone=PRAGUE
+
+    async def test_reads_battery_net_alongside_soc_and_grid(self):
+        service = self._make_service()
+        loader = self._loader(
+            soc=[{"slot": "08:00", "pct": 40.0}],
+            grid_net=[{"timestamp": _slot(8).isoformat(), "wh": -100.0}],
+            battery_net=[{"timestamp": _slot(8).isoformat(), "wh": 250.0}],
         )
+        with patch.object(service_mod, "load_battery_forecast_points_for_day", loader):
+            soc, grid, battery, _, _ = await service._recorded_battery_forecast_points(
+                date(2026, 5, 10),
+                cutoff=None,
+                timezone=PRAGUE,
+                reads_statistics=False,
+                statistics_day=service_mod.StatisticsDay(),
+            )
         self.assertEqual(soc, [{"slot": "08:00", "pct": 40.0}])
         self.assertEqual([p["wh"] for p in grid], [-100.0])
         self.assertEqual(
@@ -269,14 +294,46 @@ class TestRecordedBatteryForecastPoints(unittest.TestCase):
             [(_slot(8).isoformat(), 250.0)],
         )
 
-    def test_days_archived_before_battery_net_yield_no_battery_points(self):
-        service = self._make_service({"08:00": {"socPct": 40.0, "gridNetWh": -100.0}})
-        soc, grid, battery, _, _ = service._recorded_battery_forecast_points(
-            date(2026, 5, 10), cutoff=None, timezone=PRAGUE
+    async def test_the_cutoff_trims_both_point_shapes(self):
+        service = self._make_service()
+        loader = self._loader(
+            soc=[{"slot": "08:00", "pct": 40.0}, {"slot": "10:00", "pct": 55.0}],
+            grid_net=[
+                {"timestamp": _slot(8).isoformat(), "wh": -100.0},
+                {"timestamp": _slot(10).isoformat(), "wh": 20.0},
+            ],
         )
-        self.assertEqual(len(soc), 1)
-        self.assertEqual(len(grid), 1)
-        self.assertEqual(battery, [])
+        with patch.object(service_mod, "load_battery_forecast_points_for_day", loader):
+            soc, grid, *_ = await service._recorded_battery_forecast_points(
+                date(2026, 5, 10),
+                cutoff=_slot(9),
+                timezone=PRAGUE,
+                reads_statistics=False,
+                statistics_day=service_mod.StatisticsDay(),
+            )
+        self.assertEqual([p["slot"] for p in soc], ["08:00"])
+        self.assertEqual([p["wh"] for p in grid], [-100.0])
+
+    async def test_a_purged_day_takes_the_five_from_the_statistics_day(self):
+        service = self._make_service()
+        stats = service_mod.StatisticsDay(
+            battery_soc_forecast_points=[{"slot": "08:00", "pct": 33.0}],
+            grid_net_forecast_points=[{"timestamp": _slot(8).isoformat(), "wh": 12.0}],
+            battery_net_forecast_points=[{"timestamp": _slot(8).isoformat(), "wh": 9.0}],
+        )
+        loader = self._loader()
+        with patch.object(service_mod, "load_battery_forecast_points_for_day", loader):
+            soc, grid, battery, _, _ = await service._recorded_battery_forecast_points(
+                date(2026, 5, 10),
+                cutoff=None,
+                timezone=PRAGUE,
+                reads_statistics=True,
+                statistics_day=stats,
+            )
+        loader.assert_not_awaited()
+        self.assertEqual(soc, [{"slot": "08:00", "pct": 33.0}])
+        self.assertEqual([p["wh"] for p in grid], [12.0])
+        self.assertEqual([p["wh"] for p in battery], [9.0])
 
 
 if __name__ == "__main__":

@@ -61,6 +61,17 @@ _LOGGER = logging.getLogger(__name__)
 #: arithmetic that turns a mean power into an energy stay the same number.
 HOUR_MINUTES = 60
 
+#: What a battery-forecast Wh series' hourly ``mean`` is multiplied by to reach
+#: one hour's representative slot Wh.
+#:
+#: Those entities record energy (unit ``Wh``), so ``query_hourly_statistics``
+#: hands their ``mean`` back converted to the energy unit class's display unit,
+#: kWh -- see :data:`~..recorder_statistics_span.STATISTICS_UNITS`. The house
+#: forecast above needs no such factor because it records power, not energy;
+#: this is the same conversion ``forecast_slot_history`` applies to the solar
+#: forecast's statistics tail.
+_KWH_TO_WH = 1000.0
+
 
 @dataclass(frozen=True)
 class StatisticsDay:
@@ -82,6 +93,15 @@ class StatisticsDay:
     battery_soc_points: list[dict] = field(default_factory=list)
     #: ``[{"timestamp": iso_local, "wh": float}]`` for the house forecast.
     house_forecast_points: list[dict] = field(default_factory=list)
+    #: The five retired-store battery-forecast series, in the shapes
+    #: ``_recorded_battery_forecast_points`` produced from raw states.
+    #: ``[{"slot": "HH:MM", "pct": float}]`` for the forecast state of charge...
+    battery_soc_forecast_points: list[dict] = field(default_factory=list)
+    #: ...and ``[{"timestamp": iso_local, "wh": float}]`` for the four energies.
+    grid_net_forecast_points: list[dict] = field(default_factory=list)
+    grid_import_forecast_points: list[dict] = field(default_factory=list)
+    grid_export_forecast_points: list[dict] = field(default_factory=list)
+    battery_net_forecast_points: list[dict] = field(default_factory=list)
     #: ``[{"slot": "HH:MM", "value": float}]`` per rail.
     import_price_points: list[dict] = field(default_factory=list)
     export_price_points: list[dict] = field(default_factory=list)
@@ -96,6 +116,11 @@ async def load_statistics_day(
     meter_entity_ids: list[str],
     battery_soc_entity_id: str | None,
     house_forecast_entity_id: str,
+    battery_forecast_soc_entity_id: str,
+    battery_forecast_grid_net_entity_id: str,
+    battery_forecast_grid_import_entity_id: str,
+    battery_forecast_grid_export_entity_id: str,
+    battery_forecast_battery_net_entity_id: str,
     import_price_entity_id: str | None,
     export_price_entity_id: str | None,
     export_price_fallback_entity_id: str | None,
@@ -132,6 +157,11 @@ async def load_statistics_day(
                 *meter_entity_ids,
                 battery_soc_entity_id,
                 house_forecast_entity_id,
+                battery_forecast_soc_entity_id,
+                battery_forecast_grid_net_entity_id,
+                battery_forecast_grid_import_entity_id,
+                battery_forecast_grid_export_entity_id,
+                battery_forecast_battery_net_entity_id,
                 import_price_entity_id,
                 export_price_entity_id,
                 export_price_fallback_entity_id,
@@ -158,6 +188,24 @@ async def load_statistics_day(
         ],
         house_forecast_points=_house_forecast_points(
             span.rows_for(house_forecast_entity_id), target_date
+        ),
+        battery_soc_forecast_points=[
+            {"slot": slot, "pct": value}
+            for slot, value in _mean_by_slot(
+                span.rows_for(battery_forecast_soc_entity_id), target_date
+            ).items()
+        ],
+        grid_net_forecast_points=_forecast_wh_points(
+            span.rows_for(battery_forecast_grid_net_entity_id), target_date
+        ),
+        grid_import_forecast_points=_forecast_wh_points(
+            span.rows_for(battery_forecast_grid_import_entity_id), target_date
+        ),
+        grid_export_forecast_points=_forecast_wh_points(
+            span.rows_for(battery_forecast_grid_export_entity_id), target_date
+        ),
+        battery_net_forecast_points=_forecast_wh_points(
+            span.rows_for(battery_forecast_battery_net_entity_id), target_date
         ),
         import_price_points=_rail_points(
             span.rows_for(import_price_entity_id), target_date
@@ -263,6 +311,28 @@ def _house_forecast_points(
         if mean_w is None:
             continue
         points.append({"timestamp": local_hour.isoformat(), "wh": mean_w})
+    return points
+
+
+def _forecast_wh_points(
+    rows_by_utc_hour: dict[datetime, Any], target_date: date
+) -> list[dict]:
+    """A battery-forecast Wh series' hourly mean as that hour's slot Wh.
+
+    Unlike :func:`_house_forecast_points`, which reads a power sensor whose hour
+    mean already *is* Wh, these entities record energy: the mean arrives in kWh
+    and is scaled by :data:`_KWH_TO_WH`. Signed series (net grid, net battery)
+    ride through unchanged -- a mean is a level, and these carry no device class
+    precisely so a decrease is not read as a meter reset.
+    """
+    points: list[dict] = []
+    for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
+        mean_kwh = _mean_of(row)
+        if mean_kwh is None:
+            continue
+        points.append(
+            {"timestamp": local_hour.isoformat(), "wh": mean_kwh * _KWH_TO_WH}
+        )
     return points
 
 

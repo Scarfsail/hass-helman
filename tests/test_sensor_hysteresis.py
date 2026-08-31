@@ -44,7 +44,12 @@ def _load_sensor_module():
     sensor_mod.SensorDeviceClass = type(
         "SensorDeviceClass",
         (),
-        {"DURATION": "duration", "POWER": "power", "ENERGY": "energy"},
+        {
+            "DURATION": "duration",
+            "POWER": "power",
+            "ENERGY": "energy",
+            "BATTERY": "battery",
+        },
     )
     sensor_mod.SensorStateClass = type(
         "SensorStateClass",

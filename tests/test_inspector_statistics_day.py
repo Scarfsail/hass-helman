@@ -160,6 +160,11 @@ IMPORT_PRICE = "sensor.helman_grid_import_price"
 HELMAN_EXPORT_PRICE = "sensor.helman_grid_export_price"
 EXPORT_PRICE = "sensor.spot_sell_price"
 HOUSE_FORECAST = "sensor.helman_house_consumption_forecast_current"
+BATTERY_FORECAST_SOC = "sensor.helman_battery_forecast_soc_current"
+BATTERY_FORECAST_GRID_NET = "sensor.helman_battery_forecast_grid_net_current"
+BATTERY_FORECAST_GRID_IMPORT = "sensor.helman_battery_forecast_grid_import_current"
+BATTERY_FORECAST_GRID_EXPORT = "sensor.helman_battery_forecast_grid_export_current"
+BATTERY_FORECAST_BATTERY_NET = "sensor.helman_battery_forecast_battery_net_current"
 
 #: A day well past any horizon these tests set, and far enough from a DST
 #: changeover to have twenty-four ordinary hours.
@@ -433,6 +438,42 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
             [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 800.0}],
         )
 
+    async def test_the_battery_forecast_series_come_back_hourly_from_statistics(self):
+        # The retired store's five series are now entities, so a purged day draws
+        # them from the same one statistics read as everything else: the SoC as
+        # its hourly mean percent, the four Wh series as their hourly mean scaled
+        # kWh -> Wh, at hour grain.
+        _set_rows(
+            {
+                BATTERY_FORECAST_SOC: [
+                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=54.0),
+                ],
+                BATTERY_FORECAST_GRID_NET: [
+                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=-0.12),
+                ],
+                BATTERY_FORECAST_BATTERY_NET: [
+                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=0.3),
+                ],
+            }
+        )
+
+        payload = await _purged_day()
+
+        self.assertEqual(payload["dataGranularityMinutes"], 60)
+        self.assertEqual(
+            payload["series"]["batterySocForecast"], [{"slot": "08:00", "pct": 54.0}]
+        )
+        self.assertEqual(
+            payload["series"]["gridForecast"],
+            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": -120.0}],
+        )
+        self.assertEqual(
+            payload["series"]["batteryForecast"],
+            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 300.0}],
+        )
+        self.assertTrue(payload["availability"]["hasBatterySocForecast"])
+        self.assertTrue(payload["availability"]["hasGridForecast"])
+
     async def test_a_price_rail_holds_its_hourly_rate_across_the_hour(self):
         # Emitted at ``HH:00`` alone the rail would come back three-quarters
         # empty, and the caller's config fill would paint today's tariff into
@@ -535,6 +576,11 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
                 WASHER_METER,
                 BATTERY_SOC,
                 HOUSE_FORECAST,
+                BATTERY_FORECAST_SOC,
+                BATTERY_FORECAST_GRID_NET,
+                BATTERY_FORECAST_GRID_IMPORT,
+                BATTERY_FORECAST_GRID_EXPORT,
+                BATTERY_FORECAST_BATTERY_NET,
                 IMPORT_PRICE,
                 HELMAN_EXPORT_PRICE,
                 EXPORT_PRICE,

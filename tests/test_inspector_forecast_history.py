@@ -99,24 +99,42 @@ service_mod = importlib.import_module(
     "custom_components.helman.solar_bias_correction.service"
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
-history_mod = importlib.import_module("custom_components.helman.battery_forecast_history")
 
 from zoneinfo import ZoneInfo  # noqa: E402
 
 PRAGUE = ZoneInfo("Europe/Prague")
 
 
-class _FakeStore:
-    """Stand-in for homeassistant Store that keeps the delayed save in memory."""
+def _archived_points(
+    day_slots: dict[str, dict], *, on_date: str
+) -> tuple[list, list, list, list, list]:
+    """A ``{"HH:MM": {...}}`` map as the 5-tuple the recorder reader returns.
 
-    def __init__(self, hass, version, key):
-        self.saved: dict | None = None
-
-    async def async_load(self):
-        return self.saved
-
-    def async_delay_save(self, data_func, delay):
-        self.saved = data_func()
+    The store is gone; its five series are entities now, so a test that used to
+    seed ``BatteryForecastHistoryStore`` seeds this shape instead and patches
+    ``load_battery_forecast_points_for_day`` with it. SoC comes back as
+    ``{"slot", "pct"}`` and the four Wh series as ``{"timestamp", "wh"}`` — the
+    same shapes the whole-day loader emits.
+    """
+    soc: list[dict] = []
+    grid_net: list[dict] = []
+    battery_net: list[dict] = []
+    grid_import: list[dict] = []
+    grid_export: list[dict] = []
+    for slot in sorted(day_slots):
+        values = day_slots[slot]
+        timestamp = f"{on_date}T{slot}:00+02:00"
+        if "socPct" in values:
+            soc.append({"slot": slot, "pct": values["socPct"]})
+        for key, bucket in (
+            ("gridNetWh", grid_net),
+            ("batteryNetWh", battery_net),
+            ("gridImportWh", grid_import),
+            ("gridExportWh", grid_export),
+        ):
+            if key in values:
+                bucket.append({"timestamp": timestamp, "wh": values[key]})
+    return soc, grid_net, battery_net, grid_import, grid_export
 
 
 # Now is 10:07, so the slot in progress is 10:00 and the next one starts at 10:15.
@@ -161,150 +179,6 @@ def _entry(
     return entry
 
 
-class TestBatteryForecastHistoryStore(unittest.IsolatedAsyncioTestCase):
-    def _store(self):
-        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(history_mod.storage, "Store", _FakeStore):
-            return history_mod.BatteryForecastHistoryStore(hass)
-
-    def test_records_todays_slots_with_net_grid_sign(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(
-                _entry(f"{TODAY}T10:00:00+02:00", soc=50.0, imported=0.4),
-                _entry(f"{TODAY}T10:15:00+02:00", soc=55.0, exported=0.2),
-            ),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        slots = store.slots_for_day(date.fromisoformat(TODAY))
-        self.assertEqual(slots["10:00"]["socPct"], 50.0)
-        # Import is negative, export positive, matching gridNetKwh elsewhere.
-        self.assertEqual(slots["10:00"]["gridNetWh"], -400.0)
-        self.assertEqual(slots["10:15"]["gridNetWh"], 200.0)
-
-    def test_records_net_battery_positive_when_charging(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(
-                _entry(f"{TODAY}T10:00:00+02:00", soc=50.0, charged=0.6),
-                _entry(f"{TODAY}T10:15:00+02:00", soc=45.0, discharged=0.25),
-            ),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        slots = store.slots_for_day(date.fromisoformat(TODAY))
-        self.assertEqual(slots["10:00"]["batteryNetWh"], 600.0)
-        self.assertEqual(slots["10:15"]["batteryNetWh"], -250.0)
-
-    def test_slot_without_battery_fields_omits_battery_net(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(_entry(f"{TODAY}T10:00:00+02:00", soc=50.0, imported=0.4)),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        slots = store.slots_for_day(date.fromisoformat(TODAY))
-        self.assertNotIn("batteryNetWh", slots["10:00"])
-
-    def test_later_build_overwrites_only_the_slots_it_still_covers(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(
-                _entry(f"{TODAY}T10:00:00+02:00", soc=50.0),
-                _entry(f"{TODAY}T10:15:00+02:00", soc=55.0),
-            ),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        # A build one slot later no longer spans 10:00, so that slot must survive
-        # with the value forecast for it while it was still ahead of the clock.
-        store.record_snapshot(
-            _snapshot(_entry(f"{TODAY}T10:15:00+02:00", soc=61.0)),
-            local_now=datetime.fromisoformat(f"{TODAY}T10:20:00+02:00"),
-            timezone=PRAGUE,
-        )
-        slots = store.slots_for_day(date.fromisoformat(TODAY))
-        self.assertEqual(slots["10:00"]["socPct"], 50.0)
-        self.assertEqual(slots["10:15"]["socPct"], 61.0)
-
-    def test_ignores_the_build_time_partial_entry(self):
-        # The snapshot's first entry is stamped at build time and only covers the
-        # remainder of the slot in progress; archiving it would leave one stray
-        # key per rebuild.
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(
-                _entry(f"{TODAY}T10:07:00+02:00", soc=49.0),
-                _entry(f"{TODAY}T10:15:00+02:00", soc=55.0),
-            ),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        self.assertEqual(list(store.slots_for_day(date.fromisoformat(TODAY))), ["10:15"])
-
-    def test_drops_unaligned_keys_left_by_an_earlier_version(self):
-        store = self._store()
-        store._days[TODAY] = {
-            "09:45": {"socPct": 45.0},
-            "10:07": {"socPct": 49.0},
-        }
-        store.record_snapshot(
-            _snapshot(_entry(f"{TODAY}T10:15:00+02:00", soc=55.0)),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        self.assertEqual(
-            sorted(store.slots_for_day(date.fromisoformat(TODAY))), ["09:45", "10:15"]
-        )
-
-    def test_entries_for_other_days_are_ignored(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(
-                _entry(f"{TODAY}T10:00:00+02:00", soc=50.0),
-                _entry("2026-05-12T09:00:00+02:00", soc=70.0),
-            ),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        self.assertEqual(list(store.slots_for_day(date.fromisoformat(TODAY))), ["10:00"])
-        self.assertEqual(store.slots_for_day(date.fromisoformat("2026-05-12")), {})
-
-    def test_prunes_days_past_the_retention_window(self):
-        store = self._store()
-        store._days["2026-01-01"] = {"00:00": {"socPct": 1.0}}
-        store.record_snapshot(
-            _snapshot(_entry(f"{TODAY}T10:00:00+02:00", soc=50.0)),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        self.assertNotIn("2026-01-01", store._days)
-        self.assertIn(TODAY, store._days)
-
-    async def test_survives_a_reload(self):
-        store = self._store()
-        store.record_snapshot(
-            _snapshot(_entry(f"{TODAY}T10:00:00+02:00", soc=50.0)),
-            local_now=datetime.fromisoformat(NOW),
-            timezone=PRAGUE,
-        )
-        reloaded = self._store()
-        reloaded._store.saved = store._store.saved
-        await reloaded.async_load()
-        self.assertEqual(
-            reloaded.slots_for_day(date.fromisoformat(TODAY))["10:00"]["socPct"], 50.0
-        )
-
-
-class _FakeHistory:
-    def __init__(self, days: dict[str, dict]):
-        self._days = days
-
-    def slots_for_day(self, target_date: date) -> dict:
-        return self._days.get(target_date.isoformat(), {})
-
-
 class _DummyStore:
     profile = None
 
@@ -326,10 +200,11 @@ def _make_cfg():
 
 
 class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
-    """A bias service wired to a fake history and a fixed battery snapshot, plus
-    the inspector call with the clock and the recorder reads pinned."""
+    """A bias service wired to a fixed battery snapshot, plus the inspector call
+    with the clock and every recorder read pinned. The five battery-forecast
+    series' recorder history is fed through ``load_battery_forecast_points_for_day``."""
 
-    def _service(self, history, snapshot):
+    def _service(self, snapshot):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -343,7 +218,6 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             _DummyStore(),
             _make_cfg(),
             battery_forecast_provider=_battery_forecast_provider,
-            battery_forecast_history=history,
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
@@ -370,6 +244,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         battery_soc_actual=None,
         grid_actual=None,
         battery_actual=None,
+        archived_points=None,
     ):
         current_slot, next_slot = _pinned_slot_helpers()
         old_now = service_mod.dt_util.now
@@ -380,6 +255,21 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 return_value=actuals_by_slot or {}
             )
             with current_slot, next_slot, patch.object(
+                service,
+                "_load_slot_energy_kwh_for_entities",
+                # Non-empty so an elapsed day with no stated purge horizon stays
+                # on raw states rather than falling back to hourly statistics --
+                # these tests are about the raw-state readers.
+                AsyncMock(
+                    return_value={
+                        "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0}
+                    }
+                ),
+            ), patch.object(
+                service_mod,
+                "load_battery_forecast_points_for_day",
+                AsyncMock(return_value=archived_points or ([], [], [], [], [])),
+            ), patch.object(
                 service_mod,
                 "load_house_forecast_points_for_day",
                 AsyncMock(return_value=house_forecast_points or []),
@@ -405,16 +295,17 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             service_mod.dt_util.now = old_now
             service_mod.load_actuals_for_day = old_actuals
 
-    async def test_past_day_serves_the_whole_archived_day(self):
-        history = _FakeHistory(
+    async def test_past_day_serves_the_whole_recorded_day(self):
+        archived = _archived_points(
             {
-                PAST_DAY: {
-                    "00:00": {"socPct": 40.0, "gridNetWh": -100.0},
-                    "23:45": {"socPct": 80.0, "gridNetWh": 250.0},
-                }
-            }
+                "00:00": {"socPct": 40.0, "gridNetWh": -100.0},
+                "23:45": {"socPct": 80.0, "gridNetWh": 250.0},
+            },
+            on_date=PAST_DAY,
         )
-        payload = await self._inspect(self._service(history, _snapshot()), PAST_DAY)
+        payload = await self._inspect(
+            self._service(_snapshot()), PAST_DAY, archived_points=archived
+        )
 
         soc = payload["series"]["batterySocForecast"]
         grid = payload["series"]["gridForecast"]
@@ -423,36 +314,37 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["availability"]["hasBatterySocForecast"])
         self.assertTrue(payload["availability"]["hasGridForecast"])
 
-    async def test_today_joins_the_archive_to_the_live_snapshot_without_overlap(self):
+    async def test_today_joins_the_recorder_to_the_live_snapshot_without_overlap(self):
         # Now is 10:07, so the current slot is 10:00 and the snapshot starts at 10:15.
-        history = _FakeHistory(
+        archived = _archived_points(
             {
-                TODAY: {
-                    "09:45": {"socPct": 45.0, "gridNetWh": -50.0},
-                    "10:00": {"socPct": 48.0, "gridNetWh": -25.0},
-                    # A stale future slot left by an earlier build must not win
-                    # over the live snapshot.
-                    "10:15": {"socPct": 1.0, "gridNetWh": 1.0},
-                }
-            }
+                "09:45": {"socPct": 45.0, "gridNetWh": -50.0},
+                "10:00": {"socPct": 48.0, "gridNetWh": -25.0},
+                # A stale future slot left by an earlier build must not win over
+                # the live snapshot; the cutoff at 10:15 drops it.
+                "10:15": {"socPct": 1.0, "gridNetWh": 1.0},
+            },
+            on_date=TODAY,
         )
         snapshot = _snapshot(
             _entry(f"{TODAY}T10:15:00+02:00", soc=52.0, exported=0.1),
             _entry(f"{TODAY}T18:00:00+02:00", soc=90.0, exported=0.3),
         )
-        payload = await self._inspect(self._service(history, snapshot), TODAY)
+        payload = await self._inspect(
+            self._service(snapshot), TODAY, archived_points=archived
+        )
 
         soc = payload["series"]["batterySocForecast"]
         self.assertEqual([p["slot"] for p in soc], ["09:45", "10:00", "10:15", "18:00"])
-        # The live snapshot owns 10:15, not the stale archived value.
+        # The live snapshot owns 10:15, not the stale recorded value.
         self.assertEqual(soc[2]["pct"], 52.0)
 
         grid = payload["series"]["gridForecast"]
         self.assertEqual([p["valueWh"] for p in grid], [-50.0, -25.0, 100.0, 300.0])
 
-    async def test_without_an_archive_today_still_starts_at_the_live_snapshot(self):
+    async def test_without_recorded_history_today_still_starts_at_the_live_snapshot(self):
         snapshot = _snapshot(_entry(f"{TODAY}T10:15:00+02:00", soc=52.0))
-        payload = await self._inspect(self._service(_FakeHistory({}), snapshot), TODAY)
+        payload = await self._inspect(self._service(snapshot), TODAY)
 
         soc = payload["series"]["batterySocForecast"]
         self.assertEqual([p["slot"] for p in soc], ["10:15"])
@@ -466,7 +358,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         boundary the recorder is useless anyway: it holds its last value flat all
         the way to midnight.
         """
-        service = self._service(_FakeHistory({}), _snapshot())
+        service = self._service(_snapshot())
         recorder_points = [
             {"timestamp": f"{TODAY}T09:45:00+02:00", "wh": 100.0},
             # The archive's stale sample of the slot in progress, taken before the
@@ -519,7 +411,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         width too. The day's totals are an accumulation rather than a comparison,
         so they keep counting what the meters have recorded in it.
         """
-        service = self._service(_FakeHistory({}), _snapshot())
+        service = self._service(_snapshot())
 
         def _wh(wh_by_slot):
             return [
@@ -560,7 +452,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         against. Adding its deferrableConsumers band on top would count those
         appliances twice and push the demand stack above production.
         """
-        service = self._service(_FakeHistory({}), _snapshot())
+        service = self._service(_snapshot())
         service._house_forecast_snapshot_provider = lambda: {
             "status": "available",
             "series": [
@@ -669,8 +561,8 @@ class TestInspectorForecastComposition(_InspectorHarness):
     slot helpers; only the two composition providers are new.
     """
 
-    def _service(self, history=None, snapshot=None, *, composition=..., consumers=None):
-        service = super()._service(history or _FakeHistory({}), snapshot or _snapshot())
+    def _service(self, snapshot=None, *, composition=..., consumers=None):
+        service = super()._service(snapshot or _snapshot())
         service._house_forecast_snapshot_provider = lambda: ADJUSTED_HOUSE_FORECAST
         service._house_scheduled_consumers_provider = lambda: (
             SCHEDULED_CONSUMERS if consumers is None else consumers

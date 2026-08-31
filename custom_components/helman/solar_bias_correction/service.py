@@ -16,6 +16,14 @@ from homeassistant.util import dt as dt_util
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
+from .battery_forecast_history import (
+    BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY,
+    BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY,
+    BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY,
+    BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY,
+    BATTERY_FORECAST_SOC_CURRENT_ENTITY,
+    load_battery_forecast_points_for_day,
+)
 from .forecast_history import load_archived_forecast_points, load_trainer_samples
 from .house_forecast_history import load_house_forecast_points_for_day
 from .models import (
@@ -104,7 +112,6 @@ class SolarBiasCorrectionService:
         *,
         canonical_solar_forecast_provider=None,
         battery_forecast_provider=None,
-        battery_forecast_history=None,
         house_forecast_snapshot_provider=None,
         house_forecast_composition_provider=None,
         house_energy_entity_id_provider=None,
@@ -128,7 +135,6 @@ class SolarBiasCorrectionService:
         self._cfg = cfg
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._battery_forecast_provider = battery_forecast_provider
-        self._battery_forecast_history = battery_forecast_history
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_forecast_composition_provider = house_forecast_composition_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
@@ -849,6 +855,21 @@ class SolarBiasCorrectionService:
             meter_entity_ids=meter_entity_ids,
             battery_soc_entity_id=_entity_id(self._battery_soc_entity_id_provider),
             house_forecast_entity_id=HOUSE_FORECAST_CURRENT_ENTITY,
+            # The five battery-forecast entities are Helman's own, pinned by id
+            # like the house forecast above rather than resolved from config.
+            battery_forecast_soc_entity_id=BATTERY_FORECAST_SOC_CURRENT_ENTITY,
+            battery_forecast_grid_net_entity_id=(
+                BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY
+            ),
+            battery_forecast_grid_import_entity_id=(
+                BATTERY_FORECAST_GRID_IMPORT_CURRENT_ENTITY
+            ),
+            battery_forecast_grid_export_entity_id=(
+                BATTERY_FORECAST_GRID_EXPORT_CURRENT_ENTITY
+            ),
+            battery_forecast_battery_net_entity_id=(
+                BATTERY_FORECAST_BATTERY_NET_CURRENT_ENTITY
+            ),
             import_price_entity_id=GRID_IMPORT_PRICE_ENTITY_ID,
             export_price_entity_id=GRID_EXPORT_PRICE_ENTITY_ID,
             export_price_fallback_entity_id=_entity_id(
@@ -1257,8 +1278,12 @@ class SolarBiasCorrectionService:
                 battery_forecast_points,
                 grid_import_forecast_points,
                 grid_export_forecast_points,
-            ) = self._recorded_battery_forecast_points(
-                target_date, cutoff=next_slot, timezone=timezone
+            ) = await self._recorded_battery_forecast_points(
+                target_date,
+                cutoff=next_slot,
+                timezone=timezone,
+                reads_statistics=reads_statistics,
+                statistics_day=statistics_day,
             )
         if need_future:
             battery_soc_forecast_points += _filter_battery_soc_future(
@@ -1546,72 +1571,54 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("Battery forecast provider failed")
             return None
 
-    def _recorded_battery_forecast_points(
-        self, target_date: date, *, cutoff: datetime | None, timezone: ZoneInfo
+    async def _recorded_battery_forecast_points(
+        self,
+        target_date: date,
+        *,
+        cutoff: datetime | None,
+        timezone: ZoneInfo,
+        reads_statistics: bool,
+        statistics_day: StatisticsDay,
     ) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
-        """Read archived SoC, grid and battery forecast slots for a day.
+        """The recorded SoC, grid and battery forecast curves for a day.
 
-        Returns (soc, grid net, battery, grid import, grid export) points for
-        slots starting before cutoff, or for the whole day when cutoff is None.
-        A key added after a day was archived simply yields no points for it —
-        days written before batteryNetWh have no battery series, and days
-        written before the grid sides were split have the net but neither side.
+        Returns ``(soc, grid net, battery net, grid import, grid export)`` for
+        slots starting before ``cutoff``, or the whole day when ``cutoff`` is
+        None — the shapes the retired store's reader produced, unchanged.
+
+        On a day the recorder still holds raw states for, the five come from the
+        published entities' history, held forward across the slots they cover
+        exactly as the house forecast's own reader does. On a day older than
+        ``purge_keep_days`` they come from :meth:`_load_statistics_day` instead,
+        like every other measured series on that path — already trimmed to the
+        day, and at hour grain. A series is empty when the entity had no state
+        (or no statistics row) for the day: the two grid sides and the battery
+        net began publishing after the SoC and net-grid pair, so a deep past day
+        can carry the older series without the newer.
         """
-        empty: tuple[list[dict], list[dict], list[dict], list[dict], list[dict]] = (
-            [], [], [], [], []
-        )
-        if self._battery_forecast_history is None:
-            return empty
+        if reads_statistics:
+            return (
+                statistics_day.battery_soc_forecast_points,
+                statistics_day.grid_net_forecast_points,
+                statistics_day.battery_net_forecast_points,
+                statistics_day.grid_import_forecast_points,
+                statistics_day.grid_export_forecast_points,
+            )
         try:
-            slots = self._battery_forecast_history.slots_for_day(target_date)
+            soc, grid_net, battery_net, grid_import, grid_export = (
+                await load_battery_forecast_points_for_day(
+                    self._hass, target_date, timezone
+                )
+            )
         except Exception:
             _LOGGER.exception("Failed to read battery forecast history for inspector")
-            return empty
-        cutoff_minutes = _minutes_into_day(cutoff, target_date)
-        soc_points: list[dict] = []
-        grid_points: list[dict] = []
-        battery_points: list[dict] = []
-        grid_import_points: list[dict] = []
-        grid_export_points: list[dict] = []
-        for slot in sorted(slots):
-            minutes = _slot_to_minutes(slot)
-            if minutes is None or minutes >= cutoff_minutes:
-                continue
-            values = slots[slot]
-            if not isinstance(values, dict):
-                continue
-            pct = values.get("socPct")
-            if pct is not None:
-                soc_points.append({"slot": slot, "pct": float(pct)})
-            timestamp = datetime.combine(
-                target_date, time(minutes // 60, minutes % 60), tzinfo=timezone
-            )
-            grid_net_wh = values.get("gridNetWh")
-            if grid_net_wh is not None:
-                grid_points.append(
-                    {"timestamp": timestamp.isoformat(), "wh": float(grid_net_wh)}
-                )
-            grid_import_wh = values.get("gridImportWh")
-            if grid_import_wh is not None:
-                grid_import_points.append(
-                    {"timestamp": timestamp.isoformat(), "wh": float(grid_import_wh)}
-                )
-            grid_export_wh = values.get("gridExportWh")
-            if grid_export_wh is not None:
-                grid_export_points.append(
-                    {"timestamp": timestamp.isoformat(), "wh": float(grid_export_wh)}
-                )
-            battery_net_wh = values.get("batteryNetWh")
-            if battery_net_wh is not None:
-                battery_points.append(
-                    {"timestamp": timestamp.isoformat(), "wh": float(battery_net_wh)}
-                )
+            return ([], [], [], [], [])
         return (
-            soc_points,
-            grid_points,
-            battery_points,
-            grid_import_points,
-            grid_export_points,
+            _slot_points_before(soc, cutoff=cutoff, target_date=target_date),
+            _points_before(grid_net, cutoff=cutoff),
+            _points_before(battery_net, cutoff=cutoff),
+            _points_before(grid_import, cutoff=cutoff),
+            _points_before(grid_export, cutoff=cutoff),
         )
 
     @staticmethod
@@ -3270,6 +3277,25 @@ def _points_before(points: list[dict], *, cutoff: datetime | None) -> list[dict]
         if ts < cutoff.replace(tzinfo=None):
             kept.append(point)
     return kept
+
+
+def _slot_points_before(
+    points: list[dict], *, cutoff: datetime | None, target_date: date
+) -> list[dict]:
+    """Drop ``{"slot": "HH:MM"}``-keyed points at or after cutoff.
+
+    The counterpart of :func:`_points_before` for the SoC forecast series, whose
+    points carry a slot label rather than a timestamp. ``_minutes_into_day``
+    turns a cutoff that has rolled past midnight into the whole day, matching
+    that helper's rule.
+    """
+    limit = _minutes_into_day(cutoff, target_date)
+    return [
+        point
+        for point in points
+        if (minutes := _slot_to_minutes(point.get("slot", ""))) is not None
+        and minutes < limit
+    ]
 
 
 def _slot_energy_points(
