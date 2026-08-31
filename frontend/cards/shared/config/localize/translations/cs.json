@@ -284,6 +284,9 @@
       "revert_aria": "Vrátit tuto entitu a její nastavení na uloženou konfiguraci",
       "more_info_aria": "Zobrazit podrobnosti entity {entity}"
     },
+    "facts": {
+      "history_depth_split": "{raw_states} d surových stavů, {statistics} d statistik"
+    },
     "helpers": {
       "history_buckets": "Kolik bucketů historie Helman drží pro UI historii.",
       "history_bucket_duration": "Délka jednoho bucketu historie v hodinách.",

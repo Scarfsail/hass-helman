@@ -284,6 +284,9 @@
       "revert_aria": "Revert this entity and its settings to the saved config",
       "more_info_aria": "Show details of {entity}"
     },
+    "facts": {
+      "history_depth_split": "{raw_states} d raw states, {statistics} d statistics"
+    },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
       "history_bucket_duration": "Duration of one history bucket in hours.",

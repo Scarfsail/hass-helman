@@ -14,14 +14,16 @@ window, a minimum valid-slot count) are simply other settings of the same
 entity. Moving one into a group's slot is a layout choice; consulting it would
 be a meaning choice, and meaning choices live here.
 
-**The fact carries both tables' depth, and severity is judged on the one that
-trains.** Long-term statistics and raw states can disagree by years on a stock
-recorder (``purge_keep_days`` prunes one and not the other), and every trainer
-in this integration reads raw states -- so a badge that judged "enough
-history" against statistics would read green for an entity training will find
-almost empty. ``available`` in the fact's params is always the raw-states
-depth for exactly that reason; ``statistics`` rides alongside it so a reader
-can see the gap the recorder-versus-statistics split (issue #169) is about.
+**The fact carries both tables' depth, and severity is judged on the effective
+depth a trainer would actually see.** Long-term statistics and raw states can
+disagree by years on a stock recorder (``purge_keep_days`` prunes one and not
+the other), but since #183 every trainer in this integration reads a *spliced*
+window -- statistics for the tail, raw states for the recent part -- so the
+window it can assemble reaches back as far as the deeper of the two tables.
+``available`` in the fact's params is ``max(raw_states, statistics)`` for
+exactly that reason; ``raw_states`` and ``statistics`` ride alongside it so a
+reader can see the gap the recorder-versus-statistics split (issue #169) is
+about, and where the splice draws its tail from.
 
 Two things make this evaluator different from :mod:`.power`, and both are about
 the recorder rather than about history:
@@ -287,27 +289,37 @@ def _history_fact_if_worth_probing(
 def _history_fact(depths: _Measurement, required: int | None) -> Fact:
     """The depth in both tables, judged against a requirement when there is one.
 
-    ``available`` is always the raw-states depth -- what the training runs
-    that read ``recorder_hourly_series`` will actually find -- and
-    ``statistics`` rides alongside it so a reader can see where the two
-    disagree. Severity never looks at ``statistics``: a deep statistics table
-    behind a shallow, purged raw-states one is exactly the false green
-    #169 exists to remove.
+    ``available`` is ``max(raw_states, statistics)`` -- the effective depth a
+    trainer's spliced window (statistics for the tail, raw states for the
+    recent part, since #183) can actually reach back to -- and ``raw_states``
+    and ``statistics`` ride alongside it so a reader can see where the two
+    tables disagree. This is deliberately an inference rather than a second
+    query against
+    :func:`~..recorder_statistics_span.query_spliced_hourly_energy` or its
+    siblings: the two numbers can only differ when statistics have an
+    interior hole, which changes how *dense* the window is, not how far back
+    it reaches, and depth has never claimed to describe density (#169).
     """
     raw_states = depths.raw_states or 0
     statistics = depths.statistics or 0
+    available = max(raw_states, statistics)
     if required is None:
         return Fact(
             id="history",
             token="history_depth_only",
-            params={"available": raw_states, "statistics": statistics},
+            params={"available": available, "raw_states": raw_states, "statistics": statistics},
             severity="neutral",
         )
-    severity: Severity = "ok" if raw_states >= required else "warn"
+    severity: Severity = "ok" if available >= required else "warn"
     return Fact(
         id="history",
         token="history_depth",
-        params={"available": raw_states, "statistics": statistics, "required": required},
+        params={
+            "available": available,
+            "raw_states": raw_states,
+            "statistics": statistics,
+            "required": required,
+        },
         severity=severity,
     )
 

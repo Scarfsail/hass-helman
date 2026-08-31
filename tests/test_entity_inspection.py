@@ -533,7 +533,9 @@ class TestHistoryDepth(_HistoryTestCase):
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 41, "statistics": 41, "required": 30})
+        self.assertEqual(
+            fact["params"], {"available": 41, "raw_states": 41, "statistics": 41, "required": 30}
+        )
         self.assertEqual(fact["severity"], "ok")
 
     def test_not_enough_history_reads_as_a_warning(self):
@@ -544,7 +546,9 @@ class TestHistoryDepth(_HistoryTestCase):
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 3, "statistics": 3, "required": 30})
+        self.assertEqual(
+            fact["params"], {"available": 3, "raw_states": 3, "statistics": 3, "required": 30}
+        )
         self.assertEqual(fact["severity"], "warn")
 
     def test_no_recorder_rows_is_zero_days_rather_than_no_answer(self):
@@ -591,7 +595,7 @@ class TestHistoryDepth(_HistoryTestCase):
         )
         fact = _fact(inspection, "history")
         self.assertEqual(fact["token"], "history_depth_only")
-        self.assertEqual(fact["params"], {"available": 41, "statistics": 41})
+        self.assertEqual(fact["params"], {"available": 41, "raw_states": 41, "statistics": 41})
         self.assertEqual(fact["severity"], "neutral")
 
     def test_every_registered_history_path_answers(self):
@@ -671,31 +675,43 @@ class TestHistoryDepth(_HistoryTestCase):
 
 
 class TestHistoryDepthDisagreement(_HistoryTestCase):
-    """The false green from #169: deep statistics behind a shallow raw table.
+    """Statistics and raw states disagreeing by a lot, and what that must mean.
 
     A stock recorder's ``purge_keep_days`` prunes raw states and leaves
     long-term statistics untouched, so an entity can show years of statistics
-    while the raw states a training run actually reads go back only a handful
-    of days. Severity must be judged on the raw-states number, not on
-    whichever of the two happens to be deepest.
+    while the raw states go back only a handful of days, or -- the rarer
+    direction -- a deep raw table behind a statistics table that has not
+    accumulated much yet. #169 originally made severity ignore ``statistics``
+    entirely, because at the time every trainer read raw states only and a
+    statistics-based badge read false green for an entity training would find
+    almost empty. #183 changed the premise: every trainer now reads a spliced
+    window, statistics for the tail and raw states for the recent part, so
+    the window it can assemble reaches exactly as far as the deeper of the
+    two tables (#186). Severity follows that splice: it is judged on
+    ``max(raw_states, statistics)``, not on raw states alone.
     """
 
-    def test_a_warning_shows_even_with_years_of_statistics(self):
+    def test_shallow_raw_states_behind_deep_statistics_now_reads_ok(self):
+        # The reference case from #186: 8 days of raw states, 195 of
+        # statistics, 14 required. The house fit still trains on the full 195
+        # days via the splice, so the badge must agree rather than read amber
+        # for a trainer that is doing just fine.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
-        self.probe.days = 3
-        self.probe.statistics = 900
+        self.probe.days = 8
+        self.probe.statistics = 195
         _, inspection = self.inspect_twice(
-            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+            hass, _history_config(min_history_days=14), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
         self.assertEqual(
-            fact["params"], {"available": 3, "statistics": 900, "required": 30}
+            fact["params"],
+            {"available": 195, "raw_states": 8, "statistics": 195, "required": 14},
         )
-        self.assertEqual(fact["severity"], "warn")
+        self.assertEqual(fact["severity"], "ok")
 
     def test_a_shallow_statistics_table_behind_deep_raw_states_still_reads_ok(self):
-        # The rarer direction, and worth pinning precisely because it is the
-        # one a "trust statistics" badge would have gotten right by accident.
+        # The other direction, worth pinning precisely because it was already
+        # correct before #186 and must stay that way.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         self.probe.days = 400
         self.probe.statistics = 2
@@ -704,9 +720,27 @@ class TestHistoryDepthDisagreement(_HistoryTestCase):
         )
         fact = _fact(inspection, "history")
         self.assertEqual(
-            fact["params"], {"available": 400, "statistics": 2, "required": 30}
+            fact["params"],
+            {"available": 400, "raw_states": 400, "statistics": 2, "required": 30},
         )
         self.assertEqual(fact["severity"], "ok")
+
+    def test_both_tables_shallow_still_warns(self):
+        # The original #169 case: neither table has enough, so no splice can
+        # rescue it. This is the guard against a new false green -- severity
+        # must not read `available` as somehow deeper than both its inputs.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.days = 8
+        self.probe.statistics = 8
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=14), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"],
+            {"available": 8, "raw_states": 8, "statistics": 8, "required": 14},
+        )
+        self.assertEqual(fact["severity"], "warn")
 
 
 class TestHistoryGovernedEntities(_HistoryTestCase):
@@ -738,7 +772,12 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         fact = _fact(second, "history")
         self.assertEqual(
             fact["params"],
-            {"available": 41, "statistics": 41, "required": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS},
+            {
+                "available": 41,
+                "raw_states": 41,
+                "statistics": 41,
+                "required": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+            },
         )
 
     def test_the_battery_capacity_sensor_is_judged_against_solar_bias(self):
