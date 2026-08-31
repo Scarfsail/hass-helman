@@ -302,20 +302,27 @@ def _hourly_rows(
         samples = samples_by_hour[hour_utc]
         if series.is_energy:
             # The hour's slot sum over four: the reader multiplies an hour's
-            # mean by _SLOTS_PER_HOUR to recover the hour's forecast energy.
-            mean = sum(samples) / _SLOTS_PER_HOUR
+            # mean by _SLOTS_PER_HOUR to recover the hour's forecast energy. No
+            # min/max -- for an hour the source archived fewer than four slots
+            # for, this synthetic mean falls outside the raw slot values' range,
+            # and scaling those by four would only invent a band. Nothing reads
+            # them and the recorder's columns are nullable, so leaving them off
+            # is the honest row.
+            rows.append(
+                StatisticData(start=hour_utc, mean=sum(samples) / _SLOTS_PER_HOUR)
+            )
         else:
             # A percentage is a level; its hourly figure is the plain mean of
-            # the slots that were archived for the hour.
-            mean = sum(samples) / len(samples)
-        rows.append(
-            StatisticData(
-                start=hour_utc,
-                mean=mean,
-                min=min(samples),
-                max=max(samples),
+            # the slots archived for the hour, which always lies within their
+            # range, so min/max stay meaningful and are kept.
+            rows.append(
+                StatisticData(
+                    start=hour_utc,
+                    mean=sum(samples) / len(samples),
+                    min=min(samples),
+                    max=max(samples),
+                )
             )
-        )
     return rows
 
 

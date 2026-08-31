@@ -206,12 +206,25 @@ _FORECAST_STALE_HINT = (
     "Check the Home Assistant log for forecast refresh errors."
 )
 #: ``_async_refresh_forecast``'s ``reason`` for the quarter-hour timer tick, the
-#: one rebuild that lands on a :00/:15/:30/:45 boundary. The five battery/grid
-#: current-slot forecast entities publish only on this one: an off-beat rebuild
-#: re-stamps the snapshot's first series entry partway through the slot, so its
-#: value covers only the slot's remainder, and HA's time-weighted hourly ``mean``
-#: -- which is what a purged day reads back -- would be dragged low by it.
+#: one rebuild that lands on a :00/:15/:30/:45 boundary. ``_publish_solar_forecast_entities``
+#: gates the five battery/grid current-slot entities' *republish* on this: an
+#: off-beat rebuild that still produced a full first slot would otherwise
+#: re-write the same value mid-slot, and HA's time-weighted hourly ``mean`` --
+#: what a purged day reads back -- shifts with every such write.
+#:
+#: This gate does *not* stop a partial value: it guards only the coordinator's
+#: own publish path, and Home Assistant writes a sensor's state by other routes
+#: too (``async_add_entities``, ``homeassistant.update_entity``, a registry
+#: rename), each reading the accessor directly. The partial-value guard is in
+#: :meth:`HelmanCoordinator.get_battery_forecast_current`, which refuses a first
+#: entry whose ``durationHours`` is short of a full slot.
 _SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
+
+#: A full canonical forecast slot, in hours. The snapshot's first series entry
+#: is stamped at build time; off the slot-aligned beat it covers only the slot's
+#: remainder, carrying ``durationHours`` short of this with its four energies
+#: scaled down to match.
+_FULL_FORECAST_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
@@ -221,7 +234,7 @@ if TYPE_CHECKING:
 _BATTERY_FORECAST_KWH_TO_WH = 1000.0
 
 
-def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float]:
+def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
     """Derive one battery-forecast slot's five archived figures from the snapshot.
 
     Moved here verbatim from the retired
@@ -233,7 +246,10 @@ def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float]:
 
     A key is present only where its source field is. ``batteryNetWh`` and the
     two grid sides landed in later releases, so a slot without them yields no
-    value for that key rather than a zero.
+    value for that key rather than a zero. Returns ``None`` -- not ``{}`` -- when
+    the entry carries none of the five, the ``values or None`` the retired
+    ``_slot_values`` ended on, so a caller can treat "no slot" and "an empty
+    slot" alike.
 
     Net grid is positive when exporting, matching ``gridNetKwh`` elsewhere; net
     battery is positive when charging, the same "energy leaving the house's
@@ -270,7 +286,7 @@ def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float]:
             ) * _BATTERY_FORECAST_KWH_TO_WH
         except (TypeError, ValueError):
             pass
-    return values
+    return values or None
 
 
 def _resolve_runtime_entity_and_states(
@@ -1792,13 +1808,21 @@ class HelmanCoordinator:
     def _maybe_start_battery_forecast_backfill(self) -> None:
         """Start the one-shot back-fill of the five battery-forecast entities.
 
-        Triggered from the publish beat for the same reason as the solar walk:
-        the first import writes an entity's statistics metadata, so it must not
-        run before that entity has published a value of its own. The source --
-        ``BatteryForecastHistoryStore``'s orphaned ``.storage`` file -- is
-        static, not perishable, so this could have waited; it does not, only
-        because there is no cost to running it now and the file is exactly the
-        kind of artifact a cleanup sweeps up.
+        The source -- ``BatteryForecastHistoryStore``'s orphaned ``.storage``
+        file -- is static, not perishable, so this could have waited; it does
+        not, only because there is no cost to running it now and the file is
+        exactly the kind of artifact a cleanup sweeps up.
+
+        The guard is ``get_battery_forecast_current() is not None``, which is a
+        check on the *pipeline*, not directly on the five entities' states. It is
+        sufficient because that accessor now returns a value only for a
+        non-partial current-slot entry (see
+        :meth:`get_battery_forecast_current`), and the only rebuild that
+        produces one is the slot-aligned one -- which writes the five sensors
+        earlier in this same :meth:`_publish_solar_forecast_entities` pass,
+        before this starter is reached. So by the time the guard passes, the
+        entities have published and own their statistics metadata. This matches
+        the pipeline-level guard the solar walk uses.
 
         Runs at most once per Home Assistant start. The task keeps a per-series
         done-marker, so a run cut short by a restart resumes by skipping the
@@ -1810,8 +1834,9 @@ class HelmanCoordinator:
         if getattr(self, "_battery_forecast_backfill_started", True):
             return
         if self.get_battery_forecast_current() is None:
-            # No slot published yet, so the five entities have no series to
-            # write into and no compiled hour to stop before.
+            # No non-partial current slot yet: no slot-aligned rebuild has run,
+            # so the five entities have not published and there is no metadata
+            # or compiled hour to align the import to.
             return
 
         from .battery_forecast_backfill import (
@@ -2327,19 +2352,29 @@ class HelmanCoordinator:
         ``gridExportWh`` / ``batteryNetWh``. A key is absent when the snapshot
         slot omits its source field — the two grid sides and ``batteryNetWh``
         arrived in later releases — so a sensor for that key reports unavailable
-        rather than zero. ``None`` when the pipeline is cold or carries no slot
-        for the clock's current quarter hour.
+        rather than zero. ``None`` when the pipeline is cold, carries no slot for
+        the clock's current quarter hour, or carries only a partial one (below).
 
         The snapshot's first series entry is stamped at build time. On the
-        slot-aligned rebuild it lands microseconds into the current slot at
-        essentially the whole slot's energy; an off-beat rebuild stamps it
-        partway through and its value covers only the slot's remainder. That is
-        why :meth:`_publish_solar_forecast_entities` writes the five sensors this
-        feeds *only* on the slot-aligned rebuild — a mid-slot value would drag
-        HA's time-weighted hourly ``mean`` low, and that compiled statistic is
-        exactly what a purged day reads back, so the error would outlive the raw
-        states. This accessor still returns whatever the current snapshot holds;
-        the gate is on the write, not here.
+        slot-aligned rebuild it lands microseconds into the current slot with
+        ``durationHours`` at essentially a full slot and the whole slot's
+        energy; an off-beat rebuild stamps it partway through, so
+        ``durationHours`` is short and the four Wh figures are scaled down to
+        that fraction. This accessor **refuses** such a partial entry, returning
+        ``None`` — because Home Assistant writes a sensor's state by routes this
+        integration does not gate (``async_add_entities`` on setup, the
+        ``homeassistant.update_entity`` service, an entity-registry rename), each
+        reading this accessor directly, and a half-size energy that then stood
+        for the rest of the slot would drag hour N's compiled ``mean`` low —
+        exactly the error the raw states would outlive.
+
+        The ``slot_refresh`` gate in :meth:`_publish_solar_forecast_entities` is
+        the other half of the guard and stops a different thing: an off-beat
+        rebuild that still produced a *full* first slot re-writing that value
+        mid-slot. Neither is the whole guard; the ``socPct`` level is dropped
+        with the four energies because a partial entry's SoC is the projection
+        for the shortened interval's end, not the slot's, and returning it alone
+        would publish one of the five off the shared beat.
         """
         pipeline = self._cached_appliance_forecast_pipeline
         if pipeline is None:
@@ -2368,6 +2403,18 @@ class HelmanCoordinator:
                 continue
             ts = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
             if slot_start <= ts < slot_end:
+                duration_hours = entry.get("durationHours")
+                if (
+                    isinstance(duration_hours, (int, float))
+                    and not isinstance(duration_hours, bool)
+                    and duration_hours + 1e-6 < _FULL_FORECAST_SLOT_HOURS
+                ):
+                    # A build-time partial first entry: its four energies are
+                    # scaled to the slot's remainder. Refuse the whole entry so
+                    # no write path can publish a partial value. An entry with no
+                    # ``durationHours`` at all (older snapshots, some tests) is
+                    # taken at face value.
+                    return None
                 return _battery_forecast_slot_values(entry)
         return None
 

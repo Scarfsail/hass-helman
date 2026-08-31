@@ -152,8 +152,9 @@ class TestTheFactor(unittest.TestCase):
         self.assertEqual(point["wh"], 100.0 + 200.0 + 300.0 + 400.0)
         # And the pin the other way: a bare mean would have quartered it.
         self.assertEqual(written_mean_wh, (100.0 + 200.0 + 300.0 + 400.0) / 4)
-        self.assertEqual(rows[hour_utc]["min"], 100.0)
-        self.assertEqual(rows[hour_utc]["max"], 400.0)
+        # The synthetic mean is not a sample level, so no min/max band is drawn.
+        self.assertNotIn("min", rows[hour_utc])
+        self.assertNotIn("max", rows[hour_utc])
 
     def test_an_hour_missing_two_slots_still_round_trips_to_the_recorded_sum(self):
         # batteryNetWh landed after the first release; days archived before it
@@ -190,6 +191,22 @@ class TestSocIsNotAnEnergy(unittest.TestCase):
         rows = _rows_for(imports, SOC)
         hour_utc = datetime(2026, 5, 20, 5, 0, tzinfo=timezone.utc)
         self.assertEqual(rows[hour_utc]["mean"], 53.0)
+        # A level's mean lies within its samples, so the band is kept.
+        self.assertEqual(rows[hour_utc]["min"], 50.0)
+        self.assertEqual(rows[hour_utc]["max"], 56.0)
+
+    def test_a_short_energy_hour_omits_min_max_so_no_mean_falls_outside_them(self):
+        # One archived slot for the hour: mean = 400 / 4 = 100, which is outside
+        # [400, 400]. Writing that band would draw a mean outside its own
+        # min/max on a history card, so the row carries neither.
+        imports, _marker = _run({"2026-05-20": {"07:00": {"gridNetWh": 400.0}}})
+
+        row = _rows_for(imports, GRID_NET)[
+            datetime(2026, 5, 20, 5, 0, tzinfo=timezone.utc)
+        ]
+        self.assertEqual(row["mean"], 100.0)
+        self.assertNotIn("min", row)
+        self.assertNotIn("max", row)
 
     def test_the_percentage_metadata_is_unitless_and_the_energies_are_energy(self):
         slots = {"07:00": {"socPct": 50.0, "gridNetWh": 100.0}}
@@ -219,8 +236,7 @@ class TestSocIsNotAnEnergy(unittest.TestCase):
         rows = _rows_for(imports, mod.BATTERY_NET_FORECAST_CURRENT_ENTITY)
         hour_utc = datetime(2026, 5, 20, 5, 0, tzinfo=timezone.utc)
         self.assertEqual(rows[hour_utc]["mean"], 0.0)
-        self.assertEqual(rows[hour_utc]["min"], -400.0)
-        self.assertEqual(rows[hour_utc]["max"], 400.0)
+        self.assertNotIn("min", rows[hour_utc])
 
 
 class TestWhatIsAndIsNotWritten(unittest.TestCase):

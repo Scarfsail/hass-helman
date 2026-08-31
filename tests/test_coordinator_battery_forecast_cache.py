@@ -1385,9 +1385,11 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
         coordinator = self._coordinator(
             {
                 "series": [
-                    # The build-time partial entry, microseconds into the slot.
+                    # The slot-aligned first entry: stamped microseconds into
+                    # the slot, a full slot's ``durationHours``.
                     {
                         "timestamp": "2026-03-20T21:00:00.010000+01:00",
+                        "durationHours": 0.25,
                         "socPct": 62.5,
                         "importedFromGridKwh": 0.4,
                         "exportedToGridKwh": 0.1,
@@ -1412,6 +1414,36 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
             {"series": [{"timestamp": "2026-03-20T21:00:00+01:00", "socPct": 40.0}]}
         )
         self.assertEqual(coordinator.get_battery_forecast_current(), {"socPct": 40.0})
+
+    def test_a_partial_first_entry_is_refused(self):
+        # Off the slot-aligned beat the first entry covers only the slot's
+        # remainder -- ``durationHours`` short of 0.25, energies scaled down.
+        # The accessor refuses it whole, SoC included, so no state-write path
+        # can publish a partial value.
+        coordinator = self._coordinator(
+            {
+                "series": [
+                    {
+                        "timestamp": "2026-03-20T21:07:00+01:00",
+                        "durationHours": 0.1333,
+                        "socPct": 62.5,
+                        "importedFromGridKwh": 0.05,
+                        "exportedToGridKwh": 0.0,
+                        "chargedKwh": 0.08,
+                        "dischargedKwh": 0.0,
+                    }
+                ]
+            }
+        )
+        self.assertIsNone(coordinator.get_battery_forecast_current())
+
+    def test_an_entry_with_none_of_the_five_is_none_not_empty(self):
+        # ``_battery_forecast_slot_values`` ends on ``values or None`` again, so
+        # the accessor never hands back a truthy-but-empty ``{}``.
+        coordinator = self._coordinator(
+            {"series": [{"timestamp": "2026-03-20T21:00:00+01:00"}]}
+        )
+        self.assertIsNone(coordinator.get_battery_forecast_current())
 
     def test_none_without_a_pipeline_or_a_slot_for_the_current_quarter_hour(self):
         self.assertIsNone(self._coordinator(None).get_battery_forecast_current())
