@@ -568,6 +568,14 @@ type InspectorPayload = {
   trainingExplainability: TrainingExplainability | null;
 };
 
+/**
+ * Floor for the content shell on a cold mount, where there is no stale
+ * payload to hold the box open: the chart's fixed 260px (`.chart-wrap svg`,
+ * in `static styles`) plus the strips and totals a day view typically draws
+ * below it.
+ */
+const INSPECTOR_CONTENT_MIN_HEIGHT = 520;
+
 export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) hass?: HomeAssistant;
   /** Solar power (W) at or above which a slot counts as carrying sun energy. */
@@ -1156,6 +1164,103 @@ export class HelmanSolarInspector extends LitElement {
       height: 260px;
     }
 
+    /* Holds the card's height across a navigation: the shell keeps rendering
+       whatever content it had -- dimmed and inert -- instead of collapsing to
+       the loading note, and only supplies its own height (INSPECTOR_CONTENT_
+       MIN_HEIGHT, sized off the svg height above) on a cold mount that has
+       nothing stale to hold open. */
+    .content-shell {
+      position: relative;
+    }
+
+    /* Only when there is nothing at all to hold the box open -- see the
+       "empty" comment above _renderBody -- not on every loading or errored
+       render: a stale render that happens to be shorter than the floor is
+       already anchoring the height on its own, and forcing it up as well
+       would reintroduce the jump this shell exists to remove. */
+    .content-shell.is-empty {
+      min-height: ${unsafeCSS(INSPECTOR_CONTENT_MIN_HEIGHT)}px;
+    }
+
+    /* :not(.loading-overlay) rather than dimming the shell itself, so the
+       overlay's own chip stays fully readable over the dimmed content. No
+       transition on the dimming: the overlay above already fades in, and an
+       animated opacity would make the dim state something a test -- or a
+       reader -- can catch mid-way rather than simply on or off. */
+    .content-shell.is-loading > *:not(.loading-overlay) {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    /* A scrim rather than an opaque panel: what is underneath is the previous
+       day, and keeping it legible through the veil is the whole point of not
+       blanking the card. color-mix against the card's own background keeps it
+       correct in both light and dark themes without a second variable. */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      /* Near the top of the chart rather than the middle of the shell: the
+         shell is as tall as the whole day view, so a vertically centred chip
+         lands somewhere around the price rail -- far from where the reader is
+         looking and moving with whatever strips happen to be expanded. */
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 20px;
+      box-sizing: border-box;
+      pointer-events: none;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--card-background-color, #fff) 55%, transparent);
+      backdrop-filter: blur(2px);
+      animation: helman-inspector-fade-in 160ms ease-out;
+    }
+
+    /* The message is a floating chip, sized to its text, rather than a box
+       stretched over the whole shell -- a full-bleed panel reads as an error
+       state, and hides the content it is supposed to be veiling. */
+    .loading-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      color: var(--primary-text-color);
+      font-size: 0.9rem;
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    }
+
+    .loading-chip::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--divider-color);
+      border-top-color: var(--primary-color, #2563eb);
+      animation: helman-inspector-spin 700ms linear infinite;
+    }
+
+    @keyframes helman-inspector-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes helman-inspector-fade-in {
+      from {
+        opacity: 0;
+      }
+    }
+
+    /* The spinner is decoration; the chip still says what is happening. */
+    @media (prefers-reduced-motion: reduce) {
+      .loading-chip::before,
+      .loading-overlay {
+        animation: none;
+      }
+    }
+
     .strip-section {
       display: grid;
       gap: 2px;
@@ -1565,7 +1670,27 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderBody() {
-    const payload = this._payload?.date === this._selectedDate ? this._payload : null;
+    const loading = this._viewLoading();
+    const error = this._viewMode === "day" ? this._error : this._spanError;
+    // Stale is still drawable, and it stays drawable a beat past the request
+    // itself: a failed load leaves `_selectedDate` already moved but nothing
+    // new to show for it, and the error note reads as a lie next to a card
+    // that has gone blank under it. So the payload is kept up, dimmed, for
+    // the error too -- not only while the request that would replace it is
+    // still in flight.
+    const stale = loading || !!error;
+    const payload =
+      this._payload?.date === this._selectedDate || (stale && this._payload)
+        ? this._payload
+        : null;
+    const content = this._renderContent(payload);
+    // The empty string is the sentinel both branches of `_renderContent` use
+    // for "nothing to draw at all" -- a payload-less day, or a span with no
+    // rows. Only that state gets the height floor: a *stale* render, however
+    // short that particular day happens to be, is already holding the box
+    // open on its own, and forcing it up to the floor as well would be
+    // exactly the jump this shell exists to remove.
+    const empty = content === "";
     return html`
       <div class="body" @helman-open-schedule-editor=${this._handleOpenScheduleEditor}>
         <!-- One editor for the whole card. The band strip draws its day off
@@ -1585,11 +1710,23 @@ export class HelmanSolarInspector extends LitElement {
           .items=${buildForecastHealthItems(this._forecast, this._localize)}
           .localize=${this._localize}
         ></helman-forecast-health-banner>
-        ${(this._viewMode === "day" ? this._loading : this._spanLoading)
-          ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
-        ${(this._viewMode === "day" ? this._error : this._spanError)
-          ? html`<div class="note">${this._viewMode === "day" ? this._error : this._spanError}</div>` : ""}
-        ${this._renderContent(payload)}
+        ${error ? html`<div class="note">${error}</div>` : ""}
+        <!-- The loading note used to be its own row above this one, so its
+             appearance and disappearance was a second jump on top of the one
+             this shell exists to remove. It now overlays whatever is already
+             drawn instead of displacing it. aria-busy tracks loading rather
+             than stale: an error is done, not in progress. -->
+        <div
+          class="content-shell ${stale ? "is-loading" : ""} ${empty ? "is-empty" : ""}"
+          aria-busy=${loading ? "true" : "false"}
+        >
+          ${content}
+          ${loading
+            ? html`<div class="loading-overlay">
+                <div class="loading-chip">${this._t("bias_correction.inspector.loading")}</div>
+              </div>`
+            : ""}
+        </div>
       </div>
     `;
   }
@@ -2151,7 +2288,9 @@ export class HelmanSolarInspector extends LitElement {
     this._spanRequestKey = key;
     this._spanLoading = true;
     this._spanError = "";
-    this._span = null;
+    // The previous span stays put -- see the matching comment in `_load` --
+    // and is overwritten below on success or left in place under the error
+    // note on failure.
     try {
       const result = await this.hass.callWS<SpanAggregatePayload>({
         type: "helman/solar_bias/day_aggregates",
@@ -2191,13 +2330,21 @@ export class HelmanSolarInspector extends LitElement {
    * the branch at the top of `_renderContent` and never run.
    */
   private _renderAggregateContent() {
-    const rows = this._span?.days ?? [];
-    if (this._spanLoading || this._spanError) {
-      // The note above already says which; a second empty frame would flicker.
-      return "";
-    }
+    // A stale span is only stale, not wrong-shaped: month <-> year also
+    // switches the bucket a row means, and drawing last month's daily rows
+    // as though they were this year's monthly ones would label every column
+    // with the wrong unit for as long as the new span takes to arrive. Rows
+    // whose bucket no longer matches the view are treated as nothing to fall
+    // back on, same as a cold mount.
+    const rows = this._span?.bucket === this._spanBucket() ? this._span?.days ?? [] : [];
     if (rows.length === 0) {
-      return html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
+      // Nothing stale to fall back on. Loading or errored, the note above
+      // already says which; a second empty frame here would only flicker.
+      // Only the "no data" case gets a note of its own, and only once the
+      // request that would explain an empty span either way has finished.
+      return this._spanLoading || this._spanError
+        ? ""
+        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
     return html`
       ${this._renderTooltip()}
@@ -2773,11 +2920,12 @@ export class HelmanSolarInspector extends LitElement {
    *
    * A minutes stop can arrive with `_selectedDate` already equal to the day it
    * wants, because span navigation moves it to a span start. Guarding on
-   * `_selectedDate` therefore skips the load in exactly the case that needs it,
-   * and `_renderBody` nulls out a payload stamped with any other date, so the
-   * card draws a header over an empty body and issues no request to fix it.
-   * The payload's own date is the only thing that answers "does the day view
-   * have what it needs".
+   * `_selectedDate` therefore skips the load in exactly the case that needs it.
+   * A mismatched date is not, on its own, a reason to skip the fetch this
+   * method exists to issue -- `_renderBody` keeps drawing that payload, dimmed,
+   * while the fetch is in flight, but the fetch still has to be asked for. The
+   * payload's own date is the only thing that answers "does the day view have
+   * what it needs".
    */
   private _ensureDayLoaded() {
     if (this._payload?.date !== this._selectedDate) {
@@ -5195,8 +5343,10 @@ export class HelmanSolarInspector extends LitElement {
     if (silent) {
       this._refreshing = true;
     } else {
+      // The previous payload is kept rather than nulled: `_renderBody` still
+      // draws it, dimmed, under the loading overlay, instead of the card
+      // collapsing and re-expanding around the request.
       this._loading = true;
-      this._payload = null;
     }
     try {
       const payload = await this.hass.callWS<InspectorPayload>({

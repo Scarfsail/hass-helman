@@ -13,10 +13,12 @@ import { installFakeHass } from "./support/fake-hass";
  *
  * So there are two loads now, and the distinction is what these tests pin:
  *
- * - **A navigation blanks and says so.** The day being drawn is about to be a
- *   different day; pretending otherwise would show the wrong day's numbers
- *   under the new day's heading.
- * - **A refresh shows nothing at all until it lands.** No loading note, no
+ * - **A navigation keeps the old day up, dimmed, under a loading overlay.**
+ *   The day being drawn is about to be a different day, but the previous
+ *   day's chart holds the card's height rather than the card collapsing and
+ *   re-expanding around the request — see #195. The old content is inert
+ *   while it is up, so it cannot be mistaken for the day that was asked for.
+ * - **A refresh shows nothing at all until it lands.** No loading overlay, no
  *   vanished chart, and the day and slot the user picked are still picked
  *   afterwards — they never asked for this reload.
  *
@@ -55,8 +57,13 @@ async function mountInspector(page: Page): Promise<void> {
 
 type CardReadout = {
     hasChart: boolean;
-    /** The `.note` blocks — the loading note is one of these. */
+    /** The `.note` blocks that sit above the content shell — the error note
+     *  is one of these; the loading note moved into `.loading-overlay`. */
     notes: string[];
+    /** The centered loading message's text, or "" when it is not up. */
+    overlayText: string;
+    /** Whether the content shell is dimming and disabling what it holds. */
+    dimmed: boolean;
     /** The day pill currently pressed. */
     selectedDay: string;
     totals: string;
@@ -72,6 +79,8 @@ function readCard(page: Page): Promise<CardReadout> {
             notes: Array.from(root?.querySelectorAll(".body > .note") ?? []).map(
                 (note) => note.textContent?.trim() ?? "",
             ),
+            overlayText: root?.querySelector(".loading-overlay")?.textContent?.trim() ?? "",
+            dimmed: !!root?.querySelector(".content-shell.is-loading"),
             selectedDay: pressed?.getAttribute("data-day") ?? "",
             totals: root?.querySelector(".metrics-section")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
         };
@@ -103,20 +112,24 @@ async function pressPreviousWeek(page: Page): Promise<void> {
     });
 }
 
-test("a navigation blanks the card and says it is loading", async ({ page }) => {
+test("a navigation keeps the old day drawn, dimmed, under the loading overlay", async ({ page }) => {
     await mountInspector(page);
     const startingDay = (await readCard(page)).selectedDay;
 
     await pressPreviousWeek(page);
     await page.waitForFunction(() => window.__pendingInspector() === 1);
 
-    // Mid-flight: the old day is gone rather than mislabelled as the new one.
+    // Mid-flight: the old day's chart is still up rather than gone, but it
+    // reads as stale rather than current -- dimmed, inert, with the loading
+    // message centered over it.
     const inFlight = await readCard(page);
-    expect(inFlight.hasChart).toBe(false);
-    expect(inFlight.notes.length).toBe(1);
+    expect(inFlight.hasChart).toBe(true);
+    expect(inFlight.dimmed).toBe(true);
+    expect(inFlight.overlayText.length).toBeGreaterThan(0);
+    expect(inFlight.notes).toEqual([]);
 
     await page.evaluate(() => window.__releaseInspector());
-    await expect.poll(() => readCard(page)).toMatchObject({ hasChart: true });
+    await expect.poll(() => readCard(page)).toMatchObject({ hasChart: true, dimmed: false });
     expect((await readCard(page)).selectedDay).not.toBe(startingDay);
 });
 
