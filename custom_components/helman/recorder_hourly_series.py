@@ -45,10 +45,43 @@ _ENERGY_TOLERANCE_KWH = 1e-6
 _RESET_FRACTION = 0.9
 
 
+def _carry_staleness_limit(interval_minutes: int) -> timedelta:
+    """How old a carried meter reading can be before it is distrusted.
+
+    A recorder gap -- Home Assistant restarted, the container down, the
+    database locked -- carries the last reading forward to every boundary
+    inside the gap with nothing to say it is stale, which zeroes the gap's
+    slots and dumps the whole outage's energy on the first slot that sees a
+    fresh reading. The limit is a multiple of the slot rather than the slot
+    itself: a meter that only publishes on change can be legitimately quiet
+    for a stretch longer than one interval, and a limit of exactly one slot
+    would flag that as a gap. The floor keeps a coarse grid -- hourly
+    long-term statistics backfill, in particular -- from inheriting an
+    implausibly long staleness window just because its slot is big.
+    """
+    return timedelta(minutes=max(2 * interval_minutes, 30))
+
+
 @dataclass(frozen=True)
 class _EnergyObservation:
     updated_at: datetime
     value_kwh: float
+
+
+@dataclass(frozen=True)
+class _BoundarySample:
+    """A boundary's carried meter value, and when the reading behind it was real.
+
+    ``observed_at`` is the last real observation's timestamp, independent of
+    which boundary the value happened to be carried to. A staleness
+    judgement -- and a resumed :class:`TodaySlotEnergyReader` read's staleness
+    clock -- needs the reading's own age, not the boundary it lands on, which
+    is why the two travel together instead of the boundary sample being a
+    bare float.
+    """
+
+    value_kwh: float
+    observed_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -180,10 +213,20 @@ async def query_cumulative_slot_energy_changes(
     # row to None and hand back an empty history.
     no_attributes = default_unit is not None
 
+    # The recorder replays whatever was last written before the query window
+    # as a single row stamped at the window start, whatever its true age --
+    # see the module docstring reasoning in the issue this staleness check
+    # implements. Querying from a full staleness limit earlier than the first
+    # boundary means any real reading in that lookback arrives with its own
+    # timestamp, so a gap that started before the window is still judged on
+    # its true age rather than reading as fresh at the window start.
+    staleness_limit = _carry_staleness_limit(interval_minutes)
+    query_start = utc_boundaries[0] - staleness_limit
+
     def _query_and_parse() -> dict[datetime, float]:
         history = state_changes_during_period(
             hass,
-            utc_boundaries[0],
+            query_start,
             utc_boundaries[-1],
             entity_id,
             no_attributes,
@@ -195,6 +238,7 @@ async def query_cumulative_slot_energy_changes(
             _states_for_entity(history, entity_id),
             default_unit=default_unit,
             utc_boundaries=utc_boundaries,
+            staleness_limit=staleness_limit,
         )
 
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
@@ -248,10 +292,16 @@ async def query_cumulative_slot_energy_changes_for_entities(
     # entity without a live unit needs it at all.
     no_attributes = all(unit is not None for unit in default_units.values())
 
+    # See the singular query for why the window is widened: the recorder
+    # otherwise erases the real age of whatever it replays at the window
+    # start, hiding a gap that began before the window.
+    staleness_limit = _carry_staleness_limit(interval_minutes)
+    query_start = utc_boundaries[0] - staleness_limit
+
     def _query_and_parse() -> dict[str, dict[datetime, float]]:
         history = get_significant_states(
             hass,
-            utc_boundaries[0],
+            query_start,
             utc_boundaries[-1],
             entity_ids=unique_entity_ids,
             filters=None,
@@ -274,6 +324,7 @@ async def query_cumulative_slot_energy_changes_for_entities(
                 _states_for_entity(history, entity_id),
                 default_unit=default_units[entity_id],
                 utc_boundaries=utc_boundaries,
+                staleness_limit=staleness_limit,
             )
             for entity_id in unique_entity_ids
         }
@@ -290,12 +341,13 @@ def _slot_energy_changes_from_states(
     *,
     default_unit: str | None,
     utc_boundaries: list[datetime],
+    staleness_limit: timedelta | None,
 ) -> dict[datetime, float]:
     observations = _build_unwrapped_energy_observations(
         _parse_energy_observations(states, default_unit=default_unit)
     )
     boundary_samples = _sample_energy_observations_at_boundaries(
-        observations, utc_boundaries
+        observations, utc_boundaries, staleness_limit=staleness_limit
     )
     return _build_slot_energy_changes_from_boundaries(utc_boundaries, boundary_samples)
 
@@ -323,7 +375,7 @@ class _FrozenSlotBoundaries:
     local_date: date
     interval_minutes: int
     frozen_through: datetime
-    samples: dict[datetime, float]
+    samples: dict[datetime, _BoundarySample]
     unwrap_state: _UnwrapState
 
 
@@ -383,7 +435,13 @@ class TodaySlotEnergyReader:
         )
         freeze_at = self._find_freeze_boundary(utc_boundaries, utc_end=utc_end)
 
-        query_start = frozen.frozen_through if frozen else utc_boundaries[0]
+        staleness_limit = _carry_staleness_limit(interval_minutes)
+        # A resumed read already has the frozen prefix's carry stamped with
+        # its own observation timestamp (see ``_freeze``), so its staleness
+        # clock is already correct without widening. Only a cold read is
+        # exposed to the recorder's start-time replay erasing the reading's
+        # true age, so only it needs the lookback.
+        query_start = frozen.frozen_through if frozen else utc_boundaries[0] - staleness_limit
         resume_state = frozen.unwrap_state if frozen else _INITIAL_UNWRAP_STATE
         carried_value = frozen.samples.get(frozen.frozen_through) if frozen else None
         pending_boundaries = [
@@ -402,7 +460,7 @@ class TodaySlotEnergyReader:
         # redundant, and without one the join is the only source of a unit.
         no_attributes = default_unit is not None
 
-        def _query_and_parse() -> tuple[dict[datetime, float], _UnwrapState]:
+        def _query_and_parse() -> tuple[dict[datetime, _BoundarySample], _UnwrapState]:
             history = state_changes_during_period(
                 self._hass,
                 query_start,
@@ -434,6 +492,7 @@ class TodaySlotEnergyReader:
                     unwrapped,
                     pending_boundaries,
                     carried_value=carried_value,
+                    staleness_limit=staleness_limit,
                 ),
                 unwrap_state,
             )
@@ -507,7 +566,7 @@ class TodaySlotEnergyReader:
         interval_minutes: int,
         freeze_at: datetime | None,
         previously_frozen_through: datetime | None,
-        samples: dict[datetime, float],
+        samples: dict[datetime, _BoundarySample],
         unwrap_state: _UnwrapState,
     ) -> None:
         if freeze_at is None or (
@@ -819,17 +878,17 @@ async def _estimate_average_hourly_energy_when_entity_active(
 
 def _build_slot_energy_changes_from_boundaries(
     boundaries: list[datetime],
-    samples: dict[datetime, float],
+    samples: dict[datetime, _BoundarySample],
 ) -> dict[datetime, float]:
     values_by_slot: dict[datetime, float] = {}
     for index, slot_start in enumerate(boundaries[:-1]):
         slot_end = boundaries[index + 1]
-        start_value = samples.get(slot_start)
-        end_value = samples.get(slot_end)
-        if start_value is None or end_value is None:
+        start_sample = samples.get(slot_start)
+        end_sample = samples.get(slot_end)
+        if start_sample is None or end_sample is None:
             continue
 
-        delta = end_value - start_value
+        delta = end_sample.value_kwh - start_sample.value_kwh
         if delta < 0:
             continue
 
@@ -932,21 +991,30 @@ def _sample_energy_observations_at_boundaries(
     observations: list[_EnergyObservation],
     boundaries: list[datetime],
     *,
-    carried_value: float | None = None,
-) -> dict[datetime, float]:
+    carried_value: _BoundarySample | None = None,
+    staleness_limit: timedelta | None = None,
+) -> dict[datetime, _BoundarySample]:
     """Sample the series at each boundary, carrying the last value forward.
 
     ``carried_value`` is the value in force before the first observation, which
     a resumed read has from its frozen prefix. Without it a stretch of
     boundaries with no readings between them would go unsampled here and its
     slots would drop out of the result.
+
+    ``staleness_limit`` distrusts a carry that has stood too long -- see
+    :func:`_is_carry_stale`. ``None`` disables the check and restores a plain
+    carry-forward, for the one caller (the appliance active-hours estimator)
+    whose boundaries are active-state transitions rather than a fixed slot
+    grid, so the "multiple of the interval" shape the limit is expressed in
+    does not apply to it.
     """
     if not boundaries:
         return {}
 
-    samples: dict[datetime, float] = {}
+    samples: dict[datetime, _BoundarySample] = {}
     observation_index = 0
-    latest_value: float | None = carried_value
+    latest_value = carried_value.value_kwh if carried_value is not None else None
+    latest_value_at = carried_value.observed_at if carried_value is not None else None
 
     for boundary in boundaries:
         while observation_index < len(observations):
@@ -955,12 +1023,57 @@ def _sample_energy_observations_at_boundaries(
                 break
 
             latest_value = observation.value_kwh
+            latest_value_at = observation.updated_at
             observation_index += 1
 
-        if latest_value is not None:
-            samples[boundary] = latest_value
+        if latest_value is None:
+            continue
+
+        if staleness_limit is not None and _is_carry_stale(
+            boundary=boundary,
+            latest_value=latest_value,
+            latest_value_at=latest_value_at,
+            next_observation=(
+                observations[observation_index]
+                if observation_index < len(observations)
+                else None
+            ),
+            staleness_limit=staleness_limit,
+        ):
+            continue
+
+        samples[boundary] = _BoundarySample(
+            value_kwh=latest_value, observed_at=latest_value_at
+        )
 
     return samples
+
+
+def _is_carry_stale(
+    *,
+    boundary: datetime,
+    latest_value: float,
+    latest_value_at: datetime | None,
+    next_observation: _EnergyObservation | None,
+    staleness_limit: timedelta,
+) -> bool:
+    """Decision 5: age alone does not condemn a carry -- the meter has to have moved.
+
+    Staleness alone would drop every night slot of an on-change meter that
+    legitimately publishes nothing while the house is quiet, throwing away
+    real zeros. So both halves have to hold: the last real reading is older
+    than ``staleness_limit`` at this boundary, *and* the next real reading (if
+    any comes before the window ends) differs from what was carried. A carry
+    with no known age -- ``latest_value_at`` is ``None`` because nothing real
+    has been seen yet -- can't be judged and is trusted as before. A stretch
+    with no next reading at all, the window ending inside it, is judged on
+    age alone: there is nothing to compare against.
+    """
+    if latest_value_at is None or boundary - latest_value_at <= staleness_limit:
+        return False
+    if next_observation is None:
+        return True
+    return abs(next_observation.value_kwh - latest_value) > _ENERGY_TOLERANCE_KWH
 
 
 def _estimate_average_hourly_energy_kwh_for_active_intervals(
@@ -993,6 +1106,10 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
     boundaries = sorted(
         {boundary for interval in active_intervals for boundary in interval}
     )
+    # These boundaries are active-state transitions, not a fixed slot grid, so
+    # the staleness limit's "multiple of the interval" shape does not apply --
+    # this estimator is out of scope for the carry-staleness rule and keeps
+    # the plain carry-forward.
     boundary_samples = _sample_energy_observations_at_boundaries(
         observations,
         boundaries,
@@ -1001,12 +1118,12 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
     total_energy_kwh = 0.0
     total_active_hours = 0.0
     for interval_start, interval_end in active_intervals:
-        start_value = boundary_samples.get(interval_start)
-        end_value = boundary_samples.get(interval_end)
-        if start_value is None or end_value is None:
+        start_sample = boundary_samples.get(interval_start)
+        end_sample = boundary_samples.get(interval_end)
+        if start_sample is None or end_sample is None:
             continue
 
-        delta = end_value - start_value
+        delta = end_sample.value_kwh - start_sample.value_kwh
         if delta < 0:
             continue
 

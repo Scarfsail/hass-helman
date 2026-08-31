@@ -123,10 +123,16 @@ def _quarter_hour_boundaries() -> list[datetime]:
 
 
 def _slot_energy(states: list[SimpleNamespace]) -> dict[datetime, float]:
+    # These fixtures compress a day into blips every 15-60 minutes as a
+    # readable stand-in for a real device's much denser reporting; they are
+    # not simulating a recorder gap. Staleness is exercised on its own in
+    # test_recorder_carry_staleness.py, so it is switched off here to keep
+    # this file about reset/dip detection only.
     return recorder_hourly_series._slot_energy_changes_from_states(
         states,
         default_unit="kWh",
         utc_boundaries=_quarter_hour_boundaries(),
+        staleness_limit=None,
     )
 
 
@@ -203,7 +209,7 @@ class ShallowDropTests(unittest.TestCase):
         ]
 
         by_slot = recorder_hourly_series._slot_energy_changes_from_states(
-            states, default_unit="kWh", utc_boundaries=boundaries
+            states, default_unit="kWh", utc_boundaries=boundaries, staleness_limit=None
         )
 
         self.assertAlmostEqual(sum(by_slot.values()), 0.1, places=6)
