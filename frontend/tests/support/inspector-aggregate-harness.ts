@@ -49,8 +49,13 @@ export async function mountInspector(
     variant: "" | "no-gain" | "over-soc" | "no-energy" = "",
     minDate = "2020-01-01",
     dayMinDate: string | null = null,
+    // Off by default -- every existing case wants its span answered right
+    // away. On, `helman/solar_bias/day_aggregates` returns a promise the test
+    // releases itself, through `window.__pendingSpan()` / `__releaseSpan()`,
+    // the same shape `fake-hass.ts` gives the day read.
+    holdSpanRequests = false,
 ): Promise<void> {
-    await page.evaluate(([punchHoles, shape, floor, rawDayFloor]: [boolean, string, string, string | null]) => {
+    await page.evaluate(([punchHoles, shape, floor, rawDayFloor, holdSpan]: [boolean, string, string, string | null, boolean]) => {
         const today = new Date();
         const iso = (date: Date) => date.toISOString().slice(0, 10);
         const date = iso(today);
@@ -158,6 +163,11 @@ export async function mountInspector(
 
         (window as any).__spanRequests = [];
         (window as any).__dayRequests = [];
+        const pendingSpan: Array<() => void> = [];
+        (window as any).__pendingSpan = () => pendingSpan.length;
+        (window as any).__releaseSpan = () => {
+            pendingSpan.shift()?.();
+        };
 
         /** Every bucket of the requested window, with plausible numbers. */
         const spanDays = (start: string, end: string, bucket: string, withBreakdown: boolean) => {
@@ -240,7 +250,7 @@ export async function mountInspector(
             callWS: async (msg: any) => {
                 if (msg.type === "helman/solar_bias/day_aggregates") {
                     (window as any).__spanRequests.push(msg);
-                    return {
+                    const result = {
                         bucket: msg.bucket ?? "day",
                         currency: "CZK",
                         days: spanDays(
@@ -258,6 +268,10 @@ export async function mountInspector(
                         // view's shallower floor out of their way.
                         range: { minDate: floor, maxDate: date },
                     };
+                    if (!holdSpan) return result;
+                    return new Promise((resolveSpan) => {
+                        pendingSpan.push(() => resolveSpan(result));
+                    });
                 }
                 if (msg.type === "helman/solar_bias/inspector") {
                     (window as any).__dayRequests.push(msg.date);
@@ -267,7 +281,7 @@ export async function mountInspector(
             },
         };
         document.body.appendChild(el);
-    }, [holes, variant, minDate, dayMinDate] as [boolean, string, string, string | null]);
+    }, [holes, variant, minDate, dayMinDate, holdSpanRequests] as [boolean, string, string, string | null, boolean]);
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
