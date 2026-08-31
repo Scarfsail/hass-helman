@@ -1183,19 +1183,82 @@ export class HelmanSolarInspector extends LitElement {
     }
 
     /* :not(.loading-overlay) rather than dimming the shell itself, so the
-       overlay's own text stays fully readable over the dimmed content. */
+       overlay's own chip stays fully readable over the dimmed content. No
+       transition on the dimming: the overlay above already fades in, and an
+       animated opacity would make the dim state something a test -- or a
+       reader -- can catch mid-way rather than simply on or off. */
     .content-shell.is-loading > *:not(.loading-overlay) {
-      opacity: 0.35;
+      opacity: 0.45;
       pointer-events: none;
     }
 
+    /* A scrim rather than an opaque panel: what is underneath is the previous
+       day, and keeping it legible through the veil is the whole point of not
+       blanking the card. color-mix against the card's own background keeps it
+       correct in both light and dark themes without a second variable. */
     .loading-overlay {
       position: absolute;
       inset: 0;
       display: flex;
-      align-items: center;
+      /* Near the top of the chart rather than the middle of the shell: the
+         shell is as tall as the whole day view, so a vertically centred chip
+         lands somewhere around the price rail -- far from where the reader is
+         looking and moving with whatever strips happen to be expanded. */
+      align-items: flex-start;
       justify-content: center;
+      padding-top: 20px;
+      box-sizing: border-box;
       pointer-events: none;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--card-background-color, #fff) 55%, transparent);
+      backdrop-filter: blur(2px);
+      animation: helman-inspector-fade-in 160ms ease-out;
+    }
+
+    /* The message is a floating chip, sized to its text, rather than a box
+       stretched over the whole shell -- a full-bleed panel reads as an error
+       state, and hides the content it is supposed to be veiling. */
+    .loading-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      color: var(--primary-text-color);
+      font-size: 0.9rem;
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    }
+
+    .loading-chip::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--divider-color);
+      border-top-color: var(--primary-color, #2563eb);
+      animation: helman-inspector-spin 700ms linear infinite;
+    }
+
+    @keyframes helman-inspector-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes helman-inspector-fade-in {
+      from {
+        opacity: 0;
+      }
+    }
+
+    /* The spinner is decoration; the chip still says what is happening. */
+    @media (prefers-reduced-motion: reduce) {
+      .loading-chip::before,
+      .loading-overlay {
+        animation: none;
+      }
     }
 
     .strip-section {
@@ -1658,7 +1721,11 @@ export class HelmanSolarInspector extends LitElement {
           aria-busy=${loading ? "true" : "false"}
         >
           ${content}
-          ${loading ? html`<div class="loading-overlay note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
+          ${loading
+            ? html`<div class="loading-overlay">
+                <div class="loading-chip">${this._t("bias_correction.inspector.loading")}</div>
+              </div>`
+            : ""}
         </div>
       </div>
     `;
