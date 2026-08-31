@@ -46,6 +46,9 @@ STATISTICS_ROWS_5MIN: dict[str, list[dict]] = {}
 #: a probe row's ``start`` is local midnight on the first of a month, not an
 #: hour, and a fake that served hours here could not tell the two reads apart.
 STATISTICS_ROWS_MONTH: dict[str, list[dict]] = {}
+#: Rows the fake serves for ``period="day"`` -- what the statistics-day probe
+#: reads once the month probe has told it which month to narrow.
+STATISTICS_ROWS_DAY: dict[str, list[dict]] = {}
 
 
 def _install_import_stubs() -> None:
@@ -107,6 +110,7 @@ def _install_import_stubs() -> None:
         source = {
             "5minute": STATISTICS_ROWS_5MIN,
             "month": STATISTICS_ROWS_MONTH,
+            "day": STATISTICS_ROWS_DAY,
         }.get(period, STATISTICS_ROWS)
         # The real reader only ever returns rows inside the window it was given,
         # which is the whole point of the tail read's clamps -- a fake that
@@ -301,6 +305,7 @@ def _set_rows(
     rows_by_entity: dict[str, list[dict]],
     five_minute: dict[str, list[dict]] | None = None,
     month: dict[str, list[dict]] | None = None,
+    day: dict[str, list[dict]] | None = None,
 ) -> None:
     STATISTICS_CALLS.clear()
     STATISTICS_ROWS.clear()
@@ -309,6 +314,8 @@ def _set_rows(
     STATISTICS_ROWS_5MIN.update(five_minute or {})
     STATISTICS_ROWS_MONTH.clear()
     STATISTICS_ROWS_MONTH.update(month or {})
+    STATISTICS_ROWS_DAY.clear()
+    STATISTICS_ROWS_DAY.update(day or {})
 
 
 def _calls(period: str) -> list[dict]:
@@ -1557,3 +1564,84 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(day["range"]["minDate"], "2024-03-01")
         self.assertEqual(day["dataGranularityMinutes"], 15)
 
+
+
+def _day_row(local_midnight: datetime) -> dict:
+    """One day-reduced ``StatisticsRow``, stamped at local midnight."""
+    start = local_midnight.timestamp()
+    return {"start": start, "end": start + 86400.0}
+
+
+class TestOldestStatisticsDay(unittest.IsolatedAsyncioTestCase):
+    """The probe that narrows a month to the day its rows really begin on.
+
+    ``query_oldest_statistics_date`` answers a month, because local midnight on
+    the first is exactly the floor a day-browsing view wants and it costs a
+    handful of rows however deep the history is. Subtract that from today and
+    it stops being a floor and becomes an overstatement of up to a month --
+    which is fine while the number is displayed and not fine once a badge
+    judges against it (#186). These pin the narrowing.
+    """
+
+    async def test_the_month_is_narrowed_to_the_day_its_rows_begin_on(self):
+        _set_rows(
+            {},
+            month={HOUSE_METER: [_month_row(_hour("2026-08-01T00:00:00+02:00"))]},
+            day={
+                HOUSE_METER: [
+                    _day_row(_hour("2026-08-28T00:00:00+02:00")),
+                    _day_row(_hour("2026-08-29T00:00:00+02:00")),
+                ]
+            },
+        )
+
+        oldest = await span_mod.query_oldest_statistics_day(
+            None, [HOUSE_METER], local_tz=PRAGUE
+        )
+
+        # The month probe alone would say the 1st -- twenty-seven days of
+        # history this entity does not have.
+        self.assertEqual(oldest, date(2026, 8, 28))
+
+    async def test_the_narrowing_read_is_bounded_to_that_one_month(self):
+        _set_rows(
+            {},
+            month={HOUSE_METER: [_month_row(_hour("2026-08-01T00:00:00+02:00"))]},
+            day={HOUSE_METER: [_day_row(_hour("2026-08-28T00:00:00+02:00"))]},
+        )
+
+        await span_mod.query_oldest_statistics_day(
+            None, [HOUSE_METER], local_tz=PRAGUE
+        )
+
+        day_calls = _calls("day")
+        self.assertEqual(len(day_calls), 1)
+        span = day_calls[0]["end_time"] - day_calls[0]["start_time"]
+        self.assertEqual(day_calls[0]["start_time"].date(), date(2026, 8, 1))
+        # Wide enough to clear the longest month, and no wider: the whole point
+        # of two bounded reads is that neither grows with the history's depth.
+        self.assertEqual(span, timedelta(days=32))
+
+    async def test_no_statistics_at_all_is_no_date_and_no_second_read(self):
+        _set_rows({})
+
+        oldest = await span_mod.query_oldest_statistics_day(
+            None, [HOUSE_METER], local_tz=PRAGUE
+        )
+
+        self.assertIsNone(oldest)
+        self.assertEqual(_calls("day"), [])
+
+    async def test_a_month_whose_days_come_back_empty_keeps_the_month_floor(self):
+        # Not a shape the recorder produces, but reporting no history at all
+        # for an entity the month probe just found would be worse than
+        # reporting the floor already in hand.
+        _set_rows(
+            {}, month={HOUSE_METER: [_month_row(_hour("2026-08-01T00:00:00+02:00"))]}
+        )
+
+        oldest = await span_mod.query_oldest_statistics_day(
+            None, [HOUSE_METER], local_tz=PRAGUE
+        )
+
+        self.assertEqual(oldest, date(2026, 8, 1))

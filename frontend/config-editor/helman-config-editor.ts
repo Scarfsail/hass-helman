@@ -743,11 +743,19 @@ export class HelmanConfigEditorPanel
 
     /* Same hue the entity-group badge uses when a row's spliced depth falls
        short of its requirement. On the row rather than one cell since #186:
-       colour inherits into every cell, which is the point -- it is the pair
-       of columns that is short, not either one of them. */
+       it is the pair of columns that is short, not either one of them. The
+       two cells that declare their own colour need it unset explicitly -- a
+       declared value beats an inherited one whatever the selector's
+       specificity, so without this the role and the entity id stay grey and
+       the row reads as half-marked. */
     tr.training-depth-warn {
       color: var(--warning-color, #ffa600);
       font-weight: 600;
+    }
+
+    tr.training-depth-warn .training-depth-role,
+    tr.training-depth-warn .training-depth-entity-id {
+      color: inherit;
     }
 
     .section-footer {

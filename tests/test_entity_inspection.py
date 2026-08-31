@@ -1137,8 +1137,13 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
     stops being true, a group will contradict the card that reads the same
     history.
 
-    It is the *raw-states* depth that has to agree, because that is the table
-    the trainer whose rows ``_compute_history_days`` reduces actually read.
+    **Both** depths have to agree, and that is newer than it looks. While the
+    trainers read raw states only, the raw-states depth was the one that had to
+    match and the statistics number was decoration. Since #183 a trainer reads a
+    spliced window and #186 judges the badge on the deeper of the two, so a
+    statistics depth that overstated its reach would put a green badge in front
+    of a trainer that has nothing -- the #169 false green wearing different
+    clothes. The subtests below pin the arithmetic on each side separately.
     """
 
     async def test_both_paths_report_the_same_depth_for_the_same_oldest_sample(self):
@@ -1166,10 +1171,9 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                 async def _no_statistics(hass, ids, *, local_tz):
                     return None
 
-                # Statistics are stubbed empty on purpose: the depth that has
-                # to agree with the trainer is the raw-states one, and pinning
-                # it here means a statistics table that disagreed could never
-                # be mistaken for agreement.
+                # Statistics are stubbed empty here so this subtest speaks
+                # only for the raw-states side; the statistics side gets the
+                # same arithmetic pinned on it below, against its own probe.
                 with unittest.mock.patch.object(
                     span_mod, "query_oldest_state_date", _oldest
                 ), unittest.mock.patch.object(
@@ -1183,6 +1187,41 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(from_rows, days_back)
                 self.assertEqual(depths.raw_states_days, from_rows)
+
+    async def test_the_statistics_depth_uses_the_same_arithmetic(self):
+        """The statistics side, against the probe that narrows to a real day.
+
+        ``query_history_depths`` reads :func:`query_oldest_statistics_day` and
+        not the month-floored :func:`query_oldest_statistics_date` for exactly
+        this reason: subtracting a month floor from today reports history that
+        does not exist. Patching the day probe here pins the arithmetic; that
+        the probe itself narrows a month to its day is pinned in
+        ``tests/test_inspector_span_aggregates.py``.
+        """
+        today = date(2026, 8, 31)
+        for days_back in (0, 3, 41, 400):
+            with self.subTest(days_back=days_back):
+                oldest = today - timedelta(days=days_back)
+
+                async def _oldest_statistics(hass, ids, *, local_tz, _date=oldest):
+                    return _date
+
+                async def _no_states(hass, entity_id, *, local_tz):
+                    return None
+
+                with unittest.mock.patch.object(
+                    span_mod, "query_oldest_statistics_day", _oldest_statistics
+                ), unittest.mock.patch.object(
+                    span_mod, "query_oldest_state_date", _no_states
+                ):
+                    depths = await span_mod.query_history_depths(
+                        None,
+                        "sensor.house_energy",
+                        today_local=today,
+                        local_tz=timezone.utc,
+                    )
+                self.assertEqual(depths.statistics_days, days_back)
+                self.assertEqual(depths.raw_states_days, 0)
 
     async def test_nothing_recorded_is_zero_days_on_both_paths(self):
         async def _nothing(hass, ids, *, local_tz):
@@ -1211,6 +1250,14 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
     once statistics answered, it always asks both tables -- the whole point is
     telling a reader where they disagree, and a caller that skipped the second
     query could never say.
+
+    "The statistics side" is :func:`query_oldest_statistics_day`, which is
+    itself a month probe narrowed by a read bounded to that one month (#186).
+    Both of its reads are bounded whatever the history's depth, and which of
+    them fires is that function's business, pinned in
+    ``tests/test_inspector_span_aggregates.py``; what is pinned here is that
+    the statistics side and the raw-states side are each consulted exactly
+    once.
     """
 
     async def _depths(self, *, statistics, state_date, calls: list[str]):
@@ -1223,7 +1270,7 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
             return state_date
 
         with unittest.mock.patch.object(
-            span_mod, "query_oldest_statistics_date", _stats
+            span_mod, "query_oldest_statistics_day", _stats
         ), unittest.mock.patch.object(span_mod, "query_oldest_state_date", _states):
             return await span_mod.query_history_depths(
                 None,
@@ -1244,11 +1291,12 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
         # number.
         self.assertEqual(calls, ["statistics", "states"])
 
-    async def test_no_more_than_two_queries_in_the_worst_case(self):
-        # The recorder-query-count guard: the single-number fallback this
-        # replaced already issued two reads (statistics, then raw states) in
-        # its worst case -- no statistics at all -- so this must not cost more
-        # than that same worst case, however both probes answer.
+    async def test_no_more_than_two_probes_however_they_answer(self):
+        # The recorder-query-count guard, at the level this function decides:
+        # one statistics probe and one raw-states probe, never a third of
+        # either. The statistics probe spends a second bounded read of its own
+        # when it has a month to narrow (#186) -- that is its cost to account
+        # for, and an entity with no statistics never reaches it.
         calls: list[str] = []
         await self._depths(statistics=None, state_date=None, calls=calls)
         self.assertEqual(len(calls), 2)

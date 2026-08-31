@@ -557,6 +557,79 @@ async def query_oldest_statistics_date(
     return datetime.fromtimestamp(oldest, tz=local_tz).date()
 
 
+async def query_oldest_statistics_day(
+    hass: HomeAssistant,
+    statistic_ids: Sequence[str | None],
+    *,
+    local_tz: tzinfo,
+) -> date | None:
+    """The local date the oldest statistics row actually falls on.
+
+    :func:`query_oldest_statistics_date` answers a *month*: its ``period="month"``
+    read returns local midnight on the first of the month the oldest row lands
+    in, which is the right floor for a view that browses by day within a month
+    and is cheap however deep the history is. It is the wrong answer for anyone
+    who subtracts it from today and calls the result a depth -- an entity first
+    recorded on the 28th reads as thirty days of history on the 31st.
+
+    That rounding was harmless while the number was only displayed. It stopped
+    being harmless when the badge began *judging* against it (#186): a
+    month-floored depth clears a fourteen-day requirement for an entity three
+    days old, which is the false green #169 exists to remove, wearing different
+    clothes.
+
+    So this narrows the month to its day, in two bounded reads rather than one
+    unbounded one: the month probe first (a handful of rows per entity, whatever
+    the depth), then a ``period="day"`` read confined to that month alone -- at
+    most thirty-one rows of two narrow columns. Probing days from the epoch
+    directly would be one query rather than two, and would grow a row per day of
+    history for as long as the instance lives.
+
+    ``None`` when the month probe finds nothing, and the month's own first day
+    when the narrowing read comes back empty -- a month that exists but whose
+    days do not is not a shape this understands, and reporting the floor it
+    already has is better than reporting no history at all.
+    """
+    month_start = await query_oldest_statistics_date(
+        hass, statistic_ids, local_tz=local_tz
+    )
+    if month_start is None:
+        return None
+
+    unique_ids = list(dict.fromkeys(sid for sid in statistic_ids if sid))
+    if not unique_ids:
+        return None
+
+    window_start = datetime.combine(month_start, time.min, tzinfo=local_tz)
+    # 32 days clears the longest month from its first, and the read is bounded
+    # by the end instant rather than by a month arithmetic this does not need.
+    window_end = window_start + timedelta(days=32)
+
+    def _query() -> dict[str, list[dict[str, Any]]]:
+        return statistics_during_period(
+            hass,
+            window_start,
+            window_end,
+            set(unique_ids),
+            "day",
+            None,
+            set(),
+        )
+
+    raw = await get_instance(hass).async_add_executor_job(_query)
+    oldest: float | None = None
+    for entity_rows in (raw or {}).values():
+        for row in entity_rows or []:
+            start = row.get("start")
+            if start is None:
+                continue
+            if oldest is None or start < oldest:
+                oldest = start
+    if oldest is None:
+        return month_start
+    return datetime.fromtimestamp(oldest, tz=local_tz).date()
+
+
 @dataclass(frozen=True)
 class HistoryDepths:
     """How much history the recorder holds for one entity, in both tables.
@@ -580,16 +653,28 @@ async def query_history_depths(
     """Both tables' depth for one entity, so a caller can show -- or judge -- either.
 
     This used to be one number, picked by falling back from statistics to raw
-    states. That is the right answer for a caller that only wants to know "how
-    far back can this be shown", and the wrong one for a caller that has to say
-    how far back *training* can reach: every trainer reads raw states through
-    :mod:`recorder_hourly_series`, which ``purge_keep_days`` prunes, while
-    long-term statistics survive indefinitely -- so the fallback made a
-    shallow, pruned entity look perfectly deep (issue #169).
+    states, and the fallback hid the very gap the caller needed to see: raw
+    states are pruned by ``purge_keep_days`` while long-term statistics survive
+    indefinitely, so a shallow, pruned entity looked perfectly deep (issue
+    #169). Both probes therefore run unconditionally rather than
+    short-circuiting -- the same two queries the fallback already issued in its
+    worst case (no statistics), just no longer conditional on the first coming
+    back empty.
 
-    So both probes run unconditionally rather than short-circuiting -- the same
-    two queries the fallback already issued in its worst case (no statistics),
-    just no longer conditional on the first coming back empty.
+    **What the two numbers mean has moved on, and the split still matters.**
+    Since #183 every trainer reads a *spliced* window -- statistics for the
+    tail, raw states for the recent part -- so neither number alone is "how far
+    back training can reach"; the deeper of the two is, and
+    :mod:`entity_inspection.history` is where that judgement is made (#186).
+    What is reported here stays two separate facts, because a caller that wants
+    to show the gap and a caller that wants to judge against it need the same
+    pair.
+
+    The statistics side goes through :func:`query_oldest_statistics_day` rather
+    than :func:`query_oldest_statistics_date` precisely because it is subtracted
+    from a date here: the month-floored answer would inflate a young entity's
+    depth by up to a month, which a judging caller reads as history it does not
+    have.
 
     **The arithmetic matches the trainer's.** Whole days between the local date
     the oldest sample falls on and ``today_local``, which is exactly what
@@ -599,7 +684,7 @@ async def query_history_depths(
     the trainer already holds the rows, the editor holds nothing but an entity
     id. ``tests/test_entity_inspection.py`` pins the agreement.
     """
-    statistics_oldest = await query_oldest_statistics_date(
+    statistics_oldest = await query_oldest_statistics_day(
         hass, [entity_id], local_tz=local_tz
     )
     states_oldest = await query_oldest_state_date(hass, entity_id, local_tz=local_tz)
