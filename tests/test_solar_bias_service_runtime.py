@@ -57,8 +57,11 @@ async def _load_archived_forecast_points(*args, **kwargs):
     return []
 async def _load_trainer_samples(*args, **kwargs):
     return []
+def _forecast_points_from_slot_map(*args, **kwargs):
+    return []
 forecast_history_mod.load_archived_forecast_points = _load_archived_forecast_points
 forecast_history_mod.load_trainer_samples = _load_trainer_samples
+forecast_history_mod.forecast_points_from_slot_map = _forecast_points_from_slot_map
 sys.modules[forecast_history_mod.__name__] = forecast_history_mod
 
 

@@ -15,9 +15,8 @@ numbers rather than an error:
   chart and double-count the boundary hour in the totals;
 * reading a measurement's ``mean`` as if it were energy, or an energy as if a
   repeated DST hour could simply overwrite its twin;
-* letting the missing forecast -- which statistics genuinely cannot bring back,
-  since it lives in state *attributes* -- fail the day rather than leaving it an
-  actuals-only day.
+* drawing the solar forecast at the wrong grain, or letting a day the back-fill
+  wrote nothing for fail rather than fall back to an actuals-only day.
 
 The recorder is faked at ``statistics_during_period``, so
 ``recorder_statistics_span`` and ``statistics_day`` are really exercised, in the
@@ -159,6 +158,7 @@ WASHER_METER = "sensor.washer_energy"
 IMPORT_PRICE = "sensor.helman_grid_import_price"
 HELMAN_EXPORT_PRICE = "sensor.helman_grid_export_price"
 EXPORT_PRICE = "sensor.spot_sell_price"
+SOLAR_FORECAST = "sensor.helman_solar_forecast_current"
 HOUSE_FORECAST = "sensor.helman_house_consumption_forecast_current"
 BATTERY_SOC_FORECAST = "sensor.helman_battery_soc_forecast_current"
 BATTERY_NET_FORECAST = "sensor.helman_battery_net_forecast_current"
@@ -568,6 +568,7 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
             hourly[0]["statistic_ids"],
             {
                 SOLAR_METER,
+                SOLAR_FORECAST,
                 HOUSE_METER,
                 GRID_IMPORT_METER,
                 GRID_EXPORT_METER,
@@ -590,11 +591,47 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call["period"] for call in STATISTICS_CALLS].count("5minute"), 0)
 
 
-class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
-    async def test_the_forecast_is_absent_and_the_day_still_draws(self):
-        # The archived solar forecast lives in a state *attribute*, and
-        # attributes are never compiled into statistics. An actuals-only day is
-        # the accepted limitation -- not an error, and not an empty day.
+class TestSolarForecastFromStatistics(unittest.IsolatedAsyncioTestCase):
+    """The recorded solar forecast, folded out of the same one hourly read."""
+
+    async def test_a_forecast_hour_reaches_its_four_slots_at_hour_grain(self):
+        # ``solar_forecast_backfill`` writes each hour's mean of the current-slot
+        # Wh sensor; the span read hands it back in the energy class's kWh, and
+        # each of the hour's four slots carries that mean back as Wh -- a weight,
+        # not a claim about how the hour was shaped.
+        _set_rows(
+            {
+                SOLAR_FORECAST: [
+                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=0.5),
+                    _row(_hour(f"{PURGED_DAY}T09:00:00+02:00"), mean=0.8),
+                ],
+            }
+        )
+
+        payload = await _purged_day()
+
+        self.assertEqual(payload["dataGranularityMinutes"], 60)
+        self.assertEqual(
+            [(p["timestamp"], p["valueWh"]) for p in payload["series"]["raw"]],
+            [
+                (f"{PURGED_DAY}T08:00:00+02:00", 500.0),
+                (f"{PURGED_DAY}T08:15:00+02:00", 500.0),
+                (f"{PURGED_DAY}T08:30:00+02:00", 500.0),
+                (f"{PURGED_DAY}T08:45:00+02:00", 500.0),
+                (f"{PURGED_DAY}T09:00:00+02:00", 800.0),
+                (f"{PURGED_DAY}T09:15:00+02:00", 800.0),
+                (f"{PURGED_DAY}T09:30:00+02:00", 800.0),
+                (f"{PURGED_DAY}T09:45:00+02:00", 800.0),
+            ],
+        )
+        # The hour's forecast energy is its four slots summed, not a quarter of
+        # the mean and not four times it.
+        self.assertEqual(payload["totals"]["rawWh"], 4 * 500.0 + 4 * 800.0)
+        self.assertTrue(payload["availability"]["hasRawForecast"])
+
+    async def test_the_back_fill_wrote_nothing_leaves_an_actuals_only_day(self):
+        # No forecast rows for the day: not an error, not an empty day -- just a
+        # day drawing what happened with no curve beside it, as before #188.
         _set_rows({SOLAR_METER: _meter_series(_hour(f"{PURGED_DAY}T07:00:00+02:00"), [10.0, 12.5])})
 
         payload = await _purged_day()
@@ -605,6 +642,8 @@ class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
         # ``hasActuals`` alone is what keeps the chart drawing.
         self.assertTrue(payload["availability"]["hasActuals"])
 
+
+class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
     async def test_a_day_the_recorder_has_nothing_for_is_empty_rather_than_broken(self):
         _set_rows({})
 

@@ -28,19 +28,15 @@ thread, so a query per meter is a serial round-trip per meter however the awaits
 are arranged -- the same reasoning the span read and the batched slot-energy
 read are both built on. Every id the day needs goes into one call.
 
-A statistics-only day still comes back without its solar forecast, and the
-reason has changed rather than gone away. It used to be that the curve lived
-in the daily-energy entity's ``wh_period_15m`` attribute and attributes are
-never compiled into statistics. Helman now publishes the curve as an entity
-of its own (``sensor.helman_solar_forecast_current``), which the recorder
-does compile -- but ``load_archived_forecast_points`` reads that entity's
-*raw states*, and a day is statistics-only precisely because its raw states
-are gone. So the day is still an actuals day: what happened, without the
-forecast it was compared against.
-
-#173 is what closes this, by teaching the readers to splice a states window
-with a statistics tail. Until then the back-filled statistics
-(``solar_forecast_backfill``) are written and unread.
+A statistics-only day draws its solar forecast too. ``solar_forecast_backfill``
+has been compiling ``sensor.helman_solar_forecast_current``'s hourly statistics
+since before anything read them, so ``SOLAR_FORECAST_CURRENT_ENTITY`` rides in on
+the one hourly read alongside every measured series and comes back as
+``solar_forecast_by_slot`` -- at hour grain, each hour's four slots carrying that
+hour's mean. The hour-to-slot conversion is not duplicated here: it is
+:func:`~.forecast_slot_history.forecast_slots_from_hourly_statistics`, the same
+one the training window's states/statistics splice reads through. The four equal
+quarters are a weight, not a claim about within-hour production.
 """
 
 from __future__ import annotations
@@ -89,6 +85,11 @@ class StatisticsDay:
     #: Solar actuals as ``{"HH:MM": wh}``, the shape ``load_actuals_for_day``
     #: returns.
     solar_actuals_by_slot: dict[str, float] = field(default_factory=dict)
+    #: The recorded solar forecast as ``{"HH:MM": wh}``, the shape the raw-states
+    #: reader hands back -- but folded from the hourly statistics tail, so each
+    #: hour's four slots carry that hour's mean. Empty when the back-fill wrote
+    #: nothing for the day, which leaves it an actuals-only day exactly as before.
+    solar_forecast_by_slot: dict[str, float] = field(default_factory=dict)
     #: ``[{"slot": "HH:MM", "pct": float}]``, the hour's mean state of charge.
     battery_soc_points: list[dict] = field(default_factory=list)
     #: ``[{"timestamp": iso_local, "wh": float}]`` for the house forecast.
@@ -146,6 +147,10 @@ async def load_statistics_day(
         prefer_rows,
         query_hourly_statistics,
     )
+    from .forecast_slot_history import (
+        SOLAR_FORECAST_CURRENT_ENTITY,
+        forecast_slots_from_hourly_statistics,
+    )
 
     local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
     local_end = local_start + timedelta(days=1)
@@ -154,6 +159,7 @@ async def load_statistics_day(
             hass,
             [
                 solar_entity_id,
+                SOLAR_FORECAST_CURRENT_ENTITY,
                 *meter_entity_ids,
                 battery_soc_entity_id,
                 house_forecast_entity_id,
@@ -180,6 +186,9 @@ async def load_statistics_day(
         solar_actuals_by_slot=_energy_wh_by_slot(
             span.energy_for(solar_entity_id), target_date
         ),
+        solar_forecast_by_slot=forecast_slots_from_hourly_statistics(
+            span.rows_for(SOLAR_FORECAST_CURRENT_ENTITY), local_tz=local_tz
+        ).get(target_date.isoformat(), {}),
         battery_soc_points=[
             {"slot": slot, "pct": value}
             for slot, value in _mean_by_slot(

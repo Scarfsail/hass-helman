@@ -24,7 +24,11 @@ from .battery_forecast_history import (
     GRID_NET_FORECAST_CURRENT_ENTITY,
     load_battery_forecast_points_for_day,
 )
-from .forecast_history import load_archived_forecast_points, load_trainer_samples
+from .forecast_history import (
+    forecast_points_from_slot_map,
+    load_archived_forecast_points,
+    load_trainer_samples,
+)
 from .house_forecast_history import load_house_forecast_points_for_day
 from .models import (
     BatterySocBoundsPoint,
@@ -933,11 +937,12 @@ class SolarBiasCorrectionService:
         # recorder that cannot be read costs the meter series, neither the other.
         #
         # A statistics-backed day reads the same meters from the same one query,
-        # only against the hourly long-term table -- and it brings back four more
-        # series in the bargain (solar, SoC, the house forecast and both price
-        # rails), because they live in that one read rather than in five separate
-        # raw-state ones. What comes back is keyed and shaped exactly as the raw
-        # read's output, which is why nothing below this block branches again.
+        # only against the hourly long-term table -- and it brings back every
+        # other measured series in the bargain (solar actuals and forecast, SoC,
+        # the house and battery forecasts, both price rails), because they live in
+        # that one read rather than in a raw-state read apiece. What comes back is
+        # keyed and shaped exactly as the raw read's output, so the branches that
+        # take it below are source switches, not shape ones.
         breakdown_consumers_for_day: list[dict] = []
         slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
         statistics_day = StatisticsDay()
@@ -1005,13 +1010,23 @@ class SolarBiasCorrectionService:
         raw_points: list[dict[str, Any]] = []
         corrected_points: list[dict[str, Any]] = []
         if need_past:
-            archived_points = _points_before(
-                await self._guarded_points(
+            # On a statistics day the elapsed half comes from the same one hourly
+            # read as every other measured series -- ``solar_forecast_by_slot``,
+            # already folded to this day and at hour grain -- rather than from
+            # ``load_archived_forecast_points``, whose raw states are exactly what
+            # is gone. The same ``reads_statistics`` fork the house forecast, SoC
+            # and price rails take below, and the point shape is identical either
+            # way so the current-slot splice cannot tell them apart.
+            if reads_statistics:
+                archived_source = forecast_points_from_slot_map(
+                    statistics_day.solar_forecast_by_slot, target_date, timezone
+                )
+            else:
+                archived_source = await self._guarded_points(
                     load_archived_forecast_points(self._hass, target_date, timezone),
                     "solar forecast history",
-                ),
-                cutoff=next_slot,
-            )
+                )
+            archived_points = _points_before(archived_source, cutoff=next_slot)
             raw_points += archived_points
             # Corrected the same way a past day is corrected -- by applying the
             # profile in force now, not the one that happened to be in force

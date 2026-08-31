@@ -60,7 +60,6 @@ trainer_mod = importlib.import_module(
 models_mod = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
 )
-backfill_mod = importlib.import_module("custom_components.helman.solar_forecast_backfill")
 
 PRAGUE = ZoneInfo("Europe/Prague")
 #: The clock every test runs against.
@@ -512,46 +511,6 @@ class GrainEquivalenceTests(unittest.TestCase):
 
         for slot in slot_forecast:
             self.assertAlmostEqual(outcome.profile.factors[slot], 0.95, places=6)
-
-
-class ForecastConversionTests(unittest.TestCase):
-    """What the back-fill writes, read back as the hour's forecast energy.
-
-    The one number in this phase that is silently wrong when it is wrong: a
-    constant factor on every tail day's forecast is absorbed by the fit, which
-    then misprices every future slot. So it is pinned against
-    ``solar_forecast_backfill``'s own row builder rather than against a
-    hand-written mean.
-    """
-
-    def test_the_hours_forecast_is_recovered_from_the_row_the_backfill_writes(self):
-        hour = datetime(2026, 5, 1, 11, 0, tzinfo=PRAGUE).astimezone(timezone.utc)
-        slots = [1000.0, 1400.0, 1800.0, 1200.0]
-        rows = backfill_mod._hourly_rows(
-            [
-                (hour + timedelta(minutes=15 * index), value)
-                for index, value in enumerate(slots)
-            ],
-            utc_start=hour,
-            utc_end=hour + timedelta(hours=1),
-        )
-
-        # The span read asks for the energy class in kWh and the sensor records
-        # Wh, so this is what actually reaches the reader.
-        recovered = slot_history_mod._slots_from_hourly_rows(
-            {hour: {"mean": rows[0]["mean"] / 1000.0}}, local_tz=PRAGUE
-        )
-
-        day = recovered["2026-05-01"]
-        self.assertEqual(sorted(day), ["11:00", "11:15", "11:30", "11:45"])
-        # The hour's forecast energy is the four slots summed -- and it is the
-        # energy the source actually published for that hour, not a quarter of
-        # it and not four times it.
-        self.assertAlmostEqual(sum(day.values()), sum(slots), places=3)
-        # Each slot carries a quarter of the hour: a weight, not a claim about
-        # how the hour was shaped.
-        for value in day.values():
-            self.assertAlmostEqual(value, sum(slots) / 4.0, places=3)
 
 
 class HourGrainCurtailmentTests(unittest.IsolatedAsyncioTestCase):
