@@ -9,7 +9,13 @@ by day and slot rather than a conversion: the entity already carries the slot's
 own energy.
 
 Three things about the read are easy to get wrong, and each produces
-plausible numbers rather than an error:
+plausible numbers rather than an error. This module is where they were worked
+out and is still where they are explained, but they are no longer *implemented*
+here: :func:`~.forecast_slot_sampling.resolve_forecast_slot_values` is the one
+implementation, shared with the house and battery current-slot readers, because
+a drift between two copies of this rule would shift a curve by one slot and
+still look entirely believable — which is how the original bug survived a green
+suite.
 
 * **Prefer the slot's own write to a sampled instant.** The refresh fires at
   ``:00/:15/:30/:45`` but publishes at the *end* of a long rebuild, so how
@@ -48,6 +54,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+
+from .forecast_slot_sampling import resolve_forecast_slot_values
 
 try:
     from homeassistant.components.recorder import get_instance
@@ -109,39 +117,45 @@ async def load_forecast_slots_for_window(
     if not timeline:
         return {}
 
+    # One call over the whole window rather than one per day: the helper's
+    # cursor carries the standing value across midnight by itself, which is the
+    # only thing that made this loop awkward to share in the first place.
+    resolved = resolve_forecast_slot_values(
+        timeline, _slot_starts_for_window(first_date, last_date, local_tz=local_tz),
+        slot_minutes=_SLOT_MINUTES,
+    )
+
     days: dict[str, dict[str, float]] = {}
-    cursor = 0
-    standing: float | None = None
+    for slot_start, value_wh in resolved.items():
+        slots = days.setdefault(slot_start.date().isoformat(), {})
+        slots[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = value_wh
+    return days
+
+
+def _slot_starts_for_window(
+    first_date: date,
+    last_date: date,
+    *,
+    local_tz: ZoneInfo,
+) -> list[datetime]:
+    """Every slot start in the inclusive range, as local wall-clock instants.
+
+    Built per day from that day's local midnight rather than by stepping one
+    cursor across the window, so a day always contributes its 96 wall-clock
+    labels ``00:00``..``23:45`` -- the keys the callers index by. Stepping in
+    absolute time instead would give a DST day 92 or 100 slots and shift every
+    label after the transition.
+    """
+    starts: list[datetime] = []
     day = first_date
     while day <= last_date:
         day_start = datetime.combine(day, time.min, tzinfo=local_tz)
-        slots: dict[str, float] = {}
-        for slot_index in range(_SLOTS_PER_DAY):
-            slot_start = day_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
-            slot_end = slot_start + timedelta(minutes=_SLOT_MINUTES)
-            # Everything before this slot only updates what is standing; an
-            # ``unavailable`` among them clears it rather than being skipped.
-            while cursor < len(timeline) and timeline[cursor][0] < slot_start:
-                standing = timeline[cursor][1]
-                cursor += 1
-            # The slot's own writes. The first numeric one is the boundary
-            # write, however late the rebuild published it; a republication
-            # later in the same slot carries a revision and is passed over.
-            slot_value: float | None = None
-            while cursor < len(timeline) and timeline[cursor][0] < slot_end:
-                value = timeline[cursor][1]
-                if slot_value is None and value is not None:
-                    slot_value = value
-                standing = value
-                cursor += 1
-            resolved = slot_value if slot_value is not None else standing
-            if resolved is None:
-                continue
-            slots[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = resolved
-        if slots:
-            days[day.isoformat()] = slots
+        starts.extend(
+            day_start + timedelta(minutes=index * _SLOT_MINUTES)
+            for index in range(_SLOTS_PER_DAY)
+        )
         day += timedelta(days=1)
-    return days
+    return starts
 
 
 @dataclass(frozen=True)
