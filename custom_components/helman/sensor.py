@@ -105,6 +105,18 @@ async def async_setup_entry(
     async_add_entities(solar_forecast_current_sensors)
     coordinator.register_solar_forecast_current_sensors(solar_forecast_current_sensors)
 
+    battery_forecast_current_sensors = [
+        HelmanBatterySocForecastCurrentSensor(coordinator, entry),
+        HelmanBatteryNetForecastCurrentSensor(coordinator, entry),
+        HelmanGridNetForecastCurrentSensor(coordinator, entry),
+        HelmanGridImportForecastCurrentSensor(coordinator, entry),
+        HelmanGridExportForecastCurrentSensor(coordinator, entry),
+    ]
+    async_add_entities(battery_forecast_current_sensors)
+    coordinator.register_battery_forecast_current_sensors(
+        battery_forecast_current_sensors
+    )
+
     grid_import_price_sensor = HelmanGridImportPriceSensor(coordinator, entry)
     async_add_entities([grid_import_price_sensor])
     coordinator.register_grid_import_price_sensor(grid_import_price_sensor)
@@ -517,6 +529,131 @@ class HelmanSolarForecastCurrentCorrectedSensor(_HelmanSolarForecastCurrentSenso
 
     def _read(self) -> float | None:
         return self._coordinator.get_solar_forecast_current_wh(corrected=True)
+
+
+class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
+    """One of the five battery-simulation forecast series for the *current* slot.
+
+    Together these retire ``BatteryForecastHistoryStore``: the battery forecast
+    snapshot only ever spans from the current slot forward, so once a slot has
+    elapsed nothing else recorded what was predicted for it. Each sensor is
+    written on the slot-aligned refresh, so its recorder history *is* that
+    archive — exactly the move ``_HelmanSolarForecastCurrentSensorBase`` makes
+    for the solar forecast.
+
+    **The entity ids name the quantity, not this subsystem** — ``grid_export``,
+    not ``battery_forecast_grid_export`` — following the repo convention
+    (``solar_forecast_current``, ``house_consumption_forecast_current``). Three
+    of the five are grid flows that only fall out of the battery simulation, and
+    a ``battery_forecast_`` prefix on those tells a user nothing they can act on
+    (and ``battery_forecast_battery_net`` stutters). The class names and the
+    coordinator accessor keep the source-describing prefix because they are not
+    a public contract; the ids are, so do not re-prefix them.
+
+    The four Wh members carry **no device class** for the reason that base class
+    sets out in full: ``SensorDeviceClass.ENERGY`` is permitted only alongside
+    ``TOTAL``/``TOTAL_INCREASING``, both of which describe a cumulative meter,
+    and these values rise and fall — two of them are signed. Nothing is lost,
+    because the recorder's unit fallback still resolves ``Wh`` to the energy
+    unit class. The SoC member is an ordinary ``BATTERY`` percentage.
+
+    Each subclass names the key it reads out of
+    :meth:`HelmanCoordinator.get_battery_forecast_current`, which is the one
+    place the snapshot-to-series derivation lives now that the store is gone.
+    """
+
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+
+    #: The key this sensor reads out of the coordinator accessor's map.
+    _snapshot_key: str
+
+    def __init__(self, coordinator, entry: ConfigEntry, entity_key: str) -> None:
+        self._coordinator = coordinator
+        self.entity_id = f"sensor.helman_{entity_key}"
+        self._attr_unique_id = f"{entry.entry_id}_{entity_key}"
+        self._attr_translation_key = entity_key
+
+    def _read(self) -> float | None:
+        values = self._coordinator.get_battery_forecast_current()
+        if not isinstance(values, dict):
+            return None
+        return values.get(self._snapshot_key)
+
+    @property
+    def available(self) -> bool:
+        return self._read() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._read()
+        # Two decimals, matching the sibling solar current-slot entity: the
+        # source publishes slot energies at that precision and this is what a
+        # history card draws them from.
+        return None if value is None else round(value, 2)
+
+
+class HelmanBatterySocForecastCurrentSensor(_HelmanBatteryForecastCurrentSensorBase):
+    """The forecast state of charge at the current slot."""
+
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = "%"
+    _snapshot_key = "socPct"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "battery_soc_forecast_current")
+
+
+class HelmanBatteryNetForecastCurrentSensor(
+    _HelmanBatteryForecastCurrentSensorBase
+):
+    """Net battery energy forecast for the current slot, positive when charging."""
+
+    _attr_native_unit_of_measurement = "Wh"
+    _snapshot_key = "batteryNetWh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "battery_net_forecast_current")
+
+
+class HelmanGridNetForecastCurrentSensor(
+    _HelmanBatteryForecastCurrentSensorBase
+):
+    """Net grid energy forecast for the current slot, positive when exporting."""
+
+    _attr_native_unit_of_measurement = "Wh"
+    _snapshot_key = "gridNetWh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "grid_net_forecast_current")
+
+
+class HelmanGridImportForecastCurrentSensor(
+    _HelmanBatteryForecastCurrentSensorBase
+):
+    """Forecast grid import for the current slot, kept beside the net so a slot
+    that both imports and exports — and money, which prices each side at its own
+    rate — is not left to reconstruct it."""
+
+    _attr_native_unit_of_measurement = "Wh"
+    _snapshot_key = "gridImportWh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "grid_import_forecast_current")
+
+
+class HelmanGridExportForecastCurrentSensor(
+    _HelmanBatteryForecastCurrentSensorBase
+):
+    """Forecast grid export for the current slot, the counterpart of the import
+    side above."""
+
+    _attr_native_unit_of_measurement = "Wh"
+    _snapshot_key = "gridExportWh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "grid_export_forecast_current")
 
 
 class HelmanGridImportPriceSensor(SensorEntity):

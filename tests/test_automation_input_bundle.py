@@ -821,7 +821,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             refresh_result = await coordinator._async_build_forecast_snapshots(
-                reference_time=REFERENCE_TIME
+                reference_time=REFERENCE_TIME, reason="slot_refresh"
             )
 
         self.assertEqual(coordinator._cached_forecast, snapshot)

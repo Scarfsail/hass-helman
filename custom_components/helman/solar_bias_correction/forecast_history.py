@@ -34,6 +34,23 @@ async def load_archived_forecast_points(
     return _points_from_slot_map(slots, target_date, timezone)
 
 
+def forecast_points_from_slot_map(
+    slot_wh: dict[str, float],
+    target_date: date,
+    local_tz: ZoneInfo,
+) -> list[dict[str, Any]]:
+    """A slot map in the shape :func:`load_archived_forecast_points` returns.
+
+    The inspector's statistics-day branch already holds the recorded curve as a
+    slot map -- ``StatisticsDay.solar_forecast_by_slot``, folded from the hourly
+    statistics tail -- and feeds it into the same current-slot splice the
+    raw-states day uses, which works in timestamped points. This is that one
+    shape change, kept out of the call site so both days reach the splice
+    identically.
+    """
+    return _points_from_slot_map(slot_wh, target_date, local_tz)
+
+
 def _points_from_slot_map(
     sub_slot_wh: dict[str, float],
     target_date: date,

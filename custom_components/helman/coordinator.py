@@ -205,11 +205,88 @@ _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
 )
+#: ``_async_refresh_forecast``'s ``reason`` for the quarter-hour timer tick, the
+#: one rebuild that lands on a :00/:15/:30/:45 boundary. ``_publish_solar_forecast_entities``
+#: gates the five battery/grid current-slot entities' *republish* on this: an
+#: off-beat rebuild that still produced a full first slot would otherwise
+#: re-write the same value mid-slot, and HA's time-weighted hourly ``mean`` --
+#: what a purged day reads back -- shifts with every such write.
+#:
+#: This gate does *not* stop a partial value: it guards only the coordinator's
+#: own publish path, and Home Assistant writes a sensor's state by other routes
+#: too (``async_add_entities``, ``homeassistant.update_entity``, a registry
+#: rename), each reading the accessor directly. The partial-value guard is in
+#: :meth:`HelmanCoordinator.get_battery_forecast_current`, which refuses a first
+#: entry whose ``durationHours`` is short of a full slot.
+_SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
+
+#: A full canonical forecast slot, in hours. The snapshot's first series entry
+#: is stamped at build time; off the slot-aligned beat it covers only the slot's
+#: remainder, carrying ``durationHours`` short of this with its four energies
+#: scaled down to match.
+_FULL_FORECAST_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
-    from .battery_forecast_history import BatteryForecastHistoryStore
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
+#: kWh -> Wh for the battery forecast series. See _battery_forecast_slot_values.
+_BATTERY_FORECAST_KWH_TO_WH = 1000.0
+
+
+def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
+    """Derive one battery-forecast slot's five archived figures from the snapshot.
+
+    Moved here verbatim from the retired
+    ``BatteryForecastHistoryStore._slot_values`` so this stays a single
+    implementation of which snapshot field feeds which series, the two sign
+    conventions, and the kWh -> Wh factor. :meth:`HelmanCoordinator.get_battery_forecast_current`
+    is the only caller; the sensors read one key off its result rather than
+    repeating any of this.
+
+    A key is present only where its source field is. ``batteryNetWh`` and the
+    two grid sides landed in later releases, so a slot without them yields no
+    value for that key rather than a zero. Returns ``None`` -- not ``{}`` -- when
+    the entry carries none of the five, the ``values or None`` the retired
+    ``_slot_values`` ended on, so a caller can treat "no slot" and "an empty
+    slot" alike.
+
+    Net grid is positive when exporting, matching ``gridNetKwh`` elsewhere; net
+    battery is positive when charging, the same "energy leaving the house's
+    demand" sign the future-half filters in ``solar_bias_correction.service``
+    use. The two grid sides are kept beside the net rather than instead of it:
+    netting is right for the chart's one signed series and wrong for money,
+    where a slot can import at one rate and export at another.
+    """
+    values: dict[str, float] = {}
+    pct = entry.get("socPct")
+    if pct is not None:
+        try:
+            values["socPct"] = float(pct)
+        except (TypeError, ValueError):
+            pass
+    imported = entry.get("importedFromGridKwh")
+    exported = entry.get("exportedToGridKwh")
+    if imported is not None or exported is not None:
+        try:
+            imported_wh = float(imported or 0.0) * _BATTERY_FORECAST_KWH_TO_WH
+            exported_wh = float(exported or 0.0) * _BATTERY_FORECAST_KWH_TO_WH
+        except (TypeError, ValueError):
+            pass
+        else:
+            values["gridNetWh"] = exported_wh - imported_wh
+            values["gridImportWh"] = imported_wh
+            values["gridExportWh"] = exported_wh
+    charged = entry.get("chargedKwh")
+    discharged = entry.get("dischargedKwh")
+    if charged is not None or discharged is not None:
+        try:
+            values["batteryNetWh"] = (
+                float(charged or 0.0) - float(discharged or 0.0)
+            ) * _BATTERY_FORECAST_KWH_TO_WH
+        except (TypeError, ValueError):
+            pass
+    return values or None
 
 
 def _resolve_runtime_entity_and_states(
@@ -466,6 +543,10 @@ class HelmanCoordinator:
         self._cached_forecast: dict | None = None
         self._house_consumption_forecast_current_sensor = None
         self._solar_forecast_current_sensors: list[Any] = []
+        # The five battery-forecast current-slot entities, published on the same
+        # slot-aligned beat so their recorder history is the archive the retired
+        # BatteryForecastHistoryStore used to keep.
+        self._battery_forecast_current_sensors: list[Any] = []
         self._grid_import_price_sensor = None
         # The import rate in force right now, refreshed with the forecast
         # snapshots. Nothing else records it, so this is what the published
@@ -485,8 +566,11 @@ class HelmanCoordinator:
         #: The one-shot walk that recovers the forecast's past publications.
         self._solar_forecast_backfill_task: Any | None = None
         self._solar_forecast_backfill_started = False
+        #: The one-shot back-fill of the five battery-forecast entities'
+        #: statistics from the retired store's orphaned .storage file.
+        self._battery_forecast_backfill_task: Any | None = None
+        self._battery_forecast_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
-        self._battery_forecast_history: BatteryForecastHistoryStore | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
         self._cached_battery_forecast: dict | None = None
@@ -701,7 +785,7 @@ class HelmanCoordinator:
     def register_sensor_ready(self) -> None:
         """No-op: sensors receive their first value on the next tick."""
 
-    def _publish_solar_forecast_entities(self) -> None:
+    def _publish_solar_forecast_entities(self, *, reason: str) -> None:
         for sensor in self._solar_forecast_sensors:
             if getattr(sensor, "hass", None) is None:
                 continue
@@ -728,6 +812,24 @@ class HelmanCoordinator:
                         "Error publishing solar forecast sensor state: %s",
                         getattr(solar_sensor, "entity_id", "<unknown>"),
                     )
+        # The five battery/grid current-slot forecast entities publish *only* on
+        # the slot-aligned rebuild -- unlike the solar and house sensors above,
+        # which publish on every refresh. An off-beat rebuild re-stamps the
+        # snapshot's first series entry partway through the slot, so its value
+        # covers only the slot's remainder; the raw-state reader passes that
+        # revision over, but HA's time-weighted hourly ``mean`` -- which a purged
+        # day reads back -- would be dragged low by it and the error would
+        # outlive the raw states. See ``_SLOT_ALIGNED_REFRESH_REASON``.
+        if reason == _SLOT_ALIGNED_REFRESH_REASON:
+            for battery_sensor in getattr(self, "_battery_forecast_current_sensors", []):
+                if getattr(battery_sensor, "hass", None) is not None:
+                    try:
+                        battery_sensor.async_write_ha_state()
+                    except Exception:
+                        _LOGGER.exception(
+                            "Error publishing battery forecast sensor state: %s",
+                            getattr(battery_sensor, "entity_id", "<unknown>"),
+                        )
         # Published on the same beat, though it is neither solar nor a forecast:
         # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
         # import windows align to the same grid, so a price change and its
@@ -747,17 +849,15 @@ class HelmanCoordinator:
             export_price_sensor.async_write_ha_state()
         self._maybe_start_grid_export_price_backfill()
         self._maybe_start_solar_forecast_backfill()
+        self._maybe_start_battery_forecast_backfill()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
         self._active_config = deepcopy(self._storage.config)
-        from .battery_forecast_history import BatteryForecastHistoryStore
         from .storage import SolarBiasCorrectionStore
 
         self._solar_bias_store = SolarBiasCorrectionStore(self._hass)
         await self._solar_bias_store.async_load()
-        self._battery_forecast_history = BatteryForecastHistoryStore(self._hass)
-        await self._battery_forecast_history.async_load()
         bias_config = read_bias_config(self._active_config)
         self._solar_bias_service = SolarBiasCorrectionService(
             self._hass,
@@ -765,7 +865,6 @@ class HelmanCoordinator:
             bias_config,
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
-            battery_forecast_history=self._battery_forecast_history,
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
             house_forecast_composition_provider=self._get_house_forecast_composition,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
@@ -1706,6 +1805,54 @@ class HelmanCoordinator:
         first = entity_ids[0]
         return first.strip() if isinstance(first, str) and first.strip() else None
 
+    def _maybe_start_battery_forecast_backfill(self) -> None:
+        """Start the one-shot back-fill of the five battery-forecast entities.
+
+        The source -- ``BatteryForecastHistoryStore``'s orphaned ``.storage``
+        file -- is static, not perishable, so this could have waited; it does
+        not, only because there is no cost to running it now and the file is
+        exactly the kind of artifact a cleanup sweeps up.
+
+        The guard is ``get_battery_forecast_current() is not None``, which is a
+        check on the *pipeline*, not directly on the five entities' states. It is
+        sufficient because that accessor now returns a value only for a
+        non-partial current-slot entry (see
+        :meth:`get_battery_forecast_current`), and the only rebuild that
+        produces one is the slot-aligned one -- which writes the five sensors
+        earlier in this same :meth:`_publish_solar_forecast_entities` pass,
+        before this starter is reached. So by the time the guard passes, the
+        entities have published and own their statistics metadata. This matches
+        the pipeline-level guard the solar walk uses.
+
+        Runs at most once per Home Assistant start. The task keeps a per-series
+        done-marker, so a run cut short by a restart resumes by skipping the
+        series it already wrote.
+        """
+        # ``getattr`` throughout, like the sibling starters: this runs off the
+        # publish beat, which several tests and the recovery path reach with a
+        # partially built coordinator.
+        if getattr(self, "_battery_forecast_backfill_started", True):
+            return
+        if self.get_battery_forecast_current() is None:
+            # No non-partial current slot yet: no slot-aligned rebuild has run,
+            # so the five entities have not published and there is no metadata
+            # or compiled hour to align the import to.
+            return
+
+        from .battery_forecast_backfill import (
+            async_backfill_battery_forecast_statistics,
+        )
+
+        self._battery_forecast_backfill_started = True
+        # Tracked so it can be cancelled on unload, for the reason the sibling
+        # tasks are: a reload builds a fresh coordinator whose "started" flag is
+        # False, and a second run would re-read the file and re-import. The
+        # imports upsert, so nothing corrupts -- but it is wasted work.
+        self._battery_forecast_backfill_task = self._hass.async_create_background_task(
+            async_backfill_battery_forecast_statistics(self._hass),
+            "helman_battery_forecast_backfill",
+        )
+
     def _maybe_start_grid_export_price_backfill(self) -> None:
         """Start the one-shot statistics back-fill, once the mirror has a value.
 
@@ -2189,6 +2336,88 @@ class HelmanCoordinator:
                 return None
         return None
 
+    def register_battery_forecast_current_sensors(self, sensors) -> None:
+        self._battery_forecast_current_sensors = list(sensors)
+
+    def get_battery_forecast_current(self) -> dict[str, float] | None:
+        """The current 15-minute slot's forecast SoC, grid and battery energy.
+
+        The figures ``BatteryForecastHistoryStore`` used to archive, read
+        straight off the snapshot the rest of the system already acts on
+        (``_cached_appliance_forecast_pipeline.battery_forecast``) — the same
+        move :meth:`get_solar_forecast_current_wh` makes for the solar forecast,
+        so the five published entities' recorder history becomes that archive.
+
+        Returns a map keyed ``socPct`` / ``gridNetWh`` / ``gridImportWh`` /
+        ``gridExportWh`` / ``batteryNetWh``. A key is absent when the snapshot
+        slot omits its source field — the two grid sides and ``batteryNetWh``
+        arrived in later releases — so a sensor for that key reports unavailable
+        rather than zero. ``None`` when the pipeline is cold, carries no slot for
+        the clock's current quarter hour, or carries only a partial one (below).
+
+        The snapshot's first series entry is stamped at build time. On the
+        slot-aligned rebuild it lands microseconds into the current slot with
+        ``durationHours`` at essentially a full slot and the whole slot's
+        energy; an off-beat rebuild stamps it partway through, so
+        ``durationHours`` is short and the four Wh figures are scaled down to
+        that fraction. This accessor **refuses** such a partial entry, returning
+        ``None`` — because Home Assistant writes a sensor's state by routes this
+        integration does not gate (``async_add_entities`` on setup, the
+        ``homeassistant.update_entity`` service, an entity-registry rename), each
+        reading this accessor directly, and a half-size energy that then stood
+        for the rest of the slot would drag hour N's compiled ``mean`` low —
+        exactly the error the raw states would outlive.
+
+        The ``slot_refresh`` gate in :meth:`_publish_solar_forecast_entities` is
+        the other half of the guard and stops a different thing: an off-beat
+        rebuild that still produced a *full* first slot re-writing that value
+        mid-slot. Neither is the whole guard; the ``socPct`` level is dropped
+        with the four energies because a partial entry's SoC is the projection
+        for the shortened interval's end, not the slot's, and returning it alone
+        would publish one of the five off the shared beat.
+        """
+        pipeline = self._cached_appliance_forecast_pipeline
+        if pipeline is None:
+            return None
+        snapshot = getattr(pipeline, "battery_forecast", None)
+        if not isinstance(snapshot, dict):
+            return None
+        series = snapshot.get("series")
+        if not isinstance(series, list):
+            return None
+
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+        slot_start = get_local_current_slot_start(
+            dt_util.as_local(dt_util.now()), interval_minutes=15
+        )
+        slot_end = slot_start + timedelta(minutes=15)
+        for entry in series:
+            if not isinstance(entry, dict):
+                continue
+            raw_ts = entry.get("timestamp")
+            if not isinstance(raw_ts, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                continue
+            ts = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
+            if slot_start <= ts < slot_end:
+                duration_hours = entry.get("durationHours")
+                if (
+                    isinstance(duration_hours, (int, float))
+                    and not isinstance(duration_hours, bool)
+                    and duration_hours + 1e-6 < _FULL_FORECAST_SLOT_HOURS
+                ):
+                    # A build-time partial first entry: its four energies are
+                    # scaled to the slot's remainder. Refuse the whole entry so
+                    # no write path can publish a partial value. An entry with no
+                    # ``durationHours`` at all (older snapshots, some tests) is
+                    # taken at face value.
+                    return None
+                return _battery_forecast_slot_values(entry)
+        return None
+
     def register_grid_import_price_sensor(self, sensor) -> None:
         self._grid_import_price_sensor = sensor
 
@@ -2660,7 +2889,7 @@ class HelmanCoordinator:
         """Rebuild the snapshots, then ask for a re-plan if one is warranted."""
         request_now = reference_time or dt_util.now()
         refresh_result = await self._async_build_forecast_snapshots(
-            reference_time=request_now
+            reference_time=request_now, reason=reason
         )
 
         automation_config = read_automation_config(self._active_config)
@@ -2686,9 +2915,14 @@ class HelmanCoordinator:
         )
 
     async def _async_build_forecast_snapshots(
-        self, *, reference_time: datetime | None = None
+        self, *, reference_time: datetime | None = None, reason: str
     ) -> _ForecastRefreshResult:
-        """Build new forecast snapshots, cache them, and persist them."""
+        """Build new forecast snapshots, cache them, and persist them.
+
+        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`, which
+        publishes the battery/grid current-slot forecast sensors on the
+        slot-aligned rebuild alone.
+        """
         request_now = reference_time or dt_util.now()
         try:
             builder = ConsumptionForecastBuilder(
@@ -2752,7 +2986,7 @@ class HelmanCoordinator:
             # deriving the rate a second time.
             self._absorb_grid_import_price(raw_forecast.get("grid"))
             self._absorb_grid_export_price(raw_forecast.get("grid"))
-            self._publish_solar_forecast_entities()
+            self._publish_solar_forecast_entities(reason=reason)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
             return _ForecastRefreshResult(
@@ -3724,29 +3958,7 @@ class HelmanCoordinator:
             appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
         )
-        self._record_battery_forecast_history(
-            rebuild.battery_forecast, started_at=started_at
-        )
         return pipeline
-
-    def _record_battery_forecast_history(
-        self, battery_forecast: dict[str, Any] | None, *, started_at: datetime
-    ) -> None:
-        """Archive today's forecast SoC and net grid slots before they elapse.
-
-        Only a fresh build reaches here, so the archive keeps the last forecast
-        made for each slot while it was still ahead of the clock.
-        """
-        if self._battery_forecast_history is None:
-            return
-        try:
-            self._battery_forecast_history.record_snapshot(
-                battery_forecast,
-                local_now=dt_util.as_local(started_at),
-                timezone=ZoneInfo(str(self._hass.config.time_zone)),
-            )
-        except Exception:
-            _LOGGER.exception("Failed to record battery forecast history")
 
     async def _async_get_appliance_projection_plan(
         self,
@@ -4276,7 +4488,7 @@ class HelmanCoordinator:
         def _on_forecast_interval(_now: datetime) -> None:
             self._create_tracked_refresh_task(
                 self._async_refresh_forecast(
-                    reason="slot_refresh",
+                    reason=_SLOT_ALIGNED_REFRESH_REASON,
                     reference_time=_now,
                 )
             )
@@ -4762,6 +4974,10 @@ class HelmanCoordinator:
         if solar_backfill_task is not None:
             solar_backfill_task.cancel()
             self._solar_forecast_backfill_task = None
+        battery_backfill_task = getattr(self, "_battery_forecast_backfill_task", None)
+        if battery_backfill_task is not None:
+            battery_backfill_task.cancel()
+            self._battery_forecast_backfill_task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()

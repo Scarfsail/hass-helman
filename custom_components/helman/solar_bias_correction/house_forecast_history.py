@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .forecast_slot_sampling import resolve_forecast_slot_values
+
 try:
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.history import get_significant_states
@@ -27,9 +29,11 @@ async def load_house_forecast_points_for_day(
 ) -> list[dict[str, Any]]:
     """Return per-15min house forecast slot points for target_date.
 
-    Reads the recorder history of the house forecast sensor (W = Wh/h) and
-    holds-forward each value across the slot it covers, then converts the
-    W value into the slot's Wh (W * 0.25 h).
+    Reads the recorder history of the house forecast sensor (W = Wh/h), resolves
+    each slot to the value published *for* it -- see
+    :func:`resolve_forecast_slot_values` for why the boundary write lands just
+    after the slot start and a ``<= slot_start`` sweep drew the curve one slot
+    late -- and converts the W value into the slot's Wh (W * 0.25 h).
 
     Returns a list of {"timestamp": ISO local time, "wh": float}.
     Empty list if no recorder data for the day.
@@ -56,8 +60,9 @@ async def load_house_forecast_points_for_day(
     if not states:
         return []
 
-    # Build a list of (instant_local, value_w) pairs.
-    timeline: list[tuple[datetime, float]] = []
+    # Build a list of (instant_local, value_w) pairs. Non-numeric rows are
+    # dropped rather than kept as hold-breakers -- unchanged from before.
+    timeline: list[tuple[datetime, float | None]] = []
     for state in states:
         raw = getattr(state, "state", None)
         try:
@@ -72,22 +77,13 @@ async def load_house_forecast_points_for_day(
         return []
     timeline.sort(key=lambda pair: pair[0])
 
-    points: list[dict[str, Any]] = []
-    cursor = 0
-    current_value: float | None = None
-    for slot_index in range(_SLOTS_PER_DAY):
-        slot_start = day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
-        # advance cursor while next change is <= slot_start
-        while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
-            current_value = timeline[cursor][1]
-            cursor += 1
-        if current_value is None:
-            continue
-        slot_wh = current_value * _SLOT_FRACTION_OF_HOUR
-        points.append(
-            {
-                "timestamp": slot_start.isoformat(),
-                "wh": slot_wh,
-            }
-        )
-    return points
+    slot_starts = [
+        day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
+        for slot_index in range(_SLOTS_PER_DAY)
+    ]
+    return [
+        {"timestamp": slot_start.isoformat(), "wh": value_w * _SLOT_FRACTION_OF_HOUR}
+        for slot_start, value_w in resolve_forecast_slot_values(
+            timeline, slot_starts, slot_minutes=_SLOT_MINUTES
+        ).items()
+    ]

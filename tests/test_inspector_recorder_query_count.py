@@ -100,6 +100,9 @@ models = importlib.import_module(
 recorder_series_mod = importlib.import_module(
     "custom_components.helman.recorder_hourly_series"
 )
+span_mod = importlib.import_module(
+    "custom_components.helman.recorder_statistics_span"
+)
 
 
 def _counting_queries():
@@ -235,6 +238,62 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
         # And not one per meter behind it: the per-entity read is what this
         # replaced, so reaching it at all is the regression.
         self.assertEqual(QUERIES["per_entity"], [])
+
+
+class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase):
+    """A day past the purge horizon draws every series from one hourly read.
+
+    The solar forecast joined that read in #188 by being added to its id list,
+    not by a read of its own -- so a statistics day must still cost exactly one
+    ``period="hour"`` round-trip, with the forecast entity inside it.
+    """
+
+    async def test_the_solar_forecast_adds_no_statistics_round_trip(self):
+        service = _make_service()
+
+        async def _executor(func, *args):
+            return func(*args)
+
+        hourly_id_lists: list[list[str]] = []
+
+        def _statistics_during_period(
+            hass, start, end, statistic_ids, period, *args, **kwargs
+        ):
+            if period == "hour":
+                hourly_id_lists.append(sorted(statistic_ids or []))
+            return {}
+
+        purging_recorder = SimpleNamespace(
+            async_add_executor_job=_executor, keep_days=1, auto_purge=True
+        )
+
+        old_actuals = service_mod.load_actuals_for_day
+        try:
+            service_mod.load_actuals_for_day = AsyncMock(return_value={})
+            with patch.multiple(
+                span_mod,
+                statistics_during_period=_statistics_during_period,
+                get_instance=lambda hass: purging_recorder,
+            ), patch(
+                "homeassistant.components.recorder.get_instance",
+                lambda hass: purging_recorder,
+            ), patch.object(
+                service_mod,
+                "load_house_forecast_points_for_day",
+                AsyncMock(return_value=[]),
+            ), patch.object(
+                service,
+                "_load_recorded_price_rails",
+                AsyncMock(return_value=([], [])),
+            ):
+                # today - 1 with one day kept: the day the purge cuts through, so
+                # it reads statistics along with everything older.
+                await service.async_get_inspector_day("2026-05-10")
+        finally:
+            service_mod.load_actuals_for_day = old_actuals
+
+        self.assertEqual(len(hourly_id_lists), 1)
+        self.assertIn("sensor.helman_solar_forecast_current", hourly_id_lists[0])
 
 
 class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):

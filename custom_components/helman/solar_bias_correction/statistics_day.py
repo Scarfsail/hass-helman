@@ -28,19 +28,15 @@ thread, so a query per meter is a serial round-trip per meter however the awaits
 are arranged -- the same reasoning the span read and the batched slot-energy
 read are both built on. Every id the day needs goes into one call.
 
-A statistics-only day still comes back without its solar forecast, and the
-reason has changed rather than gone away. It used to be that the curve lived
-in the daily-energy entity's ``wh_period_15m`` attribute and attributes are
-never compiled into statistics. Helman now publishes the curve as an entity
-of its own (``sensor.helman_solar_forecast_current``), which the recorder
-does compile -- but ``load_archived_forecast_points`` reads that entity's
-*raw states*, and a day is statistics-only precisely because its raw states
-are gone. So the day is still an actuals day: what happened, without the
-forecast it was compared against.
-
-#173 is what closes this, by teaching the readers to splice a states window
-with a statistics tail. Until then the back-filled statistics
-(``solar_forecast_backfill``) are written and unread.
+A statistics-only day draws its solar forecast too. ``solar_forecast_backfill``
+has been compiling ``sensor.helman_solar_forecast_current``'s hourly statistics
+since before anything read them, so ``SOLAR_FORECAST_CURRENT_ENTITY`` rides in on
+the one hourly read alongside every measured series and comes back as
+``solar_forecast_by_slot`` -- at hour grain, each hour's four slots carrying that
+hour's mean. The hour-to-slot conversion is not duplicated here: it is
+:func:`~.forecast_slot_history.forecast_slots_from_hourly_statistics`, the same
+one the training window's states/statistics splice reads through. The four equal
+quarters are a weight, not a claim about within-hour production.
 """
 
 from __future__ import annotations
@@ -61,6 +57,21 @@ _LOGGER = logging.getLogger(__name__)
 #: arithmetic that turns a mean power into an energy stay the same number.
 HOUR_MINUTES = 60
 
+#: kWh -> Wh. The battery-forecast entities record energy (unit ``Wh``), so
+#: ``query_hourly_statistics`` hands their ``mean`` back converted to the energy
+#: unit class's display unit, kWh -- see
+#: :data:`~..recorder_statistics_span.STATISTICS_UNITS`.
+_KWH_TO_WH = 1000.0
+
+#: Fifteen-minute slots per statistics hour. The battery-forecast entities each
+#: publish *one slot's* Wh, so an hour holds four of them and the hour's
+#: ``mean`` is a quarter of the hour's forecast energy: ``mean x 4`` is the
+#: hour. ``forecast_slot_history`` states the same ("the hour's forecast energy
+#: is ``mean x 4``") and spreads that mean across the hour's four slots; this
+#: path emits one point per hour, so it multiplies instead. The house forecast
+#: above needs neither factor because it records power, not per-slot energy.
+_SLOTS_PER_HOUR = HOUR_MINUTES // 15
+
 
 @dataclass(frozen=True)
 class StatisticsDay:
@@ -78,10 +89,24 @@ class StatisticsDay:
     #: Solar actuals as ``{"HH:MM": wh}``, the shape ``load_actuals_for_day``
     #: returns.
     solar_actuals_by_slot: dict[str, float] = field(default_factory=dict)
+    #: The recorded solar forecast as ``{"HH:MM": wh}``, the shape the raw-states
+    #: reader hands back -- but folded from the hourly statistics tail, so each
+    #: hour's four slots carry that hour's mean. Empty when the back-fill wrote
+    #: nothing for the day, which leaves it an actuals-only day exactly as before.
+    solar_forecast_by_slot: dict[str, float] = field(default_factory=dict)
     #: ``[{"slot": "HH:MM", "pct": float}]``, the hour's mean state of charge.
     battery_soc_points: list[dict] = field(default_factory=list)
     #: ``[{"timestamp": iso_local, "wh": float}]`` for the house forecast.
     house_forecast_points: list[dict] = field(default_factory=list)
+    #: The five retired-store battery-forecast series, in the shapes
+    #: ``_recorded_battery_forecast_points`` produced from raw states.
+    #: ``[{"slot": "HH:MM", "pct": float}]`` for the forecast state of charge...
+    battery_soc_forecast_points: list[dict] = field(default_factory=list)
+    #: ...and ``[{"timestamp": iso_local, "wh": float}]`` for the four energies.
+    grid_net_forecast_points: list[dict] = field(default_factory=list)
+    grid_import_forecast_points: list[dict] = field(default_factory=list)
+    grid_export_forecast_points: list[dict] = field(default_factory=list)
+    battery_net_forecast_points: list[dict] = field(default_factory=list)
     #: ``[{"slot": "HH:MM", "value": float}]`` per rail.
     import_price_points: list[dict] = field(default_factory=list)
     export_price_points: list[dict] = field(default_factory=list)
@@ -96,6 +121,11 @@ async def load_statistics_day(
     meter_entity_ids: list[str],
     battery_soc_entity_id: str | None,
     house_forecast_entity_id: str,
+    battery_soc_forecast_entity_id: str,
+    grid_net_forecast_entity_id: str,
+    grid_import_forecast_entity_id: str,
+    grid_export_forecast_entity_id: str,
+    battery_net_forecast_entity_id: str,
     import_price_entity_id: str | None,
     export_price_entity_id: str | None,
     export_price_fallback_entity_id: str | None,
@@ -121,6 +151,10 @@ async def load_statistics_day(
         prefer_rows,
         query_hourly_statistics,
     )
+    from .forecast_slot_history import (
+        SOLAR_FORECAST_CURRENT_ENTITY,
+        forecast_slots_from_hourly_statistics,
+    )
 
     local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
     local_end = local_start + timedelta(days=1)
@@ -129,9 +163,15 @@ async def load_statistics_day(
             hass,
             [
                 solar_entity_id,
+                SOLAR_FORECAST_CURRENT_ENTITY,
                 *meter_entity_ids,
                 battery_soc_entity_id,
                 house_forecast_entity_id,
+                battery_soc_forecast_entity_id,
+                grid_net_forecast_entity_id,
+                grid_import_forecast_entity_id,
+                grid_export_forecast_entity_id,
+                battery_net_forecast_entity_id,
                 import_price_entity_id,
                 export_price_entity_id,
                 export_price_fallback_entity_id,
@@ -150,6 +190,9 @@ async def load_statistics_day(
         solar_actuals_by_slot=_energy_wh_by_slot(
             span.energy_for(solar_entity_id), target_date
         ),
+        solar_forecast_by_slot=forecast_slots_from_hourly_statistics(
+            span.rows_for(SOLAR_FORECAST_CURRENT_ENTITY), local_tz=local_tz
+        ).get(target_date.isoformat(), {}),
         battery_soc_points=[
             {"slot": slot, "pct": value}
             for slot, value in _mean_by_slot(
@@ -158,6 +201,24 @@ async def load_statistics_day(
         ],
         house_forecast_points=_house_forecast_points(
             span.rows_for(house_forecast_entity_id), target_date
+        ),
+        battery_soc_forecast_points=[
+            {"slot": slot, "pct": value}
+            for slot, value in _mean_by_slot(
+                span.rows_for(battery_soc_forecast_entity_id), target_date
+            ).items()
+        ],
+        grid_net_forecast_points=_forecast_wh_points(
+            span.rows_for(grid_net_forecast_entity_id), target_date
+        ),
+        grid_import_forecast_points=_forecast_wh_points(
+            span.rows_for(grid_import_forecast_entity_id), target_date
+        ),
+        grid_export_forecast_points=_forecast_wh_points(
+            span.rows_for(grid_export_forecast_entity_id), target_date
+        ),
+        battery_net_forecast_points=_forecast_wh_points(
+            span.rows_for(battery_net_forecast_entity_id), target_date
         ),
         import_price_points=_rail_points(
             span.rows_for(import_price_entity_id), target_date
@@ -263,6 +324,38 @@ def _house_forecast_points(
         if mean_w is None:
             continue
         points.append({"timestamp": local_hour.isoformat(), "wh": mean_w})
+    return points
+
+
+def _forecast_wh_points(
+    rows_by_utc_hour: dict[datetime, Any], target_date: date
+) -> list[dict]:
+    """A battery-forecast Wh series' hour, as one point carrying the hour's Wh.
+
+    These entities publish *one 15-minute slot's* energy, so an hour's ``mean``
+    is a quarter of the hour's forecast: the point carries
+    ``mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR`` -- the hour's whole forecast
+    energy, commensurable with the hour-total actuals :func:`_energy_wh_by_slot`
+    emits on this same path and with the sum that becomes ``gridForecastWh`` /
+    ``batteryForecastWh`` and prices ``moneyForecast``. ``forecast_slot_history``
+    reaches the same figure by spreading the mean across the hour's four slots.
+
+    Unlike :func:`_house_forecast_points`, which reads a power sensor whose hour
+    mean already *is* Wh. Signed series (net grid, net battery) ride through
+    unchanged -- a mean is a level, and these carry no device class precisely so
+    a decrease is not read as a meter reset.
+    """
+    points: list[dict] = []
+    for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
+        mean_kwh = _mean_of(row)
+        if mean_kwh is None:
+            continue
+        points.append(
+            {
+                "timestamp": local_hour.isoformat(),
+                "wh": mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR,
+            }
+        )
     return points
 
 

@@ -184,19 +184,14 @@ async def load_spliced_forecast_slots_for_window(
     *after* the oldest state's date because states begin part-way through their
     first day.
 
-    **What the tail's ``mean`` means.** The sensor's state is the *current
-    slot's* energy in Wh, and the back-fill writes each hour's time-weighted
-    mean of it. Four equal-length slots make up an hour, so that mean is the
-    hour's average slot -- the hour's forecast energy is ``mean x 4``, and one
-    slot's share of it is the mean itself. That is the whole conversion, and
-    getting it wrong is invisible: a constant factor on every tail day's
-    forecast, which the fit absorbs into factors that then misprice every future
-    slot. The unit is the other half of it -- see :data:`_KWH_TO_WH`.
-
-    **The quarters are weights, not shape.** Splitting the hour evenly is not a
-    claim about within-hour production, and no reader may take it as one: it is
-    what lets an hour's *one* ratio reach the four slots it covers with equal
-    weight (#173's G3). ``hourly_grain_dates`` names every day it was done to.
+    **The hour-to-slot conversion lives in one place.**
+    :func:`forecast_slots_from_hourly_statistics` turns the tail's rows into the
+    slot map, and both this window splice and the inspector's statistics day
+    (``StatisticsDay.solar_forecast_by_slot``) go through it -- one
+    implementation of the ``mean x 4`` recovery, the :data:`_KWH_TO_WH` unit
+    factor, and the four-equal-quarters weighting, because getting any of them
+    wrong is a silent constant on every tail day. ``hourly_grain_dates`` names
+    every day this splice drew that way.
     """
     if query_hourly_statistics is None or query_oldest_state_date is None:
         return ForecastSlotWindow(
@@ -229,7 +224,7 @@ async def load_spliced_forecast_slots_for_window(
             local_end=datetime.combine(splice_date, time.min, tzinfo=local_tz),
         )
         slots_by_date.update(
-            _slots_from_hourly_rows(
+            forecast_slots_from_hourly_statistics(
                 tail.rows_for(SOLAR_FORECAST_CURRENT_ENTITY), local_tz=local_tz
             )
         )
@@ -247,12 +242,31 @@ async def load_spliced_forecast_slots_for_window(
     )
 
 
-def _slots_from_hourly_rows(
+def forecast_slots_from_hourly_statistics(
     rows_by_utc_hour: dict[datetime, dict[str, Any]],
     *,
     local_tz: ZoneInfo,
 ) -> dict[str, dict[str, float]]:
-    """Hourly statistics rows as the same ``{day: {"HH:MM": wh}}`` map.
+    """The hourly-statistics tail as the same ``{day: {"HH:MM": wh}}`` map.
+
+    This is the one-day-or-many conversion the training window splice
+    (:func:`load_spliced_forecast_slots_for_window`) and the inspector's
+    statistics day (``StatisticsDay.solar_forecast_by_slot``, one day sliced out
+    of the result) both read through, so the arithmetic exists once.
+
+    **The ``mean`` is one slot's Wh.** The sensor's state is the current slot's
+    energy in Wh; ``solar_forecast_backfill`` writes each hour's time-weighted
+    mean of it, and four equal slots make up an hour -- so the hour's forecast
+    energy is ``mean x 4`` and one slot's share is the mean itself. The
+    :data:`_KWH_TO_WH` factor is the other half: the rows come back converted to
+    the energy class's display unit, kWh. Getting either wrong is invisible -- a
+    constant factor on every tail day that the fit then absorbs and the chart
+    then draws.
+
+    **The four quarters are a weight, not a shape.** Splitting the hour evenly
+    is not a claim about within-hour production; it is what lets an hour's one
+    number reach the four slots it covers with equal weight. The same wording
+    ``ForecastSlotWindow`` uses is the wording the readers must reuse.
 
     Rows are keyed by the hour's UTC instant, so the local date and hour are
     resolved per row rather than assumed -- and the autumn fall-back day's two

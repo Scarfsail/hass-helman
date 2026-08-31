@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from custom_components.helman import solar_forecast_backfill as backfill_mod  # noqa: E402
 from custom_components.helman.solar_bias_correction import (  # noqa: E402
     forecast_slot_history as mod,
 )
@@ -251,6 +252,68 @@ class SingleDayTests(unittest.TestCase):
             slots = asyncio.run(mod.load_forecast_slots_for_day(HASS, date(2026, 4, 24)))
 
         self.assertEqual(slots, {})
+
+
+class HourlyStatisticsConversionTests(unittest.TestCase):
+    """``forecast_slots_from_hourly_statistics``: the tail's rows as a slot map.
+
+    The one number that is silently wrong when it is wrong -- a constant factor
+    on every tail day's forecast, absorbed by the fit, mispricing every future
+    slot -- so the ``_KWH_TO_WH`` half is pinned against
+    ``solar_forecast_backfill``'s own row builder rather than a hand-written
+    mean. Both the training-window splice and the inspector's statistics day
+    read through this one function.
+    """
+
+    def test_the_hours_forecast_is_recovered_from_the_row_the_backfill_writes(self):
+
+        hour = datetime(2026, 5, 1, 11, 0, tzinfo=TZ).astimezone(timezone.utc)
+        slots = [1000.0, 1400.0, 1800.0, 1200.0]
+        rows = backfill_mod._hourly_rows(
+            [
+                (hour + timedelta(minutes=15 * index), value)
+                for index, value in enumerate(slots)
+            ],
+            utc_start=hour,
+            utc_end=hour + timedelta(hours=1),
+        )
+
+        # The span read asks for the energy class in kWh and the sensor records
+        # Wh, so this is what actually reaches the reader.
+        recovered = mod.forecast_slots_from_hourly_statistics(
+            {hour: {"mean": rows[0]["mean"] / 1000.0}}, local_tz=TZ
+        )
+
+        day = recovered["2026-05-01"]
+        self.assertEqual(sorted(day), ["11:00", "11:15", "11:30", "11:45"])
+        # The hour's forecast energy is the four slots summed -- the energy the
+        # source published for that hour, not a quarter of it and not four times.
+        self.assertAlmostEqual(sum(day.values()), sum(slots), places=3)
+        # Each slot carries a quarter of the hour: a weight, not a claim about
+        # how the hour was shaped.
+        for value in day.values():
+            self.assertAlmostEqual(value, sum(slots) / 4.0, places=3)
+
+    def test_a_repeated_local_hour_is_added_not_overwritten(self):
+
+        # Two distinct UTC hours that share the 02:00 local wall clock on the
+        # autumn fall-back day: both really happened and both are kept.
+        first = datetime(2025, 10, 26, 0, 0, tzinfo=timezone.utc)
+        second = datetime(2025, 10, 26, 1, 0, tzinfo=timezone.utc)
+
+        recovered = mod.forecast_slots_from_hourly_statistics(
+            {first: {"mean": 0.3}, second: {"mean": 0.5}}, local_tz=TZ
+        )
+
+        day = recovered["2025-10-26"]
+        self.assertEqual(day["02:00"], 800.0)
+
+    def test_a_row_without_a_mean_is_skipped(self):
+        hour = datetime.fromisoformat("2026-05-01T09:00:00+00:00")
+        recovered = mod.forecast_slots_from_hourly_statistics(
+            {hour: {"mean": None}}, local_tz=TZ
+        )
+        self.assertEqual(recovered, {})
 
 
 if __name__ == "__main__":
