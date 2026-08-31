@@ -533,7 +533,9 @@ class TestHistoryDepth(_HistoryTestCase):
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 41, "statistics": 41, "required": 30})
+        self.assertEqual(
+            fact["params"], {"available": 41, "raw_states": 41, "statistics": 41, "required": 30}
+        )
         self.assertEqual(fact["severity"], "ok")
 
     def test_not_enough_history_reads_as_a_warning(self):
@@ -544,7 +546,9 @@ class TestHistoryDepth(_HistoryTestCase):
             hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(fact["params"], {"available": 3, "statistics": 3, "required": 30})
+        self.assertEqual(
+            fact["params"], {"available": 3, "raw_states": 3, "statistics": 3, "required": 30}
+        )
         self.assertEqual(fact["severity"], "warn")
 
     def test_no_recorder_rows_is_zero_days_rather_than_no_answer(self):
@@ -591,7 +595,7 @@ class TestHistoryDepth(_HistoryTestCase):
         )
         fact = _fact(inspection, "history")
         self.assertEqual(fact["token"], "history_depth_only")
-        self.assertEqual(fact["params"], {"available": 41, "statistics": 41})
+        self.assertEqual(fact["params"], {"available": 41, "raw_states": 41, "statistics": 41})
         self.assertEqual(fact["severity"], "neutral")
 
     def test_every_registered_history_path_answers(self):
@@ -671,31 +675,43 @@ class TestHistoryDepth(_HistoryTestCase):
 
 
 class TestHistoryDepthDisagreement(_HistoryTestCase):
-    """The false green from #169: deep statistics behind a shallow raw table.
+    """Statistics and raw states disagreeing by a lot, and what that must mean.
 
     A stock recorder's ``purge_keep_days`` prunes raw states and leaves
     long-term statistics untouched, so an entity can show years of statistics
-    while the raw states a training run actually reads go back only a handful
-    of days. Severity must be judged on the raw-states number, not on
-    whichever of the two happens to be deepest.
+    while the raw states go back only a handful of days, or -- the rarer
+    direction -- a deep raw table behind a statistics table that has not
+    accumulated much yet. #169 originally made severity ignore ``statistics``
+    entirely, because at the time every trainer read raw states only and a
+    statistics-based badge read false green for an entity training would find
+    almost empty. #183 changed the premise: every trainer now reads a spliced
+    window, statistics for the tail and raw states for the recent part, so
+    the window it can assemble reaches exactly as far as the deeper of the
+    two tables (#186). Severity follows that splice: it is judged on
+    ``max(raw_states, statistics)``, not on raw states alone.
     """
 
-    def test_a_warning_shows_even_with_years_of_statistics(self):
+    def test_shallow_raw_states_behind_deep_statistics_now_reads_ok(self):
+        # The reference case from #186: 8 days of raw states, 195 of
+        # statistics, 14 required. The house fit still trains on the full 195
+        # days via the splice, so the badge must agree rather than read amber
+        # for a trainer that is doing just fine.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
-        self.probe.days = 3
-        self.probe.statistics = 900
+        self.probe.days = 8
+        self.probe.statistics = 195
         _, inspection = self.inspect_twice(
-            hass, _history_config(min_history_days=30), HOUSE_HISTORY_PATH
+            hass, _history_config(min_history_days=14), HOUSE_HISTORY_PATH
         )
         fact = _fact(inspection, "history")
         self.assertEqual(
-            fact["params"], {"available": 3, "statistics": 900, "required": 30}
+            fact["params"],
+            {"available": 195, "raw_states": 8, "statistics": 195, "required": 14},
         )
-        self.assertEqual(fact["severity"], "warn")
+        self.assertEqual(fact["severity"], "ok")
 
     def test_a_shallow_statistics_table_behind_deep_raw_states_still_reads_ok(self):
-        # The rarer direction, and worth pinning precisely because it is the
-        # one a "trust statistics" badge would have gotten right by accident.
+        # The other direction, worth pinning precisely because it was already
+        # correct before #186 and must stay that way.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         self.probe.days = 400
         self.probe.statistics = 2
@@ -704,9 +720,27 @@ class TestHistoryDepthDisagreement(_HistoryTestCase):
         )
         fact = _fact(inspection, "history")
         self.assertEqual(
-            fact["params"], {"available": 400, "statistics": 2, "required": 30}
+            fact["params"],
+            {"available": 400, "raw_states": 400, "statistics": 2, "required": 30},
         )
         self.assertEqual(fact["severity"], "ok")
+
+    def test_both_tables_shallow_still_warns(self):
+        # The original #169 case: neither table has enough, so no splice can
+        # rescue it. This is the guard against a new false green -- severity
+        # must not read `available` as somehow deeper than both its inputs.
+        hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
+        self.probe.days = 8
+        self.probe.statistics = 8
+        _, inspection = self.inspect_twice(
+            hass, _history_config(min_history_days=14), HOUSE_HISTORY_PATH
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"],
+            {"available": 8, "raw_states": 8, "statistics": 8, "required": 14},
+        )
+        self.assertEqual(fact["severity"], "warn")
 
 
 class TestHistoryGovernedEntities(_HistoryTestCase):
@@ -738,7 +772,12 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         fact = _fact(second, "history")
         self.assertEqual(
             fact["params"],
-            {"available": 41, "statistics": 41, "required": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS},
+            {
+                "available": 41,
+                "raw_states": 41,
+                "statistics": 41,
+                "required": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+            },
         )
 
     def test_the_battery_capacity_sensor_is_judged_against_solar_bias(self):
@@ -1098,8 +1137,13 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
     stops being true, a group will contradict the card that reads the same
     history.
 
-    It is the *raw-states* depth that has to agree, because that is the table
-    the trainer whose rows ``_compute_history_days`` reduces actually read.
+    **Both** depths have to agree, and that is newer than it looks. While the
+    trainers read raw states only, the raw-states depth was the one that had to
+    match and the statistics number was decoration. Since #183 a trainer reads a
+    spliced window and #186 judges the badge on the deeper of the two, so a
+    statistics depth that overstated its reach would put a green badge in front
+    of a trainer that has nothing -- the #169 false green wearing different
+    clothes. The subtests below pin the arithmetic on each side separately.
     """
 
     async def test_both_paths_report_the_same_depth_for_the_same_oldest_sample(self):
@@ -1127,10 +1171,9 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                 async def _no_statistics(hass, ids, *, local_tz):
                     return None
 
-                # Statistics are stubbed empty on purpose: the depth that has
-                # to agree with the trainer is the raw-states one, and pinning
-                # it here means a statistics table that disagreed could never
-                # be mistaken for agreement.
+                # Statistics are stubbed empty here so this subtest speaks
+                # only for the raw-states side; the statistics side gets the
+                # same arithmetic pinned on it below, against its own probe.
                 with unittest.mock.patch.object(
                     span_mod, "query_oldest_state_date", _oldest
                 ), unittest.mock.patch.object(
@@ -1144,6 +1187,41 @@ class TestHistoryDaysAgreement(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(from_rows, days_back)
                 self.assertEqual(depths.raw_states_days, from_rows)
+
+    async def test_the_statistics_depth_uses_the_same_arithmetic(self):
+        """The statistics side, against the probe that narrows to a real day.
+
+        ``query_history_depths`` reads :func:`query_oldest_statistics_day` and
+        not the month-floored :func:`query_oldest_statistics_date` for exactly
+        this reason: subtracting a month floor from today reports history that
+        does not exist. Patching the day probe here pins the arithmetic; that
+        the probe itself narrows a month to its day is pinned in
+        ``tests/test_inspector_span_aggregates.py``.
+        """
+        today = date(2026, 8, 31)
+        for days_back in (0, 3, 41, 400):
+            with self.subTest(days_back=days_back):
+                oldest = today - timedelta(days=days_back)
+
+                async def _oldest_statistics(hass, ids, *, local_tz, _date=oldest):
+                    return _date
+
+                async def _no_states(hass, entity_id, *, local_tz):
+                    return None
+
+                with unittest.mock.patch.object(
+                    span_mod, "query_oldest_statistics_day", _oldest_statistics
+                ), unittest.mock.patch.object(
+                    span_mod, "query_oldest_state_date", _no_states
+                ):
+                    depths = await span_mod.query_history_depths(
+                        None,
+                        "sensor.house_energy",
+                        today_local=today,
+                        local_tz=timezone.utc,
+                    )
+                self.assertEqual(depths.statistics_days, days_back)
+                self.assertEqual(depths.raw_states_days, 0)
 
     async def test_nothing_recorded_is_zero_days_on_both_paths(self):
         async def _nothing(hass, ids, *, local_tz):
@@ -1172,6 +1250,14 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
     once statistics answered, it always asks both tables -- the whole point is
     telling a reader where they disagree, and a caller that skipped the second
     query could never say.
+
+    "The statistics side" is :func:`query_oldest_statistics_day`, which is
+    itself a month probe narrowed by a read bounded to that one month (#186).
+    Both of its reads are bounded whatever the history's depth, and which of
+    them fires is that function's business, pinned in
+    ``tests/test_inspector_span_aggregates.py``; what is pinned here is that
+    the statistics side and the raw-states side are each consulted exactly
+    once.
     """
 
     async def _depths(self, *, statistics, state_date, calls: list[str]):
@@ -1184,7 +1270,7 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
             return state_date
 
         with unittest.mock.patch.object(
-            span_mod, "query_oldest_statistics_date", _stats
+            span_mod, "query_oldest_statistics_day", _stats
         ), unittest.mock.patch.object(span_mod, "query_oldest_state_date", _states):
             return await span_mod.query_history_depths(
                 None,
@@ -1205,11 +1291,12 @@ class TestHistoryDepthsBothTables(unittest.IsolatedAsyncioTestCase):
         # number.
         self.assertEqual(calls, ["statistics", "states"])
 
-    async def test_no_more_than_two_queries_in_the_worst_case(self):
-        # The recorder-query-count guard: the single-number fallback this
-        # replaced already issued two reads (statistics, then raw states) in
-        # its worst case -- no statistics at all -- so this must not cost more
-        # than that same worst case, however both probes answer.
+    async def test_no_more_than_two_probes_however_they_answer(self):
+        # The recorder-query-count guard, at the level this function decides:
+        # one statistics probe and one raw-states probe, never a third of
+        # either. The statistics probe spends a second bounded read of its own
+        # when it has a month to narrow (#186) -- that is its cost to account
+        # for, and an entity with no statistics never reaches it.
         calls: list[str] = []
         await self._depths(statistics=None, state_date=None, calls=calls)
         self.assertEqual(len(calls), 2)

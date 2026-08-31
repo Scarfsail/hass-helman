@@ -94,14 +94,26 @@ const HISTORY_CONFIG = {
     },
 };
 
-/** A history reading of the fixture's choosing, at the severity it names. */
-function historyFacts(available: number, required: number, severity: string) {
+/**
+ * A history reading of the fixture's choosing, at the severity it names.
+ *
+ * `rawStates` and `statistics` default to `available` -- most callers do not
+ * care about the split behind the effective depth -- but a caller asserting
+ * on the badge's tooltip (issue #186) sets them apart on purpose.
+ */
+function historyFacts(
+    available: number,
+    required: number,
+    severity: string,
+    rawStates: number = available,
+    statistics: number = available,
+) {
     return [
         { id: "value", token: "value", params: { value: "1234.5", unit: "kWh" }, severity: "neutral" },
         {
             id: "history",
             token: "history_depth",
-            params: { available, required },
+            params: { available, raw_states: rawStates, statistics, required },
             severity,
         },
     ];
@@ -307,6 +319,9 @@ function readGroup(page: Page, key: string) {
             factClasses: Array.from(
                 shadow.querySelectorAll(".entity-group > .facts .badge"),
             ).map((badge) => badge.className),
+            factTitles: Array.from(
+                shadow.querySelectorAll(".entity-group > .facts .badge"),
+            ).map((badge) => badge.getAttribute("title")),
             // Slotted fields live in the group's light DOM, because the panel
             // renders them and passes them in through the slot.
             slottedFieldLabels: Array.from(group.querySelectorAll(".field label")).map(
@@ -703,6 +718,24 @@ test("the history badge follows the severity the backend sent", async ({ page })
         ]);
         expect(group.factClasses.at(-1)).toContain(badgeClass);
     }
+});
+
+test("the history badge's tooltip names the split behind the effective depth", async ({
+    page,
+}) => {
+    // `available` (issue #186) is the deeper of raw states and statistics --
+    // a reader staring at the number has no way to see which table it came
+    // from without this. Only the history badge carries this title; the
+    // value badge keeps the entity id it already had, and every other badge
+    // stays plain.
+    await mountEditor(page, {
+        config: HISTORY_CONFIG,
+        factsByKey: { [HOUSE_KEY]: historyFacts(195, 14, "ok", 8, 195) },
+    });
+    const group = await waitForGroupFacts(page, HOUSE_KEY);
+
+    expect(group.facts).toEqual(["1234.5 kWh", "195 d of history (14 d required)"]);
+    expect(group.factTitles).toEqual(["sensor.stub", "8 d raw states, 195 d statistics"]);
 });
 
 test("a revert restores what the reading was made of, and nothing else", async ({ page }) => {

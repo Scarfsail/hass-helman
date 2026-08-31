@@ -82,19 +82,24 @@ const CONFIG = {
 };
 
 /** Deliberately different per key, so a row's numbers cannot be mistaken for another's. */
-const DEPTHS: Record<string, { available: number; statistics: number }> = {
-    [HOUSE_KEY]: { available: 41, statistics: 620 },
-    [BIAS_KEY]: { available: 8, statistics: 400 },
-    [GRID_KEY]: { available: 15, statistics: 15 },
-    [BATTERY_KEY]: { available: 25, statistics: 999 },
-    [CONTROLLABLE_KEY]: { available: 33, statistics: 33 },
+const DEPTHS: Record<string, { raw_states: number; statistics: number }> = {
+    [HOUSE_KEY]: { raw_states: 41, statistics: 620 },
+    // Shallow raw states behind deep statistics -- the reference case from
+    // #186. The trainer's spliced window (#183) reaches into that statistics
+    // tail, so this row must read ok, not the false amber #186 fixed.
+    [BIAS_KEY]: { raw_states: 8, statistics: 400 },
+    // Both tables shallow: no splice can rescue this one. The regression
+    // guard for #169 -- a new false green must not swallow this row too.
+    [GRID_KEY]: { raw_states: 5, statistics: 5 },
+    [BATTERY_KEY]: { raw_states: 25, statistics: 999 },
+    [CONTROLLABLE_KEY]: { raw_states: 33, statistics: 33 },
     // Attribute history lives only in recorder states, so a deep statistics
     // number here is exactly the reassurance the role text warns against.
-    [FORECAST_SOURCE_KEY]: { available: 12, statistics: 730 },
+    [FORECAST_SOURCE_KEY]: { raw_states: 12, statistics: 730 },
     // The shape the real instance has: shallow states against deep statistics.
-    // Only the states column binds until #173 splices the two, so this row is
-    // the one that goes orange while every other number looks reassuring.
-    [FORECAST_RECORDED_KEY]: { available: 6, statistics: 210 },
+    // Since #183 the trainer splices the two, so this row's severity binds on
+    // the deeper of the pair, same as every other row.
+    [FORECAST_RECORDED_KEY]: { raw_states: 6, statistics: 210 },
 };
 
 async function mountEditor(page: Page, configOverride?: unknown): Promise<void> {
@@ -131,6 +136,14 @@ async function mountEditor(page: Page, configOverride?: unknown): Promise<void> 
                         return {
                             results: (request.targets ?? []).map((target: any) => {
                                 const depth = (depths as Record<string, any>)[target.key];
+                                // Mirrors `_history_fact` (issue #186):
+                                // `available` is the deeper of the two tables
+                                // -- the effective depth a spliced training
+                                // window can reach -- and severity is judged
+                                // on that, not on raw states alone.
+                                const available = depth
+                                    ? Math.max(depth.raw_states, depth.statistics)
+                                    : 0;
                                 return {
                                     key: target.key,
                                     draft: depth
@@ -147,9 +160,14 @@ async function mountEditor(page: Page, configOverride?: unknown): Promise<void> 
                                                   {
                                                       id: "history",
                                                       token: "history_depth",
-                                                      params: { ...depth, required: requiredFor(target.key) },
+                                                      params: {
+                                                          available,
+                                                          raw_states: depth.raw_states,
+                                                          statistics: depth.statistics,
+                                                          required: requiredFor(target.key),
+                                                      },
                                                       severity:
-                                                          depth.available >= requiredFor(target.key)
+                                                          available >= requiredFor(target.key)
                                                               ? "ok"
                                                               : "warn",
                                                   },
@@ -255,7 +273,7 @@ test("the numbers in each row match what inspect_entities answered for it", asyn
 
     const gridRow = allRows.find((row) => row[0].includes("sensor.grid_power"));
     expect(gridRow).toBeDefined();
-    expect(gridRow!.slice(2)).toEqual(["15", "15"]);
+    expect(gridRow!.slice(2)).toEqual(["5", "5"]);
 
     const batteryRow = allRows.find((row) => row[0].includes("sensor.battery_capacity"));
     expect(batteryRow).toBeDefined();
@@ -433,21 +451,43 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
 });
 
-test("a raw-states depth below the requirement is marked, even deep in statistics", async ({
+test("a row with both tables shallow is marked, on the row rather than a cell", async ({
     page,
 }) => {
-    // The false green from #169: the bias meter's raw-states depth (8) is
-    // below its requirement (10) while its statistics depth (400) is not --
-    // and the row has to read as a warning regardless.
+    // The regression guard for #169: the grid meter's raw states (5) and
+    // statistics (5) are both below its requirement (10), so no splice can
+    // rescue it and the row must read as a warning. Severity is a property of
+    // the pair (#186), so the highlight lands on the `<tr>`, not on either
+    // depth column alone.
     await mountEditor(page);
     await waitForRows(page, 7);
 
-    const warnCell = await page.evaluate(() => {
+    const warnRow = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        const cell = Array.from(root?.querySelectorAll(".training-depth-warn") ?? []).find(
-            (element) => element.textContent?.trim() === "8",
+        const row = Array.from(root?.querySelectorAll("tr.training-depth-warn") ?? []).find(
+            (element) => element.textContent?.includes("sensor.grid_power"),
         );
-        return cell?.textContent?.trim() ?? null;
+        return row
+            ? Array.from(row.querySelectorAll("td")).map((td) => td.textContent?.trim() ?? "")
+            : null;
     });
-    expect(warnCell).toBe("8");
+    expect(warnRow).not.toBeNull();
+    expect(warnRow!.slice(2)).toEqual(["5", "5"]);
+});
+
+test("shallow raw states behind deep statistics no longer marks the row", async ({ page }) => {
+    // The reference case from #186: the bias meter's raw states (8) sit below
+    // its requirement (10) while its statistics (400) do not. Since #183 the
+    // trainer's spliced window reaches into that statistics tail, so this row
+    // must read ok -- the false amber #186 exists to remove.
+    await mountEditor(page);
+    await waitForRows(page, 7);
+
+    const warnRowTexts = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll("tr.training-depth-warn") ?? []).map(
+            (row) => row.textContent ?? "",
+        );
+    });
+    expect(warnRowTexts.some((text) => text.includes("sensor.solar_bias_meter"))).toBe(false);
 });

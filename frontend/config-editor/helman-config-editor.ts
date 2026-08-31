@@ -741,10 +741,21 @@ export class HelmanConfigEditorPanel
       color: var(--secondary-text-color);
     }
 
-    /* Same hue the entity-group badge uses for a shallow raw-states depth. */
-    .training-depth-warn {
+    /* Same hue the entity-group badge uses when a row's spliced depth falls
+       short of its requirement. On the row rather than one cell since #186:
+       it is the pair of columns that is short, not either one of them. The
+       two cells that declare their own colour need it unset explicitly -- a
+       declared value beats an inherited one whatever the selector's
+       specificity, so without this the role and the entity id stay grey and
+       the row reads as half-marked. */
+    tr.training-depth-warn {
       color: var(--warning-color, #ffa600);
       font-weight: 600;
+    }
+
+    tr.training-depth-warn .training-depth-role,
+    tr.training-depth-warn .training-depth-entity-id {
+      color: inherit;
     }
 
     .section-footer {
@@ -2274,8 +2285,10 @@ export class HelmanConfigEditorPanel
    *
    * Both of its columns matter and they mean different things: raw states are
    * the 15-minute detail the fit is built from and stop at `purge_keep_days`,
-   * while statistics are hourly and kept forever. Until #173 teaches the
-   * trainer to splice the two, only the states column binds.
+   * while statistics are hourly and kept forever. #183 taught the trainer to
+   * splice the two -- statistics for the tail, raw states for the recent part
+   * -- so the row's severity now binds on whichever column reaches deeper
+   * (issue #186), not on the states column alone.
    *
    * Curtailment detection reads grid power and the battery SoC sensor (which
    * lives under the `capacity` key — see `actuals.py:411`). None of the three
@@ -2399,15 +2412,15 @@ export class HelmanConfigEditorPanel
     const historyFact: EntityFact | undefined = draft?.facts?.find(
       (fact) => fact.id === "history",
     );
-    const rawStates = historyFact?.params?.["available"];
+    const rawStates = historyFact?.params?.["raw_states"];
     const statistics = historyFact?.params?.["statistics"];
     const name = html`<div class="training-depth-label">${row.label}</div>`;
-    const warnClass =
-      historyFact?.severity === "warn"
-        ? "training-depth-number training-depth-warn"
-        : "training-depth-number";
+    // Severity is a property of the pair now that `available` is the spliced
+    // effective depth (issue #186) -- the raw-states cell alone no longer
+    // says whether the row is short, so the highlight moves to the row.
+    const rowClass = historyFact?.severity === "warn" ? "training-depth-warn" : "";
     return html`
-      <tr>
+      <tr class=${rowClass}>
         <td>
           ${entityId
             ? html`<button
@@ -2426,7 +2439,7 @@ export class HelmanConfigEditorPanel
                 </div>`}
         </td>
         <td class="training-depth-role">${this._t(row.roleKey)}</td>
-        <td class=${warnClass}>${this._trainingDepthCell(rawStates)}</td>
+        <td class="training-depth-number">${this._trainingDepthCell(rawStates)}</td>
         <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
       </tr>
     `;

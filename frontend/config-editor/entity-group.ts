@@ -483,7 +483,16 @@ export class HelmanEntityGroup extends LitElement {
         }
         const badgeClass = BADGE_CLASSES[fact.severity ?? "neutral"] ?? BADGE_CLASSES.neutral;
         if (!entityId || fact.id !== "value") {
-            return html`<span class="badge ${badgeClass}">${text}</span>`;
+            // The history badge is the one other badge with something to add
+            // beyond its own text: `available` (issue #186) is the deeper of
+            // raw states and statistics, and a reader staring at an amber
+            // badge deserves to see which table is the shallow one without
+            // opening the training-depth table. Every other non-value badge
+            // stays a plain, title-less span.
+            const title = fact.id === "history" ? this._historyTitle(fact) : null;
+            return title
+                ? html`<span class="badge ${badgeClass}" title=${title}>${text}</span>`
+                : html`<span class="badge ${badgeClass}">${text}</span>`;
         }
         return html`
             <button
@@ -530,18 +539,46 @@ export class HelmanEntityGroup extends LitElement {
      * drawn -- its siblings still are.
      */
     private _factText(fact: EntityFact): string | null {
-        const key = "editor.entity_status." + fact.token;
+        return this._localizeWithParams("editor.entity_status." + fact.token, fact.params ?? {});
+    }
+
+    /**
+     * One localized string with `{name}` placeholders filled from `params`, or
+     * `null` when no locale knows the key.
+     *
+     * Shared by the two callers that render backend-supplied params -- a
+     * fact's own text and the history badge's title -- so the "unknown token
+     * draws nothing" rule is stated once rather than drifting between them.
+     */
+    private _localizeWithParams(
+        key: string,
+        params: Record<string, unknown>,
+    ): string | null {
         const localize = getLocalizeFunction(this.hass ?? undefined);
         const template = localize(key);
         if (!template || template === key || template.startsWith(MISSING_TRANSLATION_PREFIX)) {
             return null;
         }
         let text = template;
-        for (const [name, value] of Object.entries(fact.params ?? {})) {
+        for (const [name, value] of Object.entries(params)) {
             text = text.split("{" + name + "}").join(String(value));
         }
         text = text.trim();
         return text ? text : null;
+    }
+
+    /**
+     * "8 d raw states, 195 d statistics" -- the split behind the history
+     * badge's effective-depth number, or `null` when the params it needs are
+     * missing (an older backend, an unrelated fact this method was never
+     * meant to be asked about).
+     */
+    private _historyTitle(fact: EntityFact): string | null {
+        const params = fact.params ?? {};
+        if (!("raw_states" in params) || !("statistics" in params)) {
+            return null;
+        }
+        return this._localizeWithParams("editor.facts.history_depth_split", params);
     }
 
     private _t(key: string): string {
