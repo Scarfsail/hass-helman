@@ -550,6 +550,10 @@ class HelmanCoordinator:
         #: The one-shot walk that recovers the forecast's past publications.
         self._solar_forecast_backfill_task: Any | None = None
         self._solar_forecast_backfill_started = False
+        #: The one-shot back-fill of the five battery-forecast entities'
+        #: statistics from the retired store's orphaned .storage file.
+        self._battery_forecast_backfill_task: Any | None = None
+        self._battery_forecast_backfill_started = False
         self._cached_solar_forecast: dict[str, Any] | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
@@ -829,6 +833,7 @@ class HelmanCoordinator:
             export_price_sensor.async_write_ha_state()
         self._maybe_start_grid_export_price_backfill()
         self._maybe_start_solar_forecast_backfill()
+        self._maybe_start_battery_forecast_backfill()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1783,6 +1788,45 @@ class HelmanCoordinator:
             return None
         first = entity_ids[0]
         return first.strip() if isinstance(first, str) and first.strip() else None
+
+    def _maybe_start_battery_forecast_backfill(self) -> None:
+        """Start the one-shot back-fill of the five battery-forecast entities.
+
+        Triggered from the publish beat for the same reason as the solar walk:
+        the first import writes an entity's statistics metadata, so it must not
+        run before that entity has published a value of its own. The source --
+        ``BatteryForecastHistoryStore``'s orphaned ``.storage`` file -- is
+        static, not perishable, so this could have waited; it does not, only
+        because there is no cost to running it now and the file is exactly the
+        kind of artifact a cleanup sweeps up.
+
+        Runs at most once per Home Assistant start. The task keeps a per-series
+        done-marker, so a run cut short by a restart resumes by skipping the
+        series it already wrote.
+        """
+        # ``getattr`` throughout, like the sibling starters: this runs off the
+        # publish beat, which several tests and the recovery path reach with a
+        # partially built coordinator.
+        if getattr(self, "_battery_forecast_backfill_started", True):
+            return
+        if self.get_battery_forecast_current() is None:
+            # No slot published yet, so the five entities have no series to
+            # write into and no compiled hour to stop before.
+            return
+
+        from .battery_forecast_backfill import (
+            async_backfill_battery_forecast_statistics,
+        )
+
+        self._battery_forecast_backfill_started = True
+        # Tracked so it can be cancelled on unload, for the reason the sibling
+        # tasks are: a reload builds a fresh coordinator whose "started" flag is
+        # False, and a second run would re-read the file and re-import. The
+        # imports upsert, so nothing corrupts -- but it is wasted work.
+        self._battery_forecast_backfill_task = self._hass.async_create_background_task(
+            async_backfill_battery_forecast_statistics(self._hass),
+            "helman_battery_forecast_backfill",
+        )
 
     def _maybe_start_grid_export_price_backfill(self) -> None:
         """Start the one-shot statistics back-fill, once the mirror has a value.
@@ -4883,6 +4927,10 @@ class HelmanCoordinator:
         if solar_backfill_task is not None:
             solar_backfill_task.cancel()
             self._solar_forecast_backfill_task = None
+        battery_backfill_task = getattr(self, "_battery_forecast_backfill_task", None)
+        if battery_backfill_task is not None:
+            battery_backfill_task.cancel()
+            self._battery_forecast_backfill_task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
