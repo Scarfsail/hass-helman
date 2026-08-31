@@ -615,12 +615,15 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
             windows=windows,
         )
 
-        # The first refresh of the day has to read the day; the second reads
-        # only what could still change — the slots inside the rebound window.
+        # The first refresh of the day has to read the day -- widened back by
+        # the 15-minute grid's 30-minute staleness limit (decision 4), so a
+        # carry spanning the window start can still be judged on its true age
+        # -- and the second reads only what could still change: the slots
+        # inside the rebound window.
         self.assertEqual(
             windows[0],
             (
-                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 0, 0, tzinfo=TZ)),
+                _FakeDtUtil.as_utc(datetime(2026, 5, 9, 23, 30, tzinfo=TZ)),
                 _FakeDtUtil.as_utc(datetime(2026, 5, 10, 23, 30, tzinfo=TZ)),
             ),
         )

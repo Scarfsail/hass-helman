@@ -27,7 +27,7 @@ _HOURLY_GRAIN_REASON = "hourly_statistics_grain"
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
 _ALGORITHM_VERSION = (
     "configurable_aggregation_v1+15min_v1+curtailment_inference_v1+live_horizon_v1"
-    "+hourly_statistics_tail_v1"
+    "+hourly_statistics_tail_v1+carry_staleness_v1"
 )
 _LOGGER = logging.getLogger(__name__)
 

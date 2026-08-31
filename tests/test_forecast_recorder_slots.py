@@ -217,9 +217,15 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
         ]
         samples = {
-            boundaries[0]: 1.0,
-            boundaries[1]: 1.25,
-            boundaries[2]: 1.2,
+            boundaries[0]: recorder_hourly_series._BoundarySample(
+                value_kwh=1.0, observed_at=boundaries[0]
+            ),
+            boundaries[1]: recorder_hourly_series._BoundarySample(
+                value_kwh=1.25, observed_at=boundaries[1]
+            ),
+            boundaries[2]: recorder_hourly_series._BoundarySample(
+                value_kwh=1.2, observed_at=boundaries[2]
+            ),
         }
 
         changes = recorder_hourly_series._build_slot_energy_changes_from_boundaries(

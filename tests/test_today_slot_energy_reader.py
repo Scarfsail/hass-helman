@@ -305,11 +305,13 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
             await self._read_incremental(reader, recorder, reference_time)
             reference_time += timedelta(minutes=15)
 
-        # First read of the day: the whole day, once.
+        # First read of the day: the whole day, once -- widened back by the
+        # 15-minute grid's 30-minute staleness limit (decision 4) so a carry
+        # spanning the window start can still be judged on its true age.
         self.assertEqual(
             recorder.windows[0],
             (
-                _FakeDtUtil.as_utc(DAY),
+                _FakeDtUtil.as_utc(DAY - timedelta(minutes=30)),
                 _FakeDtUtil.as_utc(DAY + timedelta(minutes=15)),
             ),
         )
@@ -461,10 +463,11 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
             (DAY + timedelta(days=1)).date(),
         )
         # The new day is read from its own midnight, not resumed from the old
-        # day's frozen boundary.
+        # day's frozen boundary -- widened back by the staleness limit, same
+        # as the first read of any day (a fresh day is a cold read too).
         self.assertEqual(
             recorder.windows[-1][0],
-            _FakeDtUtil.as_utc(DAY + timedelta(days=1)),
+            _FakeDtUtil.as_utc(DAY + timedelta(days=1) - timedelta(minutes=30)),
         )
 
 
