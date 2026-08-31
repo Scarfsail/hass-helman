@@ -57,16 +57,20 @@ _LOGGER = logging.getLogger(__name__)
 #: arithmetic that turns a mean power into an energy stay the same number.
 HOUR_MINUTES = 60
 
-#: What a battery-forecast Wh series' hourly ``mean`` is multiplied by to reach
-#: one hour's representative slot Wh.
-#:
-#: Those entities record energy (unit ``Wh``), so ``query_hourly_statistics``
-#: hands their ``mean`` back converted to the energy unit class's display unit,
-#: kWh -- see :data:`~..recorder_statistics_span.STATISTICS_UNITS`. The house
-#: forecast above needs no such factor because it records power, not energy;
-#: this is the same conversion ``forecast_slot_history`` applies to the solar
-#: forecast's statistics tail.
+#: kWh -> Wh. The battery-forecast entities record energy (unit ``Wh``), so
+#: ``query_hourly_statistics`` hands their ``mean`` back converted to the energy
+#: unit class's display unit, kWh -- see
+#: :data:`~..recorder_statistics_span.STATISTICS_UNITS`.
 _KWH_TO_WH = 1000.0
+
+#: Fifteen-minute slots per statistics hour. The battery-forecast entities each
+#: publish *one slot's* Wh, so an hour holds four of them and the hour's
+#: ``mean`` is a quarter of the hour's forecast energy: ``mean x 4`` is the
+#: hour. ``forecast_slot_history`` states the same ("the hour's forecast energy
+#: is ``mean x 4``") and spreads that mean across the hour's four slots; this
+#: path emits one point per hour, so it multiplies instead. The house forecast
+#: above needs neither factor because it records power, not per-slot energy.
+_SLOTS_PER_HOUR = HOUR_MINUTES // 15
 
 
 @dataclass(frozen=True)
@@ -326,13 +330,20 @@ def _house_forecast_points(
 def _forecast_wh_points(
     rows_by_utc_hour: dict[datetime, Any], target_date: date
 ) -> list[dict]:
-    """A battery-forecast Wh series' hourly mean as that hour's slot Wh.
+    """A battery-forecast Wh series' hour, as one point carrying the hour's Wh.
+
+    These entities publish *one 15-minute slot's* energy, so an hour's ``mean``
+    is a quarter of the hour's forecast: the point carries
+    ``mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR`` -- the hour's whole forecast
+    energy, commensurable with the hour-total actuals :func:`_energy_wh_by_slot`
+    emits on this same path and with the sum that becomes ``gridForecastWh`` /
+    ``batteryForecastWh`` and prices ``moneyForecast``. ``forecast_slot_history``
+    reaches the same figure by spreading the mean across the hour's four slots.
 
     Unlike :func:`_house_forecast_points`, which reads a power sensor whose hour
-    mean already *is* Wh, these entities record energy: the mean arrives in kWh
-    and is scaled by :data:`_KWH_TO_WH`. Signed series (net grid, net battery)
-    ride through unchanged -- a mean is a level, and these carry no device class
-    precisely so a decrease is not read as a meter reset.
+    mean already *is* Wh. Signed series (net grid, net battery) ride through
+    unchanged -- a mean is a level, and these carry no device class precisely so
+    a decrease is not read as a meter reset.
     """
     points: list[dict] = []
     for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
@@ -340,7 +351,10 @@ def _forecast_wh_points(
         if mean_kwh is None:
             continue
         points.append(
-            {"timestamp": local_hour.isoformat(), "wh": mean_kwh * _KWH_TO_WH}
+            {
+                "timestamp": local_hour.isoformat(),
+                "wh": mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR,
+            }
         )
     return points
 

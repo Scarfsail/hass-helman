@@ -97,6 +97,10 @@ async def load_battery_forecast_points_for_day(
             dt_util.as_utc(day_end_local),
             entity_ids,
             significant_changes_only=False,
+            # Only the state and its timestamp are read; these five entities
+            # carry no attributes worth materialising across a day of rows --
+            # the same flag ``forecast_slot_history._load_timeline`` passes.
+            no_attributes=True,
         )
     )
     if not states_by_entity:

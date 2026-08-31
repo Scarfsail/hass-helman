@@ -205,6 +205,13 @@ _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
 )
+#: ``_async_refresh_forecast``'s ``reason`` for the quarter-hour timer tick, the
+#: one rebuild that lands on a :00/:15/:30/:45 boundary. The five battery/grid
+#: current-slot forecast entities publish only on this one: an off-beat rebuild
+#: re-stamps the snapshot's first series entry partway through the slot, so its
+#: value covers only the slot's remainder, and HA's time-weighted hourly ``mean``
+#: -- which is what a purged day reads back -- would be dragged low by it.
+_SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
@@ -758,7 +765,7 @@ class HelmanCoordinator:
     def register_sensor_ready(self) -> None:
         """No-op: sensors receive their first value on the next tick."""
 
-    def _publish_solar_forecast_entities(self) -> None:
+    def _publish_solar_forecast_entities(self, *, reason: str) -> None:
         for sensor in self._solar_forecast_sensors:
             if getattr(sensor, "hass", None) is None:
                 continue
@@ -785,19 +792,24 @@ class HelmanCoordinator:
                         "Error publishing solar forecast sensor state: %s",
                         getattr(solar_sensor, "entity_id", "<unknown>"),
                     )
-        # The five battery-forecast current-slot entities ride the same beat, for
-        # the same reason: each one's recorded state at a slot boundary is what
-        # the inspector reads back as that slot's forecast once the raw states
-        # are the only record left of it.
-        for battery_sensor in getattr(self, "_battery_forecast_current_sensors", []):
-            if getattr(battery_sensor, "hass", None) is not None:
-                try:
-                    battery_sensor.async_write_ha_state()
-                except Exception:
-                    _LOGGER.exception(
-                        "Error publishing battery forecast sensor state: %s",
-                        getattr(battery_sensor, "entity_id", "<unknown>"),
-                    )
+        # The five battery/grid current-slot forecast entities publish *only* on
+        # the slot-aligned rebuild -- unlike the solar and house sensors above,
+        # which publish on every refresh. An off-beat rebuild re-stamps the
+        # snapshot's first series entry partway through the slot, so its value
+        # covers only the slot's remainder; the raw-state reader passes that
+        # revision over, but HA's time-weighted hourly ``mean`` -- which a purged
+        # day reads back -- would be dragged low by it and the error would
+        # outlive the raw states. See ``_SLOT_ALIGNED_REFRESH_REASON``.
+        if reason == _SLOT_ALIGNED_REFRESH_REASON:
+            for battery_sensor in getattr(self, "_battery_forecast_current_sensors", []):
+                if getattr(battery_sensor, "hass", None) is not None:
+                    try:
+                        battery_sensor.async_write_ha_state()
+                    except Exception:
+                        _LOGGER.exception(
+                            "Error publishing battery forecast sensor state: %s",
+                            getattr(battery_sensor, "entity_id", "<unknown>"),
+                        )
         # Published on the same beat, though it is neither solar nor a forecast:
         # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
         # import windows align to the same grid, so a price change and its
@@ -2274,13 +2286,16 @@ class HelmanCoordinator:
         rather than zero. ``None`` when the pipeline is cold or carries no slot
         for the clock's current quarter hour.
 
-        The snapshot's first series entry is stamped at build time: on the
-        slot-aligned refresh it lands microseconds into the current slot at
-        essentially the whole slot's energy, and that publication's recorded
-        state is the one the inspector reads back. An off-beat rebuild stamps it
-        partway through the slot instead, so the live value dips until the next
-        beat — the recorded history the inspector samples at slot boundaries is
-        unaffected either way.
+        The snapshot's first series entry is stamped at build time. On the
+        slot-aligned rebuild it lands microseconds into the current slot at
+        essentially the whole slot's energy; an off-beat rebuild stamps it
+        partway through and its value covers only the slot's remainder. That is
+        why :meth:`_publish_solar_forecast_entities` writes the five sensors this
+        feeds *only* on the slot-aligned rebuild — a mid-slot value would drag
+        HA's time-weighted hourly ``mean`` low, and that compiled statistic is
+        exactly what a purged day reads back, so the error would outlive the raw
+        states. This accessor still returns whatever the current snapshot holds;
+        the gate is on the write, not here.
         """
         pipeline = self._cached_appliance_forecast_pipeline
         if pipeline is None:
@@ -2783,7 +2798,7 @@ class HelmanCoordinator:
         """Rebuild the snapshots, then ask for a re-plan if one is warranted."""
         request_now = reference_time or dt_util.now()
         refresh_result = await self._async_build_forecast_snapshots(
-            reference_time=request_now
+            reference_time=request_now, reason=reason
         )
 
         automation_config = read_automation_config(self._active_config)
@@ -2809,9 +2824,14 @@ class HelmanCoordinator:
         )
 
     async def _async_build_forecast_snapshots(
-        self, *, reference_time: datetime | None = None
+        self, *, reference_time: datetime | None = None, reason: str
     ) -> _ForecastRefreshResult:
-        """Build new forecast snapshots, cache them, and persist them."""
+        """Build new forecast snapshots, cache them, and persist them.
+
+        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`, which
+        publishes the battery/grid current-slot forecast sensors on the
+        slot-aligned rebuild alone.
+        """
         request_now = reference_time or dt_util.now()
         try:
             builder = ConsumptionForecastBuilder(
@@ -2875,7 +2895,7 @@ class HelmanCoordinator:
             # deriving the rate a second time.
             self._absorb_grid_import_price(raw_forecast.get("grid"))
             self._absorb_grid_export_price(raw_forecast.get("grid"))
-            self._publish_solar_forecast_entities()
+            self._publish_solar_forecast_entities(reason=reason)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
             return _ForecastRefreshResult(
@@ -4377,7 +4397,7 @@ class HelmanCoordinator:
         def _on_forecast_interval(_now: datetime) -> None:
             self._create_tracked_refresh_task(
                 self._async_refresh_forecast(
-                    reason="slot_refresh",
+                    reason=_SLOT_ALIGNED_REFRESH_REASON,
                     reference_time=_now,
                 )
             )

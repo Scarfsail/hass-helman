@@ -543,7 +543,6 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._active_config = {}
         coordinator._appliances_registry = coordinator_module.AppliancesRuntimeRegistry()
-        coordinator._battery_forecast_history = None
         coordinator._cached_battery_forecast = None
         coordinator._cached_battery_forecast_expires_at = None
         coordinator._cached_battery_forecast_house_generated_at = None

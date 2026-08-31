@@ -189,7 +189,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             self.assertEqual(coordinator._cached_forecast, house_snapshot)
@@ -251,10 +251,95 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             forecast_entity.async_write_ha_state.assert_called_once_with()
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_battery_forecast_sensors_publish_only_on_the_slot_aligned_rebuild(
+        self,
+    ) -> None:
+        # An off-beat rebuild re-stamps the battery snapshot's first entry
+        # partway through the slot, so its value covers only the remainder and
+        # would drag HA's time-weighted hourly mean low. The five battery/grid
+        # current-slot sensors therefore publish on reason="slot_refresh" alone;
+        # the solar entities keep publishing on every refresh.
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+
+            def _fresh_coordinator():
+                coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+                coordinator._hass = SimpleNamespace()
+                coordinator._active_config = {}
+                coordinator._cached_forecast = None
+                coordinator._house_profile = None
+                coordinator._house_profile_trained_at = None
+                coordinator._house_profile_last_outcome = "no_training_yet"
+                coordinator._slot_history = None
+                coordinator._cached_solar_forecast = None
+                coordinator._invalidate_battery_forecast_cache = Mock()
+                coordinator._async_refresh_automation_input_bundle = AsyncMock(
+                    return_value=True
+                )
+                coordinator._storage = SimpleNamespace(
+                    async_save_snapshots=AsyncMock()
+                )
+                coordinator._solar_forecast_sensors = [
+                    SimpleNamespace(
+                        hass=object(),
+                        entity_id="sensor.helman_energy_production_today",
+                        async_write_ha_state=Mock(),
+                    )
+                ]
+                coordinator._battery_forecast_current_sensors = [
+                    SimpleNamespace(
+                        hass=object(),
+                        entity_id="sensor.helman_grid_export_forecast_current",
+                        async_write_ha_state=Mock(),
+                    )
+                ]
+                coordinator._build_canonical_solar_forecast = Mock(
+                    return_value={"status": "available", "points": [], "rawPoints": []}
+                )
+                return coordinator
+
+            builder_instance = SimpleNamespace(
+                build=AsyncMock(return_value={"status": "available"})
+            )
+            raw_forecast_builder = SimpleNamespace(
+                build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            )
+            with (
+                patch.object(
+                    coordinator_module,
+                    "ConsumptionForecastBuilder",
+                    return_value=builder_instance,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=raw_forecast_builder,
+                ),
+            ):
+                off_beat = _fresh_coordinator()
+                await off_beat._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME, reason="solar_bias_changed"
+                )
+                off_beat._solar_forecast_sensors[0].async_write_ha_state.assert_called_once_with()
+                off_beat._battery_forecast_current_sensors[
+                    0
+                ].async_write_ha_state.assert_not_called()
+
+                on_beat = _fresh_coordinator()
+                await on_beat._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME, reason="slot_refresh"
+                )
+                on_beat._battery_forecast_current_sensors[
+                    0
+                ].async_write_ha_state.assert_called_once_with()
         finally:
             _restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
@@ -306,7 +391,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             forecast_entity.async_write_ha_state.assert_not_called()
@@ -847,7 +932,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
                 coordinator_module, house_snapshot=house_snapshot
             ):
                 result = await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             self.assertIs(coordinator._cached_solar_forecast, cached)
@@ -881,7 +966,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
                 coordinator_module, house_snapshot={"status": "unavailable"}
             ):
                 result = await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             self.assertIs(coordinator._cached_solar_forecast, empty)
@@ -913,7 +998,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
                 coordinator_module, house_snapshot={"status": "unavailable"}
             ):
                 result = await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             self.assertIs(coordinator._cached_solar_forecast, partial)
@@ -948,7 +1033,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
                 coordinator_module, house_snapshot={"status": "unavailable"}
             ):
                 await coordinator._async_build_forecast_snapshots(
-                    reference_time=REFERENCE_TIME
+                    reference_time=REFERENCE_TIME, reason="startup"
                 )
 
             coordinator._storage = SimpleNamespace(config={})

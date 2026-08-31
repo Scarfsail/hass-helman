@@ -440,16 +440,30 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_battery_forecast_series_come_back_hourly_from_statistics(self):
         # The retired store's five series are now entities, so a purged day draws
-        # them from the same one statistics read as everything else: the SoC as
-        # its hourly mean percent, the four Wh series as their hourly mean scaled
-        # kWh -> Wh, at hour grain.
+        # them from the same one statistics read as everything else, at hour
+        # grain. The SoC is its hourly mean percent. The four Wh entities publish
+        # *one slot's* energy, so an hour holds four of them and the hour's mean
+        # is a quarter of the hour's forecast: the point carries mean * 1000 * 4,
+        # commensurable with the hour-total actuals on this same path.
+        #
+        # Grid net forecast is pinned equal to grid net actual for this hour so
+        # the two totals must come out identical -- the regression guard, since
+        # dropping the * 4 quartered the forecast against a full-size actual.
         _set_rows(
             {
+                GRID_IMPORT_METER: _meter_series(
+                    _hour(f"{PURGED_DAY}T07:00:00+02:00"), [5.0, 5.25]
+                ),
+                GRID_EXPORT_METER: _meter_series(
+                    _hour(f"{PURGED_DAY}T07:00:00+02:00"), [3.0, 4.0]
+                ),
                 BATTERY_SOC_FORECAST: [
                     _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=54.0),
                 ],
+                # 0.1875 kWh mean * 1000 * 4 = 750 Wh, the hour's net (1.0 kWh
+                # exported minus 0.25 kWh imported).
                 GRID_NET_FORECAST: [
-                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=-0.12),
+                    _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=0.1875),
                 ],
                 BATTERY_NET_FORECAST: [
                     _row(_hour(f"{PURGED_DAY}T08:00:00+02:00"), mean=0.3),
@@ -465,11 +479,17 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             payload["series"]["gridForecast"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": -120.0}],
+            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 750.0}],
         )
         self.assertEqual(
             payload["series"]["batteryForecast"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 300.0}],
+            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 1200.0}],
+        )
+        # Forecast and actual are the same quantity at the same scale: an hour
+        # where they are equal produces equal day totals.
+        self.assertEqual(payload["series"]["gridActual"][0]["valueWh"], 750.0)
+        self.assertEqual(
+            payload["totals"]["gridForecastWh"], payload["totals"]["gridActualWh"]
         )
         self.assertTrue(payload["availability"]["hasBatterySocForecast"])
         self.assertTrue(payload["availability"]["hasGridForecast"])

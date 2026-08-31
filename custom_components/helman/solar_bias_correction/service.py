@@ -1152,6 +1152,18 @@ class SolarBiasCorrectionService:
                     "price history",
                     count=2,
                 ),
+                # The recorded SoC/grid/battery forecast curves — a recorder read
+                # of their own on a raw-state day, so it joins the batch rather
+                # than awaiting after it on the recorder's one DB thread. Already
+                # guarded internally; on a statistics day it just hands back the
+                # ``statistics_day`` lists.
+                self._recorded_battery_forecast_points(
+                    target_date,
+                    cutoff=next_slot,
+                    timezone=timezone,
+                    reads_statistics=reads_statistics,
+                    statistics_day=statistics_day,
+                ),
             ]
             if need_past
             else []
@@ -1170,6 +1182,9 @@ class SolarBiasCorrectionService:
         consumer_slot_maps: list[dict] = []
         recorded_import_price_points: list[dict] = []
         recorded_export_price_points: list[dict] = []
+        battery_forecast_series: tuple[
+            list[dict], list[dict], list[dict], list[dict], list[dict]
+        ] = ([], [], [], [], [])
         if need_past:
             (
                 house_forecast_history_points,
@@ -1178,7 +1193,8 @@ class SolarBiasCorrectionService:
                 grid_actual_series,
                 battery_actual_points,
                 recorded_price_series,
-            ) = gathered[:6]
+                battery_forecast_series,
+            ) = gathered[:7]
             recorded_import_price_points, recorded_export_price_points = (
                 recorded_price_series
             )
@@ -1269,29 +1285,17 @@ class SolarBiasCorrectionService:
             )
 
         # --- Battery SoC, grid and battery forecast ---
-        # Elapsed slots come from the archive written as each snapshot was built,
-        # since none of these series is recorded anywhere else and the live
-        # snapshot starts at the current slot. Slots still ahead of the clock come
-        # from that live snapshot, which begins one slot boundary after now.
-        battery_soc_forecast_points: list[dict] = []
-        grid_forecast_points: list[dict] = []
-        battery_forecast_points: list[dict] = []
-        grid_import_forecast_points: list[dict] = []
-        grid_export_forecast_points: list[dict] = []
-        if need_past:
-            (
-                battery_soc_forecast_points,
-                grid_forecast_points,
-                battery_forecast_points,
-                grid_import_forecast_points,
-                grid_export_forecast_points,
-            ) = await self._recorded_battery_forecast_points(
-                target_date,
-                cutoff=next_slot,
-                timezone=timezone,
-                reads_statistics=reads_statistics,
-                statistics_day=statistics_day,
-            )
+        # Elapsed slots come from the five published sensors' recorder history
+        # (loaded in the batch above), since the live snapshot starts at the
+        # current slot. Slots still ahead of the clock come from that live
+        # snapshot, which begins one slot boundary after now.
+        (
+            battery_soc_forecast_points,
+            grid_forecast_points,
+            battery_forecast_points,
+            grid_import_forecast_points,
+            grid_export_forecast_points,
+        ) = battery_forecast_series
         if need_future:
             battery_soc_forecast_points += _filter_battery_soc_future(
                 battery_snapshot,
