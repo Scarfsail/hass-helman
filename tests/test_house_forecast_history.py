@@ -116,6 +116,43 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         noon = next(p for p in points if "T12:00:00" in p["timestamp"])
         self.assertAlmostEqual(noon["wh"], 300.0, places=3)
 
+    async def test_a_write_late_in_its_slot_is_that_slots_value(self):
+        # The sensor is written at the end of a rebuild that fires on the slot
+        # beat, so a slot's forecast is stamped a fraction of a second *after*
+        # the slot start. A ``<= slot_start`` sweep dropped that row and the
+        # slot kept the value published just after the previous beat -- the whole
+        # curve one slot late. Stamped late within the slot so a boundary-only
+        # seeding would not reproduce it.
+        target = date(2026, 5, 10)
+        states = [
+            _state(800, "2026-05-10T10:00:00.300000+02:00"),
+            _state(1200, "2026-05-10T10:15:00.400000+02:00"),
+        ]
+        fake_result = {"sensor.helman_house_consumption_forecast_current": states}
+        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+            points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
+        by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
+        self.assertAlmostEqual(by_slot["10:00"], 200.0, places=3)
+        # 1200 W published 0.4s into the 10:15 slot -> 300 Wh, not 800/4 held over.
+        self.assertAlmostEqual(by_slot["10:15"], 300.0, places=3)
+        self.assertAlmostEqual(by_slot["23:45"], 300.0, places=3)
+
+    async def test_a_later_write_in_the_same_slot_is_a_revision_and_ignored(self):
+        target = date(2026, 5, 10)
+        states = [
+            _state(800, "2026-05-10T10:15:00.400000+02:00"),
+            _state(2000, "2026-05-10T10:23:00+02:00"),
+        ]
+        fake_result = {"sensor.helman_house_consumption_forecast_current": states}
+        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+            points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
+        by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
+        self.assertAlmostEqual(by_slot["10:15"], 200.0, places=3)
+
     async def test_returns_empty_when_no_states(self):
         target = date(2026, 5, 9)
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))

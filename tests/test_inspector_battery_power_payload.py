@@ -336,5 +336,90 @@ class TestRecordedBatteryForecastPoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p["wh"] for p in battery], [9.0])
 
 
+class _SyncRecorderInstance:
+    async def async_add_executor_job(self, func):
+        return func()
+
+
+def _forecast_state(value: float, ts_iso: str):
+    return SimpleNamespace(
+        state=str(value), last_changed=datetime.fromisoformat(ts_iso)
+    )
+
+
+class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
+    """The raw-state reader's slot resolution.
+
+    The sensors are written at the end of a rebuild that fires on the slot beat,
+    so a slot's forecast is stamped a fraction of a second *after* the slot
+    start. A ``<= slot_start`` sweep dropped that row and the slot kept the
+    value published just after the previous beat -- the whole curve one slot
+    late. States are seeded stamped late within their slot so a boundary-only
+    seeding would not reproduce it.
+    """
+
+    async def _load(self, states_by_entity):
+        battery_history = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.battery_forecast_history"
+        )
+        with patch.object(
+            battery_history, "get_significant_states", lambda *a, **kw: states_by_entity
+        ), patch.object(
+            battery_history, "get_instance", lambda hass: _SyncRecorderInstance()
+        ):
+            return await battery_history.load_battery_forecast_points_for_day(
+                SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague")),
+                date(2026, 5, 10),
+                PRAGUE,
+            )
+
+    async def test_a_write_late_in_its_slot_is_that_slots_value(self):
+        battery_history = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.battery_forecast_history"
+        )
+        soc_entity = battery_history.BATTERY_FORECAST_SOC_CURRENT_ENTITY
+        net_entity = battery_history.BATTERY_FORECAST_GRID_NET_CURRENT_ENTITY
+        soc, grid_net, *_ = await self._load(
+            {
+                soc_entity: [
+                    _forecast_state(40.0, "2026-05-10T10:00:00.300000+02:00"),
+                    _forecast_state(55.0, "2026-05-10T10:15:00.400000+02:00"),
+                ],
+                net_entity: [
+                    _forecast_state(-100.0, "2026-05-10T10:00:00.300000+02:00"),
+                    _forecast_state(20.0, "2026-05-10T10:15:00.400000+02:00"),
+                ],
+            }
+        )
+
+        by_slot = {p["slot"]: p["pct"] for p in soc}
+        self.assertEqual(by_slot["10:00"], 40.0)
+        # Its own value, published 0.4s into the slot -- not 40.0 held over.
+        self.assertEqual(by_slot["10:15"], 55.0)
+        # And held forward past the last write.
+        self.assertEqual(by_slot["23:45"], 55.0)
+
+        net_by_slot = {p["timestamp"][11:16]: p["wh"] for p in grid_net}
+        self.assertEqual(net_by_slot["10:00"], -100.0)
+        self.assertEqual(net_by_slot["10:15"], 20.0)
+
+    async def test_a_later_write_in_the_same_slot_is_a_revision_and_ignored(self):
+        battery_history = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.battery_forecast_history"
+        )
+        soc_entity = battery_history.BATTERY_FORECAST_SOC_CURRENT_ENTITY
+        soc, *_ = await self._load(
+            {
+                soc_entity: [
+                    _forecast_state(40.0, "2026-05-10T10:15:00.400000+02:00"),
+                    # A republication later in the same slot: passed over.
+                    _forecast_state(99.0, "2026-05-10T10:22:00+02:00"),
+                ]
+            }
+        )
+        by_slot = {p["slot"]: p["pct"] for p in soc}
+        self.assertEqual(by_slot["10:15"], 40.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .forecast_slot_sampling import resolve_forecast_slot_values
+
 try:
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.history import get_significant_states
@@ -124,14 +126,20 @@ async def load_battery_forecast_points_for_day(
 def _hold_forward(
     states: list[Any] | None, day_start_local: datetime
 ) -> dict[datetime, float]:
-    """Sample one entity's states onto the day's slots, last value at-or-before wins.
+    """Sample one entity's states onto the day's slots.
 
     Keyed by the slot's local ``datetime``; the SoC caller renders that as
     ``"HH:MM"`` and the Wh callers as an ISO timestamp. A slot before the
     entity's first reading is absent rather than zero, exactly as
     :func:`load_house_forecast_points_for_day` leaves it.
+
+    The slot-resolution rule -- first row *inside* the slot, not the last one
+    at-or-before its start -- is :func:`resolve_forecast_slot_values`; see its
+    docstring for why a ``<= slot_start`` sweep drew the whole curve one slot
+    late. Non-numeric rows are dropped here rather than kept as hold-breakers,
+    which is today's behaviour for the house reader too.
     """
-    timeline: list[tuple[datetime, float]] = []
+    timeline: list[tuple[datetime, float | None]] = []
     for state in states or []:
         raw = getattr(state, "state", None)
         try:
@@ -148,15 +156,10 @@ def _hold_forward(
         return {}
     timeline.sort(key=lambda pair: pair[0])
 
-    sampled: dict[datetime, float] = {}
-    cursor = 0
-    current: float | None = None
-    for slot_index in range(_SLOTS_PER_DAY):
-        slot_start = day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
-        while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
-            current = timeline[cursor][1]
-            cursor += 1
-        if current is None:
-            continue
-        sampled[slot_start] = current
-    return sampled
+    slot_starts = [
+        day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
+        for slot_index in range(_SLOTS_PER_DAY)
+    ]
+    return resolve_forecast_slot_values(
+        timeline, slot_starts, slot_minutes=_SLOT_MINUTES
+    )
