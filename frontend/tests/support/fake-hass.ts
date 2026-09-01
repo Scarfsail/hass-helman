@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import { installFixedClock } from "./fixed-clock";
+
 /**
  * The fake Home Assistant the inspector specs mount against.
  *
@@ -51,6 +53,9 @@ export interface FakeHassOptions {
  * test.
  */
 export async function installFakeHass(page: Page, options: FakeHassOptions): Promise<void> {
+    // The payloads below are dated from the page's clock, so it is fixed first.
+    // See `fixed-clock`.
+    await installFixedClock(page);
     await page.evaluate(({ pillDays }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;

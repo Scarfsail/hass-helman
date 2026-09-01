@@ -23,6 +23,7 @@ import {
     waitForAggregateChart,
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
+import { FIXED_NOW_ISO, FIXED_TODAY, FIXED_YEAR } from "./support/fixed-clock";
 
 /**
  * The day pills and the aggregate chart, as one surface.
@@ -42,7 +43,7 @@ import {
  * on one pill.
  */
 
-const THIS_YEAR = new Date().getUTCFullYear();
+const THIS_YEAR = FIXED_YEAR;
 
 /** `SELECTION_COLOR` as the browser resolves it: the card's one highlight amber. */
 const AMBER = "rgb(245, 158, 11)";
@@ -349,7 +350,7 @@ test.describe("where the correlation does and does not reach", () => {
 
 /** `YYYY-MM` for the month `count` months before this one. */
 function monthsBack(count: number): string {
-    const now = new Date();
+    const now = new Date(FIXED_NOW_ISO);
     const moved = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - count, 1));
     return moved.toISOString().slice(0, 7);
 }
@@ -442,18 +443,10 @@ test.describe("the month row and the month columns", () => {
 test.describe("the pill row's border says which days have happened", () => {
     // Both kinds of day have to be on screen at once for this test to say
     // anything, and it reads them off the expanded calendar of the month the
-    // page believes it is in. The real clock does not reliably supply that: on
-    // the last day of a month every pill in the month is history and the test
-    // fails on a card that is working perfectly. So the day of the month is
-    // pinned, and only that -- the year and month stay the real ones, because
-    // the harness derives its fixtures and its `minDate` floor from the same
-    // real year and the two must agree.
-    const midMonth = new Date();
-    midMonth.setUTCDate(15);
-    midMonth.setUTCHours(12, 0, 0, 0);
-
+    // page believes it is in. The suite's fixed clock is what supplies that: it
+    // sits mid-month, so the month has measured days behind it and forecast
+    // days ahead of it. See `fixed-clock`.
     test.beforeEach(async ({ page }) => {
-        await page.clock.setFixedTime(midMonth);
         await loadCardBundle(page);
     });
 
@@ -481,7 +474,7 @@ test.describe("the pill row's border says which days have happened", () => {
 
         // Today is measured -- it has already partly happened -- and it stays
         // measured when the picker closes. Its window changes; the day does not.
-        const today = midMonth.toISOString().slice(0, 10);
+        const today = FIXED_TODAY;
         expect(styles.find((pill) => pill.day === today)?.border).toBe("solid");
         await toggleMore(page);
         const closed = await pillBorderStyles(page);

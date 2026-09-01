@@ -1,6 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
+import { FIXED_NOW_ISO, FIXED_TODAY, installFixedClock } from "./support/fixed-clock";
+
 /**
  * The solar inspector's day pills.
  *
@@ -28,6 +30,9 @@ const FORECAST_DAYS = 6;
 const SCHEDULED_DAYS = 2;
 
 async function loadCardBundle(page: Page): Promise<void> {
+    // The fixture is dated from the page's clock and the expectations below are
+    // built from the same one. See `fixed-clock`.
+    await installFixedClock(page);
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
@@ -346,7 +351,7 @@ async function pressMore(page: Page): Promise<void> {
 
 /** Every day of the calendar month `today` falls in, in order. */
 function daysOfThisMonth(): string[] {
-    const today = new Date();
+    const today = new Date(FIXED_NOW_ISO);
     const year = today.getUTCFullYear();
     const month = today.getUTCMonth();
     const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
@@ -356,7 +361,7 @@ function daysOfThisMonth(): string[] {
 
 /** The day `offset` days from today, as the fixture writes its dates. */
 function dayAt(offset: number): string {
-    const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+    const todayMs = Date.parse(`${FIXED_TODAY}T00:00:00Z`);
     return new Date(todayMs + offset * 86_400_000).toISOString().slice(0, 10);
 }
 
@@ -669,7 +674,7 @@ test.describe("solar inspector calendar layout", () => {
 
     /** Which column the month's 1st belongs in, counting from the week's start. */
     function expectedBlanks(firstWeekdayIndex: number): number {
-        const today = new Date();
+        const today = new Date(FIXED_NOW_ISO);
         const weekday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).getUTCDay();
         return (((weekday - firstWeekdayIndex) % 7) + 7) % 7;
     }

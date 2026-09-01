@@ -1,6 +1,8 @@
 import { expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
+import { installFixedClock } from "./fixed-clock";
+
 /**
  * The harness the inspector's aggregate-view specs mount against.
  *
@@ -25,6 +27,9 @@ export const STOP_YEAR_VIEW = 4;
 export const STOP_SLOT_60 = 2;
 
 export async function loadCardBundle(page: Page): Promise<void> {
+    // Before anything is mounted: the fixtures below are generated from the
+    // page's own clock, so the clock has to be settled first. See `fixed-clock`.
+    await installFixedClock(page);
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
@@ -56,6 +61,8 @@ export async function mountInspector(
     holdSpanRequests = false,
 ): Promise<void> {
     await page.evaluate(([punchHoles, shape, floor, rawDayFloor, holdSpan]: [boolean, string, string, string | null, boolean]) => {
+        // Fixed by `installFixedClock` above, so the fixture's shape no longer
+        // depends on the calendar day the suite runs -- see `fixed-clock`.
         const today = new Date();
         const iso = (date: Date) => date.toISOString().slice(0, 10);
         const date = iso(today);
@@ -272,6 +279,14 @@ export async function mountInspector(
                     return new Promise((resolveSpan) => {
                         pendingSpan.push(() => resolveSpan(result));
                     });
+                }
+                if (msg.type === "helman/get_schedule") {
+                    // An empty schedule, in the shape the backend sends one:
+                    // `{}` is not that shape, and every subscriber that reaches
+                    // for `slots` on it throws -- inside `willUpdate`, which
+                    // leaves the element unrendered until some later property
+                    // change happens to give it another go.
+                    return { executionEnabled: true, slots: [] };
                 }
                 if (msg.type === "helman/solar_bias/inspector") {
                     (window as any).__dayRequests.push(msg.date);
