@@ -3043,10 +3043,19 @@ export class HelmanSolarInspector extends LitElement {
       { key: "batteryActual", points: s.batteryActual },
     ];
     this._partialBucketGranularityMinutes = granularity;
-    this._partialBuckets = missingMinutesByBucket(whSeries, slot, granularity) as
-      Map<number, Map<SeriesKey, number>>;
-    // Independent of `slot`: a day total is one number, so its own series
-    // either has a hole somewhere in the day or it does not.
+    // The scrim marks what the chart is drawing, so a series the legend has
+    // switched off cannot mark a column: nothing of it is on screen to be
+    // short, and a wash over a column for an invisible reason is worse than no
+    // wash at all. `_hiddenSeries` is reactive state and this runs from render,
+    // so toggling a series recomputes the marks with it.
+    this._partialBuckets = missingMinutesByBucket(
+      whSeries.filter(({ key }) => this._isSeriesVisible(key as SeriesKey)),
+      slot,
+      granularity,
+    ) as Map<number, Map<SeriesKey, number>>;
+    // Independent of `slot` — and of visibility, unlike the scrim above. A
+    // hidden series still prints its daily total, and a number on screen has
+    // to carry its own caveat whether or not its curve is drawn.
     this._partialSeries = new Map(
       whSeries
         .map(({ key, points }) => [key as SeriesKey, seriesCoverage(points, granularity)] as const)
@@ -4625,7 +4634,9 @@ export class HelmanSolarInspector extends LitElement {
     // sum so the note can still name what is short.
     const missingInSelection = new Map<SeriesKey, number>();
     for (const slot of slots) {
-      for (const [key, count] of this._partialBuckets.get(slotToMinutes(slot) ?? -1) ?? []) {
+      const minutes = slotToMinutes(slot);
+      if (minutes === null) continue;
+      for (const [key, count] of this._partialBuckets.get(minutes) ?? []) {
         missingInSelection.set(key, (missingInSelection.get(key) ?? 0) + count);
       }
     }

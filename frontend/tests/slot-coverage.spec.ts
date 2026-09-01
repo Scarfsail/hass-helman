@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { missingSlotMinutes, missingMinutesByBucket, partialBucketStarts, seriesCoverage } from "../cards/helman-solar-inspector/slot-aggregation";
+import { missingSlotMinutes, missingMinutesByBucket, seriesCoverage } from "../cards/helman-solar-inspector/slot-aggregation";
+import type { CoverageSeries } from "../cards/helman-solar-inspector/slot-aggregation";
 import type { InspectorPoint } from "../cards/helman-solar-inspector/solar-inspector-model";
 
 /**
@@ -7,9 +8,9 @@ import type { InspectorPoint } from "../cards/helman-solar-inspector/solar-inspe
  * 15-minute series rather than letting `aggregateWhSeries`'s honest sum read
  * as a genuinely low forecast.
  *
- * `missingSlotMinutes` and `partialBucketStarts` are pure and imported
- * directly (no card bundle needed) exactly as `money-model.spec.ts` exercises
- * `sumMoney` -- the render behaviour these feed is covered separately in
+ * `seriesCoverage` and `missingMinutesByBucket` are pure and imported directly
+ * (no card bundle needed) exactly as `money-model.spec.ts` exercises
+ * `sumMoney` -- the render behaviour they feed is covered separately in
  * `inspector-partial-buckets.spec.ts`.
  */
 
@@ -32,8 +33,17 @@ function fullDay(start: number, end: number, step = 15): number[] {
 const DATE = "2026-07-18";
 
 /** The two-series shape the coverage functions take, for the shared-column cases. */
-function twoSeries(whole: InspectorPoint[], withHole: InspectorPoint[]) {
+function twoSeries(whole: InspectorPoint[], withHole: InspectorPoint[]): CoverageSeries[] {
     return [{ key: "houseForecast", points: whole }, { key: "houseActual", points: withHole }];
+}
+
+/** The columns a set of series would have the chart mark, as `missingMinutesByBucket` keys. */
+function markedColumns(
+    series: CoverageSeries[],
+    slotMinutes: number,
+    granularityMinutes: number,
+): Set<number> {
+    return new Set(missingMinutesByBucket(series, slotMinutes, granularityMinutes).keys());
 }
 
 test.describe("seriesCoverage", () => {
@@ -85,13 +95,13 @@ test.describe("missingSlotMinutes", () => {
     });
 });
 
-test.describe("partialBucketStarts", () => {
+test.describe("the columns a hole marks", () => {
     test("a hole in the 10:00 hour marks the buckets it falls in, at 30 and 60 minutes", () => {
         const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         // 10:15 and 10:30 are missing: one bucket at hour width (10:00-11:00),
         // two adjacent ones at half-hour width (10:00-10:30 and 10:30-11:00).
-        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set([600]));
-        expect(partialBucketStarts([{ key: "houseActual", points }], 30, 15)).toEqual(new Set([600, 630]));
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set([600]));
+        expect(markedColumns([{ key: "houseActual", points }], 30, 15)).toEqual(new Set([600, 630]));
     });
 
     test("the same hole marks its own slots at the native 15-minute width", () => {
@@ -99,36 +109,36 @@ test.describe("partialBucketStarts", () => {
         // other series still fill the column, so an unmarked 15-minute view
         // would read as clean on a day the hour view calls broken.
         const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
-        expect(partialBucketStarts([{ key: "houseActual", points }], 15, 15)).toEqual(new Set([615, 630]));
+        expect(markedColumns([{ key: "houseActual", points }], 15, 15)).toEqual(new Set([615, 630]));
     });
 
     test("a series starting 06:15 marks no 06:00 bucket", () => {
         const points = series(DATE, fullDay(375, 1440));
-        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
     });
 
     test("a series ending at the running slot marks no trailing bucket", () => {
         // Last sample 10:00 -- the 10:00 hour bucket the actuals are still
         // living through must not read as marked just because it is not over yet.
         const points = series(DATE, fullDay(0, 615));
-        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
     });
 
     test("an hourly statistics day marks nothing even at hour width", () => {
         const points = series(DATE, fullDay(0, 1440, 60));
-        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 60)).toEqual(new Set());
+        expect(markedColumns([{ key: "houseActual", points }], 60, 60)).toEqual(new Set());
     });
 
     test("a hole in one series out of several still marks the shared column", () => {
         const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         const whole = series(DATE, fullDay(0, 1440));
-        expect(partialBucketStarts(twoSeries(whole, withHole), 60, 15)).toEqual(new Set([600]));
+        expect(markedColumns(twoSeries(whole, withHole), 60, 15)).toEqual(new Set([600]));
     });
 
     test("a complete day is unmarked at every width", () => {
         const points = series(DATE, fullDay(0, 1440));
         for (const slot of [15, 30, 60]) {
-            expect(partialBucketStarts([{ key: "houseActual", points }], slot, 15)).toEqual(new Set());
+            expect(markedColumns([{ key: "houseActual", points }], slot, 15)).toEqual(new Set());
         }
     });
 });
@@ -144,10 +154,10 @@ test.describe("missingMinutesByBucket", () => {
         expect(buckets.get(600)).toEqual(new Map([["houseActual", 2]]));
     });
 
-    test("its keys agree exactly with partialBucketStarts", () => {
+    test("its keys are exactly the columns the chart marks", () => {
         const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         const whole = series(DATE, fullDay(0, 1440));
         const buckets = missingMinutesByBucket(twoSeries(whole, withHole), 30, 15);
-        expect(new Set(buckets.keys())).toEqual(partialBucketStarts(twoSeries(whole, withHole), 30, 15));
+        expect(new Set(buckets.keys())).toEqual(markedColumns(twoSeries(whole, withHole), 30, 15));
     });
 });

@@ -34,6 +34,16 @@ async function punchHouseActualHole(page: Page, slots: string[]): Promise<void> 
         .updateComplete);
 }
 
+/** Switch the legend's hidden set wholesale, as toggling its cards would. */
+async function setHiddenSeries(page: Page, keys: string[]): Promise<void> {
+    await page.evaluate((hidden) => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        el._hiddenSeries = new Set(hidden);
+    }, keys);
+    await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+        .updateComplete);
+}
+
 /** The chart's partial-bucket scrim rects, by the bucket-start minute they carry. */
 async function partialBucketMarks(page: Page): Promise<number[]> {
     return page.evaluate(() => {
@@ -119,6 +129,24 @@ test.describe("a day with a hole inside one hour", () => {
             return null;
         });
         expect(solarIncomplete).toBe(false);
+    });
+});
+
+test.describe("a hole in a series the legend has switched off", () => {
+    test("stops marking its column until that series is shown again", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+        await punchHouseActualHole(page, ["10:15", "10:30"]);
+        await clickStop(page, STOP_SLOT_60);
+        expect(await partialBucketMarks(page)).toEqual([600]);
+
+        // Switched off, it has nothing on screen to be short of, so a wash over
+        // the column would be a mark for a reason the reader cannot see.
+        await setHiddenSeries(page, ["houseActual"]);
+        expect(await partialBucketMarks(page)).toEqual([]);
+
+        await setHiddenSeries(page, []);
+        expect(await partialBucketMarks(page)).toEqual([600]);
     });
 });
 

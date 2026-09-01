@@ -67,7 +67,7 @@ export function seriesCoverage(
   let expected = 0;
   for (let minutes = first; minutes <= last; minutes += granularityMinutes) {
     expected += 1;
-    if (minutes !== last && !present.has(minutes)) missing.push(minutes);
+    if (!present.has(minutes)) missing.push(minutes);
   }
   return { missing, expected };
 }
@@ -82,10 +82,9 @@ export function missingSlotMinutes(
 
 /**
  * Every hole in the given series, grouped by the wider bucket it falls in and
- * broken down by which series is short there — so a caller that only needs
- * "is this bucket marked" (`partialBucketStarts`, the chart's scrim) and one
- * that has to name what is missing (the mark's own tooltip) both read off one
- * walk of the series instead of two that could drift apart.
+ * broken down by which series is short there — the keys say which columns the
+ * chart's scrim covers and the breakdown says what its tooltip names, off one
+ * walk of the series rather than two that could drift apart.
  *
  * Naming the series is not a nicety. A column carries six of them, and "two
  * readings missing" is a different fact depending on whether it is the house
@@ -122,19 +121,6 @@ export function missingMinutesByBucket(
     }
   }
   return buckets;
-}
-
-/**
- * The wider-bucket starts that hide a hole in at least one of the given
- * series — `missingMinutesByBucket`'s keys, for the callers that only draw the
- * mark and leave naming what is behind it to the tooltip.
- */
-export function partialBucketStarts(
-  series: readonly CoverageSeries[],
-  slotMinutes: number,
-  granularityMinutes: number,
-): Set<number> {
-  return new Set(missingMinutesByBucket(series, slotMinutes, granularityMinutes).keys());
 }
 
 /**
