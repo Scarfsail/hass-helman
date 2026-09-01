@@ -76,7 +76,7 @@ test.describe("a day with a hole inside one hour", () => {
         expect(await partialBucketMarks(page)).toEqual([600]); // 10:00
     });
 
-    test("says how many readings are missing out of how many the column holds", async ({ page }) => {
+    test("names the short series and says how many of its readings are missing", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page);
         await punchHouseActualHole(page, ["10:15", "10:30"]);
@@ -91,6 +91,9 @@ test.describe("a day with a hole inside one hour", () => {
         });
         expect(title).toContain("2 of 4");
         expect(title).toContain("50%");
+        // And which series is short: the column looks the same whichever of
+        // the six it is, so the count alone leaves the reader guessing.
+        expect(title).toContain("Actual house");
     });
 
     test("marks the daily-totals house chip, and no other chip", async ({ page }) => {

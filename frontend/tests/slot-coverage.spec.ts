@@ -31,6 +31,11 @@ function fullDay(start: number, end: number, step = 15): number[] {
 
 const DATE = "2026-07-18";
 
+/** The two-series shape the coverage functions take, for the shared-column cases. */
+function twoSeries(whole: InspectorPoint[], withHole: InspectorPoint[]) {
+    return [{ key: "houseForecast", points: whole }, { key: "houseActual", points: withHole }];
+}
+
 test.describe("seriesCoverage", () => {
     test("counts the span the series covers as the denominator for its holes", () => {
         // 00:00-23:45 with 10:15 and 10:30 gone: 96 slots claimed, two of them
@@ -85,8 +90,8 @@ test.describe("partialBucketStarts", () => {
         const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         // 10:15 and 10:30 are missing: one bucket at hour width (10:00-11:00),
         // two adjacent ones at half-hour width (10:00-10:30 and 10:30-11:00).
-        expect(partialBucketStarts([points], 60, 15)).toEqual(new Set([600]));
-        expect(partialBucketStarts([points], 30, 15)).toEqual(new Set([600, 630]));
+        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set([600]));
+        expect(partialBucketStarts([{ key: "houseActual", points }], 30, 15)).toEqual(new Set([600, 630]));
     });
 
     test("the same hole marks its own slots at the native 15-minute width", () => {
@@ -94,52 +99,55 @@ test.describe("partialBucketStarts", () => {
         // other series still fill the column, so an unmarked 15-minute view
         // would read as clean on a day the hour view calls broken.
         const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
-        expect(partialBucketStarts([points], 15, 15)).toEqual(new Set([615, 630]));
+        expect(partialBucketStarts([{ key: "houseActual", points }], 15, 15)).toEqual(new Set([615, 630]));
     });
 
     test("a series starting 06:15 marks no 06:00 bucket", () => {
         const points = series(DATE, fullDay(375, 1440));
-        expect(partialBucketStarts([points], 60, 15)).toEqual(new Set());
+        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
     });
 
     test("a series ending at the running slot marks no trailing bucket", () => {
         // Last sample 10:00 -- the 10:00 hour bucket the actuals are still
         // living through must not read as marked just because it is not over yet.
         const points = series(DATE, fullDay(0, 615));
-        expect(partialBucketStarts([points], 60, 15)).toEqual(new Set());
+        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
     });
 
     test("an hourly statistics day marks nothing even at hour width", () => {
         const points = series(DATE, fullDay(0, 1440, 60));
-        expect(partialBucketStarts([points], 60, 60)).toEqual(new Set());
+        expect(partialBucketStarts([{ key: "houseActual", points }], 60, 60)).toEqual(new Set());
     });
 
     test("a hole in one series out of several still marks the shared column", () => {
         const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         const whole = series(DATE, fullDay(0, 1440));
-        expect(partialBucketStarts([whole, withHole], 60, 15)).toEqual(new Set([600]));
+        expect(partialBucketStarts(twoSeries(whole, withHole), 60, 15)).toEqual(new Set([600]));
     });
 
     test("a complete day is unmarked at every width", () => {
         const points = series(DATE, fullDay(0, 1440));
         for (const slot of [15, 30, 60]) {
-            expect(partialBucketStarts([points], slot, 15)).toEqual(new Set());
+            expect(partialBucketStarts([{ key: "houseActual", points }], slot, 15)).toEqual(new Set());
         }
     });
 });
 
 test.describe("missingMinutesByBucket", () => {
-    test("carries the distinct missing native minutes behind each marked bucket", () => {
-        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
-        const buckets = missingMinutesByBucket([points], 60, 15);
+    test("names which series is short in each marked bucket, and by how much", () => {
+        const whole = series(DATE, fullDay(0, 1440));
+        const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        const buckets = missingMinutesByBucket(twoSeries(whole, withHole), 60, 15);
         expect([...buckets.keys()]).toEqual([600]);
-        expect(buckets.get(600)).toEqual(new Set([615, 630]));
+        // Only the series with the hole is named: a column is marked for a
+        // reason, and the reader has to be told which of the six it is.
+        expect(buckets.get(600)).toEqual(new Map([["houseActual", 2]]));
     });
 
     test("its keys agree exactly with partialBucketStarts", () => {
         const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
         const whole = series(DATE, fullDay(0, 1440));
-        const buckets = missingMinutesByBucket([whole, withHole], 30, 15);
-        expect(new Set(buckets.keys())).toEqual(partialBucketStarts([whole, withHole], 30, 15));
+        const buckets = missingMinutesByBucket(twoSeries(whole, withHole), 30, 15);
+        expect(new Set(buckets.keys())).toEqual(partialBucketStarts(twoSeries(whole, withHole), 30, 15));
     });
 });

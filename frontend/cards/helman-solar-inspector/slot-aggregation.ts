@@ -82,38 +82,43 @@ export function missingSlotMinutes(
 
 /**
  * Every hole in the given series, grouped by the wider bucket it falls in and
- * kept as the distinct native minutes missing there rather than collapsed to
- * a yes/no per bucket — so a caller that only needs "is this bucket marked"
- * (`partialBucketStarts`, the chart's scrim) and one that needs "how much of
- * it is missing" (the selected-slot panel's caveat) both read off one walk of
- * the series instead of two that could drift apart.
+ * broken down by which series is short there — so a caller that only needs
+ * "is this bucket marked" (`partialBucketStarts`, the chart's scrim) and one
+ * that has to name what is missing (the mark's own tooltip) both read off one
+ * walk of the series instead of two that could drift apart.
+ *
+ * Naming the series is not a nicety. A column carries six of them, and "two
+ * readings missing" is a different fact depending on whether it is the house
+ * consumption behind the bar or the battery SoC line above it; without the
+ * name the reader knows only that something is wrong somewhere in the column.
  *
  * The native width marks too, where the bucket is one slot and the "hole" is
  * that slot's own absence. It is tempting to leave it out — the slot is simply
- * not drawn there, so nothing is being misstated — but a column carries
- * several series at once, and the other five still draw: a column missing only
- * the grid forecast looks as populated as any other, and the day then reads as
- * clean at 15 minutes and broken at 60. Marking at every width is what makes
- * the widths agree, which is the whole point of saying anything at all.
+ * not drawn there, so nothing is being misstated — but the other five series
+ * still draw: a column missing only the grid forecast looks as populated as
+ * any other, and the day then reads as clean at 15 minutes and broken at 60.
+ * Marking at every width is what makes the widths agree, which is the whole
+ * point of saying anything at all.
  *
- * One column can carry several series (forecast and actual, house and grid…),
- * and a reader looking at it cannot tell which of them is short, so the union
- * across every series passed in is what marks the column — one rule, applied
- * to forecast and actual alike, rather than a per-series mark that would still
- * leave the reader guessing at the ones left unmarked.
+ * Only pass series that claim to cover their span. One that is populated
+ * where something happened and empty where nothing did — the invalidated
+ * solar slots, say — is absent by design between its entries, and running
+ * this over it would mark the whole day.
  */
+export type CoverageSeries = { key: string; points: readonly InspectorPoint[] };
+
 export function missingMinutesByBucket(
-  series: readonly (readonly InspectorPoint[])[],
+  series: readonly CoverageSeries[],
   slotMinutes: number,
   granularityMinutes: number,
-): Map<number, Set<number>> {
-  const buckets = new Map<number, Set<number>>();
-  for (const points of series) {
+): Map<number, Map<string, number>> {
+  const buckets = new Map<number, Map<string, number>>();
+  for (const { key, points } of series) {
     for (const minutes of missingSlotMinutes(points, granularityMinutes)) {
       const start = bucketStart(minutes, slotMinutes);
-      const missing = buckets.get(start) ?? new Set<number>();
-      missing.add(minutes);
-      buckets.set(start, missing);
+      const perSeries = buckets.get(start) ?? new Map<string, number>();
+      perSeries.set(key, (perSeries.get(key) ?? 0) + 1);
+      buckets.set(start, perSeries);
     }
   }
   return buckets;
@@ -121,12 +126,11 @@ export function missingMinutesByBucket(
 
 /**
  * The wider-bucket starts that hide a hole in at least one of the given
- * series, at the width the chart is currently drawn at — the set the chart's
- * scrim draws over, and `missingMinutesByBucket`'s keys without the detail
- * the scrim has no use for.
+ * series — `missingMinutesByBucket`'s keys, for the callers that only draw the
+ * mark and leave naming what is behind it to the tooltip.
  */
 export function partialBucketStarts(
-  series: readonly (readonly InspectorPoint[])[],
+  series: readonly CoverageSeries[],
   slotMinutes: number,
   granularityMinutes: number,
 ): Set<number> {
