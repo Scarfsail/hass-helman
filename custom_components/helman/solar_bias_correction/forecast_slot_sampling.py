@@ -27,10 +27,20 @@ def resolve_forecast_slot_values(
     value was standing from before it.
 
     ``timeline`` is ``(instant, value)`` pairs sorted oldest-first. ``value`` is
-    ``None`` for a row a caller keeps as a hold-breaker -- ``forecast_slot_history``
-    does that for ``unavailable`` so a gap cannot mint forecast data; the house
-    and battery readers drop non-numeric rows before they get here and so never
-    pass ``None``, which leaves the rule unchanged for them.
+    ``None`` for a row a caller keeps as a hold-breaker. Every caller -- the
+    bias trainer's ``forecast_slot_history`` and the inspector's house and
+    battery readers alike -- keeps a non-numeric row (``unavailable`` and the
+    like) and passes it through as ``None``, ending the hold, because a value
+    held across a dead stretch would be forecast data for slots nothing was
+    ever believed about: a bad fit for the trainer and a false curve for the
+    inspector. The frequent sub-second NULL/restore dropouts a live instance
+    produces are nearly free under this rule -- the slot's first numeric row is
+    still found inside it -- so no threshold is needed to tell them apart from
+    a real outage. Nearly, not entirely: a dropout whose restoring row lands
+    across a slot boundary blanks the slot it straddles, since that slot ends
+    with nothing standing and has no numeric row of its own. Measured on this
+    project's reference instance that costs on the order of a tenth of a slot
+    per day, which is why it is worn rather than worked around.
     """
     result: dict[datetime, float] = {}
     cursor = 0

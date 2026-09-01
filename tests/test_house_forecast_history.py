@@ -87,6 +87,10 @@ def _state(value: float, ts_iso: str):
     return SimpleNamespace(state=str(value), last_changed=datetime.fromisoformat(ts_iso))
 
 
+def _unavailable_state(ts_iso: str):
+    return SimpleNamespace(state="unavailable", last_changed=datetime.fromisoformat(ts_iso))
+
+
 class _FakeInstance:
     """Fake recorder instance that runs executor jobs synchronously."""
 
@@ -152,6 +156,53 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
         self.assertAlmostEqual(by_slot["10:15"], 200.0, places=3)
+
+    async def test_unavailable_ends_the_hold_leaving_a_gap(self):
+        # An unavailable stretch mid-morning must not be held across as a flat
+        # line: the slots it covers are absent from the returned points, while
+        # the slots before it (still on the earlier value) are unaffected and
+        # the slot the next numeric row lands in resumes normally.
+        target = date(2026, 5, 10)
+        states = [
+            _state(800, "2026-05-10T00:00:00+02:00"),
+            _unavailable_state("2026-05-10T10:00:00+02:00"),
+            _state(1200, "2026-05-10T12:00:00+02:00"),
+        ]
+        fake_result = {"sensor.helman_house_consumption_forecast_current": states}
+        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+            points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
+        by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
+        # Held at 200 Wh right up to the unavailable row.
+        self.assertAlmostEqual(by_slot["09:45"], 200.0, places=3)
+        # Every slot from the unavailable row up to (not including) the next
+        # numeric row is absent -- not held, not zero.
+        for slot in ("10:00", "10:15", "10:30", "11:00", "11:45"):
+            self.assertNotIn(slot, by_slot)
+        # The slot the next numeric row lands in resumes normally.
+        self.assertAlmostEqual(by_slot["12:00"], 300.0, places=3)
+
+    async def test_a_subsecond_dropout_and_restore_is_harmless(self):
+        # The frequent NULL/restore pair a live instance produces (median
+        # 0.3s to the next numeric row) must not blank a slot that
+        # does have a real boundary write, nor break the hold that follows it.
+        target = date(2026, 5, 10)
+        states = [
+            _state(800, "2026-05-10T10:15:00.400000+02:00"),
+            _unavailable_state("2026-05-10T10:20:00.000000+02:00"),
+            _state(800, "2026-05-10T10:20:00.300000+02:00"),
+        ]
+        fake_result = {"sensor.helman_house_consumption_forecast_current": states}
+        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+            points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
+        by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
+        self.assertAlmostEqual(by_slot["10:15"], 200.0, places=3)
+        # The hold continues into later slots untouched by the dropout.
+        self.assertAlmostEqual(by_slot["10:30"], 200.0, places=3)
+        self.assertAlmostEqual(by_slot["23:45"], 200.0, places=3)
 
     async def test_returns_empty_when_no_states(self):
         target = date(2026, 5, 9)

@@ -4080,12 +4080,22 @@ export class HelmanSolarInspector extends LitElement {
       .filter((bar) => measuredMinutes.has(bar.minutes))
       .sort((a, b) => a.minutes - b.minutes);
     if (!bars.length) return "";
-    const points = bars.flatMap((bar) => [
-      [layout.xForMinutes(bar.minutes), yForPct(bar.pct)] as const,
-      [layout.xForMinutes(bar.minutes + this._slotMinutes), yForPct(bar.pct)] as const,
-    ]);
-    const path = points
-      .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+    // Each bar is its own flat tread, joined to the previous one by a vertical
+    // step. A bar that does not butt up against its predecessor is on the far
+    // side of a stretch nothing was forecast for -- since the history readers
+    // stopped holding across an `unavailable`, those slots are simply absent --
+    // so the pen lifts there rather than ramping across the hole and drawing a
+    // trajectory the forecast never held.
+    const path = bars
+      .map((bar, index) => {
+        const previous = bars[index - 1];
+        const contiguous =
+          previous !== undefined && previous.minutes + this._slotMinutes === bar.minutes;
+        const y = yForPct(bar.pct).toFixed(1);
+        const start = layout.xForMinutes(bar.minutes).toFixed(1);
+        const end = layout.xForMinutes(bar.minutes + this._slotMinutes).toFixed(1);
+        return `${contiguous ? "L" : "M"}${start},${y} L${end},${y}`;
+      })
       .join(" ");
     // A fixed battery hue would sit almost on top of the "charging" column
     // colour (both greens), so the line reads against the theme's own text
