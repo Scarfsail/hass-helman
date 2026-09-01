@@ -414,10 +414,16 @@ class HelmanTreeBuilder:
             return
         if not node.is_virtual:
             slug = node.id.replace(".", "_")
+            # The tree node's own ``id`` keeps the historical dot-to-underscore
+            # slug -- it is only a frontend list key. ``power_sensor_id`` is the
+            # actual Helman entity id, which ``HelmanUnmeasuredPowerSensor``
+            # builds by stripping a leading "sensor." rather than underscoring
+            # it, so it is computed separately here to match.
+            entity_slug = node.id.removeprefix("sensor.")
             unmeasured = DeviceNodeDTO(
                 id=f"{slug}_unmeasured",
                 display_name=unmeasured_title,
-                power_sensor_id=f"sensor.helman_{slug}_unmeasured_power",
+                power_sensor_id=f"sensor.helman_unmeasured_power_{entity_slug}",
                 switch_entity_id=None,
                 is_source=False,
                 is_unmeasured=True,

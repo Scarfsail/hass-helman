@@ -732,7 +732,7 @@ def _migrate_v12_to_v13(document: dict[str, Any]) -> tuple[dict[str, Any], list[
 
     The key named the entity holding "how much solar is still to come today",
     and the only entity that ever answers that is Helman's own bias-corrected
-    ``sensor.helman_energy_production_today_remaining``. A setting with one
+    ``sensor.helman_solar_forecast_today_remaining``. A setting with one
     correct value is not a setting: the card now reads that id directly. Any
     value the key held is discarded rather than checked -- a config that pointed
     it somewhere else was pointing at a worse number.

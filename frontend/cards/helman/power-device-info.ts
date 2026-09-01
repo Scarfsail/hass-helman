@@ -10,7 +10,7 @@ import "../schedule-badge";
 
 /** Helman's own bias-corrected "still to come today" sensor. Not configurable:
  *  it is the integration's own output, published under a fixed entity id. */
-const SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_energy_production_today_remaining";
+const SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_solar_forecast_today_remaining";
 
 @customElement("power-device-info")
 export class PowerDeviceInfo extends LitElement {

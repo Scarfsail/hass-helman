@@ -1217,7 +1217,7 @@ class SolarRemainingTodayForecastRetirementTests(unittest.TestCase):
             {
                 "power": "sensor.solar_power",
                 "remaining_today_energy_forecast": (
-                    "sensor.helman_energy_production_today_remaining"
+                    "sensor.helman_solar_forecast_today_remaining"
                 ),
             }
         )

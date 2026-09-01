@@ -223,7 +223,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
             forecast_entity = SimpleNamespace(
                 hass=object(),
-                entity_id="sensor.helman_energy_production_today",
+                entity_id="sensor.helman_solar_forecast_today",
                 async_write_ha_state=Mock(),
             )
             coordinator._solar_forecast_sensors = [forecast_entity]
@@ -290,7 +290,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 coordinator._solar_forecast_sensors = [
                     SimpleNamespace(
                         hass=object(),
-                        entity_id="sensor.helman_energy_production_today",
+                        entity_id="sensor.helman_solar_forecast_today",
                         async_write_ha_state=Mock(),
                     )
                 ]
@@ -363,7 +363,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
             forecast_entity = SimpleNamespace(
                 hass=None,
-                entity_id="sensor.helman_energy_production_today",
+                entity_id="sensor.helman_solar_forecast_today",
                 async_write_ha_state=Mock(),
             )
             coordinator._solar_forecast_sensors = [forecast_entity]

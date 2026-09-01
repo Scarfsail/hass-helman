@@ -84,10 +84,16 @@ def _load_sensor_module():
     sys.modules["homeassistant.core"] = core_mod
 
     helpers_pkg = types.ModuleType("homeassistant.helpers")
+    helpers_pkg.__path__ = []  # mark as package so sub-imports work
     sys.modules["homeassistant.helpers"] = helpers_pkg
     entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
     entity_platform_mod.AddEntitiesCallback = object
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
+
+    device_registry_mod = types.ModuleType("homeassistant.helpers.device_registry")
+    device_registry_mod.DeviceEntryType = type("DeviceEntryType", (), {"SERVICE": "service"})
+    device_registry_mod.DeviceInfo = dict
+    sys.modules["homeassistant.helpers.device_registry"] = device_registry_mod
 
     return importlib.import_module("custom_components.helman.sensor")
 
@@ -114,7 +120,9 @@ def _install(sensor) -> list[float | None]:
 
 def test_unmeasured_skips_small_delta() -> None:
     sensor_module = _load_sensor_module()
-    sensor = sensor_module.HelmanUnmeasuredPowerSensor(_FakeCoordinator(), _FakeEntry(), "node", None)
+    sensor = sensor_module.HelmanUnmeasuredPowerSensor(
+        _FakeCoordinator(), _FakeEntry(), _FakeHass(), "node", None
+    )
     written = _install(sensor)
     sensor.update_value(100.0)
     sensor.update_value(100.0 + (sensor_module._HYSTERESIS_W - 0.1))
@@ -123,7 +131,9 @@ def test_unmeasured_skips_small_delta() -> None:
 
 def test_unmeasured_emits_on_large_delta() -> None:
     sensor_module = _load_sensor_module()
-    sensor = sensor_module.HelmanUnmeasuredPowerSensor(_FakeCoordinator(), _FakeEntry(), "node", None)
+    sensor = sensor_module.HelmanUnmeasuredPowerSensor(
+        _FakeCoordinator(), _FakeEntry(), _FakeHass(), "node", None
+    )
     written = _install(sensor)
     sensor.update_value(100.0)
     sensor.update_value(100.0 + sensor_module._HYSTERESIS_W + 1)

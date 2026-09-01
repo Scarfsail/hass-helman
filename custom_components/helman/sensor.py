@@ -6,17 +6,51 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    CONSUMPTION_TOTAL_ENTITY_ID,
     DOMAIN,
     GRID_EXPORT_PRICE_ENTITY_ID,
     GRID_IMPORT_PRICE_ENTITY_ID,
+    PRODUCTION_TOTAL_ENTITY_ID,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
 
 _HYSTERESIS_W: float = 5.0
 _HYSTERESIS_MAX_GAP_S: float = 30.0
+
+
+def _unmeasured_slug(node_id: str) -> str:
+    """The id portion the unmeasured entity id and unique id are built from.
+
+    The node id *is* the source entity id for every non-root node (the tree
+    walks ``included_in_stat`` and the root is the sole exception, named
+    ``"house"``), so a leading ``sensor.`` is stripped rather than kept as a
+    stuttering ``sensor_`` fragment in the Helman entity's own id.
+    """
+    return node_id.removeprefix("sensor.")
+
+
+class _HelmanDeviceEntity(SensorEntity):
+    """Base for every Helman sensor.
+
+    Puts the entity on the one shared ``Helman`` device and names it through
+    ``has_entity_name`` + ``translation_key`` (or, for the unmeasured sensors,
+    a resolved ``_attr_name``) so nothing falls back to a device-class name
+    and nothing bakes ``"Helman "`` into its own friendly name -- the device
+    supplies that prefix instead.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Helman",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
 
 async def async_setup_entry(
@@ -42,7 +76,7 @@ async def async_setup_entry(
     battery_time_to_full = HelmanBatteryTimeSensor(coordinator, entry, required_battery_ids, "charging")
     battery_time_to_empty = HelmanBatteryTimeSensor(coordinator, entry, required_battery_ids, "discharging")
     unmeasured_sensors: dict[str, HelmanUnmeasuredPowerSensor] = {
-        node_id: HelmanUnmeasuredPowerSensor(coordinator, entry, node_id, parent_sensor_id)
+        node_id: HelmanUnmeasuredPowerSensor(coordinator, entry, hass, node_id, parent_sensor_id)
         for node_id, parent_sensor_id in qualifying_nodes.items()
     }
     total_power = HelmanConsumptionTotalSensor(coordinator, entry)
@@ -78,7 +112,7 @@ async def async_setup_entry(
         entry,
         async_add_entities,
         lambda node_id, parent_id: HelmanUnmeasuredPowerSensor(
-            coordinator, entry, node_id, parent_id
+            coordinator, entry, hass, node_id, parent_id
         ),
     )
 
@@ -126,7 +160,7 @@ async def async_setup_entry(
     coordinator.register_grid_export_price_sensor(grid_export_price_sensor)
 
 
-class HelmanBatteryTimeSensor(SensorEntity):
+class HelmanBatteryTimeSensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
@@ -139,12 +173,13 @@ class HelmanBatteryTimeSensor(SensorEntity):
         required_entity_ids: list[str],
         direction: str,
     ) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self._required_entity_ids = required_entity_ids
         suffix = "to_full" if direction == "charging" else "to_empty"
-        label = "Full" if direction == "charging" else "Empty"
-        self._attr_unique_id = f"{entry.entry_id}_battery_{suffix}"
-        self._attr_name = f"Helman Battery Time to {label}"
+        self.entity_id = f"sensor.helman_battery_time_{suffix}"
+        self._attr_unique_id = f"{entry.entry_id}_battery_time_{suffix}"
+        self._attr_translation_key = f"battery_time_{suffix}"
         self._minutes: float | None = None
         self._target_time_iso: str = ""
         self._target_soc: int | None = None
@@ -189,7 +224,16 @@ class HelmanBatteryTimeSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanUnmeasuredPowerSensor(SensorEntity):
+class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
+    """The one entity a static ``translation_key`` cannot name.
+
+    Its name describes another entity's contents -- the source that this
+    unmeasured remainder was computed from -- so it is resolved once here,
+    from that source's own friendly name, rather than expressed as a static
+    string in ``strings.json``. ``has_entity_name`` still applies, so the
+    device continues to supply the ``Helman`` prefix.
+    """
+
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -199,13 +243,23 @@ class HelmanUnmeasuredPowerSensor(SensorEntity):
         self,
         coordinator,
         entry: ConfigEntry,
+        hass: HomeAssistant,
         node_id: str,
         parent_sensor_id: str | None,
     ) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self._parent_sensor_id = parent_sensor_id
-        self._attr_unique_id = f"{entry.entry_id}_{node_id}_unmeasured_power"
-        self._attr_name = f"Helman {node_id.replace('_', ' ').title()} Unmeasured Power"
+        slug = _unmeasured_slug(node_id)
+        self.entity_id = f"sensor.helman_unmeasured_power_{slug}"
+        self._attr_unique_id = f"{entry.entry_id}_unmeasured_power_{slug}"
+        parent_state = hass.states.get(parent_sensor_id) if parent_sensor_id else None
+        parent_name = (
+            parent_state.attributes.get("friendly_name") if parent_state is not None else None
+        )
+        if not parent_name:
+            parent_name = node_id.replace("_", " ").title()
+        self._attr_name = f"Unmeasured — {parent_name}"
         self._value: float | None = None
 
     @property
@@ -250,16 +304,18 @@ class HelmanUnmeasuredPowerSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanConsumptionTotalSensor(SensorEntity):
+class HelmanConsumptionTotalSensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "W"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_consumption_total"
-        self._attr_name = "Helman Consumption Total"
+        self.entity_id = CONSUMPTION_TOTAL_ENTITY_ID
+        self._attr_unique_id = f"{entry.entry_id}_house_consumption_power"
+        self._attr_translation_key = "house_consumption_power"
         self._value: float | None = None
 
     @property
@@ -291,16 +347,25 @@ class HelmanConsumptionTotalSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanProductionTotalSensor(SensorEntity):
+class HelmanProductionTotalSensor(_HelmanDeviceEntity):
+    """Despite the class name, this sums every non-virtual *source* node --
+    solar, battery discharge and grid import alike -- so it is what supplies
+    the house, not what it produces. See ``HelmanCoordinator._compute_production_total``.
+    The entity id and name say "supply"; only the class name still says
+    "production", since renaming it is not part of this change.
+    """
+
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "W"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_production_total"
-        self._attr_name = "Helman Production Total"
+        self.entity_id = PRODUCTION_TOTAL_ENTITY_ID
+        self._attr_unique_id = f"{entry.entry_id}_house_supply_power"
+        self._attr_translation_key = "house_supply_power"
         self._value: float | None = None
 
     @property
@@ -332,15 +397,16 @@ class HelmanProductionTotalSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanSourceRatioSensor(SensorEntity):
+class HelmanSourceRatioSensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "%"
 
     def __init__(self, coordinator, entry: ConfigEntry, source_type: str) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self._attr_unique_id = f"{entry.entry_id}_{source_type}_source_ratio"
-        self._attr_name = f"Helman {source_type.title()} Source Ratio"
+        self._attr_translation_key = f"{source_type}_source_ratio"
         self.entity_id = f"sensor.helman_{source_type}_source_ratio"
         self._value: float | None = None
 
@@ -357,11 +423,10 @@ class HelmanSourceRatioSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanSolarForecastEnergySensor(SensorEntity):
+class HelmanSolarForecastEnergySensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = "kWh"
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -371,11 +436,12 @@ class HelmanSolarForecastEnergySensor(SensorEntity):
         *,
         day_offset: int,
     ) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self._day_offset = day_offset
-        self.entity_id = f"sensor.helman_energy_production_{key}"
-        self._attr_unique_id = f"{entry.entry_id}_energy_production_{key}"
-        self._attr_translation_key = f"energy_production_{key}"
+        self.entity_id = f"sensor.helman_solar_forecast_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_solar_forecast_{key}"
+        self._attr_translation_key = f"solar_forecast_{key}"
 
     @property
     def available(self) -> bool:
@@ -386,17 +452,17 @@ class HelmanSolarForecastEnergySensor(SensorEntity):
         return self._coordinator.get_solar_forecast_day_total(self._day_offset)
 
 
-class HelmanSolarForecastRemainingSensor(SensorEntity):
+class HelmanSolarForecastRemainingSensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = "kWh"
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID
-        self._attr_unique_id = f"{entry.entry_id}_energy_production_today_remaining"
-        self._attr_translation_key = "energy_production_today_remaining"
+        self._attr_unique_id = f"{entry.entry_id}_solar_forecast_today_remaining"
+        self._attr_translation_key = "solar_forecast_today_remaining"
 
     @property
     def available(self) -> bool:
@@ -407,7 +473,7 @@ class HelmanSolarForecastRemainingSensor(SensorEntity):
         return self._coordinator.get_solar_forecast_today_remaining()
 
 
-class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
+class HelmanHouseConsumptionForecastCurrentSensor(_HelmanDeviceEntity):
     """Publishes the forecasted house consumption for the *current* 15-min slot.
 
     The state value is the slot's energy expressed in Wh-per-hour (i.e. W).
@@ -420,9 +486,9 @@ class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "W"
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = "sensor.helman_house_consumption_forecast_current"
         self._attr_unique_id = f"{entry.entry_id}_house_consumption_forecast_current"
@@ -440,7 +506,7 @@ class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
         return round(value, 1)
 
 
-class _HelmanSolarForecastCurrentSensorBase(SensorEntity):
+class _HelmanSolarForecastCurrentSensorBase(_HelmanDeviceEntity):
     """The solar forecast for the *current* 15-minute slot, as energy.
 
     The number is the slot's own Wh — the same quantity, and the same figure,
@@ -474,9 +540,9 @@ class _HelmanSolarForecastCurrentSensorBase(SensorEntity):
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "Wh"
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry, key: str) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = f"sensor.helman_solar_forecast_{key}"
         self._attr_unique_id = f"{entry.entry_id}_solar_forecast_{key}"
@@ -531,7 +597,7 @@ class HelmanSolarForecastCurrentCorrectedSensor(_HelmanSolarForecastCurrentSenso
         return self._coordinator.get_solar_forecast_current_wh(corrected=True)
 
 
-class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
+class _HelmanBatteryForecastCurrentSensorBase(_HelmanDeviceEntity):
     """One of the five battery-simulation forecast series for the *current* slot.
 
     Together these retire ``BatteryForecastHistoryStore``: the battery forecast
@@ -564,12 +630,12 @@ class _HelmanBatteryForecastCurrentSensorBase(SensorEntity):
 
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_has_entity_name = True
 
     #: The key this sensor reads out of the coordinator accessor's map.
     _snapshot_key: str
 
     def __init__(self, coordinator, entry: ConfigEntry, entity_key: str) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = f"sensor.helman_{entity_key}"
         self._attr_unique_id = f"{entry.entry_id}_{entity_key}"
@@ -656,7 +722,7 @@ class HelmanGridExportForecastCurrentSensor(
         super().__init__(coordinator, entry, "grid_export_forecast_current")
 
 
-class HelmanGridImportPriceSensor(SensorEntity):
+class HelmanGridImportPriceSensor(_HelmanDeviceEntity):
     """Publishes the grid import rate that applies right now.
 
     Helman derives this rate from the ``import_price_windows`` config table and
@@ -675,9 +741,9 @@ class HelmanGridImportPriceSensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = GRID_IMPORT_PRICE_ENTITY_ID
         self._attr_unique_id = f"{entry.entry_id}_grid_import_price"
@@ -696,7 +762,7 @@ class HelmanGridImportPriceSensor(SensorEntity):
         return self._coordinator.get_grid_import_price_unit()
 
 
-class HelmanGridExportPriceSensor(SensorEntity):
+class HelmanGridExportPriceSensor(_HelmanDeviceEntity):
     """Mirrors the configured sell-price entity so the recorder archives the rate.
 
     The counterpart of :class:`HelmanGridImportPriceSensor`, and it exists for a
@@ -720,9 +786,9 @@ class HelmanGridExportPriceSensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = GRID_EXPORT_PRICE_ENTITY_ID
         self._attr_unique_id = f"{entry.entry_id}_grid_export_price"
