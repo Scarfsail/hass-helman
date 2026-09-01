@@ -111,6 +111,24 @@ class ResolveForecastSlotValuesTests(unittest.TestCase):
         )
         self.assertEqual(by_label["10:15"], 60.0)
 
+    def test_a_dropout_straddling_a_boundary_blanks_the_slot_it_straddles(self):
+        # The cost the sampler's docstring owns up to: a sub-second dropout
+        # whose restoring row lands in the next slot leaves the straddled slot
+        # with nothing standing and no numeric row of its own, so it is blanked
+        # even though the forecast held for all but a fraction of it.
+        timeline = [
+            (_at("10:00", after_seconds=0.3), 40.0),
+            (_at("10:29", after_seconds=59.9), None),
+            (_at("10:30", after_seconds=0.2), 40.0),
+        ]
+        by_label = self._by_label(
+            resolve_forecast_slot_values(timeline, SLOT_STARTS, slot_minutes=15)
+        )
+        self.assertEqual(by_label["10:00"], 40.0)
+        self.assertNotIn("10:15", by_label)
+        # The restore starts a fresh hold in its own slot.
+        self.assertEqual(by_label["10:30"], 40.0)
+
     def test_empty_timeline_yields_nothing(self):
         self.assertEqual(
             resolve_forecast_slot_values([], SLOT_STARTS, slot_minutes=15), {}

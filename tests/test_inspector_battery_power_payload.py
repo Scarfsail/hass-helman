@@ -347,6 +347,10 @@ def _forecast_state(value: float, ts_iso: str):
     )
 
 
+def _unavailable_forecast_state(ts_iso: str):
+    return SimpleNamespace(state="unavailable", last_changed=datetime.fromisoformat(ts_iso))
+
+
 class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
     """The raw-state reader's slot resolution.
 
@@ -419,6 +423,74 @@ class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
         )
         by_slot = {p["slot"]: p["pct"] for p in soc}
         self.assertEqual(by_slot["10:15"], 40.0)
+
+    async def test_unavailable_ends_the_hold_leaving_a_gap(self):
+        # All five entities share ``_hold_forward``, so one non-numeric row
+        # proves the rule for the group: SoC and one Wh series both gap.
+        battery_history = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.battery_forecast_history"
+        )
+        soc_entity = battery_history.BATTERY_SOC_FORECAST_CURRENT_ENTITY
+        net_entity = battery_history.GRID_NET_FORECAST_CURRENT_ENTITY
+        soc, grid_net, *_ = await self._load(
+            {
+                soc_entity: [
+                    _forecast_state(40.0, "2026-05-10T00:00:00+02:00"),
+                    _unavailable_forecast_state("2026-05-10T10:00:00+02:00"),
+                    _forecast_state(55.0, "2026-05-10T12:00:00+02:00"),
+                ],
+                net_entity: [
+                    _forecast_state(-100.0, "2026-05-10T00:00:00+02:00"),
+                    _unavailable_forecast_state("2026-05-10T10:00:00+02:00"),
+                    _forecast_state(20.0, "2026-05-10T12:00:00+02:00"),
+                ],
+            }
+        )
+
+        by_slot = {p["slot"]: p["pct"] for p in soc}
+        self.assertEqual(by_slot["09:45"], 40.0)
+        for slot in ("10:00", "10:15", "11:00", "11:45"):
+            self.assertNotIn(slot, by_slot)
+        self.assertEqual(by_slot["12:00"], 55.0)
+
+        net_by_slot = {p["timestamp"][11:16]: p["wh"] for p in grid_net}
+        self.assertEqual(net_by_slot["09:45"], -100.0)
+        for slot in ("10:00", "10:15", "11:00", "11:45"):
+            self.assertNotIn(slot, net_by_slot)
+        self.assertEqual(net_by_slot["12:00"], 20.0)
+
+    async def test_a_subsecond_dropout_and_restore_is_harmless(self):
+        # The frequent NULL/restore pair a live instance produces must not
+        # blank a slot with a real boundary write, nor break the hold
+        # that follows it.
+        battery_history = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.battery_forecast_history"
+        )
+        soc_entity = battery_history.BATTERY_SOC_FORECAST_CURRENT_ENTITY
+        net_entity = battery_history.GRID_NET_FORECAST_CURRENT_ENTITY
+        soc, grid_net, *_ = await self._load(
+            {
+                soc_entity: [
+                    _forecast_state(40.0, "2026-05-10T10:15:00.400000+02:00"),
+                    _unavailable_forecast_state("2026-05-10T10:20:00.000000+02:00"),
+                    _forecast_state(40.0, "2026-05-10T10:20:00.300000+02:00"),
+                ],
+                net_entity: [
+                    _forecast_state(-100.0, "2026-05-10T10:15:00.400000+02:00"),
+                    _unavailable_forecast_state("2026-05-10T10:20:00.000000+02:00"),
+                    _forecast_state(-100.0, "2026-05-10T10:20:00.300000+02:00"),
+                ],
+            }
+        )
+
+        by_slot = {p["slot"]: p["pct"] for p in soc}
+        self.assertEqual(by_slot["10:15"], 40.0)
+        self.assertEqual(by_slot["10:30"], 40.0)
+        self.assertEqual(by_slot["23:45"], 40.0)
+
+        net_by_slot = {p["timestamp"][11:16]: p["wh"] for p in grid_net}
+        self.assertEqual(net_by_slot["10:15"], -100.0)
+        self.assertEqual(net_by_slot["10:30"], -100.0)
 
 
 if __name__ == "__main__":

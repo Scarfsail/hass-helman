@@ -138,16 +138,15 @@ def _hold_forward(
     The slot-resolution rule -- first row *inside* the slot, not the last one
     at-or-before its start -- is :func:`resolve_forecast_slot_values`; see its
     docstring for why a ``<= slot_start`` sweep drew the whole curve one slot
-    late. Non-numeric rows are dropped here rather than kept as hold-breakers,
-    which is today's behaviour for the house reader too.
+    late, and for why non-numeric rows are kept here as hold-breakers.
     """
     timeline: list[tuple[datetime, float | None]] = []
     for state in states or []:
         raw = getattr(state, "state", None)
         try:
-            value = float(raw)
+            value: float | None = float(raw)
         except (TypeError, ValueError):
-            continue
+            value = None
         when = getattr(state, "last_changed", None) or getattr(
             state, "last_updated", None
         )

@@ -60,15 +60,15 @@ async def load_house_forecast_points_for_day(
     if not states:
         return []
 
-    # Build a list of (instant_local, value_w) pairs. Non-numeric rows are
-    # dropped rather than kept as hold-breakers -- unchanged from before.
+    # Build a list of (instant_local, value_w) pairs. Non-numeric rows are kept
+    # as hold-breakers -- see :func:`resolve_forecast_slot_values` for why.
     timeline: list[tuple[datetime, float | None]] = []
     for state in states:
         raw = getattr(state, "state", None)
         try:
-            value_w = float(raw)
+            value_w: float | None = float(raw)
         except (TypeError, ValueError):
-            continue
+            value_w = None
         ts = getattr(state, "last_changed", None) or getattr(state, "last_updated", None)
         if ts is None:
             continue

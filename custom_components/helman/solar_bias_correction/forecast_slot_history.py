@@ -32,8 +32,12 @@ suite.
 * **Stop holding at an ``unavailable``.** Home Assistant writes one when the
   integration stops or the entity drops out, and carrying the last numeric
   value across that gap would mint forecast data for slots nothing was ever
-  believed about — which the trainer would then fit to. A non-numeric row ends
-  the hold; the next numeric one starts it again.
+  believed about — which the trainer would then fit to, and which would draw
+  a false curve for the inspector. A non-numeric row ends the hold; the next
+  numeric one starts it again. This is not this module's own trade: all three
+  readers of a Helman forecast sensor's history follow it, and
+  :func:`~.forecast_slot_sampling.resolve_forecast_slot_values` is where the
+  rule now lives.
 
   A crash hard enough to leave no ``unavailable`` behind defeats this, because
   from the state history alone that gap is indistinguishable from a flat night.
