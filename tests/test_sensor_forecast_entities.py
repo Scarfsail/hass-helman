@@ -99,6 +99,11 @@ def _load_sensor_module():
     entity_platform_mod.AddEntitiesCallback = object
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
 
+    device_registry_mod = types.ModuleType("homeassistant.helpers.device_registry")
+    device_registry_mod.DeviceEntryType = type("DeviceEntryType", (), {"SERVICE": "service"})
+    device_registry_mod.DeviceInfo = dict
+    sys.modules["homeassistant.helpers.device_registry"] = device_registry_mod
+
     # ``automation.day_context_store`` (pulled in transitively) does
     # ``from homeassistant.helpers import storage``; provide a lightweight stub.
     storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
@@ -154,11 +159,11 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(forecast_sensors), 9)
         self.assertEqual(
             forecast_sensors[0].entity_id,
-            "sensor.helman_energy_production_today",
+            "sensor.helman_solar_forecast_today",
         )
         self.assertEqual(
             forecast_sensors[-1].entity_id,
-            "sensor.helman_energy_production_today_remaining",
+            "sensor.helman_solar_forecast_today_remaining",
         )
         # The forecast sensors, then the ten coordinator-pushed singletons that
         # follow them: the house consumption forecast, the two current-slot solar
@@ -231,7 +236,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(today_entity._attr_native_unit_of_measurement, "kWh")
-        self.assertEqual(today_entity._attr_translation_key, "energy_production_today")
+        self.assertEqual(today_entity._attr_translation_key, "solar_forecast_today")
         self.assertTrue(today_entity._attr_has_entity_name)
         self.assertEqual(
             remaining_entity._attr_native_unit_of_measurement,
@@ -239,7 +244,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             remaining_entity._attr_translation_key,
-            "energy_production_today_remaining",
+            "solar_forecast_today_remaining",
         )
         self.assertTrue(remaining_entity._attr_has_entity_name)
 

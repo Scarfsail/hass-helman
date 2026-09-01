@@ -12,44 +12,62 @@
   },
   "entity": {
     "sensor": {
-      "energy_production_today": {
-        "name": "Výroba energie dnes"
+      "battery_time_to_full": {
+        "name": "Čas do nabití baterie"
       },
-      "energy_production_tomorrow": {
-        "name": "Výroba energie zítra"
+      "battery_time_to_empty": {
+        "name": "Čas do vybití baterie"
       },
-      "energy_production_d2": {
-        "name": "Výroba energie den 2"
+      "house_consumption_power": {
+        "name": "Spotřeba domu"
       },
-      "energy_production_d3": {
-        "name": "Výroba energie den 3"
+      "house_supply_power": {
+        "name": "Přísun energie do domu"
       },
-      "energy_production_d4": {
-        "name": "Výroba energie den 4"
+      "solar_source_ratio": {
+        "name": "Podíl zdroje: solár"
       },
-      "energy_production_d5": {
-        "name": "Výroba energie den 5"
+      "battery_source_ratio": {
+        "name": "Podíl zdroje: baterie"
       },
-      "energy_production_d6": {
-        "name": "Výroba energie den 6"
+      "grid_source_ratio": {
+        "name": "Podíl zdroje: síť"
       },
-      "energy_production_d7": {
-        "name": "Výroba energie den 7"
+      "solar_forecast_today": {
+        "name": "Solární prognóza dnes"
       },
-      "grid_export_price": {
-        "name": "Prodejní cena elektřiny"
+      "solar_forecast_tomorrow": {
+        "name": "Solární prognóza zítra"
       },
-      "grid_import_price": {
-        "name": "Nákupní cena elektřiny"
+      "solar_forecast_d2": {
+        "name": "Solární prognóza den 2"
       },
-      "energy_production_today_remaining": {
-        "name": "Zbývající výroba energie dnes"
+      "solar_forecast_d3": {
+        "name": "Solární prognóza den 3"
+      },
+      "solar_forecast_d4": {
+        "name": "Solární prognóza den 4"
+      },
+      "solar_forecast_d5": {
+        "name": "Solární prognóza den 5"
+      },
+      "solar_forecast_d6": {
+        "name": "Solární prognóza den 6"
+      },
+      "solar_forecast_d7": {
+        "name": "Solární prognóza den 7"
+      },
+      "solar_forecast_today_remaining": {
+        "name": "Solární prognóza zbytek dne"
       },
       "solar_forecast_current": {
         "name": "Solární prognóza aktuální slot"
       },
       "solar_forecast_current_corrected": {
         "name": "Solární prognóza aktuální slot (korigovaná)"
+      },
+      "house_consumption_forecast_current": {
+        "name": "Prognóza spotřeby domu aktuální slot"
       },
       "battery_soc_forecast_current": {
         "name": "Prognóza SoC baterie aktuální slot"
@@ -65,6 +83,12 @@
       },
       "grid_export_forecast_current": {
         "name": "Prognóza dodávky do sítě aktuální slot"
+      },
+      "grid_import_price": {
+        "name": "Nákupní cena elektřiny"
+      },
+      "grid_export_price": {
+        "name": "Prodejní cena elektřiny"
       }
     }
   }

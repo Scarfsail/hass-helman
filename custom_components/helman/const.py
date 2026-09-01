@@ -63,8 +63,8 @@ SCHEDULE_EXECUTOR_INTERVAL_SECONDS = 30
 # ably exceed a re-plan's duration so the re-plan -> execute hop settles inside
 # the window and does not bounce back and forth.
 AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS = 30
-CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_consumption_total"
-PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_production_total"
+CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_house_consumption_power"
+PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_house_supply_power"
 #: The import rate Helman itself publishes so the recorder archives it. Nothing
 #: else records what a kilowatt-hour cost, because the rate is computed from the
 #: window config rather than read off an entity; once a slot elapses, this
@@ -85,7 +85,41 @@ GRID_EXPORT_PRICE_ENTITY_ID = "sensor.helman_grid_export_price"
 #: entity id, which only ever pointed back at this very sensor -- a setting
 #: whose single correct value was Helman's own output. The card reads it back
 #: by this id, so it is pinned here rather than left to entity-id slugging.
-SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_energy_production_today_remaining"
+SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_solar_forecast_today_remaining"
+
+#: Single source of truth for the sensor-platform entity registry migration
+#: (``__init__.async_migrate_entry``) run when a config entry upgrades from
+#: version 1 to version 2. Each row is
+#: ``(old_unique_id_suffix, new_suffix, migrate_entity_id)`` where ``new_suffix``
+#: is what both the new ``unique_id`` (``f"{entry_id}_{new_suffix}"``) and, when
+#: ``migrate_entity_id`` is true, the new entity id
+#: (``f"sensor.helman_{new_suffix}"``) are built from -- the same rule
+#: ``sensor.py`` itself follows, so migrated and freshly-created entities always
+#: land on the same ids. ``migrate_entity_id`` is false only for the battery
+#: time-to-full/empty sensors: their *entity* id was already right, and only
+#: their ``unique_id`` (missing the ``time_`` segment) needed the fix.
+#: The dynamically-created unmeasured-power sensors are not listed here --
+#: they are migrated by pattern, since their ids are only known from the tree
+#: at runtime -- see ``async_migrate_entry``.
+SENSOR_UNIQUE_ID_MIGRATIONS: tuple[tuple[str, str, bool], ...] = (
+    ("battery_to_full", "battery_time_to_full", False),
+    ("battery_to_empty", "battery_time_to_empty", False),
+    ("consumption_total", "house_consumption_power", True),
+    ("production_total", "house_supply_power", True),
+    ("energy_production_today", "solar_forecast_today", True),
+    ("energy_production_tomorrow", "solar_forecast_tomorrow", True),
+    ("energy_production_d2", "solar_forecast_d2", True),
+    ("energy_production_d3", "solar_forecast_d3", True),
+    ("energy_production_d4", "solar_forecast_d4", True),
+    ("energy_production_d5", "solar_forecast_d5", True),
+    ("energy_production_d6", "solar_forecast_d6", True),
+    ("energy_production_d7", "solar_forecast_d7", True),
+    ("energy_production_today_remaining", "solar_forecast_today_remaining", True),
+)
+#: Suffix that marks a unique id as an unmeasured-power sensor under the old
+#: scheme (``f"{entry_id}_{node_id}_unmeasured_power"``), for the migration's
+#: pattern-based branch.
+UNMEASURED_POWER_UNIQUE_ID_SUFFIX = "_unmeasured_power"
 HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS = 14
 HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS = 56
 HOUSE_FORECAST_DEFAULT_MIN_SLOT_POINTS = 2

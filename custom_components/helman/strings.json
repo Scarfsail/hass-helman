@@ -12,32 +12,83 @@
   },
   "entity": {
     "sensor": {
-      "energy_production_today": {
-        "name": "Energy production today"
+      "battery_time_to_full": {
+        "name": "Battery time to full"
       },
-      "energy_production_tomorrow": {
-        "name": "Energy production tomorrow"
+      "battery_time_to_empty": {
+        "name": "Battery time to empty"
       },
-      "energy_production_d2": {
-        "name": "Energy production day 2"
+      "house_consumption_power": {
+        "name": "House consumption"
       },
-      "energy_production_d3": {
-        "name": "Energy production day 3"
+      "house_supply_power": {
+        "name": "House supply"
       },
-      "energy_production_d4": {
-        "name": "Energy production day 4"
+      "solar_source_ratio": {
+        "name": "Solar source ratio"
       },
-      "energy_production_d5": {
-        "name": "Energy production day 5"
+      "battery_source_ratio": {
+        "name": "Battery source ratio"
       },
-      "energy_production_d6": {
-        "name": "Energy production day 6"
+      "grid_source_ratio": {
+        "name": "Grid source ratio"
       },
-      "energy_production_d7": {
-        "name": "Energy production day 7"
+      "solar_forecast_today": {
+        "name": "Solar forecast today"
       },
-      "energy_production_today_remaining": {
-        "name": "Energy production today remaining"
+      "solar_forecast_tomorrow": {
+        "name": "Solar forecast tomorrow"
+      },
+      "solar_forecast_d2": {
+        "name": "Solar forecast day 2"
+      },
+      "solar_forecast_d3": {
+        "name": "Solar forecast day 3"
+      },
+      "solar_forecast_d4": {
+        "name": "Solar forecast day 4"
+      },
+      "solar_forecast_d5": {
+        "name": "Solar forecast day 5"
+      },
+      "solar_forecast_d6": {
+        "name": "Solar forecast day 6"
+      },
+      "solar_forecast_d7": {
+        "name": "Solar forecast day 7"
+      },
+      "solar_forecast_today_remaining": {
+        "name": "Solar forecast today remaining"
+      },
+      "solar_forecast_current": {
+        "name": "Solar forecast current slot"
+      },
+      "solar_forecast_current_corrected": {
+        "name": "Solar forecast current slot (corrected)"
+      },
+      "house_consumption_forecast_current": {
+        "name": "House consumption forecast current slot"
+      },
+      "battery_soc_forecast_current": {
+        "name": "Battery SoC forecast current slot"
+      },
+      "battery_net_forecast_current": {
+        "name": "Battery net energy forecast current slot"
+      },
+      "grid_net_forecast_current": {
+        "name": "Grid net forecast current slot"
+      },
+      "grid_import_forecast_current": {
+        "name": "Grid import forecast current slot"
+      },
+      "grid_export_forecast_current": {
+        "name": "Grid export forecast current slot"
+      },
+      "grid_import_price": {
+        "name": "Grid import price"
+      },
+      "grid_export_price": {
+        "name": "Grid export price"
       }
     }
   }
