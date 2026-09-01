@@ -69,12 +69,12 @@ test.describe("partialBucketStarts", () => {
         expect(partialBucketStarts([points], 30, 15)).toEqual(new Set([600, 630]));
     });
 
-    test("the same hole marks nothing at the native 15-minute width", () => {
-        // At 15 == granularity a missing sample is an absent bucket, not a
-        // partial one -- there is nowhere inside a single-sample bucket for a
-        // hole to hide.
+    test("the same hole marks its own slots at the native 15-minute width", () => {
+        // The missing slots are simply not drawn at this width, but the five
+        // other series still fill the column, so an unmarked 15-minute view
+        // would read as clean on a day the hour view calls broken.
         const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
-        expect(partialBucketStarts([points], 15, 15)).toEqual(new Set());
+        expect(partialBucketStarts([points], 15, 15)).toEqual(new Set([615, 630]));
     });
 
     test("a series starting 06:15 marks no 06:00 bucket", () => {

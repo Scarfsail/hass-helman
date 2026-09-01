@@ -71,19 +71,19 @@ export function missingSlotMinutes(
  * it is missing" (the selected-slot panel's caveat) both read off one walk of
  * the series instead of two that could drift apart.
  *
- * A bucket that holds only one native sample — an hourly statistics day
- * drawn at hour width, or any series drawn at its own native width — has
- * nowhere for a hole to hide: a missing native sample there is a bucket that
- * is entirely absent, not one that is partly present, and `aggregateWhSeries`
- * already leaves an absent bucket off the chart the same way it always has.
- * So this returns empty outright once `slotMinutes <= granularityMinutes`
- * rather than reporting the absent bucket's start as if it were a hole inside
- * a wider one. One column can carry several series (forecast and actual,
- * house and grid…), and a reader looking at a column cannot tell which of
- * them is short just by looking at the bar, so the union across every series
- * passed in is what marks the column — one rule, applied to forecast and
- * actual alike, rather than a per-series mark that would still leave the
- * reader guessing at the ones left unmarked.
+ * The native width marks too, where the bucket is one slot and the "hole" is
+ * that slot's own absence. It is tempting to leave it out — the slot is simply
+ * not drawn there, so nothing is being misstated — but a column carries
+ * several series at once, and the other five still draw: a column missing only
+ * the grid forecast looks as populated as any other, and the day then reads as
+ * clean at 15 minutes and broken at 60. Marking at every width is what makes
+ * the widths agree, which is the whole point of saying anything at all.
+ *
+ * One column can carry several series (forecast and actual, house and grid…),
+ * and a reader looking at it cannot tell which of them is short, so the union
+ * across every series passed in is what marks the column — one rule, applied
+ * to forecast and actual alike, rather than a per-series mark that would still
+ * leave the reader guessing at the ones left unmarked.
  */
 export function missingMinutesByBucket(
   series: readonly (readonly InspectorPoint[])[],
@@ -91,7 +91,6 @@ export function missingMinutesByBucket(
   granularityMinutes: number,
 ): Map<number, Set<number>> {
   const buckets = new Map<number, Set<number>>();
-  if (slotMinutes <= granularityMinutes) return buckets;
   for (const points of series) {
     for (const minutes of missingSlotMinutes(points, granularityMinutes)) {
       const start = bucketStart(minutes, slotMinutes);

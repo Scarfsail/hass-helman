@@ -10,7 +10,8 @@ import { loadCardBundle, mountInspector, clickStop, STOP_SLOT_60 } from "./suppo
  * actual series across the whole day with no holes; this punches a two-slot
  * hole into it at 10:15-10:45 after mount, the same way `slot-selection.spec.ts`
  * edits `el._payload` in place, and checks the three places the mark can show:
- * the chart's scrim, the 15-minute view staying clean, and the totals chip.
+ * the chart's scrim at 60 minutes, the same hole marked slot by slot at the
+ * native 15, and the totals chip.
  */
 
 /** Drop the given "HH:MM" slots from `houseActual`, leaving a hole in the day. */
@@ -59,16 +60,17 @@ async function houseChipIncomplete(page: Page): Promise<boolean> {
 }
 
 test.describe("a day with a hole inside one hour", () => {
-    test("marks exactly the 10:00 column at 60 minutes, and nothing at 15", async ({ page }) => {
+    test("marks the 10:00 column at 60 minutes and its own slots at 15", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page);
         await punchHouseActualHole(page, ["10:15", "10:30"]);
 
-        // Native 15-minute width: the hole is just an absent slot, not a
-        // partial bucket -- nothing to mark. The harness opens at 30, so this
-        // has to be asked for explicitly rather than assumed.
+        // Native 15-minute width: the missing slots mark themselves. The other
+        // series still draw in those columns, so leaving them unmarked would
+        // make the day read as clean here and broken one width later. The
+        // harness opens at 30, so this width has to be asked for explicitly.
         await clickStop(page, 0);
-        expect(await partialBucketMarks(page)).toEqual([]);
+        expect(await partialBucketMarks(page)).toEqual([615, 630]); // 10:15, 10:30
 
         await clickStop(page, STOP_SLOT_60);
         expect(await partialBucketMarks(page)).toEqual([600]); // 10:00

@@ -3725,7 +3725,6 @@ export class HelmanSolarInspector extends LitElement {
         ${this._plotClipDef("plot-clip-chart", layout, layout.height)}
         ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderSlotHighlights(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
         <g clip-path="url(#plot-clip-chart)">
@@ -3733,6 +3732,11 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
           ${this._renderSolarLayer(payload, layout)}
         </g>
+        <!-- Over the bands, not under them: the mark has to take colour out of
+             the column it covers, and a wash painted underneath only lightens
+             the empty background around the bars, which reads as a highlight --
+             the opposite of what a short column should look like. -->
+        ${this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderNowMarker(layout, layout.margin.top, layout.plotHeight)}
       </svg>
     `;
@@ -5964,9 +5968,16 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * A wash over every bucket `_partialBuckets` flagged, so an hour drawn short
-   * because a slot inside it went `unavailable` cannot be mistaken for an hour
-   * the forecast genuinely called low.
+   * A wash over every column `_partialBuckets` flagged, so one drawn short
+   * because a slot inside it went `unavailable` cannot be mistaken for one the
+   * forecast genuinely called low.
+   *
+   * The fill is the card's own background rather than a tint of the foreground:
+   * painted over the bands it takes colour *out* of the column, which is what a
+   * reader already reads as "less than the rest". A tint added on top — or the
+   * same tint painted underneath, where it only lights up the empty background
+   * around the bars — reads as a highlight instead, and a highlight says "look
+   * here, there is something", the opposite of what is being said.
    *
    * A rect over the whole column rather than surgery on the stack paths: the
    * stack is built from contiguous runs per band (`_renderStackSet`) and `raw`
@@ -5999,10 +6010,9 @@ export class HelmanSolarInspector extends LitElement {
         class="partial-bucket-mark"
         data-bucket-start=${bucketStartMinutes}
         x=${x} y=${y} width=${w} height=${height}
-        style="fill: color-mix(in srgb, var(--secondary-text-color) 12%, transparent);
-               stroke: var(--secondary-text-color); stroke-dasharray: 4 3;"
-        stroke-width="1" stroke-opacity="0.6"
-        rx="1"
+        style="fill: color-mix(in srgb, var(--card-background-color) 62%, transparent);
+               stroke: var(--secondary-text-color); stroke-dasharray: 3 3;"
+        stroke-width="1" stroke-opacity="0.35"
       ><title>${this._formatPartialBucketNote(missingCount)}</title></rect>
     `;
   }
