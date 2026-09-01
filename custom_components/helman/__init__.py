@@ -53,7 +53,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if suffix == old_suffix:
                 new_suffix = mapped_suffix
                 migrate_entity_id = should_migrate_id
-                old_entity_id = f"sensor.helman_{old_suffix}"
+                # Only meaningful for a row whose entity id actually moves. The
+                # unique-id-only rows are precisely the ones whose entity id was
+                # already right, so `sensor.helman_{old_suffix}` would not name
+                # them (`battery_to_full` never was an entity id) -- left None
+                # rather than filled with a value nothing may read.
+                if should_migrate_id:
+                    old_entity_id = f"sensor.helman_{old_suffix}"
                 break
 
         if new_suffix is None and suffix.endswith(UNMEASURED_POWER_UNIQUE_ID_SUFFIX):
@@ -82,7 +88,42 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 reg_entry.entity_id,
                 updates,
             )
-            ent_reg.async_update_entity(reg_entry.entity_id, **updates)
+            try:
+                ent_reg.async_update_entity(reg_entry.entity_id, **updates)
+            except ValueError:
+                # `async_update_entity` raises when the target entity id or
+                # unique id is already taken -- by a stale row this migration
+                # does not own, or by another integration publishing the same
+                # id. One collision must not abort the whole migration: the
+                # version bump below would never run, the config entry would
+                # fail setup outright, and the registry would be left
+                # half-renamed with no way to finish.
+                #
+                # The entity id is the half that can collide with a foreign
+                # row, so retry without it. Migrating the unique id alone still
+                # matches this registry entry -- history and all -- to the
+                # entity `sensor.py` creates on the next load; the entity keeps
+                # working under its old, legacy id. Dropping the row entirely
+                # would instead strand it and spawn a `_2` duplicate.
+                unique_id_only = {
+                    k: v for k, v in updates.items() if k == "new_unique_id"
+                }
+                if unique_id_only:
+                    try:
+                        ent_reg.async_update_entity(
+                            reg_entry.entity_id, **unique_id_only
+                        )
+                    except ValueError:
+                        unique_id_only = {}
+                _LOGGER.warning(
+                    "Could not fully migrate Helman entity %s to %s -- the target id "
+                    "is already in use. %s",
+                    reg_entry.entity_id,
+                    updates,
+                    "Kept its existing entity id."
+                    if unique_id_only
+                    else "Left it unchanged.",
+                )
 
     hass.config_entries.async_update_entry(entry, version=2)
     return True

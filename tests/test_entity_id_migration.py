@@ -49,6 +49,18 @@ class FakeEntityRegistry:
     def async_update_entity(self, entity_id: str, **changes: str) -> FakeRegistryEntry:
         self.updates.append((entity_id, dict(changes)))
         entry = self._entries[entity_id]
+        # The real ``EntityRegistry._async_update_entity`` raises
+        # ``ValueError("Entity with this ID is already registered")`` when the
+        # target id is taken, and a matching one for a taken unique id. The
+        # migration has to survive that, so the fake reproduces it.
+        target_entity_id = changes.get("new_entity_id")
+        if target_entity_id is not None and target_entity_id in self._entries:
+            raise ValueError("Entity with this ID is already registered")
+        target_unique_id = changes.get("new_unique_id")
+        if target_unique_id is not None and any(
+            e.unique_id == target_unique_id for e in self._entries.values()
+        ):
+            raise ValueError(f"Unique id '{target_unique_id}' is already in use")
         new_unique_id = changes.get("new_unique_id")
         new_entity_id = changes.get("new_entity_id")
         if new_unique_id is not None:
@@ -286,6 +298,57 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
         (migrated,) = registry.entries_for_config_entry(ENTRY_ID)
         self.assertEqual(migrated.entity_id, "sensor.my_unmeasured_house_load")
         self.assertEqual(migrated.unique_id, f"{ENTRY_ID}_unmeasured_power_house")
+
+    async def test_a_taken_target_id_is_skipped_without_aborting_the_migration(
+        self,
+    ) -> None:
+        """A collision must cost one entity, not the whole config entry.
+
+        ``EntityRegistry.async_update_entity`` raises when the target id is
+        already registered -- by a stale row, or by another integration
+        publishing the same id. Letting that propagate would skip the version
+        bump, fail the entry's setup outright, and strand the registry
+        half-renamed. The migration logs and moves on instead.
+        """
+        blocker = FakeRegistryEntry(
+            "sensor.helman_house_consumption_power", "someone_elses_unique_id"
+        )
+        blocker.config_entry_id = "another_entry"
+        registry = FakeEntityRegistry(
+            [
+                FakeRegistryEntry(
+                    "sensor.helman_consumption_total", f"{ENTRY_ID}_consumption_total"
+                ),
+                FakeRegistryEntry(
+                    "sensor.helman_production_total", f"{ENTRY_ID}_production_total"
+                ),
+                blocker,
+            ]
+        )
+        self._patch_registry(registry)
+        hass = FakeHass(registry)
+        entry = FakeConfigEntry(version=1)
+
+        result = await self.helman_init.async_migrate_entry(hass, entry)
+
+        self.assertTrue(result)
+        by_unique = {e.unique_id: e for e in registry.entries_for_config_entry(ENTRY_ID)}
+        # The blocked row still gets its new unique id -- that is what keeps it
+        # matched to the entity `sensor.py` creates -- but keeps its old entity
+        # id, so it goes on working with its history intact.
+        self.assertIn(f"{ENTRY_ID}_house_consumption_power", by_unique)
+        self.assertEqual(
+            by_unique[f"{ENTRY_ID}_house_consumption_power"].entity_id,
+            "sensor.helman_consumption_total",
+        )
+        # The row after it in the loop still migrates.
+        self.assertIn(f"{ENTRY_ID}_house_supply_power", by_unique)
+        self.assertEqual(
+            by_unique[f"{ENTRY_ID}_house_supply_power"].entity_id,
+            "sensor.helman_house_supply_power",
+        )
+        # And the entry still reaches version 2, so setup proceeds.
+        self.assertEqual(entry.version, 2)
 
     async def test_second_run_is_a_no_op(self) -> None:
         registry = FakeEntityRegistry(
