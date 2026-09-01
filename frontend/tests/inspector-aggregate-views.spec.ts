@@ -32,6 +32,7 @@ import {
     waitForAggregateChart,
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
+import { FIXED_NOW_ISO, FIXED_TODAY } from "./support/fixed-clock";
 
 /**
  * The inspector's month and year views.
@@ -57,7 +58,7 @@ test.describe("solar inspector aggregate views", () => {
         await waitForAggregateChart(page);
 
         const keys = await columns(page);
-        const now = new Date();
+        const now = new Date(FIXED_NOW_ISO);
         const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
             .getUTCDate();
         expect(keys).toHaveLength(daysInMonth);
@@ -98,7 +99,7 @@ test.describe("solar inspector aggregate views", () => {
      * once, on the span the data actually stops in.
      */
     test("the year view steps back a year at a time to the oldest data", async ({ page }) => {
-        const thisYear = new Date().getUTCFullYear();
+        const thisYear = new Date(FIXED_NOW_ISO).getUTCFullYear();
         await mountInspector(page, false, "", `${thisYear - 3}-06-15`);
         await clickStop(page, STOP_YEAR_VIEW);
         await waitForAggregateChart(page);
@@ -126,7 +127,7 @@ test.describe("solar inspector aggregate views", () => {
         // compared today's *date* against the floor, said yes, and then moved
         // nothing; a row that only draws the years it has cannot make that
         // claim in the first place.
-        const thisYear = new Date().getUTCFullYear();
+        const thisYear = new Date(FIXED_NOW_ISO).getUTCFullYear();
         await mountInspector(page, false, "", `${thisYear}-02-01`);
         await clickStop(page, STOP_YEAR_VIEW);
         await waitForAggregateChart(page);
@@ -136,7 +137,7 @@ test.describe("solar inspector aggregate views", () => {
     });
 
     test("the month view reaches every month back to the oldest data", async ({ page }) => {
-        const floor = new Date();
+        const floor = new Date(FIXED_NOW_ISO);
         floor.setUTCDate(1);
         floor.setUTCMonth(floor.getUTCMonth() - 14);
         const floorIso = floor.toISOString().slice(0, 10);
@@ -167,11 +168,11 @@ test.describe("solar inspector aggregate views", () => {
      */
     test("a day the recorder has purged opens the day view at its floor", async ({ page }) => {
         const iso = (daysBack: number) => {
-            const day = new Date();
+            const day = new Date(FIXED_NOW_ISO);
             day.setUTCDate(day.getUTCDate() - daysBack);
             return day.toISOString().slice(0, 10);
         };
-        const thisYear = new Date().getUTCFullYear();
+        const thisYear = new Date(FIXED_NOW_ISO).getUTCFullYear();
         const dayFloor = iso(3);
         await mountInspector(page, false, "", `${thisYear - 3}-06-15`, dayFloor);
 
@@ -982,7 +983,7 @@ test.describe("the house composition at D and M", () => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
         const keys = await columns(page);
-        const today = new Date().toISOString().slice(0, 10);
+        const today = FIXED_TODAY;
         await clickColumn(page, keys.indexOf(today));
 
         const atD = await breakdownBoxes(page);
@@ -1135,11 +1136,11 @@ test.describe("solar inspector drill-down", () => {
         // a drill names exactly the one it was pointed at, so landing on some
         // other day would be the card answering a question nobody asked.
         const iso = (daysBack: number) => {
-            const day = new Date();
+            const day = new Date(FIXED_NOW_ISO);
             day.setUTCDate(day.getUTCDate() - daysBack);
             return day.toISOString().slice(0, 10);
         };
-        const thisYear = new Date().getUTCFullYear();
+        const thisYear = new Date(FIXED_NOW_ISO).getUTCFullYear();
         await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
 
         await clickStop(page, STOP_MONTH_VIEW);

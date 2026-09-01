@@ -365,7 +365,10 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         }
 
         const delay = getNextScheduleBoundaryDelayMs(
-            this._schedule?.slots.map((slot) => slot.id) ?? [],
+            // `slots` is optional and not only `_schedule`: this runs inside a
+            // subscriber's `willUpdate`, so a payload that arrives without one
+            // throws there and leaves that element unrendered for good.
+            this._schedule?.slots?.map((slot) => slot.id) ?? [],
             new Date(),
         );
         if (delay === null) {

@@ -22,6 +22,7 @@ import {
     waitForAggregateChart,
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
+import { FIXED_NOW_ISO } from "./support/fixed-clock";
 
 /**
  * The aggregate views' span picker: a row of years over a row of months.
@@ -96,7 +97,7 @@ async function waitForSpanRequest(
 const iso = (year: number, month: number) =>
     `${year}-${String(month).padStart(2, "0")}-01`;
 
-const NOW = new Date();
+const NOW = new Date(FIXED_NOW_ISO);
 const THIS_YEAR = NOW.getUTCFullYear();
 const THIS_MONTH = NOW.getUTCMonth() + 1;
 const TODAY = NOW.toISOString().slice(0, 10);

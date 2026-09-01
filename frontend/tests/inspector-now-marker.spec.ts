@@ -1,6 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
+import { FIXED_TODAY, installFixedClock } from "./support/fixed-clock";
+
 /**
  * The vertical "now" line across the solar inspector's charts.
  *
@@ -17,6 +19,9 @@ const BUNDLE = resolve(
 );
 
 async function loadCardBundle(page: Page): Promise<void> {
+    // The fixtures here are dated "today" and the marker is asserted against
+    // the clock, so both sides read the same fixed one. See `fixed-clock`.
+    await installFixedClock(page);
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
@@ -24,7 +29,7 @@ async function loadCardBundle(page: Page): Promise<void> {
 
 /** Today in UTC, which is the timezone the fixture pins the card to. */
 function todayUtc(): string {
-    return new Date().toISOString().slice(0, 10);
+    return FIXED_TODAY;
 }
 
 /**
