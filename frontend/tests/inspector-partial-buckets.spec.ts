@@ -48,7 +48,7 @@ async function setHiddenSeries(page: Page, keys: string[]): Promise<void> {
 async function partialBucketMarks(page: Page): Promise<number[]> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return [...el.shadowRoot.querySelectorAll(".chart-wrap svg rect.partial-bucket-mark")]
+        return [...el.shadowRoot.querySelectorAll(".chart-wrap svg g.partial-bucket-mark")]
             .map((rect: Element) => Number(rect.getAttribute("data-bucket-start")));
     });
 }
@@ -96,7 +96,7 @@ test.describe("a day with a hole inside one hour", () => {
         // hour lost out of an hour rather than a rounding error.
         const title = await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            return el.shadowRoot.querySelector(".chart-wrap svg rect.partial-bucket-mark title")
+            return el.shadowRoot.querySelector(".chart-wrap svg g.partial-bucket-mark title")
                 ?.textContent ?? "";
         });
         expect(title).toContain("2 of 4");

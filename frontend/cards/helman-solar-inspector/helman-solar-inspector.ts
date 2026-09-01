@@ -6045,15 +6045,25 @@ export class HelmanSolarInspector extends LitElement {
     }
     const x = layout.xForMinutes(bucketStartMinutes);
     const w = Math.max(3, layout.slotWidth);
+    const note = this._formatPartialBucketNote(perSeries, 1);
+    // The wash carries the meaning; the rule under it is only there to say the
+    // dimming is deliberate. It sits inside the column's edges so a run of
+    // marked columns reads as separate ticks rather than one long line, and it
+    // is the one thing here drawn in a foreground colour -- a border around the
+    // column, however faint, competes with the selection outline and reads as
+    // "look at this" rather than "there is less here than there looks".
     return svg`
-      <rect
-        class="partial-bucket-mark"
-        data-bucket-start=${bucketStartMinutes}
-        x=${x} y=${y} width=${w} height=${height}
-        style="fill: color-mix(in srgb, var(--card-background-color) 62%, transparent);
-               stroke: var(--secondary-text-color); stroke-dasharray: 3 3;"
-        stroke-width="1" stroke-opacity="0.35"
-      ><title>${this._formatPartialBucketNote(perSeries, 1)}</title></rect>
+      <g class="partial-bucket-mark" data-bucket-start=${bucketStartMinutes}>
+        <rect
+          x=${x} y=${y} width=${w} height=${height}
+          style="fill: color-mix(in srgb, var(--card-background-color) 62%, transparent);"
+        ><title>${note}</title></rect>
+        <rect
+          x=${x + 1.5} y=${y + height - 2} width=${Math.max(1, w - 3)} height="2"
+          style="fill: var(--secondary-text-color);" fill-opacity="0.4"
+          pointer-events="none"
+        ></rect>
+      </g>
     `;
   }
 
