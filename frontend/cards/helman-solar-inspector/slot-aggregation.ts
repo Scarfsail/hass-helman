@@ -43,24 +43,41 @@ function bucketStart(minutes: number, slotMinutes: number): number {
  * the native grid from the first present sample to the last, rather than
  * from midnight, is what keeps those legitimate edges out of the result
  * without a threshold to tune.
+ *
+ * `expected` is how many samples that span should hold, which is the only
+ * honest denominator for the holes: a count on its own says nothing about
+ * whether a day lost one reading or two thirds of them. It counts the span
+ * this series actually claims to cover rather than the whole day, for the
+ * same reason the edges are not holes — a series that only ever covered the
+ * afternoon is complete for the afternoon, not a third missing.
  */
-export function missingSlotMinutes(
+export function seriesCoverage(
   points: readonly InspectorPoint[],
   granularityMinutes: number,
-): number[] {
+): { missing: number[]; expected: number } {
   const present = new Set<number>();
   for (const point of points) {
     const minutes = timestampMinutes(point.timestamp);
     if (minutes !== null) present.add(minutes);
   }
-  if (present.size === 0) return [];
+  if (present.size === 0) return { missing: [], expected: 0 };
   const first = Math.min(...present);
   const last = Math.max(...present);
   const missing: number[] = [];
-  for (let minutes = first; minutes < last; minutes += granularityMinutes) {
-    if (!present.has(minutes)) missing.push(minutes);
+  let expected = 0;
+  for (let minutes = first; minutes <= last; minutes += granularityMinutes) {
+    expected += 1;
+    if (minutes !== last && !present.has(minutes)) missing.push(minutes);
   }
-  return missing;
+  return { missing, expected };
+}
+
+/** `seriesCoverage`'s holes alone, for the callers that need nothing else. */
+export function missingSlotMinutes(
+  points: readonly InspectorPoint[],
+  granularityMinutes: number,
+): number[] {
+  return seriesCoverage(points, granularityMinutes).missing;
 }
 
 /**

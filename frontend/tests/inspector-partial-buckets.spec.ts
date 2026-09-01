@@ -76,6 +76,23 @@ test.describe("a day with a hole inside one hour", () => {
         expect(await partialBucketMarks(page)).toEqual([600]); // 10:00
     });
 
+    test("says how many readings are missing out of how many the column holds", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page);
+        await punchHouseActualHole(page, ["10:15", "10:30"]);
+        await clickStop(page, STOP_SLOT_60);
+
+        // The denominator is the point: "2" alone cannot be read as half an
+        // hour lost out of an hour rather than a rounding error.
+        const title = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            return el.shadowRoot.querySelector(".chart-wrap svg rect.partial-bucket-mark title")
+                ?.textContent ?? "";
+        });
+        expect(title).toContain("2 of 4");
+        expect(title).toContain("50%");
+    });
+
     test("marks the daily-totals house chip, and no other chip", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page);

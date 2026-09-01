@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { missingSlotMinutes, missingMinutesByBucket, partialBucketStarts } from "../cards/helman-solar-inspector/slot-aggregation";
+import { missingSlotMinutes, missingMinutesByBucket, partialBucketStarts, seriesCoverage } from "../cards/helman-solar-inspector/slot-aggregation";
 import type { InspectorPoint } from "../cards/helman-solar-inspector/solar-inspector-model";
 
 /**
@@ -30,6 +30,26 @@ function fullDay(start: number, end: number, step = 15): number[] {
 }
 
 const DATE = "2026-07-18";
+
+test.describe("seriesCoverage", () => {
+    test("counts the span the series covers as the denominator for its holes", () => {
+        // 00:00-23:45 with 10:15 and 10:30 gone: 96 slots claimed, two of them
+        // missing -- the "of 96" is what makes "2" readable as nearly complete.
+        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        expect(seriesCoverage(points, 15)).toEqual({ missing: [615, 630], expected: 96 });
+    });
+
+    test("a series covering only the afternoon is measured against the afternoon", () => {
+        // Starts 12:00, ends 17:45, no holes: complete for what it claims, not
+        // three quarters missing because it says nothing about the morning.
+        const points = series(DATE, fullDay(720, 1080));
+        expect(seriesCoverage(points, 15)).toEqual({ missing: [], expected: 24 });
+    });
+
+    test("an empty series claims no span at all", () => {
+        expect(seriesCoverage([], 15)).toEqual({ missing: [], expected: 0 });
+    });
+});
 
 test.describe("missingSlotMinutes", () => {
     test("a mid-morning hole is reported as missing", () => {
