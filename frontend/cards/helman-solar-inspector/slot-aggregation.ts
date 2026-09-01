@@ -32,6 +32,92 @@ function bucketStart(minutes: number, slotMinutes: number): number {
 }
 
 /**
+ * The native slot-of-day minutes missing from a series, between its own first
+ * and last present sample.
+ *
+ * Interior only, deliberately: a series routinely starts mid-hour (actuals
+ * catch up once the integration is up) and always ends at the slot in
+ * progress, so treating either edge as "missing" would flag a hole at the
+ * start or end of nearly every day and drown out the case this exists to
+ * catch — an outage in the middle of an otherwise-covered stretch. Walking
+ * the native grid from the first present sample to the last, rather than
+ * from midnight, is what keeps those legitimate edges out of the result
+ * without a threshold to tune.
+ */
+export function missingSlotMinutes(
+  points: readonly InspectorPoint[],
+  granularityMinutes: number,
+): number[] {
+  const present = new Set<number>();
+  for (const point of points) {
+    const minutes = timestampMinutes(point.timestamp);
+    if (minutes !== null) present.add(minutes);
+  }
+  if (present.size === 0) return [];
+  const first = Math.min(...present);
+  const last = Math.max(...present);
+  const missing: number[] = [];
+  for (let minutes = first; minutes < last; minutes += granularityMinutes) {
+    if (!present.has(minutes)) missing.push(minutes);
+  }
+  return missing;
+}
+
+/**
+ * Every hole in the given series, grouped by the wider bucket it falls in and
+ * kept as the distinct native minutes missing there rather than collapsed to
+ * a yes/no per bucket — so a caller that only needs "is this bucket marked"
+ * (`partialBucketStarts`, the chart's scrim) and one that needs "how much of
+ * it is missing" (the selected-slot panel's caveat) both read off one walk of
+ * the series instead of two that could drift apart.
+ *
+ * A bucket that holds only one native sample — an hourly statistics day
+ * drawn at hour width, or any series drawn at its own native width — has
+ * nowhere for a hole to hide: a missing native sample there is a bucket that
+ * is entirely absent, not one that is partly present, and `aggregateWhSeries`
+ * already leaves an absent bucket off the chart the same way it always has.
+ * So this returns empty outright once `slotMinutes <= granularityMinutes`
+ * rather than reporting the absent bucket's start as if it were a hole inside
+ * a wider one. One column can carry several series (forecast and actual,
+ * house and grid…), and a reader looking at a column cannot tell which of
+ * them is short just by looking at the bar, so the union across every series
+ * passed in is what marks the column — one rule, applied to forecast and
+ * actual alike, rather than a per-series mark that would still leave the
+ * reader guessing at the ones left unmarked.
+ */
+export function missingMinutesByBucket(
+  series: readonly (readonly InspectorPoint[])[],
+  slotMinutes: number,
+  granularityMinutes: number,
+): Map<number, Set<number>> {
+  const buckets = new Map<number, Set<number>>();
+  if (slotMinutes <= granularityMinutes) return buckets;
+  for (const points of series) {
+    for (const minutes of missingSlotMinutes(points, granularityMinutes)) {
+      const start = bucketStart(minutes, slotMinutes);
+      const missing = buckets.get(start) ?? new Set<number>();
+      missing.add(minutes);
+      buckets.set(start, missing);
+    }
+  }
+  return buckets;
+}
+
+/**
+ * The wider-bucket starts that hide a hole in at least one of the given
+ * series, at the width the chart is currently drawn at — the set the chart's
+ * scrim draws over, and `missingMinutesByBucket`'s keys without the detail
+ * the scrim has no use for.
+ */
+export function partialBucketStarts(
+  series: readonly (readonly InspectorPoint[])[],
+  slotMinutes: number,
+  granularityMinutes: number,
+): Set<number> {
+  return new Set(missingMinutesByBucket(series, slotMinutes, granularityMinutes).keys());
+}
+
+/**
  * The "HH:MM" slot key a timestamped sample belongs to.
  *
  * Series are keyed by timestamp and slots by time-of-day, so this is the one

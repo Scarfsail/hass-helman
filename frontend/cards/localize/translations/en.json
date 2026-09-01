@@ -65,6 +65,8 @@
       "today_training_note": "Today is not used for training yet, and invalidated points are not reflected in today's actual production view.",
       "hourly_only": "The detailed history for this day has been purged, so it is drawn from hourly statistics. Measurements are shown per hour; the archived forecast is not recoverable.",
       "hourly_only_stop": "Not available for this day \u2014 it is drawn from hourly statistics.",
+      "partial_bucket": "This bucket is missing {count} of its readings ({minutes} min) \u2014 drawn as what was measured, not filled in.",
+      "partial_total": "incomplete: some slots are missing data, so this total is a lower bound",
       "no_profile": "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",
       "no_data": "No data is available for {date}. Try a newer day or refresh after the next forecast update.",
       "positive_impact": "Correction added",
