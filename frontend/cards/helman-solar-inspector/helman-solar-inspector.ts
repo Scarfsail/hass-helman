@@ -619,6 +619,17 @@ export class HelmanSolarInspector extends LitElement {
    * the opening state.
    */
   @property({ attribute: false }) biasRatioDefault = false;
+  /**
+   * Whether a column short of readings is drawn dimmed. Unlike the properties
+   * above this is not an opening state the card can move away from — there is
+   * no runtime control for it — so it stays true unless a config turns it off.
+   *
+   * It governs the dimming alone. The daily total of an incomplete series keeps
+   * its marker and the slot panel keeps its note either way: those qualify a
+   * number rather than colour the chart, and a total quietly reading low is
+   * worth knowing however the columns are drawn.
+   */
+  @property({ attribute: false }) dimIncompleteSlots = true;
 
   @state() private _selectedDate = "";
   /**
@@ -6028,6 +6039,7 @@ export class HelmanSolarInspector extends LitElement {
    * a different, unmistakably non-selection fill.
    */
   private _renderPartialBuckets(layout: ChartLayout, y: number, height: number) {
+    if (!this.dimIncompleteSlots) return "";
     return [...this._partialBuckets.entries()].map(([start, perSeries]) =>
       this._renderPartialBucket(layout, y, height, start, perSeries));
   }
