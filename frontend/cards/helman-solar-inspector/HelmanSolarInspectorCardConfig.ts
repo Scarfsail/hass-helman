@@ -30,4 +30,17 @@ export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
      * can still hide them again at runtime. Default: false.
      */
     show_bias_ratio?: boolean;
+    /**
+     * When true, a chart column whose data is incomplete — a slot the sensor
+     * behind one of its series published nothing for — is drawn dimmed, so a
+     * column that is short of readings cannot be read as one that was genuinely
+     * low. Default: true.
+     *
+     * Turning it off removes only the dimming. The daily total of an incomplete
+     * series still carries its marker, and the selected-slot panel still names
+     * what is missing: those state a number's limits rather than colouring the
+     * chart, and a total that quietly reads low is the thing worth knowing
+     * whatever the chart looks like.
+     */
+    dim_incomplete_slots?: boolean;
 }

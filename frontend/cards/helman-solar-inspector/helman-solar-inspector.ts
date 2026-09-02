@@ -108,6 +108,9 @@ import {
   sourceMixFromTotals,
   dropPartialBuckets,
   timestampMinutes,
+  seriesCoverage,
+  missingMinutesByBucket,
+  type CoverageSeries,
   aggregateImpactOverSlots,
   aggregateImpactSeries,
   aggregateWhSeries,
@@ -234,6 +237,25 @@ type SeriesKey =
   | "batteryActual";
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
+
+/**
+ * What each series is called, as the localisation key under
+ * `bias_correction.inspector`. These are the names the daily totals already
+ * use, so a series named anywhere else on the card is named the same way.
+ */
+const SERIES_LABEL_KEYS: Record<SeriesKey, string> = {
+  raw: "raw_forecast",
+  corrected: "corrected_forecast",
+  actual: "actual_production",
+  houseForecast: "house_forecast",
+  houseActual: "house_actual",
+  batterySocForecast: "battery_soc_forecast",
+  batterySocActual: "battery_soc_actual",
+  gridForecast: "grid_forecast",
+  gridActual: "grid_actual",
+  batteryForecast: "battery_forecast",
+  batteryActual: "battery_actual",
+};
 
 /**
  * The series that stack. The SoC series and the raw forecast are drawn
@@ -597,6 +619,17 @@ export class HelmanSolarInspector extends LitElement {
    * the opening state.
    */
   @property({ attribute: false }) biasRatioDefault = false;
+  /**
+   * Whether a column short of readings is drawn dimmed. Unlike the properties
+   * above this is not an opening state the card can move away from — there is
+   * no runtime control for it — so it stays true unless a config turns it off.
+   *
+   * It governs the dimming alone. The daily total of an incomplete series keeps
+   * its marker and the slot panel keeps its note either way: those qualify a
+   * number rather than colour the chart, and a total quietly reading low is
+   * worth knowing however the columns are drawn.
+   */
+  @property({ attribute: false }) dimIncompleteSlots = true;
 
   @state() private _selectedDate = "";
   /**
@@ -773,6 +806,26 @@ export class HelmanSolarInspector extends LitElement {
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   private _lastLayoutForStrip: ChartLayout | null = null;
   private _lastForecastFillFrom = Number.NEGATIVE_INFINITY;
+  /**
+   * The wider-bucket starts the current view drew over a hole in one of its
+   * Wh series, each mapped to how many native slots each short series is
+   * missing there — the breakdown, not just a count, because the mark has to
+   * name what is missing and not only how much of it — set
+   * once per `_viewForSlot` call, alongside `_lastForecastFillFrom`, so the
+   * chart's scrim and the selected-slot panel's caveat read off one
+   * computation rather than two that could drift apart.
+   */
+  private _partialBuckets = new Map<number, Map<SeriesKey, number>>();
+  /** The native sample width `_partialBuckets`' counts were computed at. */
+  private _partialBucketGranularityMinutes = SLOT_MINUTES;
+  /**
+   * The totals series with at least one interior hole anywhere in the day,
+   * each with how many readings it is short of the span it covers --
+   * independent of the chart's current slot width, since a day total is one
+   * number for the whole day and cannot be more or less complete depending on
+   * how the chart above happens to be drawn.
+   */
+  private _partialSeries = new Map<SeriesKey, { missing: number; expected: number }>();
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
@@ -1409,6 +1462,16 @@ export class HelmanSolarInspector extends LitElement {
       font-size: 0.92rem;
       line-height: 1.2;
       overflow-wrap: anywhere;
+    }
+
+    /* The day-total counterpart of the chart's partial-bucket scrim: a sum
+       whose series has an interior hole is real but short, so it keeps its
+       own colour rather than being greyed out like a genuinely missing value
+       -- only the mark says it should be read as a lower bound. */
+    .incomplete-mark {
+      color: var(--secondary-text-color);
+      font-weight: 700;
+      margin-left: 1px;
     }
 
     .contribution-summary {
@@ -2966,8 +3029,51 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _viewForSlot(payload: InspectorPayload): InspectorPayload {
     const slot = this._slotMinutes;
-    if (slot <= SLOT_MINUTES) return payload;
     const s = payload.series;
+    // Coverage is read off the series as the backend actually served them, not
+    // the re-bucketed sums below — a hole is a fact about the 15-minute data,
+    // and bucketing it first would let a run of present-but-hole-adjacent
+    // buckets blur which native slot was actually missing. Every Wh series the
+    // day can draw is included so one rule marks forecast and actual columns
+    // alike; SoC and impact are levels and ratios, not sums, so a hole in them
+    // does not misstate an energy total and is left out. So is `invalidated`,
+    // which is not a series that covers the day but a set of annotations on
+    // the slots that were thrown out — the slots between two of them are
+    // absent because nothing was invalidated there, and reading that as a
+    // hole would mark the whole stretch.
+    const granularity = this._payloadGranularity(payload);
+    const whSeries: CoverageSeries[] = [
+      { key: "raw", points: s.raw },
+      { key: "corrected", points: s.corrected },
+      { key: "actual", points: s.actual },
+      { key: "houseForecast", points: s.houseForecast },
+      { key: "houseActual", points: s.houseActual },
+      { key: "gridForecast", points: s.gridForecast },
+      { key: "gridActual", points: s.gridActual },
+      { key: "batteryForecast", points: s.batteryForecast },
+      { key: "batteryActual", points: s.batteryActual },
+    ];
+    this._partialBucketGranularityMinutes = granularity;
+    // The scrim marks what the chart is drawing, so a series the legend has
+    // switched off cannot mark a column: nothing of it is on screen to be
+    // short, and a wash over a column for an invisible reason is worse than no
+    // wash at all. `_hiddenSeries` is reactive state and this runs from render,
+    // so toggling a series recomputes the marks with it.
+    this._partialBuckets = missingMinutesByBucket(
+      whSeries.filter(({ key }) => this._isSeriesVisible(key as SeriesKey)),
+      slot,
+      granularity,
+    ) as Map<number, Map<SeriesKey, number>>;
+    // Independent of `slot` — and of visibility, unlike the scrim above. A
+    // hidden series still prints its daily total, and a number on screen has
+    // to carry its own caveat whether or not its curve is drawn.
+    this._partialSeries = new Map(
+      whSeries
+        .map(({ key, points }) => [key as SeriesKey, seriesCoverage(points, granularity)] as const)
+        .filter(([, coverage]) => coverage.missing.length > 0)
+        .map(([key, coverage]) => [key, { missing: coverage.missing.length, expected: coverage.expected }]),
+    );
+    if (slot <= SLOT_MINUTES) return payload;
     // A wider bucket is only history once the measurements span all of it; the
     // slot we are still inside would otherwise sum a part-hour of actuals into a
     // full-hour column and read as a collapse against the forecast.
@@ -3674,6 +3780,11 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
           ${this._renderSolarLayer(payload, layout)}
         </g>
+        <!-- Over the bands, not under them: the mark has to take colour out of
+             the column it covers, and a wash painted underneath only lightens
+             the empty background around the bars, which reads as a highlight --
+             the opposite of what a short column should look like. -->
+        ${this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderNowMarker(layout, layout.margin.top, layout.plotHeight)}
       </svg>
     `;
@@ -4404,37 +4515,37 @@ export class HelmanSolarInspector extends LitElement {
         <strong>${this._t("bias_correction.inspector.daily_totals")}</strong>
         <div class="metric-grid">
           ${this._isSeriesVisible("raw")
-            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw")
+            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw", this._partialTotalNote("raw"))
             : ""}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.solar"),
             CHART_COLORS.corrected,
-            this._mergedPart(payload.totals.correctedWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
-            this._mergedPart(payload.totals.actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
+            this._mergedPart(payload.totals.correctedWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast"), this._partialTotalNote("corrected")),
+            this._mergedPart(payload.totals.actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production"), this._partialTotalNote("actual")),
             "corrected",
             "actual",
           )}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.house"),
             CHART_COLORS.house,
-            this._mergedPart(negateWh(payload.totals.houseForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
-            this._mergedPart(negateWh(payload.totals.houseActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
+            this._mergedPart(negateWh(payload.totals.houseForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast"), this._partialTotalNote("houseForecast")),
+            this._mergedPart(negateWh(payload.totals.houseActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual"), this._partialTotalNote("houseActual")),
             "houseForecast",
             "houseActual",
           )}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.grid"),
             CHART_COLORS.grid,
-            this._mergedPart(negateWh(payload.totals.gridForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
-            this._mergedPart(negateWh(payload.totals.gridActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
+            this._mergedPart(negateWh(payload.totals.gridForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast"), this._partialTotalNote("gridForecast")),
+            this._mergedPart(negateWh(payload.totals.gridActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual"), this._partialTotalNote("gridActual")),
             "gridForecast",
             "gridActual",
           )}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.battery"),
             CHART_COLORS.battery,
-            this._mergedPart(negateWh(payload.totals.batteryForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
-            this._mergedPart(negateWh(payload.totals.batteryActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
+            this._mergedPart(negateWh(payload.totals.batteryForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast"), this._partialTotalNote("batteryForecast")),
+            this._mergedPart(negateWh(payload.totals.batteryActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual"), this._partialTotalNote("batteryActual")),
             "batteryForecast",
             "batteryActual",
           )}
@@ -4527,6 +4638,19 @@ export class HelmanSolarInspector extends LitElement {
     const batteryAcWh = sumWhOverSlots(payload.series.batteryActual, slots);
     const interpolated = trainingSlot?.interpolated === true;
     const anchors = trainingSlot?.interpolationAnchors ?? null;
+    // Summed across every selected bucket rather than read off just the focus
+    // slot: a multi-slot selection can straddle more than one marked column,
+    // and the panel's job is to say what the sums above are short by, not just
+    // whether the first bucket happens to be short. Kept per series through the
+    // sum so the note can still name what is short.
+    const missingInSelection = new Map<SeriesKey, number>();
+    for (const slot of slots) {
+      const minutes = slotToMinutes(slot);
+      if (minutes === null) continue;
+      for (const [key, count] of this._partialBuckets.get(minutes) ?? []) {
+        missingInSelection.set(key, (missingInSelection.get(key) ?? 0) + count);
+      }
+    }
     const impactColor = (impact?.impactWh ?? null) === null
       ? undefined
       : (impact!.impactWh! >= 0 ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative);
@@ -4551,6 +4675,9 @@ export class HelmanSolarInspector extends LitElement {
         </strong>
         ${interpolated && showDiagnostics
           ? html`<div class="day-state">${this._t("bias_correction.inspector.interpolated_explanation")}</div>`
+          : ""}
+        ${missingInSelection.size
+          ? html`<div class="day-state">${this._formatPartialBucketNote(missingInSelection, slots.length)}</div>`
           : ""}
         <div class="metric-grid">
           ${this._isSeriesVisible("raw")
@@ -4995,17 +5122,23 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * One value inside a merged card, tagged with whether it is present so the
    * caller can drop the empty half. `title` names the underlying series for the
-   * hover tooltip the merged label no longer spells out.
+   * hover tooltip the merged label no longer spells out. `incomplete` is the
+   * day-total counterpart of `_partialBuckets`: the sentence naming what the
+   * series behind this value is short by, or null when it is whole. The sum is
+   * real either way, so the chip keeps it and says how much of the day stands
+   * behind it rather than presenting it as the day's finished figure.
    */
   private _mergedPart(
     value: number | null,
     format: (value: number | null) => string,
     title: string,
-  ): { value: string; present: boolean; title: string } {
+    incomplete: string | null = null,
+  ): { value: string; present: boolean; title: string; incomplete: string | null } {
     return {
       value: format(value),
       present: value !== null && Number.isFinite(value),
       title,
+      incomplete,
     };
   }
 
@@ -5026,22 +5159,22 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _metricChips(
     color: string,
-    actual: { value: string; present: boolean; title: string },
-    forecast: { value: string; present: boolean; title: string },
+    actual: { value: string; present: boolean; title: string; incomplete?: string | null },
+    forecast: { value: string; present: boolean; title: string; incomplete?: string | null },
   ): TemplateResult[] {
     const chipFill = (isForecast: boolean): string =>
       isForecast
         ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
         : `color-mix(in srgb, ${color} 34%, transparent)`;
     const chip = (
-      part: { value: string; title: string },
+      part: { value: string; title: string; incomplete?: string | null },
       isForecast: boolean,
     ): TemplateResult => html`
       <span
         class="metric-value metric-chip"
         style=${`background: ${chipFill(isForecast)};`}
-        title=${part.title}
-      >${part.value}</span>
+        title=${part.incomplete ? `${part.title} — ${part.incomplete}` : part.title}
+      >${part.value}${part.incomplete ? html`<sup class="incomplete-mark">*</sup>` : ""}</span>
     `;
     const chips: TemplateResult[] = [];
     if (actual.present) chips.push(chip(actual, false));
@@ -5181,16 +5314,23 @@ export class HelmanSolarInspector extends LitElement {
     color?: string,
     dashed?: boolean,
     series?: SeriesKey,
+    // Raw is the one metric on this card that never goes through `_mergedPart`
+    // (it has no actual side to pair with), so it carries the same
+    // `_partialSeries` mark through its own parameter rather than a chip.
+    incomplete: string | null = null,
   ) {
     let background = "";
     if (color) {
       background = `background: ${this._seriesFill(color, dashed === true)};`;
     }
+    const valueContent = incomplete
+      ? html`<span title=${incomplete}>${value}<sup class="incomplete-mark">*</sup></span>`
+      : value;
     if (!series) {
       return html`
         <div class="metric-card" style=${background}>
           <div class="metric-label">${label}</div>
-          <div class="metric-value">${value}</div>
+          <div class="metric-value">${valueContent}</div>
         </div>
       `;
     }
@@ -5209,7 +5349,7 @@ export class HelmanSolarInspector extends LitElement {
         @click=${() => this._toggleSeries(series)}
       >
         <div class="metric-label">${label}</div>
-        <div class="metric-value">${value}</div>
+        <div class="metric-value">${valueContent}</div>
       </button>
     `;
   }
@@ -5876,6 +6016,133 @@ export class HelmanSolarInspector extends LitElement {
         pointer-events="none"
       ></rect>
     `;
+  }
+
+  /**
+   * A wash over every column `_partialBuckets` flagged, so one drawn short
+   * because a slot inside it went `unavailable` cannot be mistaken for one the
+   * forecast genuinely called low.
+   *
+   * The fill is the card's own background rather than a tint of the foreground:
+   * painted over the bands it takes colour *out* of the column, which is what a
+   * reader already reads as "less than the rest". A tint added on top — or the
+   * same tint painted underneath, where it only lights up the empty background
+   * around the bars — reads as a highlight instead, and a highlight says "look
+   * here, there is something", the opposite of what is being said.
+   *
+   * A rect over the whole column rather than surgery on the stack paths: the
+   * stack is built from contiguous runs per band (`_renderStackSet`) and `raw`
+   * is a line on top of it (`_renderSolarLayer`), so marking one bucket inside
+   * those would mean splitting every run at that bucket, per band, per series
+   * — and would still leave the line unmarked. `_renderSlotHighlight` already
+   * draws this exact column geometry for the selection, so this reuses it with
+   * a different, unmistakably non-selection fill.
+   */
+  private _renderPartialBuckets(layout: ChartLayout, y: number, height: number) {
+    if (!this.dimIncompleteSlots) return "";
+    return [...this._partialBuckets.entries()].map(([start, perSeries]) =>
+      this._renderPartialBucket(layout, y, height, start, perSeries));
+  }
+
+  private _renderPartialBucket(
+    layout: ChartLayout,
+    y: number,
+    height: number,
+    bucketStartMinutes: number,
+    perSeries: ReadonlyMap<SeriesKey, number>,
+  ) {
+    // Cropped out of the daylight window, exactly as a selected slot would be.
+    if (bucketStartMinutes < layout.dayStartMinutes || bucketStartMinutes >= layout.dayEndMinutes) {
+      return "";
+    }
+    const x = layout.xForMinutes(bucketStartMinutes);
+    const w = Math.max(3, layout.slotWidth);
+    const note = this._formatPartialBucketNote(perSeries, 1);
+    // The wash carries the meaning; the rule under it is only there to say the
+    // dimming is deliberate. It sits inside the column's edges so a run of
+    // marked columns reads as separate ticks rather than one long line, and it
+    // is the one thing here drawn in a foreground colour -- a border around the
+    // column, however faint, competes with the selection outline and reads as
+    // "look at this" rather than "there is less here than there looks".
+    return svg`
+      <g class="partial-bucket-mark" data-bucket-start=${bucketStartMinutes}>
+        <rect
+          x=${x} y=${y} width=${w} height=${height}
+          style="fill: color-mix(in srgb, var(--card-background-color) 62%, transparent);"
+        ><title>${note}</title></rect>
+        <rect
+          x=${x + 1.5} y=${y + height - 2} width=${Math.max(1, w - 3)} height="2"
+          style="fill: var(--secondary-text-color);" fill-opacity="0.4"
+          pointer-events="none"
+        ></rect>
+      </g>
+    `;
+  }
+
+  /**
+   * "House consumption: missing 2 of 4 readings (50%)", one line per series
+   * that is short — shared by the scrim's title and the selected-slot panel,
+   * so the two ways a reader can find out why a column is marked say the same
+   * thing. Which series it is matters as much as how many readings: the same
+   * two missing readings are a hole in the bar itself or in the SoC line above
+   * it, and the column looks identical either way.
+   *
+   * `bucketCount` is how many columns the counts cover: one for the scrim,
+   * however many the reader has selected for the panel. Without the "of N"
+   * the number is unreadable — two missing readings is nearly nothing across
+   * a selected afternoon and most of an hour on its own.
+   */
+  private _formatPartialBucketNote(
+    perSeries: ReadonlyMap<SeriesKey, number>,
+    bucketCount: number,
+  ): string {
+    const perBucket = Math.max(1, Math.round(this._slotMinutes / this._partialBucketGranularityMinutes));
+    return [...perSeries.entries()]
+      .map(([key, missing]) => `${this._seriesLabel(key)}: ${this._formatIncompleteNote(
+        "bias_correction.inspector.partial_bucket",
+        missing,
+        bucketCount * perBucket,
+      )}`)
+      .join("\n");
+  }
+
+  /**
+   * The name a series goes by in the totals grid, reused wherever else it has
+   * to be named. One lookup rather than a label per call site, so a series
+   * cannot end up called two different things in two places.
+   */
+  private _seriesLabel(series: SeriesKey): string {
+    return this._t(`bias_correction.inspector.${SERIES_LABEL_KEYS[series]}`);
+  }
+
+  /** The same sentence for a whole day's total, or null for a series with no hole. */
+  private _partialTotalNote(series: SeriesKey): string | null {
+    const coverage = this._partialSeries.get(series);
+    return coverage
+      ? this._formatIncompleteNote(
+        "bias_correction.inspector.partial_total",
+        coverage.missing,
+        coverage.expected,
+      )
+      : null;
+  }
+
+  /**
+   * Missing out of expected, with the share it works out to.
+   *
+   * The percentage is the point of the sentence — a count alone cannot tell a
+   * day that lost one reading from one that lost two thirds of them — so a
+   * share that rounds to zero is written as "<1" rather than as "0%", which
+   * would read as nothing being missing at all on a mark that only exists
+   * because something is.
+   */
+  private _formatIncompleteNote(key: string, missing: number, expected: number): string {
+    const share = expected > 0 ? (missing / expected) * 100 : 0;
+    return this._tFormat(key, {
+      count: missing,
+      total: expected,
+      percent: share > 0 && share < 1 ? "<1" : String(Math.round(share)),
+    });
   }
 
   private _computeRatioBounds(rows: ContributionRow[]): RatioBounds {

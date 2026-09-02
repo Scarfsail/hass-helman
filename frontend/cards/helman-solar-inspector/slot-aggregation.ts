@@ -32,6 +32,98 @@ function bucketStart(minutes: number, slotMinutes: number): number {
 }
 
 /**
+ * The native slot-of-day minutes missing from a series, between its own first
+ * and last present sample.
+ *
+ * Interior only, deliberately: a series routinely starts mid-hour (actuals
+ * catch up once the integration is up) and always ends at the slot in
+ * progress, so treating either edge as "missing" would flag a hole at the
+ * start or end of nearly every day and drown out the case this exists to
+ * catch — an outage in the middle of an otherwise-covered stretch. Walking
+ * the native grid from the first present sample to the last, rather than
+ * from midnight, is what keeps those legitimate edges out of the result
+ * without a threshold to tune.
+ *
+ * `expected` is how many samples that span should hold, which is the only
+ * honest denominator for the holes: a count on its own says nothing about
+ * whether a day lost one reading or two thirds of them. It counts the span
+ * this series actually claims to cover rather than the whole day, for the
+ * same reason the edges are not holes — a series that only ever covered the
+ * afternoon is complete for the afternoon, not a third missing.
+ */
+export function seriesCoverage(
+  points: readonly InspectorPoint[],
+  granularityMinutes: number,
+): { missing: number[]; expected: number } {
+  const present = new Set<number>();
+  for (const point of points) {
+    const minutes = timestampMinutes(point.timestamp);
+    if (minutes !== null) present.add(minutes);
+  }
+  if (present.size === 0) return { missing: [], expected: 0 };
+  const first = Math.min(...present);
+  const last = Math.max(...present);
+  const missing: number[] = [];
+  let expected = 0;
+  for (let minutes = first; minutes <= last; minutes += granularityMinutes) {
+    expected += 1;
+    if (!present.has(minutes)) missing.push(minutes);
+  }
+  return { missing, expected };
+}
+
+/** `seriesCoverage`'s holes alone, for the callers that need nothing else. */
+export function missingSlotMinutes(
+  points: readonly InspectorPoint[],
+  granularityMinutes: number,
+): number[] {
+  return seriesCoverage(points, granularityMinutes).missing;
+}
+
+/**
+ * Every hole in the given series, grouped by the wider bucket it falls in and
+ * broken down by which series is short there — the keys say which columns the
+ * chart's scrim covers and the breakdown says what its tooltip names, off one
+ * walk of the series rather than two that could drift apart.
+ *
+ * Naming the series is not a nicety. A column carries six of them, and "two
+ * readings missing" is a different fact depending on whether it is the house
+ * consumption behind the bar or the battery SoC line above it; without the
+ * name the reader knows only that something is wrong somewhere in the column.
+ *
+ * The native width marks too, where the bucket is one slot and the "hole" is
+ * that slot's own absence. It is tempting to leave it out — the slot is simply
+ * not drawn there, so nothing is being misstated — but the other five series
+ * still draw: a column missing only the grid forecast looks as populated as
+ * any other, and the day then reads as clean at 15 minutes and broken at 60.
+ * Marking at every width is what makes the widths agree, which is the whole
+ * point of saying anything at all.
+ *
+ * Only pass series that claim to cover their span. One that is populated
+ * where something happened and empty where nothing did — the invalidated
+ * solar slots, say — is absent by design between its entries, and running
+ * this over it would mark the whole day.
+ */
+export type CoverageSeries = { key: string; points: readonly InspectorPoint[] };
+
+export function missingMinutesByBucket(
+  series: readonly CoverageSeries[],
+  slotMinutes: number,
+  granularityMinutes: number,
+): Map<number, Map<string, number>> {
+  const buckets = new Map<number, Map<string, number>>();
+  for (const { key, points } of series) {
+    for (const minutes of missingSlotMinutes(points, granularityMinutes)) {
+      const start = bucketStart(minutes, slotMinutes);
+      const perSeries = buckets.get(start) ?? new Map<string, number>();
+      perSeries.set(key, (perSeries.get(key) ?? 0) + 1);
+      buckets.set(start, perSeries);
+    }
+  }
+  return buckets;
+}
+
+/**
  * The "HH:MM" slot key a timestamped sample belongs to.
  *
  * Series are keyed by timestamp and slots by time-of-day, so this is the one

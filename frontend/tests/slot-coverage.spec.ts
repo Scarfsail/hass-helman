@@ -1,0 +1,163 @@
+import { test, expect } from "@playwright/test";
+import { missingSlotMinutes, missingMinutesByBucket, seriesCoverage } from "../cards/helman-solar-inspector/slot-aggregation";
+import type { CoverageSeries } from "../cards/helman-solar-inspector/slot-aggregation";
+import type { InspectorPoint } from "../cards/helman-solar-inspector/solar-inspector-model";
+
+/**
+ * Coverage math for #202: marking a wider bucket that hides a hole in its
+ * 15-minute series rather than letting `aggregateWhSeries`'s honest sum read
+ * as a genuinely low forecast.
+ *
+ * `seriesCoverage` and `missingMinutesByBucket` are pure and imported directly
+ * (no card bundle needed) exactly as `money-model.spec.ts` exercises
+ * `sumMoney` -- the render behaviour they feed is covered separately in
+ * `inspector-partial-buckets.spec.ts`.
+ */
+
+/** A day's worth of 15-minute points, `date`-stamped, skipping the given minutes. */
+function series(date: string, presentMinutes: number[]): InspectorPoint[] {
+    return presentMinutes.map((m) => {
+        const hh = String(Math.floor(m / 60)).padStart(2, "0");
+        const mm = String(m % 60).padStart(2, "0");
+        return { timestamp: `${date}T${hh}:${mm}:00`, valueWh: 100 };
+    });
+}
+
+/** Every 15-minute slot from `start` to `end` (exclusive), for a hole-free series. */
+function fullDay(start: number, end: number, step = 15): number[] {
+    const out: number[] = [];
+    for (let m = start; m < end; m += step) out.push(m);
+    return out;
+}
+
+const DATE = "2026-07-18";
+
+/** The two-series shape the coverage functions take, for the shared-column cases. */
+function twoSeries(whole: InspectorPoint[], withHole: InspectorPoint[]): CoverageSeries[] {
+    return [{ key: "houseForecast", points: whole }, { key: "houseActual", points: withHole }];
+}
+
+/** The columns a set of series would have the chart mark, as `missingMinutesByBucket` keys. */
+function markedColumns(
+    series: CoverageSeries[],
+    slotMinutes: number,
+    granularityMinutes: number,
+): Set<number> {
+    return new Set(missingMinutesByBucket(series, slotMinutes, granularityMinutes).keys());
+}
+
+test.describe("seriesCoverage", () => {
+    test("counts the span the series covers as the denominator for its holes", () => {
+        // 00:00-23:45 with 10:15 and 10:30 gone: 96 slots claimed, two of them
+        // missing -- the "of 96" is what makes "2" readable as nearly complete.
+        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        expect(seriesCoverage(points, 15)).toEqual({ missing: [615, 630], expected: 96 });
+    });
+
+    test("a series covering only the afternoon is measured against the afternoon", () => {
+        // Starts 12:00, ends 17:45, no holes: complete for what it claims, not
+        // three quarters missing because it says nothing about the morning.
+        const points = series(DATE, fullDay(720, 1080));
+        expect(seriesCoverage(points, 15)).toEqual({ missing: [], expected: 24 });
+    });
+
+    test("an empty series claims no span at all", () => {
+        expect(seriesCoverage([], 15)).toEqual({ missing: [], expected: 0 });
+    });
+});
+
+test.describe("missingSlotMinutes", () => {
+    test("a mid-morning hole is reported as missing", () => {
+        // 10:00 present, 10:15 and 10:30 missing, 10:45 present -- an interior hole.
+        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        expect(missingSlotMinutes(points, 15)).toEqual([615, 630]);
+    });
+
+    test("a series starting mid-hour has no leading hole", () => {
+        // Actuals often begin mid-hour; nothing before the first sample is "missing".
+        const points = series(DATE, fullDay(375, 1440)); // starts 06:15
+        expect(missingSlotMinutes(points, 15)).toEqual([]);
+    });
+
+    test("a series ending at the slot in progress has no trailing hole", () => {
+        // The running slot is simply the last sample; nothing after it is "missing".
+        const points = series(DATE, fullDay(0, 615)); // last sample 10:00
+        expect(missingSlotMinutes(points, 15)).toEqual([]);
+    });
+
+    test("an hourly-granularity series with no holes reports nothing", () => {
+        const points = series(DATE, fullDay(0, 1440, 60));
+        expect(missingSlotMinutes(points, 60)).toEqual([]);
+    });
+
+    test("an empty series has nothing to be missing", () => {
+        expect(missingSlotMinutes([], 15)).toEqual([]);
+    });
+});
+
+test.describe("the columns a hole marks", () => {
+    test("a hole in the 10:00 hour marks the buckets it falls in, at 30 and 60 minutes", () => {
+        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        // 10:15 and 10:30 are missing: one bucket at hour width (10:00-11:00),
+        // two adjacent ones at half-hour width (10:00-10:30 and 10:30-11:00).
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set([600]));
+        expect(markedColumns([{ key: "houseActual", points }], 30, 15)).toEqual(new Set([600, 630]));
+    });
+
+    test("the same hole marks its own slots at the native 15-minute width", () => {
+        // The missing slots are simply not drawn at this width, but the five
+        // other series still fill the column, so an unmarked 15-minute view
+        // would read as clean on a day the hour view calls broken.
+        const points = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        expect(markedColumns([{ key: "houseActual", points }], 15, 15)).toEqual(new Set([615, 630]));
+    });
+
+    test("a series starting 06:15 marks no 06:00 bucket", () => {
+        const points = series(DATE, fullDay(375, 1440));
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
+    });
+
+    test("a series ending at the running slot marks no trailing bucket", () => {
+        // Last sample 10:00 -- the 10:00 hour bucket the actuals are still
+        // living through must not read as marked just because it is not over yet.
+        const points = series(DATE, fullDay(0, 615));
+        expect(markedColumns([{ key: "houseActual", points }], 60, 15)).toEqual(new Set());
+    });
+
+    test("an hourly statistics day marks nothing even at hour width", () => {
+        const points = series(DATE, fullDay(0, 1440, 60));
+        expect(markedColumns([{ key: "houseActual", points }], 60, 60)).toEqual(new Set());
+    });
+
+    test("a hole in one series out of several still marks the shared column", () => {
+        const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        const whole = series(DATE, fullDay(0, 1440));
+        expect(markedColumns(twoSeries(whole, withHole), 60, 15)).toEqual(new Set([600]));
+    });
+
+    test("a complete day is unmarked at every width", () => {
+        const points = series(DATE, fullDay(0, 1440));
+        for (const slot of [15, 30, 60]) {
+            expect(markedColumns([{ key: "houseActual", points }], slot, 15)).toEqual(new Set());
+        }
+    });
+});
+
+test.describe("missingMinutesByBucket", () => {
+    test("names which series is short in each marked bucket, and by how much", () => {
+        const whole = series(DATE, fullDay(0, 1440));
+        const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        const buckets = missingMinutesByBucket(twoSeries(whole, withHole), 60, 15);
+        expect([...buckets.keys()]).toEqual([600]);
+        // Only the series with the hole is named: a column is marked for a
+        // reason, and the reader has to be told which of the six it is.
+        expect(buckets.get(600)).toEqual(new Map([["houseActual", 2]]));
+    });
+
+    test("its keys are exactly the columns the chart marks", () => {
+        const withHole = series(DATE, [...fullDay(0, 615), 645, ...fullDay(660, 1440)]);
+        const whole = series(DATE, fullDay(0, 1440));
+        const buckets = missingMinutesByBucket(twoSeries(whole, withHole), 30, 15);
+        expect(new Set(buckets.keys())).toEqual(markedColumns(twoSeries(whole, withHole), 30, 15));
+    });
+});
