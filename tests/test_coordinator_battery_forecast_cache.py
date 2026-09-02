@@ -1551,5 +1551,95 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
         self.assertIsNone(coordinator.get_battery_forecast_current())
 
 
+class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
+    """Every route to the five current-slot entities reporting unavailable says
+    why, and says it once.
+
+    #204 spent two rounds of investigation on dead stretches that left nothing
+    in the log: the builder logged its own refusals, but this accessor -- which
+    is what the entities actually read -- returned ``None`` in silence down
+    every branch. The reproduction that finally pinned it was a 13-minute hole
+    whose only trace was the recorder.
+    """
+
+    LOGGER = "custom_components.helman.coordinator"
+
+    def _coordinator(self, snapshot):
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague")
+        )
+        coordinator._cached_appliance_forecast_pipeline = (
+            None
+            if snapshot is None
+            else SimpleNamespace(battery_forecast=snapshot)
+        )
+        return coordinator
+
+    def _partial_first_entry(self):
+        # The off-beat rebuild: stamped 21:07 into the 21:00 slot, so
+        # ``durationHours`` covers only the remainder.
+        return self._coordinator(
+            {
+                "series": [
+                    {
+                        "timestamp": "2026-03-20T21:07:00+01:00",
+                        "durationHours": 0.1333,
+                        "socPct": 62.5,
+                    }
+                ]
+            }
+        )
+
+    def test_a_refused_partial_names_the_off_beat_rebuild(self):
+        coordinator = self._partial_first_entry()
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            self.assertIsNone(coordinator.get_battery_forecast_current())
+        (line,) = captured.output
+        self.assertIn("reason=partial_slot", line)
+        # The slot the entities are down *for*, not the stamp on the entry.
+        self.assertIn("slot=2026-03-20T21:00:00+01:00", line)
+        self.assertIn("0.1333", line)
+
+    def test_the_reason_is_logged_once_per_slot_not_once_per_read(self):
+        # The five entities call this accessor on every state read; without the
+        # dedupe a single dead slot would bury the log in identical lines.
+        coordinator = self._partial_first_entry()
+        with self.assertLogs(self.LOGGER, level="INFO"):
+            coordinator.get_battery_forecast_current()
+        with self.assertNoLogs(self.LOGGER, level="INFO"):
+            for _ in range(5):
+                coordinator.get_battery_forecast_current()
+
+    def test_a_new_reason_in_the_same_slot_is_not_swallowed(self):
+        # Dedupe keys on (reason, slot), so a stretch that changes cause
+        # mid-slot still reports the change.
+        coordinator = self._partial_first_entry()
+        with self.assertLogs(self.LOGGER, level="INFO"):
+            coordinator.get_battery_forecast_current()
+        coordinator._cached_appliance_forecast_pipeline = None
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            coordinator.get_battery_forecast_current()
+        self.assertIn("reason=pipeline_cold", captured.output[0])
+
+    def test_a_slot_missing_from_the_series_names_the_range_it_covered(self):
+        coordinator = self._coordinator(
+            {"series": [{"timestamp": "2026-03-20T22:00:00+01:00", "socPct": 40.0}]}
+        )
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            self.assertIsNone(coordinator.get_battery_forecast_current())
+        (line,) = captured.output
+        self.assertIn("reason=slot_not_in_series", line)
+        self.assertIn("2026-03-20T22:00:00+01:00", line)
+
+    def test_a_forecast_without_a_series_reports_its_status(self):
+        coordinator = self._coordinator({"status": "unavailable"})
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            self.assertIsNone(coordinator.get_battery_forecast_current())
+        (line,) = captured.output
+        self.assertIn("reason=no_series", line)
+        self.assertIn("'unavailable'", line)
+
+
 if __name__ == "__main__":
     unittest.main()
