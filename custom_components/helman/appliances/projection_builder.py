@@ -108,14 +108,15 @@ def build_projection_input_bundle(
         local_reference,
         interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
     )
+    house_series_by_slot = _build_house_series_map(house_forecast)
     current_house_kwh = _read_current_slot_house_value(
         house_forecast=house_forecast,
         current_slot_start=current_slot_start,
+        house_series_by_slot=house_series_by_slot,
     )
     if current_house_kwh is None:
         return None
 
-    house_series_by_slot = _build_house_series_map(house_forecast)
     solar_by_slot_wh = _build_solar_slot_map(solar_forecast)
     if not solar_by_slot_wh:
         return None
@@ -841,15 +842,26 @@ def _read_current_slot_house_value(
     *,
     house_forecast: dict[str, Any],
     current_slot_start: datetime,
+    house_series_by_slot: dict[datetime, float],
 ) -> float | None:
-    current_slot = house_forecast.get("currentSlot")
-    if not isinstance(current_slot, dict):
-        return None
+    """The house demand for the slot the projection starts in.
 
-    timestamp = _parse_timestamp(current_slot.get("timestamp"))
-    if timestamp is None or dt_util.as_local(timestamp) != current_slot_start:
-        return None
-    return _read_house_entry_value(current_slot)
+    The same anchor rule the battery builder's namesake follows, for the same
+    reason: the house payload is anchored on the *house build's* own slot, and a
+    projection one slot past that anchor finds its slot in the ``series`` rather
+    than in ``currentSlot``. Refusing it there returned no input bundle at all,
+    which drops the scheduled appliance demand out of the adjusted house
+    forecast rather than failing loudly. See #204.
+    """
+    current_slot = house_forecast.get("currentSlot")
+    if isinstance(current_slot, dict):
+        timestamp = _parse_timestamp(current_slot.get("timestamp"))
+        if timestamp is not None and dt_util.as_local(timestamp) == current_slot_start:
+            value = _read_house_entry_value(current_slot)
+            if value is not None:
+                return value
+
+    return house_series_by_slot.get(current_slot_start)
 
 
 def _build_house_series_map(house_forecast: dict[str, Any]) -> dict[datetime, float]:

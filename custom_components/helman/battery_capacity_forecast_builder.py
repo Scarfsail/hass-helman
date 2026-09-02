@@ -150,14 +150,18 @@ class BatteryCapacityForecastBuilder:
             next_slot_start - started_at_local
         ).total_seconds() / 3600
 
+        house_series_by_slot = self._build_house_series_map(house_forecast)
         current_slot_house_value = self._read_current_slot_house_value(
-            house_forecast, current_slot_start
+            house_forecast,
+            current_slot_start,
+            house_series_by_slot=house_series_by_slot,
         )
         if current_slot_house_value is None:
             _LOGGER.warning(
-                "Battery forecast unavailable: current_slot_house_value is None "
-                "(current_slot_start=%s)",
+                "Battery forecast unavailable: the house forecast covers no "
+                "slot at %s (its own anchor is %s)",
                 current_slot_start.isoformat(),
+                self._describe_house_anchor(house_forecast),
             )
             return self._make_payload(
                 status="unavailable",
@@ -167,7 +171,6 @@ class BatteryCapacityForecastBuilder:
                 horizon_hours=horizon_hours,
             )
 
-        house_series_by_slot = self._build_house_series_map(house_forecast)
         solar_by_slot = self._build_solar_slot_map(solar_forecast)
 
         slot_inputs_result = self._build_slot_inputs(
@@ -436,22 +439,53 @@ class BatteryCapacityForecastBuilder:
         return adjusted_with_baseline
 
     def _read_current_slot_house_value(
-        self, house_forecast: dict[str, Any], current_slot_start: datetime
+        self,
+        house_forecast: dict[str, Any],
+        current_slot_start: datetime,
+        *,
+        house_series_by_slot: dict[datetime, float],
     ) -> float | None:
+        """The house demand for the slot this simulation starts in.
+
+        The house payload is anchored on the *house build's* own slot: a
+        ``currentSlot`` entry, then a ``series`` starting the slot after it. A
+        battery build one slot past that anchor — the pipeline rebuilding
+        mid-slot against the snapshot the previous beat left, which happens
+        whenever an off-beat event invalidates the cache — finds its slot in the
+        series, not in ``currentSlot``. Fall through to the series map rather
+        than declaring the whole forecast unavailable, which is what used to
+        take all five current-slot sensors down with it. See #204.
+
+        The house series carries one slot more than the simulation's horizon
+        needs, so a one-slot lag still reaches the end of the horizon. A larger
+        one runs out at the tail and is refused there — a house snapshot half an
+        hour stale is a real staleness condition, not a race.
+        """
+        current_slot = house_forecast.get("currentSlot")
+        if not isinstance(current_slot, dict):
+            current_slot = house_forecast.get("currentHour")
+
+        if isinstance(current_slot, dict):
+            timestamp = self._parse_timestamp(current_slot.get("timestamp"))
+            if (
+                timestamp is not None
+                and dt_util.as_local(timestamp) == current_slot_start
+            ):
+                value = self._read_house_entry_value(current_slot)
+                if value is not None:
+                    return value
+
+        return house_series_by_slot.get(current_slot_start)
+
+    def _describe_house_anchor(self, house_forecast: dict[str, Any]) -> str:
+        """The house payload's own current slot, for the unavailable warning."""
         current_slot = house_forecast.get("currentSlot")
         if not isinstance(current_slot, dict):
             current_slot = house_forecast.get("currentHour")
         if not isinstance(current_slot, dict):
-            return None
-
+            return "absent"
         timestamp = self._parse_timestamp(current_slot.get("timestamp"))
-        if timestamp is None:
-            return None
-
-        if dt_util.as_local(timestamp) != current_slot_start:
-            return None
-
-        return self._read_house_entry_value(current_slot)
+        return "unparseable" if timestamp is None else timestamp.isoformat()
 
     def _build_house_series_map(self, house_forecast: dict[str, Any]) -> dict[datetime, float]:
         series = house_forecast.get("series")

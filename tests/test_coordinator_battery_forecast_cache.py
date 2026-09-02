@@ -1364,6 +1364,67 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(build_mock.call_count, 2)
 
 
+class SlotAlignedRefreshBeatTests(unittest.TestCase):
+    """The quarter-hour beat snaps back to the boundary before rebuilding.
+
+    Home Assistant's ``async_track_time_change`` draws a microsecond offset in
+    [50ms, 500ms] once, when the listener is attached, schedules every firing at
+    boundary + that offset, then hands the callback the real clock. Passing that
+    straight through as the rebuild's reference time stamped the snapshot's
+    first slot short by the offset for the whole session -- #204.
+    """
+
+    def _fire(self, fired_at):
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._hass = SimpleNamespace()
+        coordinator._unsub_forecast_refresh = None
+        forwarded = []
+        coordinator._create_tracked_refresh_task = lambda coro: coro
+        coordinator._async_refresh_forecast = (
+            lambda *, reason, reference_time: forwarded.append(
+                (reason, reference_time)
+            )
+        )
+
+        registered = []
+        original = coordinator_module.async_track_time_change
+        coordinator_module.async_track_time_change = (
+            lambda hass, action, **kwargs: registered.append((action, kwargs))
+            or (lambda: None)
+        )
+        try:
+            coordinator._start_forecast_refresh()
+        finally:
+            coordinator_module.async_track_time_change = original
+
+        (on_interval, kwargs) = registered[0]
+        self.assertEqual(kwargs, {"minute": [0, 15, 30, 45], "second": 0})
+        on_interval(fired_at)
+        return forwarded[0]
+
+    def test_a_late_firing_is_snapped_back_to_the_slot_boundary(self):
+        for offset_text in ("0.050000", "0.183000", "0.499999"):
+            with self.subTest(offset=offset_text):
+                reason, reference_time = self._fire(
+                    datetime.fromisoformat(f"2026-03-20T21:15:00.{offset_text[2:]}+01:00")
+                )
+                self.assertEqual(reason, coordinator_module._SLOT_ALIGNED_REFRESH_REASON)
+                self.assertEqual(
+                    reference_time,
+                    datetime.fromisoformat("2026-03-20T21:15:00+01:00"),
+                )
+
+    def test_a_firing_that_slips_past_the_next_boundary_keeps_its_own_slot(self):
+        # An event loop stalled past :30 must not be snapped back to :15 -- the
+        # slot it is actually in is the one the rebuild has to stamp.
+        _, reference_time = self._fire(
+            datetime.fromisoformat("2026-03-20T21:30:02.400000+01:00")
+        )
+        self.assertEqual(
+            reference_time, datetime.fromisoformat("2026-03-20T21:30:00+01:00")
+        )
+
+
 class BatteryForecastCurrentAccessorTests(unittest.TestCase):
     """The accessor the five retired-store entities read, and the derivation it
     now owns (moved verbatim from ``BatteryForecastHistoryStore._slot_values``)."""
@@ -1436,6 +1497,42 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
             }
         )
         self.assertIsNone(coordinator.get_battery_forecast_current())
+
+    def _first_entry(self, duration_hours):
+        return self._coordinator(
+            {
+                "series": [
+                    {
+                        "timestamp": "2026-03-20T21:00:00+01:00",
+                        "durationHours": duration_hours,
+                        "socPct": 62.5,
+                    }
+                ]
+            }
+        )
+
+    def test_the_duration_the_slot_aligned_beat_really_produces_is_accepted(self):
+        # #204: the guard used to demand a full slot to within 3.6us, which the
+        # slot-aligned rebuild never once met -- Home Assistant fires the beat
+        # 50-500ms late, by a per-session offset it draws when the listener is
+        # attached, so the first entry came out short by that offset. Sessions
+        # that drew over ~180ms published ``unavailable`` on every slot for
+        # their whole life; the rest survived only because ``simulate_slot``
+        # rounds ``durationHours`` to four places. The beat is snapped to the
+        # boundary now, and the tolerance is a second rather than microseconds.
+        for duration_hours in (
+            0.25,  # snapped: what the beat produces now
+            0.2499,  # rounded, from a 190ms-500ms offset
+            (900 - 0.5) / 3600,  # unrounded, from the largest offset HA draws
+            0.25 - 1 / 3600,  # a full second short, the edge of the tolerance
+        ):
+            with self.subTest(duration_hours=duration_hours):
+                values = self._first_entry(duration_hours).get_battery_forecast_current()
+                self.assertEqual(values, {"socPct": 62.5})
+
+    def test_an_entry_short_by_more_than_the_tolerance_is_still_refused(self):
+        # 36 seconds short: an off-beat rebuild, not scheduler slop.
+        self.assertIsNone(self._first_entry(0.249).get_battery_forecast_current())
 
     def test_an_entry_with_none_of_the_five_is_none_not_empty(self):
         # ``_battery_forecast_slot_values`` ends on ``values or None`` again, so

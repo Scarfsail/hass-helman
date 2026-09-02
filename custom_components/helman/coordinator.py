@@ -226,6 +226,15 @@ _SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
 #: scaled down to match.
 _FULL_FORECAST_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 
+#: How far short of a full slot a first entry may fall and still count as whole.
+#: One second. The slot-aligned rebuild is snapped to the boundary, so this only
+#: absorbs clock and event-loop slop; the partial entries the guard exists to
+#: refuse are stamped *minutes* in, not milliseconds. The tolerance this
+#: replaced was 3.6us -- smaller than the scheduler's own minimum jitter, so it
+#: refused the aligned rebuild too, and the sensors only ever published because
+#: ``simulate_slot`` rounds ``durationHours`` to four places. See #204.
+_FORECAST_SLOT_DURATION_TOLERANCE_HOURS = 1 / 3600
+
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
@@ -2356,9 +2365,10 @@ class HelmanCoordinator:
         the clock's current quarter hour, or carries only a partial one (below).
 
         The snapshot's first series entry is stamped at build time. On the
-        slot-aligned rebuild it lands microseconds into the current slot with
-        ``durationHours`` at essentially a full slot and the whole slot's
-        energy; an off-beat rebuild stamps it partway through, so
+        slot-aligned rebuild that is the slot boundary itself — the timer fires
+        up to half a second late and ``_start_forecast_refresh`` snaps the
+        reference time back — so ``durationHours`` is a full slot carrying the
+        whole slot's energy; an off-beat rebuild stamps it partway through, so
         ``durationHours`` is short and the four Wh figures are scaled down to
         that fraction. This accessor **refuses** such a partial entry, returning
         ``None`` — because Home Assistant writes a sensor's state by routes this
@@ -2407,7 +2417,9 @@ class HelmanCoordinator:
                 if (
                     isinstance(duration_hours, (int, float))
                     and not isinstance(duration_hours, bool)
-                    and duration_hours + 1e-6 < _FULL_FORECAST_SLOT_HOURS
+                    and duration_hours
+                    < _FULL_FORECAST_SLOT_HOURS
+                    - _FORECAST_SLOT_DURATION_TOLERANCE_HOURS
                 ):
                     # A build-time partial first entry: its four energies are
                     # scaled to the slot's remainder. Refuse the whole entry so
@@ -4485,11 +4497,23 @@ class HelmanCoordinator:
             return
 
         @callback
-        def _on_forecast_interval(_now: datetime) -> None:
+        def _on_forecast_interval(fired_at: datetime) -> None:
+            # Home Assistant does not fire this on the boundary. It draws a
+            # microsecond offset in [50ms, 500ms] once, when the listener is
+            # attached, schedules every firing at boundary + that offset, and
+            # then hands the callback the real clock -- so ``fired_at`` is
+            # always past the boundary, by the same amount for the whole
+            # session. Snap it back, or every rebuild this starts stamps its
+            # first slot short by that offset and the battery/grid current-slot
+            # sensors -- whose guard refuses a short first slot -- spend the
+            # session unavailable. See #204.
             self._create_tracked_refresh_task(
                 self._async_refresh_forecast(
                     reason=_SLOT_ALIGNED_REFRESH_REASON,
-                    reference_time=_now,
+                    reference_time=get_local_current_slot_start(
+                        dt_util.as_local(fired_at),
+                        interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+                    ),
                 )
             )
 

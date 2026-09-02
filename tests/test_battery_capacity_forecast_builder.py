@@ -320,6 +320,93 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["partialReason"], "solar_forecast_ended")
         self.assertEqual(payload["coverageUntil"], "2026-03-20T21:30:00+01:00")
 
+    async def _build_against_house_anchored_at(self, anchor, future_values):
+        """Run a 21:07 build against a house payload anchored at ``anchor``."""
+        module, builder = self._make_builder()
+        house_forecast = _make_house_forecast(
+            current_slot_start=anchor,
+            current_slot_value=0.9,
+            future_values=future_values,
+        )
+        solar_forecast = _make_solar_forecast(
+            {
+                datetime(2026, 3, 20, 21, 0, tzinfo=TZ): 100.0,
+                datetime(2026, 3, 20, 21, 15, tzinfo=TZ): 100.0,
+            }
+        )
+        with (
+            patch.object(
+                module,
+                "read_battery_entity_config",
+                return_value=BatteryEntityConfig(
+                    remaining_energy_entity_id="sensor.remaining",
+                    capacity_entity_id="sensor.capacity",
+                    min_soc_entity_id="sensor.min_soc",
+                    max_soc_entity_id="sensor.max_soc",
+                ),
+            ),
+            patch.object(
+                module,
+                "read_battery_forecast_settings",
+                return_value=module.BatteryForecastSettings(
+                    charge_efficiency=1.0,
+                    discharge_efficiency=1.0,
+                    max_charge_power_w=10000.0,
+                    max_discharge_power_w=10000.0,
+                ),
+            ),
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            return builder.build_with_history(
+                live_state=module.BatteryLiveState(
+                    current_remaining_energy_kwh=5.0,
+                    current_soc=50.0,
+                    min_soc=0.0,
+                    max_soc=100.0,
+                    nominal_capacity_kwh=10.0,
+                    min_energy_kwh=0.0,
+                    max_energy_kwh=10.0,
+                ),
+                actual_history=[],
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=REFERENCE_TIME,
+            )
+
+    async def test_a_house_payload_anchored_one_slot_back_is_read_from_its_series(
+        self,
+    ) -> None:
+        # #204: the house payload is anchored on the *house build's* slot --
+        # ``currentSlot`` plus a series starting after it. A battery build one
+        # slot past that anchor (the pipeline rebuilding mid-slot against the
+        # snapshot the previous beat left) used to demand its slot be the
+        # ``currentSlot`` entry, and returned status "unavailable" with no
+        # series at all when it was not -- taking all five current-slot sensors
+        # down. Its slot is in the series; read it from there.
+        payload = await self._build_against_house_anchored_at(
+            datetime(2026, 3, 20, 20, 45, tzinfo=TZ),
+            # 21:00 (the build's own slot), 21:15, 21:30.
+            [0.4, 0.5, 0.6],
+        )
+
+        self.assertNotEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["series"][0]["timestamp"], "2026-03-20T21:07:00+01:00")
+        # 0.4 kWh for the 21:00 slot, scaled to the 8 minutes of it that remain.
+        self.assertAlmostEqual(
+            payload["series"][0]["baselineHouseKwh"], 0.4 * (8 / 15), places=4
+        )
+
+    async def test_a_house_payload_that_covers_the_slot_nowhere_is_still_refused(
+        self,
+    ) -> None:
+        # Anchored two slots back with nothing reaching 21:00: a house snapshot
+        # this stale is a real staleness condition, not the one-slot race.
+        payload = await self._build_against_house_anchored_at(
+            datetime(2026, 3, 20, 20, 30, tzinfo=TZ), []
+        )
+        self.assertEqual(payload["status"], "unavailable")
+
     async def test_build_splits_hourly_solar_points_into_quarter_hour_slots(self) -> None:
         module, builder = self._make_builder()
         house_forecast = _make_house_forecast(
