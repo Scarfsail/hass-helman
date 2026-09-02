@@ -243,6 +243,30 @@ if TYPE_CHECKING:
 _BATTERY_FORECAST_KWH_TO_WH = 1000.0
 
 
+def _series_timestamp_at(series: list[Any], index: int) -> str:
+    """One end of a forecast series' covered range, for a log line.
+
+    Only ever used to say what a series *did* hold when the slot being looked
+    for was not in it (#204), so anything unreadable is named rather than
+    raised on — a malformed entry is itself the answer to why the lookup missed.
+    """
+    if not series:
+        return "empty"
+    entry = series[index]
+    if not isinstance(entry, dict):
+        return f"<{type(entry).__name__}>"
+    timestamp = entry.get("timestamp")
+    return timestamp if isinstance(timestamp, str) else "<no timestamp>"
+
+
+def _first_series_timestamp(series: list[Any]) -> str:
+    return _series_timestamp_at(series, 0)
+
+
+def _last_series_timestamp(series: list[Any]) -> str:
+    return _series_timestamp_at(series, -1)
+
+
 def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
     """Derive one battery-forecast slot's five archived figures from the snapshot.
 
@@ -519,6 +543,12 @@ class _ForecastRefreshResult:
 
 
 class HelmanCoordinator:
+    # Class-level default so the accessor's log dedupe works on a coordinator
+    # built with ``object.__new__`` — which the tests do, and which would
+    # otherwise turn a diagnostic log line into an AttributeError on a read
+    # path the five current-slot entities call constantly.
+    _battery_forecast_current_miss: tuple[str, str] | None = None
+
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
         self._hass = hass
         self._storage = storage
@@ -595,6 +625,12 @@ class HelmanCoordinator:
         self._cached_appliance_forecast_pipeline: (
             _ApplianceForecastPipelineSnapshot | None
         ) = None
+        # The last (reason, slot) :meth:`get_battery_forecast_current` logged a
+        # refusal for. The accessor runs on every state read of the five
+        # current-slot entities, so an unguarded log line there would repeat
+        # some tens of times per slot; keying on the slot collapses a whole
+        # dead stretch to one line per reason per slot. See #204.
+        self._battery_forecast_current_miss: tuple[str, str] | None = None
         self._cached_appliance_projection_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
@@ -2386,21 +2422,56 @@ class HelmanCoordinator:
         for the shortened interval's end, not the slot's, and returning it alone
         would publish one of the five off the shared beat.
         """
-        pipeline = self._cached_appliance_forecast_pipeline
-        if pipeline is None:
-            return None
-        snapshot = getattr(pipeline, "battery_forecast", None)
-        if not isinstance(snapshot, dict):
-            return None
-        series = snapshot.get("series")
-        if not isinstance(series, list):
-            return None
-
         timezone = ZoneInfo(str(self._hass.config.time_zone))
         slot_start = get_local_current_slot_start(
             dt_util.as_local(dt_util.now()), interval_minutes=15
         )
         slot_end = slot_start + timedelta(minutes=15)
+        slot_key = slot_start.isoformat()
+
+        def refuse(reason: str, message: str, *args: object) -> None:
+            """Say once per slot why the five current-slot entities are down.
+
+            Every branch below leaves all five reporting unavailable, and until
+            #204 every one of them did it in silence — a dead stretch showed up
+            in the recorder with nothing in the log to explain it. The dedupe
+            key is (reason, slot) so a stretch spanning several slots still
+            reports each slot it covers, and a reason that changes mid-slot is
+            not swallowed by the one before it.
+            """
+            token = (reason, slot_key)
+            if self._battery_forecast_current_miss == token:
+                return
+            self._battery_forecast_current_miss = token
+            _LOGGER.info(
+                "Battery forecast current-slot values unavailable "
+                "(slot=%s, reason=%s): " + message,
+                slot_key,
+                reason,
+                *args,
+            )
+
+        pipeline = self._cached_appliance_forecast_pipeline
+        if pipeline is None:
+            refuse("pipeline_cold", "the appliance forecast pipeline has no snapshot yet")
+            return None
+        snapshot = getattr(pipeline, "battery_forecast", None)
+        if not isinstance(snapshot, dict):
+            refuse(
+                "no_battery_forecast",
+                "the pipeline snapshot carries no battery_forecast dict (got %s)",
+                type(snapshot).__name__,
+            )
+            return None
+        series = snapshot.get("series")
+        if not isinstance(series, list):
+            refuse(
+                "no_series",
+                "the battery forecast carries no series (status=%r, got %s)",
+                snapshot.get("status"),
+                type(series).__name__,
+            )
+            return None
         for entry in series:
             if not isinstance(entry, dict):
                 continue
@@ -2426,8 +2497,25 @@ class HelmanCoordinator:
                     # no write path can publish a partial value. An entry with no
                     # ``durationHours`` at all (older snapshots, some tests) is
                     # taken at face value.
+                    refuse(
+                        "partial_slot",
+                        "the snapshot's entry for this slot is a build-time "
+                        "partial (durationHours=%s, a full slot is %s) — an "
+                        "off-beat rebuild stamped it mid-slot, so the five stay "
+                        "down until the next slot-aligned rebuild",
+                        duration_hours,
+                        _FULL_FORECAST_SLOT_HOURS,
+                    )
                     return None
                 return _battery_forecast_slot_values(entry)
+        refuse(
+            "slot_not_in_series",
+            "no series entry covers this slot (series has %d entries, "
+            "first=%s, last=%s)",
+            len(series),
+            _first_series_timestamp(series),
+            _last_series_timestamp(series),
+        )
         return None
 
     def register_grid_import_price_sensor(self, sensor) -> None:

@@ -87,6 +87,17 @@ class BatteryCapacityForecastBuilder:
         )
 
         if entity_config is None or not settings.is_configured:
+            # Debug, not warning: an unconfigured battery is a standing state,
+            # not an incident, and this runs on every rebuild. It is logged at
+            # all because "no battery configured" and "configured but failing"
+            # produce the same five unavailable entities, and #204 showed how
+            # long that ambiguity can go unresolved.
+            _LOGGER.debug(
+                "Battery forecast not configured: entity_config=%s, "
+                "settings.is_configured=%s",
+                "missing" if entity_config is None else "present",
+                settings.is_configured,
+            )
             return self._make_payload(
                 status="not_configured",
                 settings=settings,
