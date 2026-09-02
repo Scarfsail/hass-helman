@@ -260,6 +260,58 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
 
 
 class ApplianceProjectionBuilderTests(unittest.TestCase):
+    def test_a_house_payload_anchored_one_slot_back_still_yields_a_bundle(self) -> None:
+        # #204: the house payload is anchored on the house build's own slot --
+        # ``currentSlot``, then a series starting after it. A projection one slot
+        # past that anchor (the pipeline rebuilding mid-slot against the snapshot
+        # the previous beat left) used to get no input bundle at all, which drops
+        # the scheduled appliance demand out of the adjusted house forecast
+        # rather than failing loudly. Its slot is in the series; read it there.
+        house_forecast = _make_house_forecast()
+        # Re-anchor a slot back: 21:00 moves from ``currentSlot`` into the series.
+        house_forecast["currentSlot"] = {
+            "timestamp": "2026-03-20T20:45:00+01:00",
+            "nonDeferrable": {"value": 0.9},
+        }
+        house_forecast["series"] = [
+            {"timestamp": "2026-03-20T21:00:00+01:00", "nonDeferrable": {"value": 0.5}},
+            *house_forecast["series"],
+        ]
+
+        inputs = build_projection_input_bundle(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=house_forecast,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertIsNotNone(inputs)
+        self.assertEqual(
+            inputs.current_slot_start,
+            datetime.fromisoformat("2026-03-20T21:00:00+01:00"),
+        )
+        # The 21:00 value, now reached through the series rather than currentSlot.
+        self.assertEqual(inputs.current_house_kwh, 0.5)
+
+    def test_a_house_payload_that_covers_the_slot_nowhere_yields_no_bundle(self) -> None:
+        house_forecast = _make_house_forecast()
+        house_forecast["currentSlot"] = {
+            "timestamp": "2026-03-20T20:30:00+01:00",
+            "nonDeferrable": {"value": 0.9},
+        }
+        house_forecast["series"] = [
+            entry
+            for entry in house_forecast["series"]
+            if not entry["timestamp"].startswith("2026-03-20T21:00")
+        ]
+
+        self.assertIsNone(
+            build_projection_input_bundle(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=house_forecast,
+                reference_time=REFERENCE_TIME,
+            )
+        )
+
     def test_fast_projection_uses_effective_power_cap(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())
         inputs = build_projection_input_bundle(
