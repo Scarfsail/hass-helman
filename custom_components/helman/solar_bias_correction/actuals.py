@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import logging
@@ -64,8 +65,10 @@ except Exception:  # pragma: no cover - test stub compatibility
         local_start: datetime,
         local_end: datetime,
         interval_minutes: int,
+        liveness_instants: Sequence[datetime] | None = None,
     ) -> dict[datetime, float]:
         del hass, entity_id, local_start, local_end, interval_minutes
+        del liveness_instants
         return {}
 
 
@@ -78,7 +81,15 @@ async def load_actuals_for_day(
     target_date: date,
     *,
     local_now: datetime,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[str, float]:
+    """The day's measured solar production, per fifteen-minute slot.
+
+    ``liveness_instants`` is the recorder write trace the caller's batched
+    meter read gathered. The solar meter is silent every night and cannot show
+    on its own that the recorder was up while it said nothing, so without a
+    trace its quiet stretches read as recorder gaps and drop out (#208).
+    """
     entity_id = _read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None:
         return {}
@@ -87,6 +98,7 @@ async def load_actuals_for_day(
         entity_id,
         target_date,
         local_now=local_now,
+        liveness_instants=liveness_instants,
     )
 
 
@@ -258,6 +270,7 @@ async def _read_day_slot_actuals(
     target_date: date,
     *,
     local_now: datetime,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[str, float]:
     local_start = datetime.combine(target_date, time.min, tzinfo=local_now.tzinfo)
     local_end = local_start + timedelta(days=1)
@@ -272,6 +285,7 @@ async def _read_day_slot_actuals(
         local_start=local_start,
         local_end=local_end,
         interval_minutes=15,
+        liveness_instants=liveness_instants,
     )
     return {
         dt_util.as_local(slot_start).strftime("%H:%M"): round(value_kwh * 1000.0, 4)

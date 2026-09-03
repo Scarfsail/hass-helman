@@ -61,6 +61,7 @@ from .statistics_day import HOUR_MINUTES, StatisticsDay, load_statistics_day
 from .trainer import compute_fingerprint, train
 
 if TYPE_CHECKING:
+    from ..recorder_hourly_series import SlotEnergyBatch
     from ..storage import SolarBiasCorrectionStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -911,30 +912,22 @@ class SolarBiasCorrectionService:
         actuals_by_slot: dict[str, float] = {}
         undecided = False
         reads_statistics = False
-        if need_past:
-            decided = self._day_reads_statistics(target_date, local_now)
-            reads_statistics = decided is True
-            # Only an elapsed day can be judged by an empty read: today reads
-            # empty every night before dawn and has nothing compiled at all just
-            # after midnight, so its emptiness says nothing about a purge.
-            undecided = decided is None and target_date < today
-            if not reads_statistics:
-                actuals_by_slot = await load_actuals_for_day(
-                    self._hass,
-                    self._cfg,
-                    target_date,
-                    local_now=local_now,
-                )
 
         # Every cumulative meter the day's actual series need — house, both grid
-        # sides, both battery sides and one per house consumer — is read in a
-        # single recorder query up front. The recorder serves from one DB
-        # executor thread, so gathering a read per meter would only queue them;
-        # the batch turns ~18 serial round-trips into one. The consumer roster
-        # has to be resolved first because it decides most of the entity ids.
-        # The two steps degrade apart, the way the per-series loaders they came
-        # from did: a roster that cannot be built costs the breakdown, and a
+        # sides, both battery sides, the solar meter and one per house consumer —
+        # is read in a single recorder query up front. The recorder serves from
+        # one DB executor thread, so gathering a read per meter would only queue
+        # them; the batch turns ~18 serial round-trips into one. The consumer
+        # roster has to be resolved first because it decides most of the entity
+        # ids. The two steps degrade apart, the way the per-series loaders they
+        # came from did: a roster that cannot be built costs the breakdown, and a
         # recorder that cannot be read costs the meter series, neither the other.
+        #
+        # The batch runs before the solar actuals, which keep their own read (the
+        # invalidation rules live on that path), so that it can hand them its
+        # liveness trace: the solar meter is silent from dusk to dawn and cannot
+        # prove on its own that the recorder was up while it said nothing. See
+        # ``_is_carry_stale`` and issue #208.
         #
         # A statistics-backed day reads the same meters from the same one query,
         # only against the hourly long-term table -- and it brings back every
@@ -947,6 +940,12 @@ class SolarBiasCorrectionService:
         slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
         statistics_day = StatisticsDay()
         if need_past:
+            decided = self._day_reads_statistics(target_date, local_now)
+            reads_statistics = decided is True
+            # Only an elapsed day can be judged by an empty read: today reads
+            # empty every night before dawn and has nothing compiled at all just
+            # after midnight, so its emptiness says nothing about a purge.
+            undecided = decided is None and target_date < today
             try:
                 breakdown_consumers_for_day = await self._house_breakdown_consumers()
             except Exception:
@@ -958,8 +957,9 @@ class SolarBiasCorrectionService:
             )
             if not reads_statistics:
                 meters_answered = True
+                liveness_instants: list[datetime] = []
                 try:
-                    slot_energy_by_entity = await self._load_slot_energy_kwh_for_entities(
+                    meter_batch = await self._load_slot_energy_kwh_for_entities(
                         meter_entity_ids,
                         target_date,
                         timezone,
@@ -968,6 +968,16 @@ class SolarBiasCorrectionService:
                     _LOGGER.exception("Failed to load slot energy meters for inspector")
                     slot_energy_by_entity = {}
                     meters_answered = False
+                else:
+                    slot_energy_by_entity = meter_batch.by_entity
+                    liveness_instants = meter_batch.liveness_instants
+                actuals_by_slot = await load_actuals_for_day(
+                    self._hass,
+                    self._cfg,
+                    target_date,
+                    local_now=local_now,
+                    liveness_instants=liveness_instants,
+                )
                 # Nothing anywhere in raw state on an elapsed day, with no
                 # horizon to have predicted it: the recorder has been trimmed
                 # past this day even though it will not say so. Judged on the
@@ -1676,10 +1686,12 @@ class SolarBiasCorrectionService:
 
     async def _load_slot_energy_kwh_for_entities(
         self, entity_ids: Sequence[str], target_date: date, local_tz: ZoneInfo
-    ) -> dict[str, dict[datetime, float]]:
+    ) -> SlotEnergyBatch:
         """Per-15-min energy deltas of several cumulative meters, in one recorder read.
 
-        Keyed by entity id, each value keyed by UTC slot start. Daily-resetting
+        ``by_entity`` is keyed by entity id, each value keyed by UTC slot start,
+        and ``liveness_instants`` is the read's record of when the recorder was
+        writing — which the solar actuals read borrows. Daily-resetting
         meters are fine here: the query unwraps total_increasing resets, and a
         single local day never spans the midnight reset boundary.
 
@@ -1704,9 +1716,15 @@ class SolarBiasCorrectionService:
     def _cumulative_meter_entity_ids(self, consumers: list[dict]) -> list[str]:
         """Every cumulative meter the inspector's actual series read for a day.
 
-        The house meter, both grid sides, both battery sides and one per house
-        consumer — the entity ids the single batched read has to cover. Missing
-        providers and unconfigured meters drop out; the batch de-duplicates.
+        The house meter, both grid sides, both battery sides, the solar meter
+        and one per house consumer — the entity ids the single batched read has
+        to cover. Missing providers and unconfigured meters drop out; the batch
+        de-duplicates.
+
+        The solar meter is in the roster even though its series is built from
+        its own read: what the batch needs from it is its publishes, which are
+        part of the evidence that the recorder was up (issue #208). One more
+        entity on a query that already carries a dozen costs nothing.
 
         A provider that raises costs only its own meter here. Its series still
         calls it and still fails, and its own error boundary still degrades that
@@ -1723,7 +1741,14 @@ class SolarBiasCorrectionService:
                 _LOGGER.exception("Meter entity id provider failed for inspector")
                 return None
 
+        try:
+            solar_entity_id, *_ = self._energy_meter_entity_ids()
+        except Exception:
+            _LOGGER.exception("Failed to resolve the solar meter for inspector")
+            solar_entity_id = None
+
         candidates = [
+            solar_entity_id,
             _entity_id(self._house_energy_entity_id_provider),
             _entity_id(self._grid_import_energy_entity_id_provider),
             _entity_id(self._grid_export_energy_entity_id_provider),

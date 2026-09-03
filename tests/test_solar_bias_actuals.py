@@ -134,12 +134,21 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
     async def test_today_actuals_stop_at_current_completed_slot(self) -> None:
         captured = {}
 
-        async def _query(hass, entity_id, *, local_start, local_end, interval_minutes):
+        async def _query(
+            hass,
+            entity_id,
+            *,
+            local_start,
+            local_end,
+            interval_minutes,
+            liveness_instants=None,
+        ):
             captured["args"] = {
                 "entity_id": entity_id,
                 "local_start": local_start,
                 "local_end": local_end,
                 "interval_minutes": interval_minutes,
+                "liveness_instants": liveness_instants,
             }
             return {}
 

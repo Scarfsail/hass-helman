@@ -184,6 +184,25 @@ class _Recorder:
         return {entity_id: _replay_window(self.states, start, end)}
 
 
+class _BatchRecorder:
+    """A recorder holding several entities' states, for the batched read.
+
+    ``get_significant_states`` takes a list of entity ids and is called with
+    keywords, which is the only way it differs from the singular fake above.
+    """
+
+    def __init__(self, states_by_entity: dict[str, list[SimpleNamespace]]) -> None:
+        self.states_by_entity = states_by_entity
+        self.windows: list[tuple[datetime, datetime]] = []
+
+    def get_significant_states(self, _hass, start, end, *, entity_ids, **_kwargs):
+        self.windows.append((start, end))
+        return {
+            entity_id: _replay_window(self.states_by_entity.get(entity_id, []), start, end)
+            for entity_id in entity_ids
+        }
+
+
 def _make_hass() -> SimpleNamespace:
     return SimpleNamespace(
         states=SimpleNamespace(
@@ -201,6 +220,22 @@ class _RecorderPatchMixin:
                 recorder_hourly_series,
                 "state_changes_during_period",
                 recorder.state_changes_during_period,
+            ),
+            patch.object(
+                recorder_hourly_series,
+                "get_instance",
+                lambda hass: SimpleNamespace(
+                    async_add_executor_job=_inline_executor_job
+                ),
+            ),
+        )
+
+    def _batch_patches(self, recorder: _BatchRecorder):
+        return (
+            patch.object(
+                recorder_hourly_series,
+                "get_significant_states",
+                recorder.get_significant_states,
             ),
             patch.object(
                 recorder_hourly_series,
@@ -467,6 +502,209 @@ class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyn
         # reading as a string of zeros.
         gap_slot = _FakeDtUtil.as_utc(DAY + timedelta(hours=9, minutes=30))
         self.assertNotIn(gap_slot, incremental)
+
+
+BUSY_ENTITY_ID = "sensor.house_energy_busy"
+QUIET_ENTITY_ID = "sensor.battery_charge_energy"
+
+
+def _quiet_meter_states() -> list[SimpleNamespace]:
+    """A meter that goes quiet for two hours and resumes a little higher.
+
+    The shape #208 is about: an idle battery, no grid flow, solar before dawn.
+    It resumes at 50.1 rather than at the 50.0 it left off at, because a meter
+    publishes precisely *because* it moved -- which is why the equality escape
+    in :func:`_is_carry_stale` cannot rescue it and something else has to.
+    """
+    return [
+        _state(DAY + timedelta(hours=8, minutes=45), 49.75),
+        _state(DAY + timedelta(hours=9), 50.0),
+        _state(DAY + timedelta(hours=11, minutes=7), 50.1),
+        _state(DAY + timedelta(hours=11, minutes=15), 50.2),
+    ]
+
+
+class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
+    """Issue #208: a meter quiet inside a live recorder keeps its zero slots."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._dt_patcher.stop()
+
+    async def _read(self, states_by_entity: dict[str, list[SimpleNamespace]]):
+        recorder = _BatchRecorder(states_by_entity)
+        read_patch, instance_patch = self._batch_patches(recorder)
+        with read_patch, instance_patch:
+            return await recorder_hourly_series.query_cumulative_slot_energy_changes_for_entities(
+                _make_hass(),
+                list(states_by_entity),
+                local_start=DAY,
+                local_end=DAY + timedelta(hours=12),
+                interval_minutes=15,
+            )
+
+    async def test_a_meter_quiet_beside_a_busy_one_keeps_its_real_zeros(self) -> None:
+        # The busy meter publishes every fifteen minutes throughout, which is
+        # the batch's proof that the recorder was recording the whole time.
+        batch = await self._read(
+            {
+                BUSY_ENTITY_ID: _climbing_states(
+                    start=DAY,
+                    end=DAY + timedelta(hours=12),
+                    step=timedelta(minutes=15),
+                    first_value=90.0,
+                    increment=0.25,
+                ),
+                QUIET_ENTITY_ID: _quiet_meter_states(),
+            }
+        )
+
+        # Every slot from 09:00 to 11:00 is a real, unchanged zero. Before the
+        # fix these were dropped: the carry was older than the limit and the
+        # meter's next reading differed, which is every quiet stretch there is.
+        quiet = batch.by_entity[QUIET_ENTITY_ID]
+        for index in range(8):
+            slot_start = _FakeDtUtil.as_utc(
+                DAY + timedelta(hours=9, minutes=15 * index)
+            )
+            self.assertIn(slot_start, quiet, f"slot {index} should still be present")
+            self.assertAlmostEqual(quiet[slot_start], 0.0, places=6)
+
+        # The busy meter is unaffected, and the movement the quiet meter did
+        # make lands in the slot it belongs to rather than being spread.
+        busy = batch.by_entity[BUSY_ENTITY_ID]
+        self.assertAlmostEqual(
+            busy[_FakeDtUtil.as_utc(DAY + timedelta(hours=10))], 0.25, places=6
+        )
+        self.assertAlmostEqual(
+            quiet[_FakeDtUtil.as_utc(DAY + timedelta(hours=11))], 0.2, places=6
+        )
+
+        # And the trace really is the union of both meters' publishes.
+        self.assertEqual(
+            batch.liveness_instants, sorted(batch.liveness_instants)
+        )
+        self.assertIn(
+            _FakeDtUtil.as_utc(DAY + timedelta(hours=10)), batch.liveness_instants
+        )
+
+    async def test_a_batch_wide_silence_still_drops_its_slots(self) -> None:
+        # #182's case, which the fix must not undo: nothing was written for
+        # anyone across the stretch, which is what a recorder outage looks
+        # like. Both meters resume together at 11:07, the busy one carrying
+        # the whole outage's 4 kWh.
+        outage_start = DAY + timedelta(hours=9)
+        resumed = DAY + timedelta(hours=11, minutes=7)
+        batch = await self._read(
+            {
+                BUSY_ENTITY_ID: [
+                    *_climbing_states(
+                        start=DAY,
+                        end=outage_start,
+                        step=timedelta(minutes=15),
+                        first_value=90.0,
+                        increment=0.25,
+                    ),
+                    _state(outage_start, 100.0),
+                    _state(resumed, 104.0),
+                    _state(DAY + timedelta(hours=11, minutes=15), 104.3),
+                ],
+                QUIET_ENTITY_ID: _quiet_meter_states(),
+            }
+        )
+
+        # From 09:45 -- the first boundary past the staleness limit -- through
+        # 11:00, every slot is absent for both meters, and the outage's 4 kWh
+        # is not dumped on the slot the fresh reading lands in.
+        for entity_id in (BUSY_ENTITY_ID, QUIET_ENTITY_ID):
+            changes = batch.by_entity[entity_id]
+            for offset_minutes in (45, 60, 75, 90, 105, 120):
+                slot_start = _FakeDtUtil.as_utc(
+                    DAY + timedelta(hours=9, minutes=offset_minutes)
+                )
+                self.assertNotIn(
+                    slot_start,
+                    changes,
+                    f"{entity_id} 09:{offset_minutes:02d} should be absent",
+                )
+        self.assertNotIn(4.0, batch.by_entity[BUSY_ENTITY_ID].values())
+
+
+class SolarPathBorrowsTheBatchTraceTests(
+    _RecorderPatchMixin, unittest.IsolatedAsyncioTestCase
+):
+    """The inspector's solar series reads alone and has to be handed a trace.
+
+    Its meter is silent from dusk to dawn, so its own rows can never show that
+    the recorder was up while it said nothing -- the singular read is exactly
+    the case a batch cannot cover, and #208's 04:00-06:00 stretch is it.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._dt_patcher.stop()
+
+    @staticmethod
+    def _predawn_solar_states() -> list[SimpleNamespace]:
+        """A daily solar meter: flat at 0.0 overnight, first light at 06:00."""
+        return [
+            _state(DAY + timedelta(hours=3, minutes=45), 0.0),
+            _state(DAY + timedelta(hours=4), 0.0),
+            # Nothing for two hours -- the panels are dark.
+            _state(DAY + timedelta(hours=6, minutes=2), 0.004),
+            _state(DAY + timedelta(hours=6, minutes=15), 0.02),
+        ]
+
+    async def _read(self, liveness_instants):
+        recorder = _Recorder(self._predawn_solar_states())
+        read_patch, instance_patch = self._patches(recorder)
+        with read_patch, instance_patch:
+            return await recorder_hourly_series.query_cumulative_slot_energy_changes(
+                _make_hass(),
+                ENTITY_ID,
+                local_start=DAY,
+                local_end=DAY + timedelta(hours=7),
+                interval_minutes=15,
+                liveness_instants=liveness_instants,
+            )
+
+    async def test_with_a_trace_the_pre_dawn_stretch_reads_as_zeros(self) -> None:
+        # A house meter publishing every fifteen minutes all night is the
+        # trace the inspector hands over from its batched read.
+        changes = await self._read(
+            [
+                _FakeDtUtil.as_utc(DAY + timedelta(minutes=15 * index))
+                for index in range(28)
+            ]
+        )
+
+        for index in range(8):
+            slot_start = _FakeDtUtil.as_utc(
+                DAY + timedelta(hours=4, minutes=15 * index)
+            )
+            self.assertIn(slot_start, changes, f"04:{15 * index:02d} should be present")
+            self.assertAlmostEqual(changes[slot_start], 0.0, places=6)
+
+    async def test_without_a_trace_the_same_read_still_drops_them(self) -> None:
+        # The `None` default has to leave the old judgement untouched, which is
+        # what keeps every caller that has no trace behaving as it did.
+        changes = await self._read(None)
+
+        for index in range(2, 8):
+            slot_start = _FakeDtUtil.as_utc(
+                DAY + timedelta(hours=4, minutes=15 * index)
+            )
+            self.assertNotIn(slot_start, changes)
 
 
 if __name__ == "__main__":

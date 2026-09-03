@@ -197,7 +197,7 @@ def _make_service():
 
 
 class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCase):
-    async def test_eighteen_meters_cost_one_recorder_query(self):
+    async def test_nineteen_meters_cost_one_recorder_query(self):
         service = _make_service()
 
         old_actuals = service_mod.load_actuals_for_day
@@ -220,12 +220,15 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
         finally:
             service_mod.load_actuals_for_day = old_actuals
 
-        # One query, covering every meter the day's actual series draw.
+        # One query, covering every meter the day's actual series draw. The
+        # solar meter is in it even though its own series is read separately:
+        # the batch needs its publishes as recorder-liveness evidence (#208).
         self.assertEqual(len(QUERIES["batched"]), 1)
         self.assertEqual(
             sorted(QUERIES["batched"][0]),
             sorted(
                 [
+                    "sensor.solar_total",
                     HOUSE_METER,
                     GRID_IMPORT_METER,
                     GRID_EXPORT_METER,
@@ -306,7 +309,7 @@ class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
         )
 
         with _counting_queries():
-            by_entity = (
+            batch = (
                 await recorder_series_mod.query_cumulative_slot_energy_changes_for_entities(
                     hass,
                     ["sensor.a", "sensor.b", "sensor.a"],
@@ -319,7 +322,9 @@ class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(QUERIES["batched"], [["sensor.a", "sensor.b"]])
         # Nothing recorded for either, so each maps to an empty series rather
         # than going missing — the singular function's behaviour.
-        self.assertEqual(by_entity, {"sensor.a": {}, "sensor.b": {}})
+        self.assertEqual(batch.by_entity, {"sensor.a": {}, "sensor.b": {}})
+        # And nothing reached the recorder, so the read saw no liveness either.
+        self.assertEqual(batch.liveness_instants, [])
 
     async def test_an_empty_entity_list_costs_no_query(self):
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
@@ -328,16 +333,17 @@ class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
         )
 
         with _counting_queries():
-            self.assertEqual(
+            batch = (
                 await recorder_series_mod.query_cumulative_slot_energy_changes_for_entities(
                     hass,
                     [],
                     local_start=local_start,
                     local_end=local_start.replace(hour=1),
                     interval_minutes=15,
-                ),
-                {},
+                )
             )
+            self.assertEqual(batch.by_entity, {})
+            self.assertEqual(batch.liveness_instants, [])
         self.assertEqual(QUERIES["batched"], [])
 
 
