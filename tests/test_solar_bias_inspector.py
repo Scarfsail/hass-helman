@@ -357,8 +357,11 @@ def _make_cfg():
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
     captured = {}
 
-    async def fake_read_day_slot_actuals(hass, entity_id, target_date, *, local_now):
+    async def fake_read_day_slot_actuals(
+        hass, entity_id, target_date, *, local_now, liveness_instants=None
+    ):
         captured["args"] = (entity_id, target_date, local_now)
+        captured["liveness_instants"] = liveness_instants
         return {"08:00": 120.0, "08:15": 80.0}
 
     original = actuals._read_day_slot_actuals

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -191,7 +192,17 @@ async def query_cumulative_slot_energy_changes(
     local_start: datetime,
     local_end: datetime,
     interval_minutes: int,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[datetime, float]:
+    """One cumulative meter's per-slot energy deltas.
+
+    ``liveness_instants`` is the recorder write trace that tells a quiet meter
+    apart from a recorder outage (see :func:`_is_carry_stale`). A single-entity
+    read cannot gather one -- the entity's own silence is the thing being
+    judged -- so a caller that has one from elsewhere has to hand it over.
+    :func:`query_cumulative_slot_energy_changes_for_entities` returns exactly
+    that, which is where the inspector's solar read gets its trace.
+    """
     local_slot_starts = _build_local_slot_starts_until(
         local_start,
         local_end,
@@ -222,6 +233,9 @@ async def query_cumulative_slot_energy_changes(
     # its true age rather than reading as fresh at the window start.
     staleness_limit = _carry_staleness_limit(interval_minutes)
     query_start = utc_boundaries[0] - staleness_limit
+    sorted_liveness_instants = (
+        None if liveness_instants is None else sorted(liveness_instants)
+    )
 
     def _query_and_parse() -> dict[datetime, float]:
         history = state_changes_during_period(
@@ -239,9 +253,27 @@ async def query_cumulative_slot_energy_changes(
             default_unit=default_unit,
             utc_boundaries=utc_boundaries,
             staleness_limit=staleness_limit,
+            liveness_instants=sorted_liveness_instants,
         )
 
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
+
+
+@dataclass(frozen=True)
+class SlotEnergyBatch:
+    """A batched meter read: the per-entity deltas, and what the read saw of the recorder.
+
+    ``liveness_instants`` is every observation timestamp the read touched,
+    across every entity in it, sorted. It is the batch's own evidence that the
+    recorder was recording at those moments, which is what tells a quiet meter
+    apart from an outage (see :func:`_is_carry_stale`). It travels with the
+    deltas because a caller reading one more meter on its own -- the
+    inspector's solar series does exactly that -- has no way to gather one and
+    would otherwise fall back on age alone, which is issue #208.
+    """
+
+    by_entity: dict[str, dict[datetime, float]]
+    liveness_instants: list[datetime]
 
 
 async def query_cumulative_slot_energy_changes_for_entities(
@@ -251,21 +283,23 @@ async def query_cumulative_slot_energy_changes_for_entities(
     local_start: datetime,
     local_end: datetime,
     interval_minutes: int,
-) -> dict[str, dict[datetime, float]]:
+) -> SlotEnergyBatch:
     """The per-slot energy deltas of several cumulative meters, in ONE recorder read.
 
-    Same shape and same semantics as :func:`query_cumulative_slot_energy_changes`,
-    for a set of entities that share a window and a grid. The recorder runs its
-    queries on a single DB executor thread, so N separate calls are N serial
-    round-trips no matter how they are awaited; ``get_significant_states`` takes
-    a list of entity ids, which turns them into one.
+    Same per-entity shape and same semantics as
+    :func:`query_cumulative_slot_energy_changes`, for a set of entities that
+    share a window and a grid. The recorder runs its queries on a single DB
+    executor thread, so N separate calls are N serial round-trips no matter how
+    they are awaited; ``get_significant_states`` takes a list of entity ids,
+    which turns them into one.
 
-    Returns a map keyed by entity id. An entity the recorder has nothing for maps
-    to ``{}``, matching the singular function.
+    Returns a :class:`SlotEnergyBatch` whose ``by_entity`` is keyed by entity
+    id. An entity the recorder has nothing for maps to ``{}``, matching the
+    singular function.
     """
     unique_entity_ids = list(dict.fromkeys(eid for eid in entity_ids if eid))
     if not unique_entity_ids:
-        return {}
+        return SlotEnergyBatch(by_entity={}, liveness_instants=[])
 
     local_slot_starts = _build_local_slot_starts_until(
         local_start,
@@ -273,7 +307,10 @@ async def query_cumulative_slot_energy_changes_for_entities(
         interval_minutes=interval_minutes,
     )
     if not local_slot_starts:
-        return {entity_id: {} for entity_id in unique_entity_ids}
+        return SlotEnergyBatch(
+            by_entity={entity_id: {} for entity_id in unique_entity_ids},
+            liveness_instants=[],
+        )
 
     local_boundaries = [*local_slot_starts, local_end]
     utc_boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
@@ -298,7 +335,7 @@ async def query_cumulative_slot_energy_changes_for_entities(
     staleness_limit = _carry_staleness_limit(interval_minutes)
     query_start = utc_boundaries[0] - staleness_limit
 
-    def _query_and_parse() -> dict[str, dict[datetime, float]]:
+    def _query_and_parse() -> SlotEnergyBatch:
         history = get_significant_states(
             hass,
             query_start,
@@ -319,15 +356,40 @@ async def query_cumulative_slot_energy_changes_for_entities(
             no_attributes=no_attributes,
             compressed_state_format=False,
         )
-        return {
-            entity_id: _slot_energy_changes_from_states(
-                _states_for_entity(history, entity_id),
-                default_unit=default_units[entity_id],
-                utc_boundaries=utc_boundaries,
-                staleness_limit=staleness_limit,
+        # Parse every entity first, then sample: an entity's carry is judged
+        # against what the *whole* batch saw of the recorder, so the trace has
+        # to be complete before the first boundary is judged. The unwrap runs
+        # here rather than inside the sampler for the same reason — it is the
+        # step that turns rows into observations, and the trace is built from
+        # those.
+        observations_by_entity = {
+            entity_id: _build_unwrapped_energy_observations(
+                _parse_energy_observations(
+                    _states_for_entity(history, entity_id),
+                    default_unit=default_units[entity_id],
+                )
             )
             for entity_id in unique_entity_ids
         }
+        liveness_instants = sorted(
+            observation.updated_at
+            for observations in observations_by_entity.values()
+            for observation in observations
+        )
+        by_entity = {}
+        for entity_id, observations in observations_by_entity.items():
+            boundary_samples = _sample_energy_observations_at_boundaries(
+                observations,
+                utc_boundaries,
+                staleness_limit=staleness_limit,
+                liveness_instants=liveness_instants,
+            )
+            by_entity[entity_id] = _build_slot_energy_changes_from_boundaries(
+                utc_boundaries, boundary_samples
+            )
+        return SlotEnergyBatch(
+            by_entity=by_entity, liveness_instants=liveness_instants
+        )
 
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
 
@@ -342,12 +404,16 @@ def _slot_energy_changes_from_states(
     default_unit: str | None,
     utc_boundaries: list[datetime],
     staleness_limit: timedelta | None,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[datetime, float]:
     observations = _build_unwrapped_energy_observations(
         _parse_energy_observations(states, default_unit=default_unit)
     )
     boundary_samples = _sample_energy_observations_at_boundaries(
-        observations, utc_boundaries, staleness_limit=staleness_limit
+        observations,
+        utc_boundaries,
+        staleness_limit=staleness_limit,
+        liveness_instants=liveness_instants,
     )
     return _build_slot_energy_changes_from_boundaries(utc_boundaries, boundary_samples)
 
@@ -993,6 +1059,7 @@ def _sample_energy_observations_at_boundaries(
     *,
     carried_value: _BoundarySample | None = None,
     staleness_limit: timedelta | None = None,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[datetime, _BoundarySample]:
     """Sample the series at each boundary, carrying the last value forward.
 
@@ -1007,6 +1074,10 @@ def _sample_energy_observations_at_boundaries(
     whose boundaries are active-state transitions rather than a fixed slot
     grid, so the "multiple of the interval" shape the limit is expressed in
     does not apply to it.
+
+    ``liveness_instants`` is the recorder's write trace across the window,
+    which rescues a carry the staleness limit would otherwise condemn -- again
+    see :func:`_is_carry_stale`.
     """
     if not boundaries:
         return {}
@@ -1039,6 +1110,7 @@ def _sample_energy_observations_at_boundaries(
                 else None
             ),
             staleness_limit=staleness_limit,
+            liveness_instants=liveness_instants,
         ):
             continue
 
@@ -1056,24 +1128,59 @@ def _is_carry_stale(
     latest_value_at: datetime | None,
     next_observation: _EnergyObservation | None,
     staleness_limit: timedelta,
+    liveness_instants: Sequence[datetime] | None = None,
 ) -> bool:
-    """Decision 5: age alone does not condemn a carry -- the meter has to have moved.
+    """Age alone does not condemn a carry -- the recorder has to have been down.
 
     Staleness alone would drop every night slot of an on-change meter that
     legitimately publishes nothing while the house is quiet, throwing away
-    real zeros. So both halves have to hold: the last real reading is older
-    than ``staleness_limit`` at this boundary, *and* the next real reading (if
-    any comes before the window ends) differs from what was carried. A carry
-    with no known age -- ``latest_value_at`` is ``None`` because nothing real
-    has been seen yet -- can't be judged and is trusted as before. A stretch
-    with no next reading at all, the window ending inside it, is judged on
-    age alone: there is nothing to compare against.
+    real zeros. Two things can rescue such a carry, and either is enough.
+
+    ``liveness_instants`` is the decisive one (issue #208): timestamps at
+    which *something* was written to the recorder, gathered across every
+    entity of a batched read. One of them falling between the carried
+    reading and this boundary proves the recorder was recording while this
+    meter said nothing, which is a quiet meter and not an outage, so the
+    boundary keeps its carry and the slot records its real zero. ``None``
+    means the caller has no such evidence -- a single-entity read cannot
+    produce any on its own -- and leaves the judgement to the clauses below.
+
+    The other is the meter's own next reading matching what was carried
+    (decision 5 of #182). It is kept because it is not wrong, but it is very
+    nearly unreachable against a real recorder: Home Assistant writes no row
+    for an unchanged state, and a meter publishes precisely *because* it
+    moved, so the first reading after a quiet stretch essentially always
+    differs. It cannot carry this on its own, which is what #208 was.
+
+    A carry with no known age -- ``latest_value_at`` is ``None`` because
+    nothing real has been seen yet -- can't be judged and is trusted as
+    before. A stretch with no next reading at all, the window ending inside
+    it, falls back on age: there is nothing left to compare against.
     """
     if latest_value_at is None or boundary - latest_value_at <= staleness_limit:
+        return False
+    if _recorder_was_live_between(liveness_instants, latest_value_at, boundary):
         return False
     if next_observation is None:
         return True
     return abs(next_observation.value_kwh - latest_value) > _ENERGY_TOLERANCE_KWH
+
+
+def _recorder_was_live_between(
+    liveness_instants: Sequence[datetime] | None,
+    after: datetime,
+    through: datetime,
+) -> bool:
+    """Did anything at all reach the recorder in ``(after, through]``?
+
+    ``liveness_instants`` is sorted, so this is one bisection rather than a
+    scan: a day of 15-minute slots asks it ~96 times per entity against a list
+    holding every observation of every meter in the batch.
+    """
+    if not liveness_instants:
+        return False
+    index = bisect_right(liveness_instants, after)
+    return index < len(liveness_instants) and liveness_instants[index] <= through
 
 
 def _estimate_average_hourly_energy_kwh_for_active_intervals(

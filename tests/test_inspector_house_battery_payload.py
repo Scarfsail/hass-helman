@@ -97,6 +97,9 @@ service_mod = importlib.import_module(
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
 )
+SlotEnergyBatch = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+).SlotEnergyBatch
 
 TARGET_DATE = "2026-05-10"
 
@@ -214,7 +217,10 @@ async def _inspector_payload(
             service,
             "_load_slot_energy_kwh_for_entities",
             AsyncMock(
-                return_value=_slot_energy_kwh_by_entity(_consumer_slot_by_entity)
+                return_value=SlotEnergyBatch(
+                    by_entity=_slot_energy_kwh_by_entity(_consumer_slot_by_entity),
+                    liveness_instants=[],
+                )
             ),
         ):
             return await service.async_get_inspector_day(TARGET_DATE)

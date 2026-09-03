@@ -680,7 +680,7 @@ _REAL_LOAD_ACTUALS = service_mod.load_actuals_for_day
 
 
 def _actuals_returning(by_slot: dict[str, float]):
-    async def _load(hass, cfg, target_date, *, local_now):
+    async def _load(hass, cfg, target_date, *, local_now, liveness_instants=None):
         return dict(by_slot)
 
     return _load

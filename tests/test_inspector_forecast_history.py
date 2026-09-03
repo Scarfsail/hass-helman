@@ -99,6 +99,9 @@ service_mod = importlib.import_module(
     "custom_components.helman.solar_bias_correction.service"
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
+SlotEnergyBatch = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+).SlotEnergyBatch
 
 from zoneinfo import ZoneInfo  # noqa: E402
 
@@ -261,9 +264,12 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 # on raw states rather than falling back to hourly statistics --
                 # these tests are about the raw-state readers.
                 AsyncMock(
-                    return_value={
-                        "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0}
-                    }
+                    return_value=SlotEnergyBatch(
+                        by_entity={
+                            "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0}
+                        },
+                        liveness_instants=[],
+                    )
                 ),
             ), patch.object(
                 service_mod,
