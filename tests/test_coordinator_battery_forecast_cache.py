@@ -1531,16 +1531,39 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
         # the snapshot's entry for that same slot with a partial. The slot's
         # answer was already known and does not become unknown -- the five must
         # not drop out for the remaining eight minutes.
+        whole_slot = {
+            "socPct": 62.5,
+            "gridNetWh": -300.0,
+            "gridImportWh": 400.0,
+            "gridExportWh": 100.0,
+            "batteryNetWh": 350.0,
+        }
         coordinator = self._coordinator(self._FULL_SLOT_SNAPSHOT)
         served = coordinator.get_battery_forecast_current()
+        self.assertEqual(served, whole_slot)
         coordinator._cached_appliance_forecast_pipeline = SimpleNamespace(
             battery_forecast=self._PARTIAL_SNAPSHOT
         )
-        # The whole-slot figures, not the partial's rescaled ones: 58.0 and its
-        # eighth of a slot's energies must not appear.
-        self.assertEqual(coordinator.get_battery_forecast_current(), served)
+        # The whole-slot figures spelled out, not the object the first read
+        # returned: the partial's rescaled 58.0 and its eighth of a slot's
+        # energies must not appear.
+        self.assertEqual(coordinator.get_battery_forecast_current(), whole_slot)
+
+    def test_the_memo_survives_a_caller_mutating_what_it_was_handed(self):
+        # The accessor runs on every state read of the five entities. Handing
+        # out the memo's own map would let one caller's mutation stand as the
+        # slot's answer for the rest of the quarter hour.
+        coordinator = self._coordinator(self._FULL_SLOT_SNAPSHOT)
+        coordinator.get_battery_forecast_current().clear()
+        coordinator._cached_appliance_forecast_pipeline = SimpleNamespace(
+            battery_forecast=self._PARTIAL_SNAPSHOT
+        )
+        served = coordinator.get_battery_forecast_current()
         self.assertEqual(served["socPct"], 62.5)
-        self.assertEqual(served["gridImportWh"], 400.0)
+        served["socPct"] = 0.0
+        self.assertEqual(
+            coordinator.get_battery_forecast_current()["socPct"], 62.5
+        )
 
     def test_a_memo_from_an_earlier_slot_is_not_served(self):
         # The slot key is the memo's entire expiry: 20:45's figures can never

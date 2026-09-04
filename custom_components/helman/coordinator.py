@@ -1873,14 +1873,16 @@ class HelmanCoordinator:
 
         The guard is ``get_battery_forecast_current() is not None``, which is a
         check on the *pipeline*, not directly on the five entities' states. It is
-        sufficient because that accessor now returns a value only for a
-        non-partial current-slot entry (see
-        :meth:`get_battery_forecast_current`), and the only rebuild that
-        produces one is the slot-aligned one -- which writes the five sensors
-        earlier in this same :meth:`_publish_solar_forecast_entities` pass,
-        before this starter is reached. So by the time the guard passes, the
-        entities have published and own their statistics metadata. This matches
-        the pipeline-level guard the solar walk uses.
+        sufficient because every way that accessor has of returning a value
+        traces back to a slot-aligned rebuild: either the snapshot's current-slot
+        entry is a full one, which only the beat produces, or it is a partial
+        served from the memo, which only a full read earlier in the same slot can
+        have filled (see :meth:`get_battery_forecast_current`). Either way the
+        beat has run, and it writes the five sensors earlier in this same
+        :meth:`_publish_solar_forecast_entities` pass, before this starter is
+        reached -- so by the time the guard passes, the entities have published
+        and own their statistics metadata. This matches the pipeline-level guard
+        the solar walk uses.
 
         Runs at most once per Home Assistant start. The task keeps a per-series
         done-marker, so a run cut short by a restart resumes by skipping the
@@ -1892,9 +1894,9 @@ class HelmanCoordinator:
         if getattr(self, "_battery_forecast_backfill_started", True):
             return
         if self.get_battery_forecast_current() is None:
-            # No non-partial current slot yet: no slot-aligned rebuild has run,
-            # so the five entities have not published and there is no metadata
-            # or compiled hour to align the import to.
+            # No value for the current slot yet: no slot-aligned rebuild has
+            # run, so the five entities have not published and there is no
+            # metadata or compiled hour to align the import to.
             return
 
         from .battery_forecast_backfill import (
@@ -2410,9 +2412,9 @@ class HelmanCoordinator:
         ``gridExportWh`` / ``batteryNetWh``. A key is absent when the snapshot
         slot omits its source field — the two grid sides and ``batteryNetWh``
         arrived in later releases — so a sensor for that key reports unavailable
-        rather than zero. ``None`` when the pipeline is cold, carries no slot for
-        the clock's current quarter hour, or carries only a partial one this slot
-        has no full-slot answer to fall back on (below).
+        rather than zero. ``None`` when the pipeline is cold, when it carries no
+        slot for the clock's current quarter hour, or when the slot it carries is
+        a partial and this slot has no full-slot answer to fall back on (below).
 
         The snapshot's first series entry is stamped at build time. On the
         slot-aligned rebuild that is the slot boundary itself — the timer fires
@@ -2539,7 +2541,7 @@ class HelmanCoordinator:
                         # knowledge about the slot, and the published contract
                         # for these five is what was believed at the slot's
                         # start. Not a refusal, so nothing is logged.
-                        return memo[1]
+                        return dict(memo[1])
                     refuse(
                         "partial_slot",
                         "the snapshot's entry for this slot is a build-time "
@@ -2557,7 +2559,11 @@ class HelmanCoordinator:
                     # remembering; an entry with none of the five is "no slot"
                     # and memoing it would answer a later partial with the same
                     # ``None`` while suppressing the reason.
-                    self._battery_forecast_current_slot = (slot_key, values)
+                    # A copy, so the memo owns its map: the accessor runs on
+                    # every state read of the five entities and a caller that
+                    # mutated what it was handed would otherwise corrupt the
+                    # slot's answer for the rest of the quarter hour.
+                    self._battery_forecast_current_slot = (slot_key, dict(values))
                 return values
         refuse(
             "slot_not_in_series",
