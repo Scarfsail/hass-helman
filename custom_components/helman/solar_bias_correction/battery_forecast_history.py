@@ -22,10 +22,18 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 #: The battery forecast snapshot only ever spans from the current slot forward,
 #: and nothing else records these series, so once a slot has elapsed there was
 #: no record of what was predicted for it. Each entity is written on the
-#: slot-aligned refresh, so its recorder history is that record -- the same move
-#: ``sensor.helman_solar_forecast_current`` makes, and the reason the four Wh
-#: entities carry no device class is set out on
+#: slot-aligned refresh and carries ``force_update``, so its recorder history is
+#: that record -- the same move ``sensor.helman_solar_forecast_current`` makes,
+#: and the reason the four Wh entities carry no device class is set out on
 #: :class:`~..sensor._HelmanBatteryForecastCurrentSensorBase`.
+#:
+#: ``force_update`` is what makes "is that record" literal rather than nearly
+#: true. Home Assistant writes no state row for an unchanged value, so without
+#: it a series sitting flat -- the grid net forecast at ``0.0`` through an
+#: evening with no expected flow -- leaves no row for any slot in the stretch,
+#: and every one of those slots would have to be reconstructed by
+#: :func:`~.forecast_slot_sampling.resolve_forecast_slot_values` from a held
+#: value that any dropout clears.
 #:
 #: The ids name the quantity, not this subsystem: three of the five are grid
 #: flows that only fall out of the battery simulation, and a user reading a
