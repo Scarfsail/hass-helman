@@ -76,6 +76,7 @@ import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-s
 import {
   currencyFromPriceUnit,
   sumMoney,
+  UNPRICED_MONEY,
   type MoneyPoint,
   type MoneyTotals,
 } from "./money-model";
@@ -473,20 +474,6 @@ type TooltipContent = {
   title?: string;
   hasActual: boolean;
   rows: TooltipRow[];
-};
-
-/**
- * A span's money, with each side independently unknown.
- *
- * Not `MoneyTotals`: that type is the day view's, where every slot on the rails
- * is priced and the three numbers always exist. Over a span they need not --
- * see `_spanMoney` -- and widening `MoneyTotals` would push nulls into the day
- * view, which has no way to mean them.
- */
-type SpanMoneyTotals = {
-  cost: number | null;
-  gain: number | null;
-  net: number | null;
 };
 
 /** The four things the combined chart stacks; one popup section per family. */
@@ -2840,9 +2827,9 @@ export class HelmanSolarInspector extends LitElement {
    *
    * A bucket the backend could price neither side of is left out entirely, so
    * "no priced bucket in the selection" stays distinguishable from "priced, and
-   * it came to nothing". A bucket priced on only one side contributes that side
-   * and a zero for the other, which is what the missing direction actually
-   * means once the other is known: no energy flowed that way.
+   * it came to nothing". A bucket priced on only one side carries its null
+   * through unchanged: `sumMoney` skips the unpriced direction and reports it
+   * as unknown, which is the same rule the day view's slots follow.
    */
   private _spanMoneyPoints(rows: readonly SpanAggregateRow[]): MoneyPoint[] {
     const points: MoneyPoint[] = [];
@@ -2850,11 +2837,7 @@ export class HelmanSolarInspector extends LitElement {
       const cost = Number.isFinite(row.moneyCost as number) ? (row.moneyCost as number) : null;
       const gain = Number.isFinite(row.moneyGain as number) ? (row.moneyGain as number) : null;
       if (cost === null && gain === null) continue;
-      // Zero stands in only so `sumMoney` has a number to add; whether the side
-      // was priced at all is tracked separately in `_spanMoney`, which is what
-      // decides between a figure and an em dash. A zero written here must never
-      // reach the reader as one.
-      points.push({ slot: row.date, cost: cost ?? 0, gain: gain ?? 0 });
+      points.push({ slot: row.date, cost, gain });
     }
     return points;
   }
@@ -2873,24 +2856,20 @@ export class HelmanSolarInspector extends LitElement {
    * unsupported claim wearing a different label. In a healthy setup neither side
    * is ever null -- a working export meter on a day that exported nothing prices
    * a real 0.00 -- so this costs the ordinary reader nothing.
+   *
+   * All of which `sumMoney` now does, for the day view's slots and these buckets
+   * alike; the only thing left here is the difference between a selection with
+   * no priced bucket in it and a bucket that priced nothing, which the span
+   * views render as no panel rather than as three em dashes.
    */
   private _spanMoney(
     rows: readonly SpanAggregateRow[],
     keys: readonly string[],
-  ): SpanMoneyTotals | null {
+  ): MoneyTotals | null {
     const points = this._spanMoneyPoints(rows);
     const wanted = new Set(keys);
     if (!points.some((point) => wanted.has(point.slot))) return null;
-    const priced = (read: (row: SpanAggregateRow) => number | null) =>
-      rows.some((row) => wanted.has(row.date) && Number.isFinite(read(row) as number));
-    const totals: MoneyTotals = sumMoney(points, keys);
-    const cost = priced((row) => row.moneyCost) ? totals.cost : null;
-    const gain = priced((row) => row.moneyGain) ? totals.gain : null;
-    return {
-      cost,
-      gain,
-      net: cost !== null && gain !== null ? cost - gain : null,
-    };
+    return sumMoney(points, keys);
   }
 
   /** Missing money is an em dash, matching the day view's own money rail. */
@@ -5247,9 +5226,14 @@ export class HelmanSolarInspector extends LitElement {
    * in the selection panel do. Two rules, but each tile follows the same one as
    * the energy it sits next to — which is the whole point.
    *
-   * A vintage with no priced slot at all shows nothing rather than a zero: a
-   * day past the recorder's reach has real exported kWh at an unknown rate, and
-   * "earned 0" would be a claim the data does not support.
+   * An unpriced direction shows nothing rather than a zero: a day past the
+   * recorder's reach has real exported kWh at an unknown rate, and "earned 0"
+   * would be a claim the data does not support. Per *direction* and per tile,
+   * not per vintage -- a day whose import rail is filled from the configured
+   * windows and whose export rail predates the sell-price entity prices one
+   * side and not the other, and the gain tile is the one that has to admit it.
+   * The net tile then admits it too: with a direction unknown there is no
+   * honest balance, only the priced side wearing the other's name.
    */
   private _renderMoneyMetrics(
     payload: InspectorPayload,
@@ -5263,43 +5247,36 @@ export class HelmanSolarInspector extends LitElement {
     // Presence is asked of the *selection*, not the day. Reading it day-wide
     // would print "0.00" against an hour tonight simply because this morning
     // had actuals -- claiming a future hour has already cost nothing, which is
-    // the one thing every other tile in this panel is careful not to do.
+    // the one thing every other tile in this panel is careful not to do. It
+    // needs no flag of its own: an amount is null exactly where it is unknown,
+    // and a selection nothing priced sums to three nulls.
     const summed = (
       points: readonly MoneyPoint[],
       dayTotals: MoneyTotals | null,
-    ): { totals: MoneyTotals; present: boolean } => {
-      if (railSlots === null) {
-        // The zero stands in only where `present` is false, so no tile ever
-        // renders it -- an unpriced vintage prints an em dash instead.
-        const totals = dayTotals ?? { cost: 0, gain: 0, net: 0 };
-        return { totals, present: dayTotals !== null };
-      }
-      const wanted = new Set(railSlots);
-      return {
-        totals: sumMoney(points, railSlots),
-        present: points.some((point) => wanted.has(point.slot)),
-      };
-    };
-    const actualSide = summed(payload.series.moneyActual, payload.totals.moneyActual);
-    const forecastSide = summed(
+    ): MoneyTotals =>
+      railSlots === null
+        ? dayTotals ?? UNPRICED_MONEY
+        : sumMoney(points, railSlots);
+    const actual = summed(payload.series.moneyActual, payload.totals.moneyActual);
+    const forecast = summed(
       payload.series.moneyForecast,
       payload.totals.moneyForecast,
     );
-    const actual = actualSide.totals;
-    const forecast = forecastSide.totals;
-    const hasActual = actualSide.present;
-    const hasForecast = forecastSide.present;
-    const part = (totals: MoneyTotals, key: keyof MoneyTotals, present: boolean, title: string) => ({
-      value: present ? `${totals[key].toFixed(2)} ${currency}`.trim() : "—",
-      present,
-      title,
-    });
+    const part = (totals: MoneyTotals, key: keyof MoneyTotals, title: string) => {
+      const amount = totals[key];
+      const present = amount !== null && Number.isFinite(amount);
+      return {
+        value: present ? `${amount.toFixed(2)} ${currency}`.trim() : "—",
+        present,
+        title,
+      };
+    };
     const tile = (labelKey: string, color: string, key: keyof MoneyTotals) =>
       this._renderMoneyMetric(
         this._t(`bias_correction.inspector.${labelKey}`),
         color,
-        part(actual, key, hasActual, this._t("bias_correction.inspector.column_actual")),
-        part(forecast, key, hasForecast, this._t("bias_correction.inspector.column_forecast")),
+        part(actual, key, this._t("bias_correction.inspector.column_actual")),
+        part(forecast, key, this._t("bias_correction.inspector.column_forecast")),
       );
     return html`
       ${tile("import_cost", GRID_IMPORT_COLOR, "cost")}

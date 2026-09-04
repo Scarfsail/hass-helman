@@ -23,12 +23,16 @@ const BUNDLE = resolve(
 
 const DAY = "2026-07-18";
 
+/** One slot's money as the payload carries it: either side may be unpriced. */
+type MoneyPoint = { slot: string; cost: number | null; gain: number | null };
+type MoneyTotals = { cost: number | null; gain: number | null; net: number | null };
+
 /**
  * Two elapsed slots and one running slot's worth of money, with the running
  * slot present in the totals and absent from the drawn series — the shape the
  * backend serves on today.
  */
-const MONEY_ACTUAL = [
+const MONEY_ACTUAL: MoneyPoint[] = [
     { slot: "08:00", cost: 2, gain: 0 },
     { slot: "08:15", cost: 3, gain: 1 },
 ];
@@ -38,8 +42,8 @@ const TOTALS_ACTUAL = { cost: 2 + 3 + RUNNING_SLOT_COST, gain: 1, net: 2 + 3 + R
 async function mountInspector(
     page: Page,
     overrides: {
-        moneyActual?: Array<{ slot: string; cost: number; gain: number }>;
-        totalsActual?: { cost: number; gain: number; net: number } | null;
+        moneyActual?: MoneyPoint[];
+        totalsActual?: MoneyTotals | null;
     } = {},
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -181,5 +185,39 @@ test.describe("solar inspector money tiles", () => {
         // "cost 0" would be a claim the data cannot support.
         await mountInspector(page, { moneyActual: [], totalsActual: null });
         expect(await moneyTile(page, "Import cost")).toBe("—");
+    });
+
+    test("a day priced on one side only dashes that side, and the net", async ({ page }) => {
+        // The reachable case: an import rail filled from the configured
+        // windows, an export rail from before the sell-price entity existed.
+        // The import bill is real and stands; the exported kWh are real too and
+        // their rate is unknown, so the gain is an em dash rather than 0.00 —
+        // and the net follows it, since a balance missing one direction is the
+        // import bill under another name.
+        await mountInspector(page, {
+            moneyActual: [
+                { slot: "08:00", cost: 2, gain: null },
+                { slot: "08:15", cost: 3, gain: null },
+            ],
+            totalsActual: { cost: 5, gain: null, net: null },
+        });
+        expect(await moneyTile(page, "Import cost")).toBe("5.00 CZK");
+        expect(await moneyTile(page, "Export gain")).toBe("—");
+        expect(await moneyTile(page, "Net cost")).toBe("—");
+    });
+
+    test("a selection over one unpriced direction dashes it too", async ({ page }) => {
+        // The selection path asks the same question of its own sum, so the two
+        // panels cannot disagree about what is known.
+        await mountInspector(page, {
+            moneyActual: [
+                { slot: "08:00", cost: 2, gain: null },
+                { slot: "08:15", cost: 3, gain: null },
+            ],
+            totalsActual: { cost: 5, gain: null, net: null },
+        });
+        expect(await moneyTile(page, "Import cost", ["08:00"])).toBe("2.00 CZK");
+        expect(await moneyTile(page, "Export gain", ["08:00"])).toBe("—");
+        expect(await moneyTile(page, "Net cost", ["08:00"])).toBe("—");
     });
 });

@@ -125,7 +125,7 @@ def _wh(slot: str, value: float) -> dict:
     return {"timestamp": f"{TODAY}T{slot}:00+02:00", "wh": value}
 
 
-def _money(points) -> dict[str, tuple[float, float]]:
+def _money(points) -> dict[str, tuple[float | None, float | None]]:
     return {p.slot: (p.cost, p.gain) for p in points}
 
 
@@ -166,9 +166,12 @@ class TestPricingOneVintage(unittest.TestCase):
         self.assertEqual(points, [])
         self.assertIsNone(service_mod._money_totals(points))
 
-    def test_one_priced_direction_still_yields_the_slot(self):
-        # Only the unpriced *side* drops out; a slot that imported at a known
-        # rate is not lost because its export rail happens to be empty.
+    def test_one_priced_direction_yields_the_slot_and_no_gain(self):
+        # The slot survives on its priced side -- a slot that imported at a
+        # known rate is not lost because its export rail happens to be empty --
+        # but the unpriced side is None, not a zero. Those 2 kWh were exported
+        # at a rate nobody knows, and "earned 0.00" is the claim the whole
+        # module exists to not make.
         points = service_mod._money_points(
             [_wh("10:00", 1000.0)],
             [_wh("10:00", 2000.0)],
@@ -176,7 +179,42 @@ class TestPricingOneVintage(unittest.TestCase):
             {},
         )
 
-        self.assertEqual(_money(points), {"10:00": (4.0, 0.0)})
+        self.assertEqual(_money(points), {"10:00": (4.0, None)})
+
+    def test_a_vintage_priced_on_one_side_reports_the_other_unknown(self):
+        # The day this issue was filed for: an import rail filled from the
+        # configured windows, an export rail from before the sell-price entity
+        # existed. The cost tile stands, the gain tile reads an em dash -- and
+        # the net follows the gain, since a balance missing one direction is
+        # just the import bill under another name.
+        points = service_mod._money_points(
+            [_wh("10:00", 1000.0), _wh("11:00", 500.0)],
+            [_wh("10:00", 2000.0)],
+            {"10:00": 4.0, "11:00": 6.0},
+            {},
+        )
+
+        totals = service_mod._money_totals(points)
+        self.assertAlmostEqual(totals.cost, 7.0, places=6)
+        self.assertIsNone(totals.gain)
+        self.assertIsNone(totals.net)
+
+    def test_a_direction_priced_in_part_sums_the_slots_it_could_price(self):
+        # The approximation the span aggregates already make: a rail that loses
+        # its rate at the edge of recorder retention still yields a bill for the
+        # hours it covers, which is more use than a hole. Only a direction with
+        # no priced slot at all goes unknown.
+        points = service_mod._money_points(
+            [],
+            [_wh("10:00", 1000.0), _wh("11:00", 2000.0)],
+            {},
+            {"10:00": 3.0},
+        )
+
+        totals = service_mod._money_totals(points)
+        self.assertIsNone(totals.cost)
+        self.assertAlmostEqual(totals.gain, 3.0, places=6)
+        self.assertIsNone(totals.net)
 
     def test_a_negative_export_rate_makes_the_gain_negative(self):
         # Paying to export is ordinary here: sign carries the direction of the
@@ -185,14 +223,14 @@ class TestPricingOneVintage(unittest.TestCase):
             [], [_wh("13:00", 4000.0)], {}, {"13:00": -0.5}
         )
 
-        self.assertEqual(_money(points), {"13:00": (0.0, -2.0)})
+        self.assertEqual(_money(points), {"13:00": (None, -2.0)})
 
     def test_several_points_in_one_slot_accumulate_before_pricing(self):
         points = service_mod._money_points(
             [_wh("10:00", 500.0), _wh("10:00", 1500.0)], [], {"10:00": 3.0}, {}
         )
 
-        self.assertEqual(_money(points), {"10:00": (6.0, 0.0)})
+        self.assertEqual(_money(points), {"10:00": (6.0, None)})
 
     def test_net_is_what_the_grid_came_to_on_balance(self):
         points = service_mod._money_points(
