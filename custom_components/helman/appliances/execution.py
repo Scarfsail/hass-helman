@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from homeassistant.util import dt as dt_util
 
@@ -18,6 +18,12 @@ from ..scheduling.actuation import (
     ScheduleExecutionDisabledError,
 )
 from ..controllables.controllers import SelectEntityController
+from ..controllables.spec import (
+    CONTROLLABLE_KIND_CLIMATE,
+    CONTROLLABLE_KIND_EV_CHARGER,
+    CONTROLLABLE_KIND_GENERIC,
+    appliance_controllable_kinds,
+)
 from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
 from .climate_appliance import ClimateApplianceRuntime
 from .climate_schedule import ClimateApplianceScheduleActionDict
@@ -184,122 +190,73 @@ class ClimateEntityController:
             ) from err
 
 
-class EvChargerExecutor:
-    def __init__(
+class ApplianceActionDriver(Protocol):
+    """The per-kind half of appliance execution.
+
+    Everything an appliance kind does differently lives behind these three
+    methods; the slot-stop / signature / noop / apply decision sequence around
+    them is written once, in :class:`ApplianceExecutor`.
+    """
+
+    def signature(self, action: Any) -> tuple[object, ...]:
+        """What makes two actions the same action within one slot."""
+
+    def is_enabled(self, appliance: Any, action: Any) -> bool:
+        """Whether this action means the appliance is running."""
+
+    async def async_apply(
         self,
         actuator: ScheduleActuator,
+        *,
+        appliance: Any,
+        action: Any | None,
+        action_kind: RuntimeActionKind,
+        reference_time: datetime,
+    ) -> ApplianceRuntimeStatus:
+        """Drive the appliance; ``action is None`` means "go to rest"."""
+
+
+class EvChargerDriver:
+    def __init__(
+        self,
         *,
         charge_on_wait_seconds: float = 30.0,
         poll_interval_seconds: float = _CHARGE_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        self._actuator = actuator
         self._charge_on_wait_seconds = charge_on_wait_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
 
-    async def async_execute(
-        self,
-        *,
-        appliance: EvChargerApplianceRuntime,
-        action: EvChargerScheduleActionDict | None,
-        last_scheduled_action: EvChargerScheduleActionDict | None,
-        memory: ApplianceExecutionMemory | None,
-        active_slot_id: str,
-        reference_time: datetime,
-    ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
-        if action is None:
-            if (
-                memory is not None
-                and memory.last_active_slot_id == active_slot_id
-                and memory.last_runtime_action_kind == "slot_stop"
-            ):
-                return None, memory
-            if memory is not None and not memory.last_enabled:
-                return None, memory
-            if (
-                memory is None
-                and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
-            ):
-                return None, None
-            runtime = await self._async_stop_charge_only(
-                appliance=appliance,
-                action_kind="slot_stop",
-                reference_time=reference_time,
-            )
-            if runtime.outcome != "success":
-                return runtime, memory
-            return (
-                None,
-                ApplianceExecutionMemory(
-                    last_active_slot_id=active_slot_id,
-                    last_action_signature=None,
-                    last_enabled=False,
-                    last_runtime_action_kind="slot_stop",
-                ),
-            )
-
-        signature = self._signature_for_action(action)
-        if (
-            memory is not None
-            and memory.last_active_slot_id == active_slot_id
-            and memory.last_action_signature == signature
-        ):
-            return (
-                _build_runtime_status(
-                    action_kind="noop",
-                    outcome="skipped",
-                    reference_time=reference_time,
-                ),
-                ApplianceExecutionMemory(
-                    last_active_slot_id=active_slot_id,
-                    last_action_signature=signature,
-                    last_enabled=bool(action["charge"]),
-                    last_runtime_action_kind="noop",
-                ),
-            )
-
-        runtime = await self._async_apply_action(
-            appliance=appliance,
-            action=action,
-            reference_time=reference_time,
-        )
+    def signature(self, action: EvChargerScheduleActionDict) -> tuple[object, ...]:
         return (
-            runtime,
-            ApplianceExecutionMemory(
-                last_active_slot_id=active_slot_id,
-                last_action_signature=signature,
-                last_enabled=bool(action["charge"]),
-                last_runtime_action_kind="apply",
-            ),
+            bool(action["charge"]),
+            action.get("vehicleId"),
+            action.get("useMode"),
+            action.get("ecoGear"),
         )
 
-    async def async_disable_active_action(
+    def is_enabled(
         self,
-        *,
-        appliance: EvChargerApplianceRuntime,
-        action: EvChargerScheduleActionDict | None,
-        reference_time: datetime,
-    ) -> ApplianceRuntimeStatus | None:
-        if action is None or not bool(action["charge"]):
-            return None
-        return await self._async_stop_charge_only(
-            appliance=appliance,
-            action_kind="slot_stop",
-            reference_time=reference_time,
-        )
-
-    async def _async_apply_action(
-        self,
-        *,
         appliance: EvChargerApplianceRuntime,
         action: EvChargerScheduleActionDict,
+    ) -> bool:
+        return bool(action["charge"])
+
+    async def async_apply(
+        self,
+        actuator: ScheduleActuator,
+        *,
+        appliance: EvChargerApplianceRuntime,
+        action: EvChargerScheduleActionDict | None,
+        action_kind: RuntimeActionKind,
         reference_time: datetime,
     ) -> ApplianceRuntimeStatus:
-        if not bool(action["charge"]):
+        if action is None or not bool(action["charge"]):
             return await self._async_stop_charge_only(
+                actuator,
                 appliance=appliance,
-                action_kind="apply",
+                action_kind=action_kind,
                 reference_time=reference_time,
             )
 
@@ -308,11 +265,12 @@ class EvChargerExecutor:
                 appliance.charge_entity_id,
                 description="EV charge entity",
             )
-            charge_state = switch_controller.read_state(self._actuator)
+            charge_state = switch_controller.read_state(actuator)
             if not switch_controller.is_on(charge_state):
-                await switch_controller.async_turn_on(self._actuator)
+                await switch_controller.async_turn_on(actuator)
                 await self._async_wait_until_charge_on(
-                    switch_controller=switch_controller
+                    actuator,
+                    switch_controller=switch_controller,
                 )
 
             use_mode = action.get("useMode")
@@ -321,11 +279,11 @@ class EvChargerExecutor:
                     appliance.use_mode_entity_id,
                     description="EV select",
                 )
-                mode_state = mode_controller.read_state(self._actuator)
+                mode_state = mode_controller.read_state(actuator)
                 mode_controller.validate_option(mode_state, use_mode)
                 if getattr(mode_state, "state", None) != use_mode:
                     await mode_controller.async_select_option(
-                        self._actuator,
+                        actuator,
                         option=use_mode,
                     )
 
@@ -335,29 +293,30 @@ class EvChargerExecutor:
                     appliance.eco_gear_entity_id,
                     description="EV select",
                 )
-                eco_state = eco_controller.read_state(self._actuator)
+                eco_state = eco_controller.read_state(actuator)
                 eco_controller.validate_option(eco_state, eco_gear)
                 if getattr(eco_state, "state", None) != eco_gear:
                     await eco_controller.async_select_option(
-                        self._actuator,
+                        actuator,
                         option=eco_gear,
                     )
         except ScheduleError as err:
             return _build_runtime_status(
-                action_kind="apply",
+                action_kind=action_kind,
                 outcome="failed",
                 error=err,
                 reference_time=reference_time,
             )
 
         return _build_runtime_status(
-            action_kind="apply",
+            action_kind=action_kind,
             outcome="success",
             reference_time=reference_time,
         )
 
     async def _async_stop_charge_only(
         self,
+        actuator: ScheduleActuator,
         *,
         appliance: EvChargerApplianceRuntime,
         action_kind: RuntimeActionKind,
@@ -368,9 +327,9 @@ class EvChargerExecutor:
                 appliance.charge_entity_id,
                 description="EV charge entity",
             )
-            charge_state = switch_controller.read_state(self._actuator)
+            charge_state = switch_controller.read_state(actuator)
             if switch_controller.is_on(charge_state):
-                await switch_controller.async_turn_off(self._actuator)
+                await switch_controller.async_turn_off(actuator)
         except ScheduleError as err:
             return _build_runtime_status(
                 action_kind=action_kind,
@@ -387,17 +346,18 @@ class EvChargerExecutor:
 
     async def _async_wait_until_charge_on(
         self,
+        actuator: ScheduleActuator,
         *,
         switch_controller: SwitchEntityController,
     ) -> None:
-        state = switch_controller.read_state(self._actuator)
+        state = switch_controller.read_state(actuator)
         if switch_controller.is_on(state):
             return
 
         deadline = asyncio.get_running_loop().time() + self._charge_on_wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             await self._sleep(self._poll_interval_seconds)
-            state = switch_controller.read_state(self._actuator)
+            state = switch_controller.read_state(actuator)
             if switch_controller.is_on(state):
                 return
 
@@ -406,34 +366,140 @@ class EvChargerExecutor:
             f"to turn on within {int(self._charge_on_wait_seconds)} seconds"
         )
 
-    @staticmethod
-    def _signature_for_action(
-        action: EvChargerScheduleActionDict,
+
+class GenericApplianceDriver:
+    def signature(
+        self,
+        action: GenericApplianceScheduleActionDict,
     ) -> tuple[object, ...]:
-        return (
-            bool(action["charge"]),
-            action.get("vehicleId"),
-            action.get("useMode"),
-            action.get("ecoGear"),
+        return (bool(action["on"]),)
+
+    def is_enabled(
+        self,
+        appliance: GenericApplianceRuntime,
+        action: GenericApplianceScheduleActionDict,
+    ) -> bool:
+        return bool(action["on"])
+
+    async def async_apply(
+        self,
+        actuator: ScheduleActuator,
+        *,
+        appliance: GenericApplianceRuntime,
+        action: GenericApplianceScheduleActionDict | None,
+        action_kind: RuntimeActionKind,
+        reference_time: datetime,
+    ) -> ApplianceRuntimeStatus:
+        enabled = action is not None and bool(action["on"])
+        try:
+            switch_controller = SwitchEntityController(
+                appliance.switch_entity_id,
+                description="Appliance switch entity",
+            )
+            switch_state = switch_controller.read_state(actuator)
+            if enabled and not switch_controller.is_on(switch_state):
+                await switch_controller.async_turn_on(actuator)
+            if not enabled and switch_controller.is_on(switch_state):
+                await switch_controller.async_turn_off(actuator)
+        except ScheduleError as err:
+            return _build_runtime_status(
+                action_kind=action_kind,
+                outcome="failed",
+                error=err,
+                reference_time=reference_time,
+            )
+
+        return _build_runtime_status(
+            action_kind=action_kind,
+            outcome="success",
+            reference_time=reference_time,
         )
 
-    @staticmethod
-    def _last_scheduled_action_requires_slot_stop(
-        action: EvChargerScheduleActionDict | None,
+
+class ClimateApplianceDriver:
+    def signature(
+        self,
+        action: ClimateApplianceScheduleActionDict,
+    ) -> tuple[object, ...]:
+        return (action["mode"],)
+
+    def is_enabled(
+        self,
+        appliance: ClimateApplianceRuntime,
+        action: ClimateApplianceScheduleActionDict,
     ) -> bool:
-        return bool(action is not None and action["charge"])
+        # Read straight off the appliance rather than through the controllable
+        # registry: ``resting_state()`` substitutes "off" when stop_hvac_mode is
+        # unset, which would quietly turn "cannot be stopped" into a success.
+        return action["mode"] != appliance.stop_hvac_mode
+
+    async def async_apply(
+        self,
+        actuator: ScheduleActuator,
+        *,
+        appliance: ClimateApplianceRuntime,
+        action: ClimateApplianceScheduleActionDict | None,
+        action_kind: RuntimeActionKind,
+        reference_time: datetime,
+    ) -> ApplianceRuntimeStatus:
+        hvac_mode = appliance.stop_hvac_mode if action is None else action["mode"]
+        if hvac_mode is None:
+            return _build_runtime_status(
+                action_kind=action_kind,
+                outcome="failed",
+                error=ScheduleExecutionUnavailableError(
+                    f"Climate appliance {appliance.id!r} cannot be stopped because "
+                    "HVAC mode 'off' is unavailable"
+                ),
+                reference_time=reference_time,
+            )
+        try:
+            climate_controller = ClimateEntityController(appliance.climate_entity_id)
+            climate_state = climate_controller.read_state(actuator)
+            climate_controller.validate_hvac_mode(climate_state, hvac_mode)
+            if getattr(climate_state, "state", None) != hvac_mode:
+                await climate_controller.async_set_hvac_mode(
+                    actuator,
+                    hvac_mode=hvac_mode,
+                )
+        except ScheduleError as err:
+            return _build_runtime_status(
+                action_kind=action_kind,
+                outcome="failed",
+                error=err,
+                reference_time=reference_time,
+            )
+
+        return _build_runtime_status(
+            action_kind=action_kind,
+            outcome="success",
+            reference_time=reference_time,
+        )
 
 
-class GenericApplianceExecutor:
-    def __init__(self, actuator: ScheduleActuator) -> None:
+class ApplianceExecutor:
+    """The decision sequence every appliance kind shares.
+
+    Slot stop, signature comparison, noop, apply, memory — written once, with
+    the per-kind differences behind :class:`ApplianceActionDriver`. Memory is
+    only advanced on a successful apply, so a failed actuation is retried on the
+    next reconcile instead of being remembered as done.
+    """
+
+    def __init__(
+        self,
+        actuator: ScheduleActuator,
+        driver: ApplianceActionDriver,
+    ) -> None:
         self._actuator = actuator
+        self._driver = driver
 
     async def async_execute(
         self,
         *,
-        appliance: GenericApplianceRuntime,
-        action: GenericApplianceScheduleActionDict | None,
-        last_scheduled_action: GenericApplianceScheduleActionDict | None,
+        appliance: Any,
+        action: ApplianceScheduleActionDict | None,
+        last_scheduled_action: ApplianceScheduleActionDict | None,
         memory: ApplianceExecutionMemory | None,
         active_slot_id: str,
         reference_time: datetime,
@@ -447,14 +513,15 @@ class GenericApplianceExecutor:
                 return None, memory
             if memory is not None and not memory.last_enabled:
                 return None, memory
-            if (
-                memory is None
-                and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
+            if memory is None and not (
+                last_scheduled_action is not None
+                and self._driver.is_enabled(appliance, last_scheduled_action)
             ):
                 return None, None
-            runtime = await self._async_apply_enabled_state(
+            runtime = await self._driver.async_apply(
+                self._actuator,
                 appliance=appliance,
-                enabled=False,
+                action=None,
                 action_kind="slot_stop",
                 reference_time=reference_time,
             )
@@ -470,13 +537,13 @@ class GenericApplianceExecutor:
                 ),
             )
 
-        signature = self._signature_for_action(action)
+        signature = self._driver.signature(action)
+        enabled = self._driver.is_enabled(appliance, action)
         if (
             memory is not None
             and memory.last_active_slot_id == active_slot_id
             and memory.last_action_signature == signature
         ):
-            enabled = bool(action["on"])
             return (
                 _build_runtime_status(
                     action_kind="noop",
@@ -491,10 +558,10 @@ class GenericApplianceExecutor:
                 ),
             )
 
-        enabled = bool(action["on"])
-        runtime = await self._async_apply_enabled_state(
+        runtime = await self._driver.async_apply(
+            self._actuator,
             appliance=appliance,
-            enabled=enabled,
+            action=action,
             action_kind="apply",
             reference_time=reference_time,
         )
@@ -513,228 +580,19 @@ class GenericApplianceExecutor:
     async def async_disable_active_action(
         self,
         *,
-        appliance: GenericApplianceRuntime,
-        action: GenericApplianceScheduleActionDict | None,
+        appliance: Any,
+        action: ApplianceScheduleActionDict | None,
         reference_time: datetime,
     ) -> ApplianceRuntimeStatus | None:
-        if action is None or not bool(action["on"]):
+        if action is None or not self._driver.is_enabled(appliance, action):
             return None
-        return await self._async_apply_enabled_state(
+        return await self._driver.async_apply(
+            self._actuator,
             appliance=appliance,
-            enabled=False,
+            action=None,
             action_kind="slot_stop",
             reference_time=reference_time,
         )
-
-    async def _async_apply_enabled_state(
-        self,
-        *,
-        appliance: GenericApplianceRuntime,
-        enabled: bool,
-        action_kind: RuntimeActionKind,
-        reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
-        try:
-            switch_controller = SwitchEntityController(
-                appliance.switch_entity_id,
-                description="Appliance switch entity",
-            )
-            switch_state = switch_controller.read_state(self._actuator)
-            if enabled and not switch_controller.is_on(switch_state):
-                await switch_controller.async_turn_on(self._actuator)
-            if not enabled and switch_controller.is_on(switch_state):
-                await switch_controller.async_turn_off(self._actuator)
-        except ScheduleError as err:
-            return _build_runtime_status(
-                action_kind=action_kind,
-                outcome="failed",
-                error=err,
-                reference_time=reference_time,
-            )
-
-        return _build_runtime_status(
-            action_kind=action_kind,
-            outcome="success",
-            reference_time=reference_time,
-        )
-
-    @staticmethod
-    def _signature_for_action(
-        action: GenericApplianceScheduleActionDict,
-    ) -> tuple[object, ...]:
-        return (bool(action["on"]),)
-
-    @staticmethod
-    def _last_scheduled_action_requires_slot_stop(
-        action: GenericApplianceScheduleActionDict | None,
-    ) -> bool:
-        return bool(action is not None and action["on"])
-
-
-class ClimateApplianceExecutor:
-    def __init__(self, actuator: ScheduleActuator) -> None:
-        self._actuator = actuator
-
-    async def async_execute(
-        self,
-        *,
-        appliance: ClimateApplianceRuntime,
-        action: ClimateApplianceScheduleActionDict | None,
-        last_scheduled_action: ClimateApplianceScheduleActionDict | None,
-        memory: ApplianceExecutionMemory | None,
-        active_slot_id: str,
-        reference_time: datetime,
-    ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
-        if action is None:
-            if (
-                memory is not None
-                and memory.last_active_slot_id == active_slot_id
-                and memory.last_runtime_action_kind == "slot_stop"
-            ):
-                return None, memory
-            if memory is not None and not memory.last_enabled:
-                return None, memory
-            if (
-                memory is None
-                and not self._last_scheduled_action_requires_slot_stop(
-                    appliance,
-                    last_scheduled_action,
-                )
-            ):
-                return None, None
-            runtime = await self._async_apply_hvac_mode(
-                appliance=appliance,
-                hvac_mode=appliance.stop_hvac_mode,
-                action_kind="slot_stop",
-                reference_time=reference_time,
-            )
-            if runtime.outcome != "success":
-                return runtime, memory
-            return (
-                None,
-                ApplianceExecutionMemory(
-                    last_active_slot_id=active_slot_id,
-                    last_action_signature=None,
-                    last_enabled=False,
-                    last_runtime_action_kind="slot_stop",
-                ),
-            )
-
-        signature = self._signature_for_action(action)
-        if (
-            memory is not None
-            and memory.last_active_slot_id == active_slot_id
-            and memory.last_action_signature == signature
-        ):
-            return (
-                _build_runtime_status(
-                    action_kind="noop",
-                    outcome="skipped",
-                    reference_time=reference_time,
-                ),
-                ApplianceExecutionMemory(
-                    last_active_slot_id=active_slot_id,
-                    last_action_signature=signature,
-                    last_enabled=self._is_enabled_mode(appliance, action["mode"]),
-                    last_runtime_action_kind="noop",
-                ),
-            )
-
-        runtime = await self._async_apply_hvac_mode(
-            appliance=appliance,
-            hvac_mode=action["mode"],
-            action_kind="apply",
-            reference_time=reference_time,
-        )
-        if runtime.outcome != "success":
-            return runtime, memory
-        return (
-            runtime,
-                ApplianceExecutionMemory(
-                    last_active_slot_id=active_slot_id,
-                    last_action_signature=signature,
-                    last_enabled=self._is_enabled_mode(appliance, action["mode"]),
-                    last_runtime_action_kind="apply",
-                ),
-            )
-
-    async def async_disable_active_action(
-        self,
-        *,
-        appliance: ClimateApplianceRuntime,
-        action: ClimateApplianceScheduleActionDict | None,
-        reference_time: datetime,
-    ) -> ApplianceRuntimeStatus | None:
-        if action is None or not self._is_enabled_mode(appliance, action["mode"]):
-            return None
-        return await self._async_apply_hvac_mode(
-            appliance=appliance,
-            hvac_mode=appliance.stop_hvac_mode,
-            action_kind="slot_stop",
-            reference_time=reference_time,
-        )
-
-    async def _async_apply_hvac_mode(
-        self,
-        *,
-        appliance: ClimateApplianceRuntime,
-        hvac_mode: str | None,
-        action_kind: RuntimeActionKind,
-        reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
-        if hvac_mode is None:
-            return _build_runtime_status(
-                action_kind=action_kind,
-                outcome="failed",
-                error=ScheduleExecutionUnavailableError(
-                    f"Climate appliance {appliance.id!r} cannot be stopped because "
-                    "HVAC mode 'off' is unavailable"
-                ),
-                reference_time=reference_time,
-            )
-        try:
-            climate_controller = ClimateEntityController(appliance.climate_entity_id)
-            climate_state = climate_controller.read_state(self._actuator)
-            climate_controller.validate_hvac_mode(climate_state, hvac_mode)
-            if getattr(climate_state, "state", None) != hvac_mode:
-                await climate_controller.async_set_hvac_mode(
-                    self._actuator,
-                    hvac_mode=hvac_mode,
-                )
-        except ScheduleError as err:
-            return _build_runtime_status(
-                action_kind=action_kind,
-                outcome="failed",
-                error=err,
-                reference_time=reference_time,
-            )
-
-        return _build_runtime_status(
-            action_kind=action_kind,
-            outcome="success",
-            reference_time=reference_time,
-        )
-
-    @staticmethod
-    def _signature_for_action(
-        action: ClimateApplianceScheduleActionDict,
-    ) -> tuple[object, ...]:
-        return (action["mode"],)
-
-    @staticmethod
-    def _is_enabled_mode(
-        appliance: ClimateApplianceRuntime,
-        hvac_mode: str,
-    ) -> bool:
-        return hvac_mode != appliance.stop_hvac_mode
-
-    @classmethod
-    def _last_scheduled_action_requires_slot_stop(
-        cls,
-        appliance: ClimateApplianceRuntime,
-        action: ClimateApplianceScheduleActionDict | None,
-    ) -> bool:
-        return action is not None and cls._is_enabled_mode(appliance, action["mode"])
 
 
 def _build_runtime_status(
@@ -753,6 +611,55 @@ def _build_runtime_status(
     )
 
 
+@dataclass(frozen=True)
+class ApplianceDriverOptions:
+    """The knobs a driver may need, passed to every factory in the registry.
+
+    Only the EV charger reads them today — its wait-for-charge-on loop — but the
+    factories take a uniform argument so the registry stays a plain kind → driver
+    table rather than a per-kind construction branch.
+    """
+
+    charge_on_wait_seconds: float
+    poll_interval_seconds: float
+    sleep: Callable[[float], Awaitable[None]]
+
+
+APPLIANCE_DRIVERS: dict[
+    str, Callable[[ApplianceDriverOptions], ApplianceActionDriver]
+] = {
+    CONTROLLABLE_KIND_CLIMATE: lambda options: ClimateApplianceDriver(),
+    CONTROLLABLE_KIND_EV_CHARGER: lambda options: EvChargerDriver(
+        charge_on_wait_seconds=options.charge_on_wait_seconds,
+        poll_interval_seconds=options.poll_interval_seconds,
+        sleep=options.sleep,
+    ),
+    CONTROLLABLE_KIND_GENERIC: lambda options: GenericApplianceDriver(),
+}
+
+
+def _assert_drivers_cover_appliance_kinds() -> None:
+    """Fail at import, not at reconcile, when a kind has no driver.
+
+    An appliance kind added to ``CONTROLLABLE_SPECS`` without a driver here used
+    to surface as a ``TypeError`` from the dispatch chain, mid-reconcile, on
+    whichever appliance happened to be configured.
+    """
+    declared = appliance_controllable_kinds()
+    implemented = frozenset(APPLIANCE_DRIVERS)
+    if declared == implemented:
+        return
+    missing = sorted(declared - implemented)
+    unknown = sorted(implemented - declared)
+    raise RuntimeError(
+        "APPLIANCE_DRIVERS must cover exactly the appliance controllable kinds; "
+        f"missing drivers for {missing}, drivers for unknown kinds {unknown}"
+    )
+
+
+_assert_drivers_cover_appliance_kinds()
+
+
 class AppliancesExecutor:
     def __init__(
         self,
@@ -762,14 +669,15 @@ class AppliancesExecutor:
         poll_interval_seconds: float = _CHARGE_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        self._climate_executor = ClimateApplianceExecutor(actuator)
-        self._ev_executor = EvChargerExecutor(
-            actuator,
+        options = ApplianceDriverOptions(
             charge_on_wait_seconds=charge_on_wait_seconds,
             poll_interval_seconds=poll_interval_seconds,
             sleep=sleep,
         )
-        self._generic_executor = GenericApplianceExecutor(actuator)
+        self._executors: dict[str, ApplianceExecutor] = {
+            kind: ApplianceExecutor(actuator, build_driver(options))
+            for kind, build_driver in APPLIANCE_DRIVERS.items()
+        }
 
     async def async_execute(
         self,
@@ -786,7 +694,7 @@ class AppliancesExecutor:
         first_error: ScheduleError | None = None
 
         for appliance in registry.appliances:
-            runtime, memory = await self._async_execute_for_appliance(
+            runtime, memory = await self._executor_for(appliance).async_execute(
                 appliance=appliance,
                 action=active_actions.get(appliance.id),
                 last_scheduled_action=last_scheduled_actions.get(appliance.id),
@@ -820,7 +728,8 @@ class AppliancesExecutor:
         first_error: ScheduleError | None = None
 
         for appliance in registry.appliances:
-            runtime = await self._async_disable_appliance_action(
+            executor = self._executor_for(appliance)
+            runtime = await executor.async_disable_active_action(
                 appliance=appliance,
                 action=active_actions.get(appliance.id),
                 reference_time=reference_time,
@@ -839,68 +748,8 @@ class AppliancesExecutor:
             first_error=first_error,
         )
 
-    async def _async_execute_for_appliance(
-        self,
-        *,
-        appliance,
-        action: ApplianceScheduleActionDict | None,
-        last_scheduled_action: ApplianceScheduleActionDict | None,
-        memory: ApplianceExecutionMemory | None,
-        active_slot_id: str,
-        reference_time: datetime,
-    ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
-        if isinstance(appliance, ClimateApplianceRuntime):
-            return await self._climate_executor.async_execute(
-                appliance=appliance,
-                action=action,
-                last_scheduled_action=last_scheduled_action,
-                memory=memory,
-                active_slot_id=active_slot_id,
-                reference_time=reference_time,
-            )
-        if isinstance(appliance, EvChargerApplianceRuntime):
-            return await self._ev_executor.async_execute(
-                appliance=appliance,
-                action=action,
-                last_scheduled_action=last_scheduled_action,
-                memory=memory,
-                active_slot_id=active_slot_id,
-                reference_time=reference_time,
-            )
-        if isinstance(appliance, GenericApplianceRuntime):
-            return await self._generic_executor.async_execute(
-                appliance=appliance,
-                action=action,
-                last_scheduled_action=last_scheduled_action,
-                memory=memory,
-                active_slot_id=active_slot_id,
-                reference_time=reference_time,
-            )
-        raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")
-
-    async def _async_disable_appliance_action(
-        self,
-        *,
-        appliance,
-        action: ApplianceScheduleActionDict | None,
-        reference_time: datetime,
-    ) -> ApplianceRuntimeStatus | None:
-        if isinstance(appliance, ClimateApplianceRuntime):
-            return await self._climate_executor.async_disable_active_action(
-                appliance=appliance,
-                action=action,
-                reference_time=reference_time,
-            )
-        if isinstance(appliance, EvChargerApplianceRuntime):
-            return await self._ev_executor.async_disable_active_action(
-                appliance=appliance,
-                action=action,
-                reference_time=reference_time,
-            )
-        if isinstance(appliance, GenericApplianceRuntime):
-            return await self._generic_executor.async_disable_active_action(
-                appliance=appliance,
-                action=action,
-                reference_time=reference_time,
-            )
-        raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")
+    def _executor_for(self, appliance: Any) -> ApplianceExecutor:
+        executor = self._executors.get(appliance.kind)
+        if executor is None:
+            raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")
+        return executor

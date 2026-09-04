@@ -73,9 +73,10 @@ from custom_components.helman.appliances.generic_appliance import (  # noqa: E40
 )
 from custom_components.helman.appliances.execution import (  # noqa: E402
     ApplianceExecutionMemory,
-    ClimateApplianceExecutor,
-    EvChargerExecutor,
-    GenericApplianceExecutor,
+    ApplianceExecutor,
+    ClimateApplianceDriver,
+    EvChargerDriver,
+    GenericApplianceDriver,
 )
 from custom_components.helman.scheduling.actuation import (  # noqa: E402
     ScheduleActuator,
@@ -214,7 +215,10 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass), charge_on_wait_seconds=1, sleep=asyncio.sleep)
+        executor = ApplianceExecutor(
+            _actuator(hass),
+            EvChargerDriver(charge_on_wait_seconds=1, sleep=asyncio.sleep),
+        )
 
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -272,7 +276,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
 
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -306,7 +310,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -346,7 +350,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -378,7 +382,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
 
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -412,7 +416,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        executor = EvChargerExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -434,7 +438,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_generic_on_turns_on_switch(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("off")})
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
@@ -457,7 +461,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
@@ -484,7 +488,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
@@ -504,7 +508,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_generic_unchanged_same_slot_is_noop(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
 
         runtime, _memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
@@ -527,7 +531,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_generic_failed_apply_stays_retryable_within_same_slot(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("off")})
         hass.services.error = RuntimeError("temporary outage")
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
 
         first_runtime, first_memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
@@ -559,7 +563,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_generic_failed_slot_stop_retries_with_previous_memory(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
         hass.services.error = RuntimeError("temporary outage")
-        executor = GenericApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
         previous_memory = ApplianceExecutionMemory(
             last_active_slot_id="2026-03-20T20:30:00+01:00",
             last_action_signature=(True,),
@@ -603,7 +607,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -641,7 +645,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -681,7 +685,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -725,7 +729,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -762,7 +766,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -786,7 +790,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        executor = ClimateApplianceExecutor(_actuator(hass))
+        executor = ApplianceExecutor(_actuator(hass), ClimateApplianceDriver())
 
         runtime, _memory = await executor.async_execute(
             appliance=_build_climate_appliance(),
@@ -825,7 +829,10 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         async def _sleep(_delay: float) -> None:
             return None
 
-        executor = EvChargerExecutor(_actuator(hass), charge_on_wait_seconds=0, sleep=_sleep)
+        executor = ApplianceExecutor(
+            _actuator(hass),
+            EvChargerDriver(charge_on_wait_seconds=0, sleep=_sleep),
+        )
 
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
