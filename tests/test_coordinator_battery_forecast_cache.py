@@ -1498,6 +1498,105 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
         )
         self.assertIsNone(coordinator.get_battery_forecast_current())
 
+    _FULL_SLOT_SNAPSHOT = {
+        "series": [
+            {
+                "timestamp": "2026-03-20T21:00:00+01:00",
+                "durationHours": 0.25,
+                "socPct": 62.5,
+                "importedFromGridKwh": 0.4,
+                "exportedToGridKwh": 0.1,
+                "chargedKwh": 0.6,
+                "dischargedKwh": 0.25,
+            }
+        ]
+    }
+
+    _PARTIAL_SNAPSHOT = {
+        "series": [
+            {
+                "timestamp": "2026-03-20T21:07:00+01:00",
+                "durationHours": 0.1333,
+                "socPct": 58.0,
+                "importedFromGridKwh": 0.05,
+                "exportedToGridKwh": 0.0,
+                "chargedKwh": 0.08,
+                "dischargedKwh": 0.0,
+            }
+        ]
+    }
+
+    def test_a_partial_after_a_full_slot_serves_the_full_slot_again(self):
+        # #204: the beat fills the 21:00 slot, then an off-beat rebuild replaces
+        # the snapshot's entry for that same slot with a partial. The slot's
+        # answer was already known and does not become unknown -- the five must
+        # not drop out for the remaining eight minutes.
+        whole_slot = {
+            "socPct": 62.5,
+            "gridNetWh": -300.0,
+            "gridImportWh": 400.0,
+            "gridExportWh": 100.0,
+            "batteryNetWh": 350.0,
+        }
+        coordinator = self._coordinator(self._FULL_SLOT_SNAPSHOT)
+        served = coordinator.get_battery_forecast_current()
+        self.assertEqual(served, whole_slot)
+        coordinator._cached_appliance_forecast_pipeline = SimpleNamespace(
+            battery_forecast=self._PARTIAL_SNAPSHOT
+        )
+        # The whole-slot figures spelled out, not the object the first read
+        # returned: the partial's rescaled 58.0 and its eighth of a slot's
+        # energies must not appear.
+        self.assertEqual(coordinator.get_battery_forecast_current(), whole_slot)
+
+    def test_the_memo_survives_a_caller_mutating_what_it_was_handed(self):
+        # The accessor runs on every state read of the five entities. Handing
+        # out the memo's own map would let one caller's mutation stand as the
+        # slot's answer for the rest of the quarter hour.
+        coordinator = self._coordinator(self._FULL_SLOT_SNAPSHOT)
+        coordinator.get_battery_forecast_current().clear()
+        coordinator._cached_appliance_forecast_pipeline = SimpleNamespace(
+            battery_forecast=self._PARTIAL_SNAPSHOT
+        )
+        served = coordinator.get_battery_forecast_current()
+        self.assertEqual(served["socPct"], 62.5)
+        served["socPct"] = 0.0
+        self.assertEqual(
+            coordinator.get_battery_forecast_current()["socPct"], 62.5
+        )
+
+    def test_a_memo_from_an_earlier_slot_is_not_served(self):
+        # The slot key is the memo's entire expiry: 20:45's figures can never
+        # answer a read taken in the 21:00 slot.
+        coordinator = self._coordinator(self._PARTIAL_SNAPSHOT)
+        coordinator._battery_forecast_current_slot = (
+            "2026-03-20T20:45:00+01:00",
+            {"socPct": 91.0},
+        )
+        self.assertIsNone(coordinator.get_battery_forecast_current())
+
+    def test_the_memo_answers_the_partial_branch_only(self):
+        # A cold pipeline or a snapshot with no series means the system has
+        # nothing for this slot, which is a different failure and must stay
+        # visible -- the memo does not paper over it.
+        coordinator = self._coordinator(self._FULL_SLOT_SNAPSHOT)
+        self.assertIsNotNone(coordinator.get_battery_forecast_current())
+        coordinator._cached_appliance_forecast_pipeline = SimpleNamespace(
+            battery_forecast={"status": "unavailable"}
+        )
+        self.assertIsNone(coordinator.get_battery_forecast_current())
+        coordinator._cached_appliance_forecast_pipeline = None
+        self.assertIsNone(coordinator.get_battery_forecast_current())
+
+    def test_an_entry_with_none_of_the_five_is_not_memoed(self):
+        # "No slot" is not an answer worth remembering; memoing it would hand a
+        # later partial the same ``None`` while suppressing its reason.
+        coordinator = self._coordinator(
+            {"series": [{"timestamp": "2026-03-20T21:00:00+01:00"}]}
+        )
+        self.assertIsNone(coordinator.get_battery_forecast_current())
+        self.assertIsNone(coordinator._battery_forecast_current_slot)
+
     def _first_entry(self, duration_hours):
         return self._coordinator(
             {
@@ -1621,6 +1720,34 @@ class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
         with self.assertLogs(self.LOGGER, level="INFO") as captured:
             coordinator.get_battery_forecast_current()
         self.assertIn("reason=pipeline_cold", captured.output[0])
+
+    def test_a_partial_served_from_the_memo_is_not_a_refusal(self):
+        # Serving the slot's own full-slot figures is a success, so it logs
+        # nothing -- and, crucially, does not consume the (reason, slot) dedupe
+        # token, so a genuine refusal later in the same slot is still reported.
+        coordinator = self._coordinator(
+            {
+                "series": [
+                    {
+                        "timestamp": "2026-03-20T21:00:00+01:00",
+                        "durationHours": 0.25,
+                        "socPct": 62.5,
+                    }
+                ]
+            }
+        )
+        coordinator.get_battery_forecast_current()
+        coordinator._cached_appliance_forecast_pipeline = (
+            self._partial_first_entry()._cached_appliance_forecast_pipeline
+        )
+        with self.assertNoLogs(self.LOGGER, level="INFO"):
+            self.assertEqual(
+                coordinator.get_battery_forecast_current(), {"socPct": 62.5}
+            )
+        coordinator._battery_forecast_current_slot = None
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            self.assertIsNone(coordinator.get_battery_forecast_current())
+        self.assertIn("reason=partial_slot", captured.output[0])
 
     def test_a_slot_missing_from_the_series_names_the_range_it_covered(self):
         coordinator = self._coordinator(
