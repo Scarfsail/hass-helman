@@ -436,6 +436,39 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runtime)
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
 
+    async def test_ev_failed_apply_stays_retryable_within_same_slot(self) -> None:
+        hass = FakeHass({"switch.ev_nabijeni": FakeState("off")})
+        hass.services.error = RuntimeError("temporary outage")
+        executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
+
+        first_runtime, first_memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action={"charge": True, "vehicleId": "kona"},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(first_runtime.outcome, "failed")
+        self.assertIsNone(first_memory)
+
+        hass.services.error = None
+        second_runtime, second_memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action={"charge": True, "vehicleId": "kona"},
+            last_scheduled_action=None,
+            memory=first_memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(len(hass.services.calls), 1)
+        self.assertEqual(hass.services.calls[0][0:2], ("switch", "turn_on"))
+        self.assertEqual(second_runtime.outcome, "success")
+        self.assertIsNotNone(second_memory)
+        self.assertTrue(second_memory.last_enabled)
+
     async def test_generic_on_turns_on_switch(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("off")})
         executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
