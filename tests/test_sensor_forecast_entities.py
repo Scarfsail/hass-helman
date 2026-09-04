@@ -287,6 +287,36 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(entity._attr_translation_key, key)
                 self.assertTrue(entity._attr_has_entity_name)
 
+    async def test_current_slot_forecast_entities_force_update(self) -> None:
+        # Every current-slot forecast entity must write a recorder row on each
+        # slot beat, changed or not: Home Assistant records nothing for an
+        # unchanged value, so a flat series -- the grid net forecast pinned at
+        # 0.0 through an evening -- would leave no row for any slot in the
+        # stretch, and resolve_forecast_slot_values would have to reconstruct
+        # them from a held value that any dropout clears. force_update is what
+        # makes these entities the per-slot archive their docstrings claim.
+        sensor_module = _load_sensor_module()
+
+        coordinator = SimpleNamespace(
+            get_battery_forecast_current=lambda: {},
+            get_house_consumption_forecast_current_w=lambda: None,
+        )
+        classes = (
+            sensor_module.HelmanHouseConsumptionForecastCurrentSensor,
+            sensor_module.HelmanSolarForecastCurrentSensor,
+            sensor_module.HelmanSolarForecastCurrentCorrectedSensor,
+            sensor_module.HelmanBatterySocForecastCurrentSensor,
+            sensor_module.HelmanBatteryNetForecastCurrentSensor,
+            sensor_module.HelmanGridNetForecastCurrentSensor,
+            sensor_module.HelmanGridImportForecastCurrentSensor,
+            sensor_module.HelmanGridExportForecastCurrentSensor,
+        )
+        self.assertEqual(len(classes), 8)
+        for cls in classes:
+            with self.subTest(cls=cls.__name__):
+                entity = cls(coordinator, _FakeEntry())
+                self.assertTrue(entity._attr_force_update)
+
     async def test_battery_forecast_current_entities_shapes(self) -> None:
         # Four Wh series with no device class, for the reason the solar base
         # class documents; one BATTERY percentage. All MEASUREMENT, and each

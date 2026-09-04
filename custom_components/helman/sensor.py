@@ -480,9 +480,19 @@ class HelmanHouseConsumptionForecastCurrentSensor(_HelmanDeviceEntity):
     A slot forecast of 250 Wh is published as `1000` because 250 Wh / 0.25 h = 1000 Wh/h.
     Reading the recorder history of this entity over a past day yields a stair-step
     series of past forecast values, one step per slot.
+
+    ``force_update`` is on for that reason and not as a habit: Home Assistant
+    writes no state row when the value is unchanged, so a flat stretch of the
+    forecast would leave the archive with no row for any of its slots, and
+    :func:`resolve_forecast_slot_values` would have to reconstruct them from
+    whatever value was standing before. That reconstruction is what a dropout
+    across a slot boundary breaks. With a row per beat the claim above is true
+    as written, and the hold is a fallback for real gaps rather than the normal
+    path.
     """
 
     _attr_should_poll = False
+    _attr_force_update = True
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "W"
@@ -535,9 +545,18 @@ class _HelmanSolarForecastCurrentSensorBase(_HelmanDeviceEntity):
     a stair-step of what the provider said about each slot *while that slot had
     not yet begun* — the same measurement the bias trainer is fitted to, and the
     reason this entity can replace a Helman-owned archive of it.
+
+    That archive claim is only true because ``force_update`` is on. Home
+    Assistant writes no state row for an unchanged value, so without it a flat
+    stretch — an evening at zero, most obviously — records nothing at all, and
+    :func:`resolve_forecast_slot_values` has to reconstruct every one of those
+    slots from the value standing before them. A dropout landing across a slot
+    boundary then blanks a slot that was forecast perfectly well. Writing a row
+    on every beat, changed or not, is what makes the history *be* the record.
     """
 
     _attr_should_poll = False
+    _attr_force_update = True
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "Wh"
 
@@ -603,9 +622,15 @@ class _HelmanBatteryForecastCurrentSensorBase(_HelmanDeviceEntity):
     Together these retire ``BatteryForecastHistoryStore``: the battery forecast
     snapshot only ever spans from the current slot forward, so once a slot has
     elapsed nothing else recorded what was predicted for it. Each sensor is
-    written on the slot-aligned refresh, so its recorder history *is* that
-    archive — exactly the move ``_HelmanSolarForecastCurrentSensorBase`` makes
-    for the solar forecast.
+    written on the slot-aligned refresh and carries ``force_update``, so its
+    recorder history *is* that archive — exactly the move
+    ``_HelmanSolarForecastCurrentSensorBase`` makes for the solar forecast, and
+    for the same reason. Without ``force_update`` Home Assistant writes no row
+    for an unchanged value, and these are precisely the series that sit flat:
+    the grid net forecast pinned at ``0.0`` through an evening with no expected
+    flow would record nothing across the whole stretch, leaving
+    :func:`resolve_forecast_slot_values` to reconstruct every slot in it from a
+    held value that any dropout clears.
 
     **The entity ids name the quantity, not this subsystem** — ``grid_export``,
     not ``battery_forecast_grid_export`` — following the repo convention
@@ -629,6 +654,7 @@ class _HelmanBatteryForecastCurrentSensorBase(_HelmanDeviceEntity):
     """
 
     _attr_should_poll = False
+    _attr_force_update = True
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     #: The key this sensor reads out of the coordinator accessor's map.

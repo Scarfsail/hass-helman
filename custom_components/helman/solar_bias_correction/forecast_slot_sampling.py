@@ -41,6 +41,16 @@ def resolve_forecast_slot_values(
     with nothing standing and has no numeric row of its own. Measured on this
     project's reference instance that costs on the order of a tenth of a slot
     per day, which is why it is worn rather than worked around.
+
+    That cost is priced on the slot having a numeric row of its own, so only the
+    hold is at risk. Every current-slot forecast entity these callers read --
+    the bias trainer's ``forecast_slot_history``, the inspector's house and
+    battery readers -- now sets ``force_update``, so each writes a row on every
+    beat whether or not the value moved, and the hold is a fallback for genuine
+    gaps rather than the normal path for a flat series. Before that, a series
+    pinned at one value recorded no rows at all across the stretch and every
+    slot in it was hold-derived, which put far more than a tenth of a slot a day
+    at the mercy of a single restart.
     """
     result: dict[datetime, float] = {}
     cursor = 0
