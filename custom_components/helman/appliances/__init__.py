@@ -22,7 +22,6 @@ __all__ = [
     "ClimateApplianceRuntime",
     "ClimateApplianceConfigError",
     "ClimateApplianceScheduleActionDict",
-    "EvChargerExecutor",
     "GenericApplianceResponseDict",
     "GenericApplianceRuntime",
     "GenericApplianceConfigError",
@@ -85,7 +84,6 @@ _EXPORTS = {
         ".climate_schedule",
         "ClimateApplianceScheduleActionDict",
     ),
-    "EvChargerExecutor": (".execution", "EvChargerExecutor"),
     "GenericApplianceResponseDict": (
         ".generic_appliance",
         "GenericApplianceResponseDict",
