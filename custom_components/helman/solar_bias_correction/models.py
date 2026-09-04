@@ -163,11 +163,15 @@ class SolarBiasMoneyPoint:
     money aggregate to their sum. Cost and gain are kept apart because each
     direction is billed at its own rail, and no rate applied to the netted grid
     series reproduces the pair.
+
+    Either side is ``None`` where that direction's rail had no rate for the
+    slot: the energy is real and its price is simply unknown, which is not the
+    same claim as zero. See :func:`_money_points`.
     """
 
     slot: str  # "HH:MM"
-    cost: float
-    gain: float
+    cost: float | None
+    gain: float | None
 
 
 @dataclass
@@ -177,12 +181,17 @@ class SolarBiasMoneyTotals:
     ``net`` is carried rather than left to the reader so the payload shape is
     the one the card already sums a selection into -- the day's totals and a
     selection's totals are then the same thing, and cannot drift apart.
+
+    Each side is independently ``None`` where the vintage could price no slot of
+    that direction, and ``net`` follows both: subtracting an unknown gain from a
+    known cost would restate the import bill as what the grid came to. The card
+    renders a ``None`` as an em dash.
     """
 
-    cost: float
-    gain: float
+    cost: float | None
+    gain: float | None
     #: What the grid came to on balance: positive means it took money off you.
-    net: float
+    net: float | None
 
 
 @dataclass

@@ -20,7 +20,7 @@ const BUNDLE = resolve(
 
 const DAY = "2026-07-18";
 
-type MoneyPoint = { slot: string; cost: number; gain: number };
+type MoneyPoint = { slot: string; cost: number | null; gain: number | null };
 type Bar = { side: "cost" | "gain"; height: number; width: number };
 
 async function loadCardBundle(page: Page): Promise<void> {
@@ -65,6 +65,53 @@ async function barsFor(
                 height: Math.round(parseFloat(r.getAttribute("height"))),
                 width: Math.round(parseFloat(r.getAttribute("width"))),
             }));
+    }, { mounted: input, day: DAY });
+}
+
+/**
+ * The tooltip the strip emits for the cell covering `minutes`, as
+ * `[label, amount]` pairs. The labels come back as their raw keys: the mounted
+ * strip has no Home Assistant to localize against, which is enough to tell the
+ * three rows apart.
+ */
+async function tooltipRowsAt(
+    page: Page,
+    input: { actual: MoneyPoint[]; minutes: number },
+): Promise<Array<[string, string]>> {
+    return page.evaluate(async ({ mounted, day }) => {
+        const el = document.createElement("helman-solar-money-strip") as any;
+        el.hass = { language: "en", localize: (key: string) => key, states: {} };
+        el.timeZone = "Europe/Prague";
+        el.date = day;
+        el.slotMinutes = 15;
+        // Late enough that every slot of the day is behind the seam, so the
+        // amounts ride in the tooltip's measured column.
+        el.nowMs = Date.parse(`${day}T23:59:00+02:00`);
+        el.moneyActual = mounted.actual;
+        el.moneyForecast = [];
+        el.currency = "CZK";
+        el.geometry = {
+            width: 1000, marginLeft: 0, plotWidth: 1000,
+            startMinutes: 0, endMinutes: 1440,
+        };
+        document.body.appendChild(el);
+        await el.updateComplete;
+
+        let content: any = null;
+        el.addEventListener("slot-tooltip", (event: CustomEvent) => {
+            content = event.detail;
+        });
+        const svg = el.shadowRoot.querySelector("svg") as SVGSVGElement;
+        const rect = svg.getBoundingClientRect();
+        svg.dispatchEvent(new MouseEvent("mousemove", {
+            clientX: rect.left + (mounted.minutes / 1440) * rect.width,
+            clientY: rect.top + rect.height / 2,
+            bubbles: true,
+        }));
+        return (content?.rows ?? []).map((row: any) => [
+            row.label,
+            (row.actual ?? row.forecast)?.value ?? "",
+        ]);
     }, { mounted: input, day: DAY });
 }
 
@@ -214,5 +261,21 @@ test.describe("money strip", () => {
     test("a day with no priced slot draws nothing at all", async ({ page }) => {
         const bars = await barsFor(page, { actual: [], forecast: [] });
         expect(bars).toEqual([]);
+    });
+
+    test("an unpriced direction draws no bar, and its tooltip row says so", async ({ page }) => {
+        // A slot whose export rail had no rate. No bar, the same as a zero --
+        // there is nothing to draw either way -- but the popup must tell the
+        // two apart: 2 kWh sold at an unknown rate did not earn 0.00 CZK.
+        const actual = [{ slot: "10:00", cost: 5, gain: null }];
+
+        expect((await barsFor(page, { actual })).map((b) => b.side)).toEqual(["cost"]);
+
+        const rows = await tooltipRowsAt(page, { actual, minutes: 10 * 60 + 7 });
+        expect(rows).toEqual([
+            ["Import cost", "5.00 CZK"],
+            ["Export gain", "—"],
+            ["Net cost", "—"],
+        ]);
     });
 });

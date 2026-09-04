@@ -14,9 +14,20 @@ import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
-import { EMPTY_MONEY, type MoneyPoint } from "./money-model";
+import { EMPTY_MONEY, moneyNet, type MoneyPoint } from "./money-model";
 
 const MINUTES_PER_DAY = 1440;
+
+/**
+ * A payload amount as a number, or null where there is none to draw.
+ *
+ * `null` is the payload's own word for an unpriced direction, and anything
+ * else unusable lands in the same place -- there is no amount either way, and
+ * `Number(null)` is a zero this strip must never mistake for one.
+ */
+function amountOrNull(value: number | null): number | null {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 /**
  * The strip's own geometry; it borrows only the x scale from the chart. The
@@ -25,12 +36,18 @@ const MINUTES_PER_DAY = 1440;
  */
 const MONEY_STRIP = { height: 88, padTop: 14, padBottom: 18 } as const;
 
-/** One cell's money on the inspector's current slot grid. */
+/**
+ * One cell's money on the inspector's current slot grid.
+ *
+ * A side is null where no slot in the cell priced that direction: the bar is
+ * not drawn and the tooltip says so with an em dash, rather than claiming a
+ * flat zero for energy whose rate is simply unknown.
+ */
 interface MoneyCell {
     startMinutes: number;
     endMinutes: number;
-    cost: number;
-    gain: number;
+    cost: number | null;
+    gain: number | null;
 }
 
 /** The popup content emitted for the inspector's shared floating tooltip. */
@@ -126,6 +143,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
      * Amounts falling in one cell **sum**. That is the one place this strip must
      * not follow the price strip above it, which averages: four quarter-hours of
      * cost in an hour is their total, not their mean.
+     *
+     * Per direction, and unpriced slots are skipped rather than counted as
+     * zero, so a cell keeps whichever side its rails could price and reports
+     * the other as unknown.
      */
     private _buildCells(): MoneyCell[] {
         const slot = this._slotSpan();
@@ -138,18 +159,18 @@ export class HelmanSolarMoneyStrip extends LitElement {
                 // Each slot is claimed by exactly one vintage, so the two can
                 // never both contribute and double the day's money.
                 if ((minutes < seam) !== wantElapsed) continue;
-                const cost = Number(point.cost);
-                const gain = Number(point.gain);
-                if (!Number.isFinite(cost) || !Number.isFinite(gain)) continue;
+                const cost = amountOrNull(point.cost);
+                const gain = amountOrNull(point.gain);
+                if (cost === null && gain === null) continue;
                 const start = Math.floor(minutes / slot) * slot;
                 const cell = cells.get(start) ?? {
                     startMinutes: start,
                     endMinutes: Math.min(start + slot, MINUTES_PER_DAY),
-                    cost: 0,
-                    gain: 0,
+                    cost: null,
+                    gain: null,
                 };
-                cell.cost += cost;
-                cell.gain += gain;
+                if (cost !== null) cell.cost = (cell.cost ?? 0) + cost;
+                if (gain !== null) cell.gain = (cell.gain ?? 0) + gain;
                 cells.set(start, cell);
             }
         };
@@ -202,9 +223,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
         // amounts instead would clamp those crossings away, and a day of
         // negative export prices would then scale its bars against a maximum
         // that excludes them and silently clip whatever overshot the plot.
-        const drawn = (scaled.length > 0 ? scaled : cells).flatMap(
-            (cell) => [cell.cost, -cell.gain],
-        );
+        const drawn = (scaled.length > 0 ? scaled : cells).flatMap((cell) => [
+            ...(cell.cost === null ? [] : [cell.cost]),
+            ...(cell.gain === null ? [] : [-cell.gain]),
+        ]);
         const maxUp = Math.max(0, ...drawn);
         const maxDown = Math.max(0, ...drawn.map((value) => -value));
         // Up and down share one scale, so a slot's two amounts stay comparable
@@ -296,12 +318,15 @@ export class HelmanSolarMoneyStrip extends LitElement {
             const future = cell.startMinutes >= ctx.seam;
             // Cost is drawn upward and gain downward from the same zero line, so
             // a slot that did both shows both without either hiding the other.
-            const bars: { value: number; color: string }[] = [
+            const bars: { value: number | null; color: string }[] = [
                 { value: cell.cost, color: "var(--helman-grid-import)" },
-                { value: -cell.gain, color: "var(--helman-grid-export)" },
+                { value: cell.gain === null ? null : -cell.gain, color: "var(--helman-grid-export)" },
             ];
             return bars.map(({ value, color }) => {
-                if (value === 0) return "";
+                // An unpriced direction draws no bar at all, exactly as a zero
+                // does -- but the tooltip tells the two apart, which is the
+                // whole reason the null is carried this far.
+                if (value === null || value === 0) return "";
                 const valueY = ctx.yForValue(value);
                 const top = Math.min(ctx.zeroY, valueY);
                 const barHeight = Math.max(1, Math.abs(valueY - ctx.zeroY));
@@ -343,8 +368,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
             const label = (amount: number, y: number) =>
                 stripValueLabel({ x: centre, y, text: this._formatAmount(amount) });
             // An amount that rounds to nothing gets no label: "0.0" over a
-            // hairline bar says less than the bar already did.
-            const worthLabelling = (amount: number) => Math.abs(amount) >= 0.05;
+            // hairline bar says less than the bar already did. Nor does an
+            // unpriced direction, which has no bar to label.
+            const worthLabelling = (amount: number | null): amount is number =>
+                amount !== null && Math.abs(amount) >= 0.05;
             return [
                 worthLabelling(cell.cost)
                     ? label(cell.cost, Math.max(ctx.yForValue(cell.cost) - 3, 9))
@@ -488,12 +515,12 @@ export class HelmanSolarMoneyStrip extends LitElement {
             rows: [
                 this._moneyRow("import_cost", cell.cost, measured, "var(--helman-grid-import)"),
                 this._moneyRow("export_gain", cell.gain, measured, "var(--helman-grid-export)"),
-                this._moneyRow("net_cost", cell.cost - cell.gain, measured),
+                this._moneyRow("net_cost", moneyNet(cell.cost, cell.gain), measured),
             ],
         });
     }
 
-    private _moneyRow(key: string, amount: number, measured: boolean, color?: string) {
+    private _moneyRow(key: string, amount: number | null, measured: boolean, color?: string) {
         const cell = { value: this._formatMoney(amount), color };
         return {
             label: this._t(`bias_correction.inspector.${key}`),
@@ -502,7 +529,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
         };
     }
 
-    private _formatMoney(amount: number): string {
+    /** An amount, or the em dash the tiles print for an unpriced direction. */
+    private _formatMoney(amount: number | null): string {
+        if (amount === null) return "—";
         return `${amount.toFixed(2)} ${this.currency}`.trim();
     }
 

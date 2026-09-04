@@ -30,7 +30,42 @@ test.describe("money model", () => {
     test("a slot the series has no money for contributes nothing", () => {
         // The selection is on the inspector's slot grid and may name slots the
         // day never priced; those must not be read as zeros that drag a total.
-        expect(sumMoney(MONEY, ["03:00"])).toEqual({ cost: 0, gain: 0, net: 0 });
+        // Nothing priced at all is three unknowns, not three zeros — the tile
+        // above reads an em dash rather than claiming the hour cost nothing.
+        expect(sumMoney(MONEY, ["03:00"])).toEqual({ cost: null, gain: null, net: null });
+    });
+
+    test("an unpriced direction stays unknown, and takes the net with it", () => {
+        // The day the sell-price entity did not yet exist: every slot priced on
+        // the import side, none on the export side. The cost stands; calling
+        // the gain 0.00 would be a claim the data does not support, and a net
+        // built on it would be the import bill wearing the net's name.
+        const unpriced = [
+            { slot: "10:00", cost: 4, gain: null },
+            { slot: "10:15", cost: 9, gain: null },
+        ];
+
+        expect(sumMoney(unpriced, ["10:00", "10:15"])).toEqual({
+            cost: 13,
+            gain: null,
+            net: null,
+        });
+    });
+
+    test("a direction priced in part sums the slots that priced it", () => {
+        // Only a direction with no priced slot in the selection goes unknown;
+        // one that lost its rate for part of the span still reports what it
+        // could price, the same approximation the span aggregates make.
+        const partial = [
+            { slot: "10:00", cost: 4, gain: 2 },
+            { slot: "10:15", cost: 9, gain: null },
+        ];
+
+        expect(sumMoney(partial, ["10:00", "10:15"])).toEqual({
+            cost: 13,
+            gain: 2,
+            net: 11,
+        });
     });
 
     test("net is what the grid came to on balance", () => {

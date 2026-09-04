@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
@@ -2906,10 +2906,12 @@ def _money_points(
     rate: the expensive hours are rarely the ones the house imported in.
 
     A slot appears when either direction has energy *and* a rate to value it at.
-    A direction with energy but no rate contributes nothing rather than zero --
+    A direction with energy but no rate contributes ``None`` rather than zero --
     a day past the recorder's reach has real exported kWh whose rate is simply
     unknown, and calling that "earned nothing" would be a claim the data does
-    not support.
+    not support. That is per *direction*, not per slot: a slot the import rail
+    priced and the export rail did not carries a cost and a ``None`` gain, and
+    the card draws the em dash the missing rate earns.
 
     Known limitation, once a year: on the autumn DST fall-back day the local
     ``HH:MM`` labels repeat, so the repeated hour's two occurrences share four
@@ -2936,8 +2938,8 @@ def _money_points(
         points.append(
             SolarBiasMoneyPoint(
                 slot=slot,
-                cost=import_kwh * cost_rate if priced_cost else 0.0,
-                gain=export_kwh * gain_rate if priced_gain else 0.0,
+                cost=import_kwh * cost_rate if priced_cost else None,
+                gain=export_kwh * gain_rate if priced_gain else None,
             )
         )
     return points
@@ -2946,12 +2948,35 @@ def _money_points(
 def _money_totals(
     points: list[SolarBiasMoneyPoint],
 ) -> SolarBiasMoneyTotals | None:
-    """Sum a money series, or None where the day priced nothing at all."""
+    """Sum a money series, or None where the day priced nothing at all.
+
+    Each direction is summed over the slots that priced it and is ``None`` where
+    none did, so a vintage whose export rail is empty reports its import bill
+    and an unknown gain rather than a gain of zero. ``net`` needs both sides and
+    is ``None`` without them.
+
+    A direction only *partly* priced sums the slots it could price, the same
+    approximation the span aggregates make (:func:`_money_by_bucket`): the rails
+    lose a rate at the edges of recorder retention, and a bill for the hours
+    that have one is more use than a hole. Nothing on the day view distinguishes
+    the two, which is why the whole-direction case gets the em dash instead.
+    """
     if not points:
         return None
-    cost = sum(point.cost for point in points)
-    gain = sum(point.gain for point in points)
-    return SolarBiasMoneyTotals(cost=cost, gain=gain, net=cost - gain)
+    cost = _direction_total(point.cost for point in points)
+    gain = _direction_total(point.gain for point in points)
+    net = None if cost is None or gain is None else cost - gain
+    return SolarBiasMoneyTotals(cost=cost, gain=gain, net=net)
+
+
+def _direction_total(values: Iterable[float | None]) -> float | None:
+    """One direction's money summed, or None where no slot priced it."""
+    total: float | None = None
+    for value in values:
+        if value is None:
+            continue
+        total = value if total is None else total + value
+    return total
 
 
 # --- Span aggregates: bucketing the hourly statistics ------------------------
