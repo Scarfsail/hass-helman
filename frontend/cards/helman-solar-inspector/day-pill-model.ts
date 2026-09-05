@@ -20,6 +20,25 @@ import type { ScheduleDisplaySlot } from "../shared/schedule/schedule-types";
 
 /** Days a pill row will ever draw, however far a bad `maxDate` reaches. */
 const MAX_PILL_DAYS = 31;
+/** Three months (at most 92 days), rounded outward to complete weeks. */
+export const MAX_CALENDAR_DAYS = 105;
+
+export function calendarWindow(anchor: string, from: string, to: string, weekday: number): { start: string; end: string } {
+    const month = new Date(`${anchor.slice(0, 7)}-01T00:00:00Z`);
+    const key = (date: Date) => date.toISOString().slice(0, 10);
+    let start = key(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() - 1, 1)));
+    let end = key(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 2, 0)));
+    if (from && start < from.slice(0, 7) + "-01") start = from.slice(0, 7) + "-01";
+    if (to && end.slice(0, 7) > to.slice(0, 7)) {
+        const last = new Date(`${to}T00:00:00Z`);
+        end = key(new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 0)));
+    }
+    const first = new Date(`${start}T00:00:00Z`);
+    first.setUTCDate(first.getUTCDate() - (first.getUTCDay() - weekday + 7) % 7);
+    const last = new Date(`${end}T00:00:00Z`);
+    last.setUTCDate(last.getUTCDate() + (weekday + 6 - last.getUTCDay() + 7) % 7);
+    return { start: key(first), end: key(last) };
+}
 
 /** Home Assistant's `first_weekday` values, in `getUTCDay` order. */
 const WEEKDAY_NAMES = [
@@ -76,14 +95,14 @@ export const EMPTY_DAY_PILL_MODEL: SolarInspectorDayPillModel = {
 };
 
 /** Every local date from `startDayKey` to `endDayKey`, inclusive. */
-export function buildDayPillKeys(startDayKey: string, endDayKey: string): string[] {
+export function buildDayPillKeys(startDayKey: string, endDayKey: string, maximum = MAX_PILL_DAYS): string[] {
     if (!_isDayKey(startDayKey) || !_isDayKey(endDayKey) || endDayKey < startDayKey) {
         return [];
     }
 
     const keys: string[] = [];
     let cursor = startDayKey;
-    while (cursor <= endDayKey && keys.length < MAX_PILL_DAYS) {
+    while (cursor <= endDayKey && keys.length < Math.min(MAX_CALENDAR_DAYS, maximum)) {
         keys.push(cursor);
         cursor = _addDay(cursor);
     }

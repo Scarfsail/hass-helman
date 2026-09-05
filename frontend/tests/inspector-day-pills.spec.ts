@@ -316,6 +316,7 @@ async function mountInspector(
 type PillReadout = {
     day: string;
     label: string;
+    title: string;
     selected: boolean;
     isHistory: boolean;
     /** Gauge kind → the figure it wrote, or "" when it wrote none. */
@@ -329,6 +330,7 @@ async function readPills(page: Page): Promise<PillReadout[]> {
         return Array.from(root?.querySelectorAll(".pill") ?? []).map((pill) => ({
             day: pill.getAttribute("data-day") ?? "",
             label: pill.querySelector(".pill-label")?.textContent?.trim() ?? "",
+            title: pill.getAttribute("title") ?? "",
             selected: pill.getAttribute("aria-pressed") === "true",
             isHistory: pill.getAttribute("data-history") === "true",
             gauges: Array.from(pill.querySelectorAll(".day-aggregate-gauge")).map((gauge) => ({
@@ -370,8 +372,22 @@ async function waitForHistoryPills(page: Page, count: number): Promise<void> {
     await page.waitForFunction((expected) => {
         const root = document.querySelector("helman-solar-inspector")
             ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-        return (root?.querySelectorAll('.pill[data-history="true"]').length ?? 0) === expected;
+        return [...root!.querySelectorAll('.pill[data-history="true"]')].filter((pill) =>
+            !root!.querySelector(".continuous") || pill.getAttribute("data-day")!.slice(0, 7) === new Date().toISOString().slice(0, 7)).length === expected;
     }, count);
+}
+
+async function readMonthPills(page: Page): Promise<PillReadout[]> {
+    return (await readPills(page)).filter((pill) => pill.day.slice(0, 7) === FIXED_TODAY.slice(0, 7));
+}
+
+async function expectFirstColumn(page: Page, weekday: number): Promise<void> {
+    const column = await page.locator(`helman-solar-day-pills [data-day="${FIXED_TODAY.slice(0, 7)}-01"]`).evaluate((pill) => {
+        const row = pill.parentElement!;
+        const gap = parseFloat(getComputedStyle(row).columnGap);
+        return Math.round((pill.getBoundingClientRect().left - row.getBoundingClientRect().left) / (pill.getBoundingClientRect().width + gap));
+    });
+    expect(column).toBe((new Date(`${FIXED_TODAY.slice(0, 7)}-01T00:00:00Z`).getUTCDay() - weekday + 7) % 7);
 }
 
 async function readRequestedRanges(page: Page): Promise<string[]> {
@@ -385,6 +401,15 @@ async function waitForDays(page: Page, days: string[]): Promise<void> {
             ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
         const shown = Array.from(root?.querySelectorAll(".pill") ?? [])
             .map((pill) => pill.getAttribute("data-day"));
+        if (root?.querySelector(".continuous")) {
+            const box = root.querySelector(".pill-row")!.getBoundingClientRect();
+            return expected.every((day) => {
+                const pill = root.querySelector(`[data-day="${day}"]`);
+                if (!pill) return false;
+                const rect = pill.getBoundingClientRect();
+                return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1;
+            });
+        }
         return shown.length === expected.length && shown.every((day, i) => day === expected[i]);
     }, days);
 }
@@ -537,7 +562,7 @@ test.describe("solar inspector past days", () => {
         await pressMore(page);
         await waitForDays(page, month);
 
-        const pills = await readPills(page);
+        const pills = await readMonthPills(page);
         expect(pills.map((pill) => pill.day)).toEqual(month);
         // Today is still the day on screen: widening the row is not a move.
         expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(0)]);
@@ -564,14 +589,14 @@ test.describe("solar inspector past days", () => {
         await waitForDays(page, month);
         await waitForHistoryPills(page, pastDays);
 
-        const target = (await readPills(page)).find((pill) => pill.isHistory)!.day;
-        await clickPill(page, month.indexOf(target));
+        const target = (await readMonthPills(page)).find((pill) => pill.isHistory)!.day;
+        await page.locator(`helman-solar-day-pills [data-day="${target}"]`).click();
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),
             target,
         );
 
-        const pills = await readPills(page);
+        const pills = await readMonthPills(page);
         expect(pills.map((pill) => pill.day)).toEqual(month);
         expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([target]);
     });
@@ -589,7 +614,7 @@ test.describe("solar inspector past days", () => {
         test.skip(pastDays === 0, "the 1st has no past day in its own month");
         await waitForHistoryPills(page, pastDays);
 
-        const pills = await readPills(page);
+        const pills = await readMonthPills(page);
         expect(pills.filter((pill) => pill.isHistory)).toHaveLength(pastDays);
         for (const pill of pills.filter((candidate) => candidate.isHistory)) {
             const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
@@ -613,11 +638,11 @@ test.describe("solar inspector past days", () => {
         const afterOpening = await readRequestedRanges(page);
         expect(afterOpening).toEqual([
             `${dayAt(0)}..${dayAt(0)}`,
-            `${month[0]}..${dayAt(0)}`,
+            `${dayAt(-30)}..${dayAt(0)}`,
         ]);
 
-        const target = (await readPills(page)).find((pill) => pill.isHistory)!.day;
-        await clickPill(page, month.indexOf(target));
+        const target = (await readMonthPills(page)).find((pill) => pill.isHistory)!.day;
+        await page.locator(`helman-solar-day-pills [data-day="${target}"]`).click();
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),
             target,
@@ -635,13 +660,13 @@ test.describe("solar inspector past days", () => {
         await pressMore(page);
         await waitForDays(page, daysOfThisMonth());
 
-        const pills = await readPills(page);
+        const pills = await readMonthPills(page);
         const yesterday = pills.find((pill) => pill.day === dayAt(-1))!;
-        expect(yesterday.label).not.toMatch(/\d/);
+        expect(yesterday.title).not.toMatch(/\d/);
         // A day further back does carry its date, so the word is the exception.
         const older = pills.find((pill) => pill.day < dayAt(-1));
         if (older !== undefined) {
-            expect(older.label).toMatch(/\d/);
+            expect(older.title).toMatch(/\d/);
         }
     });
 
@@ -672,13 +697,6 @@ test.describe("solar inspector calendar layout", () => {
         });
     }
 
-    /** Which column the month's 1st belongs in, counting from the week's start. */
-    function expectedBlanks(firstWeekdayIndex: number): number {
-        const today = new Date(FIXED_NOW_ISO);
-        const weekday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).getUTCDay();
-        return (((weekday - firstWeekdayIndex) % 7) + 7) % 7;
-    }
-
     test("a Monday-first locale offsets the month to its Monday column", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, 30, "monday");
@@ -686,7 +704,8 @@ test.describe("solar inspector calendar layout", () => {
         await waitForDays(page, daysOfThisMonth());
 
         const grid = await readGrid(page);
-        expect(grid.blanks).toBe(expectedBlanks(1));
+        expect(grid.blanks).toBe(0);
+        await expectFirstColumn(page, 1);
         expect(grid.columns.split(" ")).toHaveLength(7);
     });
 
@@ -696,7 +715,8 @@ test.describe("solar inspector calendar layout", () => {
         await pressMore(page);
         await waitForDays(page, daysOfThisMonth());
 
-        expect((await readGrid(page)).blanks).toBe(expectedBlanks(0));
+        expect((await readGrid(page)).blanks).toBe(0);
+        await expectFirstColumn(page, 0);
     });
 
     test("the closed row is not a grid", async ({ page }) => {
@@ -891,5 +911,231 @@ test.describe("solar inspector header layout", () => {
         // The settings take the other end.
         expect(layout.slotToggle.left).toBeGreaterThan(layout.more.right);
         expect(layout.nav.right - layout.refresh.right).toBeLessThanOrEqual(2);
+    });
+});
+
+const calendarRow = (page: Page) => page.locator("helman-solar-day-pills .continuous");
+
+async function calendarState(page: Page) {
+    return page.evaluate(() => {
+        const inspector = document.querySelector("helman-solar-inspector") as any;
+        const picker = inspector.shadowRoot.querySelector("helman-solar-day-pills");
+        const row = picker.shadowRoot.querySelector(".continuous") as HTMLElement;
+        const box = row.getBoundingClientRect();
+        const cells = [...row.querySelectorAll<HTMLElement>("[data-day]")].map((pill) => {
+            const rect = pill.getBoundingClientRect();
+            return { day: pill.dataset.day!, top: rect.top - box.top, bottom: rect.bottom - box.top };
+        });
+        return {
+            cells, visible: cells.filter((cell) => (cell.top + cell.bottom) / 2 >= 0 && (cell.top + cell.bottom) / 2 < box.height),
+            selected: inspector._selectedDate, month: inspector._browsedMonth,
+            requests: [...(window as any).__requestedDates], summaries: [...(window as any).__requestedRanges],
+            stored: inspector._historyDays.map((day: any) => day.dayKey),
+            top: row.scrollTop, height: box.height, width: row.clientWidth, scrollWidth: row.scrollWidth,
+        };
+    });
+}
+
+async function browseMonth(page: Page, month: string) {
+    // Use the real year/month controls, including their reachable-range logic.
+    await page.locator(`helman-solar-span-pills .pill[data-span="${month.slice(0, 4)}-01-01"]`).first().click();
+    await page.locator(`helman-solar-span-pills .months .pill[data-span="${month}-01"]`).click();
+    await expect.poll(async () => (await calendarState(page)).month).toBe(`${month}-01`);
+}
+
+test.describe("continuous detail calendar", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await loadCardBundle(page);
+        await mountInspector(page, 1100, "monday");
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
+    });
+
+    test("August 1 to July 31 scrolls without loading, then loads exactly once at the click position", async ({ page }) => {
+        await browseMonth(page, "2026-08");
+        await page.locator('helman-solar-day-pills [data-day="2026-08-01"]').click();
+        const before = await calendarState(page);
+        await calendarRow(page).hover();
+        await page.mouse.wheel(0, -144);
+        await expect.poll(async () => (await calendarState(page)).top).toBeLessThan(before.top);
+        const scrolled = await calendarState(page);
+        expect(scrolled.selected).toBe("2026-08-01");
+        expect(scrolled.requests).toEqual(before.requests);
+        expect(scrolled.visible.some((cell) => cell.day === "2026-07-31")).toBe(true);
+        await page.locator('helman-solar-day-pills [data-day="2026-07-31"]').click();
+        await expect.poll(async () => (await calendarState(page)).requests.length).toBe(before.requests.length + 1);
+        expect((await calendarState(page)).top).toBe(scrolled.top);
+        expect((await calendarState(page)).selected).toBe("2026-07-31");
+    });
+
+    test("buffer replacements preserve cell offsets through December/January, and return works by keyboard", async ({ page }) => {
+        await browseMonth(page, "2026-02");
+        const before = await calendarState(page);
+        for (let step = 0; step < 16; step++) {
+            const anchor = await calendarRow(page).evaluate((row: HTMLElement) => {
+                row.scrollTop -= 144;
+                const box = row.getBoundingClientRect();
+                const pill = [...row.querySelectorAll<HTMLElement>("[data-day]")].find((pill) => pill.getBoundingClientRect().top >= box.top)!;
+                return { day: pill.dataset.day, top: pill.getBoundingClientRect().top - box.top };
+            });
+            // Let the scroll event, Lit update and offset restoration all settle.
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))));
+            const state = await calendarState(page);
+            expect(state.cells.find((cell) => cell.day === anchor.day)!.top).toBeCloseTo(anchor.top!, 1);
+            expect(state.cells.length).toBeLessThanOrEqual(105);
+            expect(new Set(state.cells.map((cell) => cell.day)).size).toBe(state.cells.length);
+            for (let i = 1; i < state.cells.length; i++) {
+                expect(Date.parse(state.cells[i].day) - Date.parse(state.cells[i - 1].day)).toBe(86400000);
+            }
+            expect(state.stored.every((day: string) => day >= state.cells[0].day && day <= state.cells.at(-1)!.day)).toBe(true);
+        }
+        const after = await calendarState(page);
+        expect(after.month < "2026-01-01").toBe(true);
+        expect(after.cells.some((cell) => cell.day === before.selected)).toBe(false);
+        expect(after.requests).toEqual(before.requests);
+        for (let step = 0; step < 16; step++) {
+            const previous = await calendarState(page);
+            const anchor = await calendarRow(page).evaluate((row: HTMLElement) => {
+                row.scrollTop += 144;
+                const box = row.getBoundingClientRect();
+                const pill = [...row.querySelectorAll<HTMLElement>("[data-day]")].find((pill) => pill.getBoundingClientRect().top >= box.top)!;
+                return { day: pill.dataset.day, top: pill.getBoundingClientRect().top - box.top };
+            });
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))));
+            const state = await calendarState(page);
+            expect(state.cells.find((cell) => cell.day === anchor.day)!.top).toBeCloseTo(anchor.top!, 1);
+            expect(state.cells.length).toBeLessThanOrEqual(105);
+            if (state.cells[0].day === previous.cells[0].day) expect(state.summaries).toEqual(previous.summaries);
+            expect(state.requests).toEqual(before.requests);
+        }
+        const button = page.locator("helman-solar-day-pills .return-selected");
+        await button.focus();
+        await page.keyboard.press("Enter");
+        await waitForDays(page, daysOfThisMonth());
+        await expect(button).toHaveCount(0);
+        expect((await calendarState(page)).requests).toEqual(before.requests);
+    });
+
+    test("native touch scrolling browses without selecting a day", async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 900 });
+        await browseMonth(page, "2026-08");
+        const before = await calendarState(page);
+        const box = (await calendarRow(page).boundingBox())!;
+        const session = await page.context().newCDPSession(page);
+        await session.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + box.width / 2, y: box.y + 100 }] });
+        for (let step = 1; step <= 6; step++) {
+            await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: box.x + box.width / 2, y: box.y + 100 + step * 20 }] });
+        }
+        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await expect.poll(async () => (await calendarState(page)).top).toBeLessThan(before.top);
+        expect((await calendarState(page)).requests).toEqual(before.requests);
+        expect((await calendarState(page)).selected).toBe(before.selected);
+        await session.detach();
+    });
+
+    test("reopening and external selection reveal the loaded month, while aggregate navigation uses the loaded day", async ({ page }) => {
+        await browseMonth(page, "2026-03");
+        await pressMore(page);
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
+        await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            inspector._selectedDate = "2026-07-14";
+            inspector._load();
+        });
+        await expect.poll(async () => (await calendarState(page)).month).toBe("2026-07-01");
+        await browseMonth(page, "2026-02");
+        await page.locator(".slot-size-button").filter({ hasText: /^D$/ }).click();
+        await expect.poll(() => page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._selectedDate.slice(0, 7))).toBe("2026-07");
+    });
+
+    test("six-row months fit on mobile and repeated month clicks restore the full month", async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 900 });
+        await browseMonth(page, "2026-03");
+        const state = await calendarState(page);
+        expect(state.visible.filter((cell) => cell.day.startsWith("2026-03"))).toHaveLength(31);
+        expect(state.scrollWidth).toBe(state.width);
+        await calendarRow(page).evaluate((row) => { row.scrollTop += 72; });
+        await page.locator('helman-solar-span-pills .months [data-span="2026-03-01"]').click();
+        await expect.poll(async () => (await calendarState(page)).visible.filter((cell) => cell.day.startsWith("2026-03")).length).toBe(31);
+        await page.addStyleTag({ content: `body { font-family: sans-serif; --divider-color: #ddd;
+            --card-background-color: #fff; --primary-text-color: #222; --primary-color: #2563eb; }` });
+        await page.screenshot({ path: "/tmp/issue218-mobile.png", fullPage: true });
+        await page.setViewportSize({ width: 1100, height: 950 });
+        await page.screenshot({ path: "/tmp/issue218-desktop.png", fullPage: true });
+    });
+
+    test("visible-day month counts retain a tied month, otherwise choose the earliest", async ({ page }) => {
+        await browseMonth(page, "2026-06");
+        const alignTie = async () => {
+            await calendarRow(page).evaluate((row: HTMLElement) => {
+                const pill = row.querySelector('[data-day="2026-05-11"]')!;
+                row.scrollTop += pill.getBoundingClientRect().top - row.getBoundingClientRect().top;
+                row.dispatchEvent(new Event("scroll"));
+            });
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        };
+        await alignTie();
+        let state = await calendarState(page);
+        expect(state.visible.filter((cell) => cell.day.startsWith("2026-05"))).toHaveLength(21);
+        expect(state.visible.filter((cell) => cell.day.startsWith("2026-06"))).toHaveLength(21);
+        expect(state.month).toBe("2026-06-01");
+        await page.evaluate(async () => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            inspector._browsedMonth = "2026-04-01";
+            await inspector.updateComplete;
+        });
+        await alignTie();
+        state = await calendarState(page);
+        expect(state.month).toBe("2026-05-01");
+    });
+
+    test("pending and failed summaries retain overlap and stale replies cannot overwrite a revisited window", async ({ page }) => {
+        await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            const original = inspector.hass.callWS;
+            (window as any).__pendingSummaries = [];
+            inspector.hass.callWS = (message: any) => message.type !== "helman/solar_bias/day_aggregates"
+                ? original(message) : new Promise((resolve, reject) => (window as any).__pendingSummaries.push({ message, resolve, reject }));
+        });
+        await browseMonth(page, "2026-09");
+        expect((await calendarState(page)).stored).toContain("2026-09-15");
+        const before = await calendarState(page);
+        await page.locator('helman-solar-day-pills [data-day="2026-09-15"]').click();
+        expect((await calendarState(page)).requests.length).toBe(before.requests.length + 1);
+        await browseMonth(page, "2026-08");
+        await browseMonth(page, "2026-09");
+        await page.evaluate(async () => {
+            const pending = (window as any).__pendingSummaries;
+            const row = (solarWh: number) => ({ date: "2026-09-15", solarWh, gridImportKwh: null,
+                gridExportKwh: null, batteryMinSocPct: null, batteryMaxSocPct: null });
+            pending.at(-1).resolve({ days: [row(7777)] });
+            await Promise.resolve();
+            pending[0].resolve({ days: [row(1111)] });
+            pending[1].reject(new Error("offline"));
+        });
+        await expect.poll(() => page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+            ._historyDays.find((day: any) => day.dayKey === "2026-09-15")?.aggregate.solarWh)).toBe(7777);
+        await browseMonth(page, "2026-08");
+        await page.evaluate(() => (window as any).__pendingSummaries.at(-1).reject(new Error("offline")));
+        expect((await calendarState(page)).stored).toContain("2026-09-15");
+    });
+
+    test("leap February is continuous and resizing or summary updates preserve browsing", async ({ page }) => {
+        await browseMonth(page, "2024-02");
+        expect((await calendarState(page)).visible.filter((cell) => cell.day.startsWith("2024-02"))).toHaveLength(29);
+        await calendarRow(page).evaluate((row) => { row.scrollTop += 72; });
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        const before = await calendarState(page);
+        await page.setViewportSize({ width: 420, height: 900 });
+        await page.evaluate(async () => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            inspector._historyDays = [...inspector._historyDays];
+            await inspector.updateComplete;
+        });
+        expect((await calendarState(page)).top).toBe(before.top);
+        expect((await calendarState(page)).requests).toEqual(before.requests);
     });
 });

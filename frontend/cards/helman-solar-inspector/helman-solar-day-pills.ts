@@ -1,6 +1,7 @@
 import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
+import { repeat } from "lit/directives/repeat.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
@@ -23,6 +24,8 @@ import type {
 import { dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
 import {
     buildDayPillCalendarCells,
+    calendarWindow,
+    MAX_CALENDAR_DAYS,
     buildDayPillKeys,
     buildSolarInspectorDayPills,
     resolveFirstWeekdayIndex,
@@ -123,6 +126,22 @@ export class HelmanSolarDayPills extends LitElement {
             grid-template-columns: repeat(7, minmax(0, 1fr));
             overflow-x: visible;
         }
+
+        .pill-row.calendar.continuous {
+            height: 426px;
+            grid-auto-rows: 66px;
+            align-content: start;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overflow-anchor: none;
+            overscroll-behavior-y: contain;
+            touch-action: pan-y;
+        }
+        .continuous .pill { min-width: 0; padding: 3px; position: relative; }
+        .continuous .pill-label { overflow: hidden; text-overflow: ellipsis; }
+        .continuous .month-start { border-top: 2px solid var(--primary-color, #2563eb); }
+        .return-row { height: 30px; display: flex; align-items: center; }
+        .return-selected { font: inherit; font-size: 0.75rem; color: var(--primary-text-color); background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 6px; cursor: pointer; }
 
         /* The fixed width is what a scrolling row needs and what a grid column
            must not have: 74px in a seven-column grid overflows every card
@@ -328,6 +347,16 @@ export class HelmanSolarDayPills extends LitElement {
      * matching property on the span row, which makes the same promise.
      */
     @property({ type: Boolean }) public selectsSlot = false;
+    @property({ type: Boolean }) public continuous = false;
+    @property({ type: String }) public browsedMonth = "";
+    @property({ type: String }) public revealMonth = "";
+    @property({ type: Number }) public revealVersion = 0;
+    @state() private _selectedDirection: "" | "above" | "below" = "";
+    private _frame = 0;
+    private _resize?: ResizeObserver;
+    private _observedRow?: HTMLElement;
+    private _restore?: { day: string; offset: number };
+    private _revealed = -1;
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _forecast: ForecastPayload | null = null;
@@ -348,11 +377,21 @@ export class HelmanSolarDayPills extends LitElement {
         endDate: string;
         currentDate: string;
         timeZone: string;
+        continuous: boolean;
     } | null = null;
     /** The day the row was last scrolled to, so a re-render does not re-scroll. */
     private _scrolledTo: string | null = null;
 
     protected willUpdate(_changed: PropertyValues<this>): void {
+        if (this.continuous && (_changed.has("startDate") || _changed.has("endDate"))) {
+            const row = this.renderRoot.querySelector<HTMLElement>(".pill-row");
+            if (row) {
+                const top = row.getBoundingClientRect().top;
+                const first = [...row.querySelectorAll<HTMLElement>("[data-day]")]
+                    .find((pill) => pill.getBoundingClientRect().bottom > top);
+                if (first) this._restore = { day: first.dataset.day!, offset: first.getBoundingClientRect().top - top };
+            }
+        }
         if (this.hass) {
             this._localizeFn = getLocalizeFunction(this.hass);
             this._syncOwner();
@@ -362,13 +401,89 @@ export class HelmanSolarDayPills extends LitElement {
     }
 
     protected updated(): void {
-        this._revealSelectedPill();
+        if (!this.continuous) {
+            this._resize?.disconnect();
+            this._observedRow = undefined;
+            this._revealed = -1;
+            this._restore = undefined;
+            this._revealSelectedPill();
+            return;
+        }
+        const row = this.renderRoot.querySelector<HTMLElement>(".pill-row");
+        if (!row) return;
+        if (this._observedRow !== row) {
+            this._resize?.disconnect();
+            this._resize = new ResizeObserver(this._queueViewport);
+            this._resize.observe(row);
+            this._observedRow = row;
+        }
+        if (this._revealed !== this.revealVersion) {
+            const pill = row.querySelector<HTMLElement>(`[data-day="${this.revealMonth.slice(0, 7)}-01"]`);
+            if (pill) {
+                const top = pill.getBoundingClientRect().top - row.getBoundingClientRect().top + row.scrollTop;
+                row.scrollTo({ top, behavior: this._revealed < 0 || this._restore || matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+                this._revealed = this.revealVersion;
+            }
+        } else if (this._restore) {
+            const pill = row.querySelector<HTMLElement>(`[data-day="${this._restore.day}"]`);
+            if (pill) row.scrollTop += pill.getBoundingClientRect().top - row.getBoundingClientRect().top - this._restore.offset;
+        }
+        this._restore = undefined;
+        this._queueViewport();
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
+        cancelAnimationFrame(this._frame);
+        this._frame = 0;
+        this._resize?.disconnect();
+        this._observedRow = undefined;
+    }
+
+    private _queueViewport = (): void => {
+        if (!this.continuous || this._frame || !this.isConnected) return;
+        this._frame = requestAnimationFrame(() => {
+            this._frame = 0;
+            this._measureViewport();
+        });
+    };
+
+    private _measureViewport(): void {
+        const row = this.renderRoot.querySelector<HTMLElement>(".pill-row");
+        if (!row || !this.continuous) return;
+        const box = row.getBoundingClientRect();
+        const visible = [...row.querySelectorAll<HTMLElement>("[data-day]")].filter((pill) => {
+            const rect = pill.getBoundingClientRect();
+            const midpoint = (rect.top + rect.bottom) / 2;
+            return midpoint >= box.top && midpoint < box.bottom;
+        });
+        if (!visible.length) return;
+        const counts = new Map<string, number>();
+        for (const pill of visible) {
+            const month = pill.dataset.day!.slice(0, 7) + "-01";
+            counts.set(month, (counts.get(month) ?? 0) + 1);
+        }
+        const maximum = Math.max(...counts.values());
+        const month = counts.get(this.browsedMonth) === maximum ? this.browsedMonth
+            : [...counts.keys()].filter((key) => counts.get(key) === maximum).sort()[0];
+        if (month !== this.browsedMonth) this._emitCalendar("calendar-month", month);
+        this._selectedDirection = visible.some((pill) => pill.dataset.day === this.selectedDate) ? ""
+            : this.selectedDate < visible[0].dataset.day! ? "above" : "below";
+        // Only replace the buffer close to an edge. A visible date's offset is
+        // captured before Lit changes the keyed cells and restored afterwards.
+        if (row.scrollTop < 144 || row.scrollHeight - row.scrollTop - row.clientHeight < 144) {
+            const window = calendarWindow(month, this.reachableFrom, this.reachableTo,
+                resolveFirstWeekdayIndex(this.hass?.locale));
+            if (window.start !== this.startDate || window.end !== this.endDate) {
+                this._emitCalendar("calendar-buffer", month);
+            }
+        }
+    }
+
+    private _emitCalendar(type: string, month: string): void {
+        this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, detail: { month } }));
     }
 
     /**
@@ -420,14 +535,24 @@ export class HelmanSolarDayPills extends LitElement {
 
         return html`
             <div
-                class=${`pill-row${calendar ? " calendar" : ""}${this.selectsSlot ? " selects-slot" : ""}`}
+                class=${`pill-row${calendar ? " calendar" : ""}${this.continuous ? " continuous" : ""}${this.selectsSlot ? " selects-slot" : ""}`}
+                @scroll=${this._queueViewport}
                 role="group"
                 aria-label=${this._localize("bias_correction.inspector.day_pills")}
             >
-                ${cells.map((cell) => (cell === null
+                ${repeat(cells, (cell, index) => cell?.dayKey ?? `blank-${index}`, (cell) => (cell === null
                     ? html`<span class="pill-blank" aria-hidden="true"></span>`
                     : this._renderPill(cell)))}
             </div>
+            ${!this.continuous ? nothing : html`<div class="return-row">
+                ${!this._selectedDirection ? nothing : html`<button type="button" class="return-selected"
+                    @click=${() => this._emitCalendar("calendar-return", this.selectedDate)}>
+                    ${this._selectedDirection === "above" ? "↑" : "↓"}
+                    ${this._localize("bias_correction.inspector.show_selected_day")}
+                    ${new Date(`${this.selectedDate}T00:00:00Z`).toLocaleDateString(this._locale, { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" })}
+                    (${this._localize(`bias_correction.inspector.selected_${this._selectedDirection}`)})
+                </button>`}
+            </div>`}
         `;
     }
 
@@ -445,10 +570,13 @@ export class HelmanSolarDayPills extends LitElement {
         return html`
             <button
                 class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`
+                    + `${this.continuous && pill.dayKey.endsWith("-01") ? " month-start" : ""}`
                     + `${hovered ? " hovered" : ""}${bucketSelected ? " bucket-selected" : ""}`}
                 type="button"
                 data-day=${pill.dayKey}
                 data-history=${pill.isHistory ? "true" : "false"}
+                title=${pill.label}
+                aria-label=${pill.label}
                 ?disabled=${unreachable}
                 aria-pressed=${selected ? "true" : "false"}
                 @click=${() => this._select(pill.dayKey)}
@@ -614,6 +742,7 @@ export class HelmanSolarDayPills extends LitElement {
             && previous.endDate === this.endDate
             && previous.currentDate === this.currentDate
             && previous.timeZone === this.timeZone
+            && previous.continuous === this.continuous
         ) {
             return;
         }
@@ -626,9 +755,10 @@ export class HelmanSolarDayPills extends LitElement {
             endDate: this.endDate,
             currentDate: this.currentDate,
             timeZone: this.timeZone,
+            continuous: this.continuous,
         };
 
-        const dayKeys = buildDayPillKeys(this.startDate, this.endDate);
+        const dayKeys = buildDayPillKeys(this.startDate, this.endDate, this.continuous ? MAX_CALENDAR_DAYS : undefined);
         if (dayKeys.length === 0 && this.historyDays.length === 0) {
             this._model = EMPTY_DAY_PILL_MODEL;
             return;
