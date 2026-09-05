@@ -40,6 +40,14 @@ async function mountEditor(
     page: Page,
     options: {
         neighbour?: boolean;
+        /** A run at 20:00-22:00 as well, leaving a single free slot at 19:00. */
+        oneSlotGap?: boolean;
+        /** Half-hour slots and a single 16:00-17:00 run, so a default-length
+         *  block spans a slot boundary rather than sitting on one. */
+        halfHourSlots?: boolean;
+        /** A run on day one's last hour, so day two opens against a neighbour
+         *  that ends exactly at its midnight. */
+        acrossMidnight?: boolean;
         straddling?: boolean;
         multiLane?: boolean;
         /** Hand the editor a backend that answers the explanation query. */
@@ -49,14 +57,15 @@ async function mountEditor(
         pruned?: boolean;
     } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane, pruned, explainable }) => {
-        const buildSlot = (dayKey: string, hour: number) => {
-            const startMs = Date.parse(`${dayKey}T${String(hour).padStart(2, "0")}:00:00Z`);
-            const endMs = startMs + 3_600_000;
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, multiLane, pruned, explainable }) => {
+        const stepMs = halfHourSlots ? 1_800_000 : 3_600_000;
+        const buildSlot = (dayKey: string, index: number) => {
+            const startMs = Date.parse(`${dayKey}T00:00:00Z`) + index * stepMs;
+            const endMs = startMs + stepMs;
             const label = (ms: number) => new Date(ms).toISOString().slice(11, 16);
             return {
                 id: new Date(startMs).toISOString(),
-                index: hour,
+                index,
                 startMs,
                 endMs,
                 dayKey,
@@ -69,14 +78,27 @@ async function mountEditor(
             };
         };
 
+        const perDay = halfHourSlots ? 48 : 24;
         const slots = [
-            ...Array.from({ length: 24 }, (_unused, hour) => buildSlot(dayOne, hour)),
-            ...Array.from({ length: 24 }, (_unused, hour) => buildSlot(dayTwo, hour)),
+            ...Array.from({ length: perDay }, (_unused, index) => buildSlot(dayOne, index)),
+            ...Array.from({ length: perDay }, (_unused, index) => buildSlot(dayTwo, index)),
         ];
         for (const slot of slots) {
             if (slot.dayKey !== dayOne) {
                 continue;
             }
+
+            // Half-hour days carry one run and nothing else: they are there for
+            // the block that spans a boundary, not for the fixture's cast.
+            if (halfHourSlots) {
+                if (slot.startMs >= Date.parse(`${dayOne}T16:00:00Z`)
+                    && slot.startMs < Date.parse(`${dayOne}T17:00:00Z`)) {
+                    slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+                }
+
+                continue;
+            }
+
             const hour = slot.index;
             if (hour === 5 || hour === 6) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "automation" };
@@ -96,6 +118,12 @@ async function mountEditor(
                 slot.assignments.inverter = { action: { kind: "stop_export" }, setBy: "automation" };
             }
             if (neighbour && hour === 21) {
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+            }
+            if (oneSlotGap && (hour === 20 || hour === 21)) {
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+            }
+            if (acrossMidnight && hour === 23) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "user" };
             }
         }
@@ -249,6 +277,9 @@ async function mountEditor(
         dayTwo: DAY_TWO,
         nowMs: NOW_MS,
         neighbour: options.neighbour ?? false,
+        oneSlotGap: options.oneSlotGap ?? false,
+        halfHourSlots: options.halfHourSlots ?? false,
+        acrossMidnight: options.acrossMidnight ?? false,
         straddling: options.straddling ?? false,
         multiLane: options.multiLane ?? false,
         pruned: options.pruned ?? false,
@@ -299,6 +330,12 @@ async function trackPoint(
         const ratio = (ms - day.startMs) / (day.endMs - day.startMs);
         return { x: rect.left + ratio * rect.width, y: rect.top + rect.height / 2 };
     }, { ms: atMs, lane: laneKey });
+}
+
+/** Click the band's free stretch at a moment, the way "add a block here" is done. */
+async function clickGapAt(page: Page, atMs: number): Promise<void> {
+    const point = await trackPoint(page, atMs);
+    await page.mouse.click(point.x, point.y);
 }
 
 async function savedPatches(page: Page) {
@@ -423,6 +460,160 @@ test.describe("entity day editor", () => {
         await page.locator(".block-row").nth(2).locator("button").first().click();
         expect(await editingRange(page)).toBe(
             `${Date.parse(`${DAY_ONE}T21:00:00Z`)}|${Date.parse(`${DAY_ONE}T22:00:00Z`)}`,
+        );
+    });
+
+    /**
+     * A block is derived from the slots, so one authored right against a run
+     * carrying the same action used to fold into it: the block list showed the
+     * old run grown and the edit session took the neighbour with it. The edges
+     * the user authors here hold the two apart for as long as the dialog is
+     * open, which is long enough to give the new block its own parameters.
+     */
+    test("a block authored right after a run stays its own block", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T19:00:00Z`)}|${Date.parse(`${DAY_ONE}T20:00:00Z`)}`,
+        );
+
+        const rows = await readBlockRows(page);
+        expect(rows.map((row) => row.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
+
+        // Changing the new block reaches the new block alone: the run it was
+        // born against keeps its range and its authorship.
+        await page.locator(".edit-panel select").nth(1).selectOption(
+            String(Date.parse(`${DAY_ONE}T21:00:00Z`)),
+        );
+        const changed = await readBlockRows(page);
+        expect(changed.map((row) => row.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–21:00"]);
+        expect(changed[1].authorship).toBe("scheduling.authorship.set_by_user");
+        expect(changed[2].authorship).toBe("scheduling.entity_editor.unsaved");
+    });
+
+    test("a block authored right before a run stays its own block", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // 16:00-17:00 ends exactly where the evening run begins.
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T16:00:00Z`));
+
+        const rows = await readBlockRows(page);
+        expect(rows.map((row) => row.range)).toEqual(["05:00–07:00", "16:00–17:00", "17:00–19:00"]);
+    });
+
+    /**
+     * The one-slot gap is the same defect reached from both sides at once: the
+     * gap click clamps the new block to the gap's end, so it touches a run at
+     * each edge and used to swallow both.
+     */
+    test("a one-slot gap between two runs becomes a third block", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { oneSlotGap: true });
+
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+
+        const rows = await readBlockRows(page);
+        expect(rows.map((row) => row.range)).toEqual([
+            "05:00–07:00",
+            "17:00–19:00",
+            "19:00–20:00",
+            "20:00–22:00",
+        ]);
+    });
+
+    /**
+     * Edges outlive their session, but they must not outlive their block: the
+     * two left behind by a removed block used to cut the next block authored
+     * across that stretch in two -- the gap the user pressed, then the ghost of
+     * what they deleted.
+     */
+    test("removing a block takes its edges with it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { halfHourSlots: true });
+
+        // A slot's width past the run, then removed from its own row -- which
+        // leaves the session open over a block that no longer exists, so the
+        // press that ends it lands the edges of a ghost.
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T17:30:00Z`));
+        expect(await readBlockRows(page)).toHaveLength(2);
+        await page.locator(".block-row").nth(1).locator("button").nth(1).click();
+        expect(await readBlockRows(page)).toHaveLength(1);
+
+        // Straight after the run, across where the removed block was: one
+        // block, not one per ghost.
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T17:00:00Z`));
+
+        const rows = await readBlockRows(page);
+        expect(rows.map((row) => row.range)).toEqual(["16:00–17:00", "17:00–18:00"]);
+    });
+
+    /**
+     * The day's first slot is only "the now-line" on today. On any later day
+     * the editable boundary is simply that day's midnight, so a start there is
+     * as much a decision as any other -- and the run ending at that midnight is
+     * a neighbour like any other.
+     */
+    test("a block authored at a later day's midnight stays off its neighbour", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { acrossMidnight: true });
+
+        await page.locator(".day-chip").nth(1).click();
+        await clickGapAt(page, Date.parse(`${DAY_TWO}T00:00:00Z`));
+
+        // No leading arrow: the block begins at midnight rather than carrying
+        // on from the run that ends there.
+        const rows = await readBlockRows(page);
+        expect(rows.map((row) => row.range)).toEqual(["00:00–01:00"]);
+    });
+
+    test("saving a block authored against a run writes only that block's slots", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        // The neighbour's 17:00 and 18:00 slots already say what they should
+        // say, and the new block never claimed them.
+        const [patches] = await savedPatches(page);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
+            `${DAY_ONE}T19:00:00.000Z`,
+        ]);
+        expect(patches[0].controllables.boiler).toEqual({ on: true });
+    });
+
+    /**
+     * The edge outlives the session that authored it: the split has to survive
+     * the user moving on to something else, or the block they just placed would
+     * rejoin its neighbour the moment they clicked away.
+     */
+    test("an authored edge outlives the edit session that made it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { neighbour: true });
+
+        const edge = await trackPoint(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+        const target = await trackPoint(page, Date.parse(`${DAY_ONE}T23:00:00Z`));
+        await page.mouse.move(edge.x - 2, edge.y);
+        await page.mouse.down();
+        await page.mouse.move(target.x, target.y, { steps: 8 });
+        await page.mouse.up();
+
+        // Close the session by pressing outside it, then reopen the earlier
+        // block: both are still there, and editing one is still about one.
+        await page.locator(".day-switcher").click();
+        expect(await editingRange(page)).toBeNull();
+        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
+            "05:00–07:00",
+            "17:00–21:00",
+            "21:00–22:00",
+        ]);
+
+        await page.locator(".block-row").nth(1).locator("button").first().click();
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T17:00:00Z`)}|${Date.parse(`${DAY_ONE}T21:00:00Z`)}`,
         );
     });
 
@@ -641,12 +832,14 @@ test.describe("entity day editor", () => {
         await page.mouse.move(target.x, target.y, { steps: 8 });
         await page.mouse.up();
 
-        // The two runs now touch and read as one block -- which they are -- but
-        // the drag stopped at 21:00, so the neighbour's own slot is untouched
-        // and never reaches the patch batch.
+        // The drag stopped at 21:00, so the neighbour's own slot is untouched
+        // and never reaches the patch batch. The two runs now touch and carry
+        // the same action, but the edge the drag authored keeps them two blocks
+        // -- the user pulled this one up to the neighbour, not into it.
         const rows = await readBlockRows(page);
-        expect(rows).toHaveLength(2);
-        expect(rows[1].range).toBe("17:00–22:00");
+        expect(rows).toHaveLength(3);
+        expect(rows[1].range).toBe("17:00–21:00");
+        expect(rows[2].range).toBe("21:00–22:00");
 
         await page.locator("ha-button[slot=primaryAction]").click();
         const [patches] = await savedPatches(page);

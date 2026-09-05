@@ -20,6 +20,7 @@ import type {
 import type {
     EntityScheduleAction,
     EntityScheduleBlock,
+    EntityScheduleBlockSplits,
     EntityScheduleDay,
     EntityScheduleDraft,
     EntityScheduleDrafts,
@@ -77,7 +78,12 @@ interface EntityScheduleEditSession {
     endMs: number;
     action: EntityScheduleAction;
     valid: boolean;
+    /** The session had to raise its start to the day's editable boundary. */
+    startClamped: boolean;
 }
+
+/** Shared empty set, so a lane with no authored edges allocates nothing. */
+const EMPTY_BLOCK_SPLITS: ReadonlySet<number> = new Set<number>();
 
 export interface EntityScheduleSaveDetail {
     patches: ScheduleSlotPatch[];
@@ -403,6 +409,18 @@ export class SchedulingEntityDayEditor extends LitElement {
     @state() private _baselineSlots: ScheduleSlot[] = [];
     /** Pending edits per lane; every lane keeps its own until Save. */
     @state() private _drafts: EntityScheduleDrafts = {};
+    /**
+     * Block edges authored in this dialog, per lane.
+     *
+     * A block is derived from the slots, so one the user creates next to a run
+     * carrying the same action would otherwise fold into it and the edit would
+     * silently become an extension of the neighbour. These edges keep the two
+     * apart for as long as the dialog is open -- long enough to give the new
+     * block different parameters, which is the whole reason it was created --
+     * and are deliberately not saved: reopening reads the stored schedule the
+     * way the config editor does, contiguous identical runs as one series.
+     */
+    @state() private _blockSplits: EntityScheduleBlockSplits = {};
     /** The lane being edited, or null when the user clicked away from all of them. */
     @state() private _selectedLaneKey: string | null = null;
     @state() private _dayIndex = 0;
@@ -1015,14 +1033,57 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _setDraft(draft: EntityScheduleDraft): void {
-        if (this._selectedLaneKey === null) {
+        const laneKey = this._selectedLaneKey;
+        if (laneKey === null) {
             return;
         }
 
         // The draft it was about is being changed, so the answer it gave is
         // no longer about anything on screen.
         this._elapsedDraftNotice = false;
-        this._drafts = { ...this._drafts, [this._selectedLaneKey]: draft };
+        this._drafts = { ...this._drafts, [laneKey]: draft };
+        this._blockSplits = this._pruneBlockSplits(this._blockSplits, laneKey, draft);
+    }
+
+    /**
+     * Drop the lane's edges that no longer hold anything apart.
+     *
+     * An edge only does work where a run would otherwise close over it, so an
+     * edge that is not strictly inside a merged run is inert -- and staying
+     * inert is not the same as staying harmless. Removing a block leaves its
+     * two edges behind, and the next block authored across that stretch would
+     * be cut in two by them: the gap the user pressed, then the ghost of the
+     * block they deleted.
+     *
+     * Merging the lane with no edges at all is what says which are still
+     * load-bearing, so the rule needs no bookkeeping about which block put an
+     * edge where. An edge between two touching runs that currently disagree is
+     * inert too and goes -- if the user makes them agree, they do it in a
+     * session, and committing it authors the edge again.
+     */
+    private _pruneBlockSplits(
+        splits: EntityScheduleBlockSplits,
+        laneKey: string,
+        draft: EntityScheduleDraft,
+    ): EntityScheduleBlockSplits {
+        const stored = splits[laneKey];
+        const lane = this._lanes.find((candidate) => candidate.key === laneKey);
+        if (stored === undefined || stored.size === 0 || lane === undefined) {
+            return splits;
+        }
+
+        const merged = buildEntityScheduleBlocks({
+            slots: this._baselineSlots,
+            target: lane.target,
+            draft,
+            nowMs: this.nowMs,
+        });
+        const kept = new Set(
+            [...stored].filter(
+                (ms) => merged.some((block) => block.startMs < ms && block.endMs > ms),
+            ),
+        );
+        return kept.size === stored.size ? splits : { ...splits, [laneKey]: kept };
     }
 
     private _laneDrafts(): { target: EntityScheduleTarget; draft: EntityScheduleDraft }[] {
@@ -1035,6 +1096,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _seedFromSlots(): void {
         this._baselineSlots = [...this.slots];
         this._drafts = {};
+        this._blockSplits = {};
         this._draftBeforeEdit = {};
         this._editing = null;
         this._elapsedDraftNotice = false;
@@ -1122,6 +1184,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                 target: lane.target,
                 draft: this._drafts[lane.key] ?? {},
                 nowMs: this.nowMs,
+                splitAtMs: this._laneBlockSplits(lane.key),
             }),
             day,
         );
@@ -1133,9 +1196,58 @@ export class SchedulingEntityDayEditor extends LitElement {
             slots: this._baselineSlots,
             day,
             drafts: this._drafts,
+            splits: this._allBlockSplits(),
             nowMs: this.nowMs,
             projectionIndex: this.projectionIndex,
         });
+    }
+
+    /**
+     * The lane's authored edges, plus the open session's own two.
+     *
+     * The session contributes while it is open but is only recorded on commit:
+     * a drag passes through every position between where it started and where
+     * it was let go, and recording each of them would strew edges that later
+     * split unrelated runs in half.
+     */
+    private _laneBlockSplits(laneKey: string): ReadonlySet<number> {
+        const stored = this._blockSplits[laneKey];
+        if (this._editing === null || laneKey !== this._selectedLaneKey) {
+            return stored ?? EMPTY_BLOCK_SPLITS;
+        }
+
+        return new Set([...(stored ?? []), ...this._sessionEdges(this._editing)]);
+    }
+
+    /**
+     * The edges an open session is authoring.
+     *
+     * A start the session had to raise is the now-line rather than a decision:
+     * editing a block that is already running opens a session over the part
+     * still ahead, and splitting there would cut the running block in half on
+     * screen. It is the raising that says so, not the value -- on any day but
+     * today the editable boundary is just that day's midnight, and a block
+     * authored at the first slot of a later day is a decision like any other,
+     * with the run ending at that midnight for a neighbour.
+     */
+    private _sessionEdges(session: EntityScheduleEditSession): number[] {
+        const editableFromMs = this._selectedDay()?.editableFromMs ?? Number.NEGATIVE_INFINITY;
+        return session.startClamped && session.startMs <= editableFromMs
+            ? [session.endMs]
+            : [session.startMs, session.endMs];
+    }
+
+    /** The same, for every lane at once, as the band lane builder wants it. */
+    private _allBlockSplits(): EntityScheduleBlockSplits {
+        const splits: Record<string, ReadonlySet<number>> = {};
+        for (const lane of this._lanes) {
+            const laneSplits = this._laneBlockSplits(lane.key);
+            if (laneSplits.size > 0) {
+                splits[lane.key] = laneSplits;
+            }
+        }
+
+        return splits;
     }
 
     /**
@@ -1506,6 +1618,10 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
+        // Switching straight to another block ends the previous session rather
+        // than dropping it, so the edges it authored are kept: the block the
+        // user just placed must stay its own series once they move on.
+        this._commitEditSession();
         this._draftBeforeEdit = { ...this._draft };
         this._editSessionId += 1;
         this._updateEditSession({
@@ -1514,6 +1630,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             endMs,
             action: sanitizeEntityScheduleAction(action),
             valid: true,
+            startClamped: editableStartMs > startMs,
         });
     }
 
@@ -1538,6 +1655,30 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _commitEditSession(): void {
         if (this._editing === null) {
             return;
+        }
+
+        // Where the block finally landed is what the user authored, so that is
+        // what outlives the session. It stays for the life of the dialog: a
+        // block created at 11:00 remains its own series after the session is
+        // committed, and only rejoins its neighbour after Save and reopen.
+        // Pruned on the way in, because a session can outlive its block: the
+        // remove button on the block's row leaves the session open, so the
+        // press that ends it is landing edges for a block that is already
+        // gone. Whether they survive is the same question as always -- is
+        // there still a run for them to hold apart.
+        if (this._selectedLaneKey !== null) {
+            const laneKey = this._selectedLaneKey;
+            this._blockSplits = this._pruneBlockSplits(
+                {
+                    ...this._blockSplits,
+                    [laneKey]: new Set([
+                        ...(this._blockSplits[laneKey] ?? []),
+                        ...this._sessionEdges(this._editing),
+                    ]),
+                },
+                laneKey,
+                this._drafts[laneKey] ?? {},
+            );
         }
 
         this._editing = null;
