@@ -3956,6 +3956,22 @@ class HelmanCoordinator:
         )
         if rebuild.grid_forecast is None:
             raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
+        battery_status = rebuild.battery_forecast.get("status")
+        if battery_status not in {"available", "partial"}:
+            # Do not let optimizers skip unusable battery rails and persist an
+            # incomplete plan. The runner reports this as a snapshot failure.
+            house_anchor = rebuild.adjusted_house_forecast.get("currentSlot")
+            if not isinstance(house_anchor, dict):
+                house_anchor = rebuild.adjusted_house_forecast.get("currentHour")
+            house_anchor_timestamp = (
+                house_anchor.get("timestamp")
+                if isinstance(house_anchor, dict)
+                else None
+            )
+            raise RuntimeError(
+                "Automation snapshot rebuild has unusable battery forecast: "
+                f"status={battery_status!r}, house_anchor={house_anchor_timestamp!r}"
+            )
 
         battery_state = compute_inputs.battery_live_state
 
