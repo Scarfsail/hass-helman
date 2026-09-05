@@ -1937,6 +1937,90 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unusable_battery_rebuild_aborts_runner_before_persistence(self) -> None:
+        snapshot_coordinator = object.__new__(HelmanCoordinator)
+        snapshot_coordinator._build_forecast_schedule_documents = Mock(
+            return_value=coordinator_module._ForecastScheduleDocuments(
+                forecast_schedule_document=_make_schedule_document(),
+                projection_schedule_document=_make_schedule_document(),
+            )
+        )
+        snapshot_coordinator._build_forecast_rebuild_pure = Mock(
+            return_value=coordinator_module._ForecastRebuildSnapshot(
+                adjusted_house_forecast={
+                    "status": "available",
+                    "currentSlot": {"timestamp": CURRENT_SLOT_ID},
+                },
+                battery_forecast={"status": "unavailable", "series": []},
+                projection_plan=SimpleNamespace(),
+                grid_forecast={"status": "unavailable", "series": []},
+            )
+        )
+
+        def build_snapshot(**kwargs):
+            return snapshot_coordinator._build_automation_snapshot_from_schedule_pure(
+                **kwargs, compute_inputs=ComputeInputs()
+            )
+
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=build_snapshot,
+        )
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=_make_automation_config(_make_optimizer_instance()),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(result.failure.stage, "initial_snapshot")
+        self.assertIn("status='unavailable'", result.failure.message)
+        self.assertIn(CURRENT_SLOT_ID, result.failure.message)
+        self.assertIsNone(result.snapshot)
+        self.assertEqual(result.optimizers, ())
+        self.assertEqual(coordinator.persist_calls, [])
+        self.assertEqual(coordinator.post_write_calls, [])
+
+    def test_snapshot_rejects_unusable_battery_forecast_with_house_anchor(self) -> None:
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._build_forecast_schedule_documents = Mock(
+            return_value=coordinator_module._ForecastScheduleDocuments(
+                forecast_schedule_document=_make_schedule_document(),
+                projection_schedule_document=_make_schedule_document(),
+            )
+        )
+        for status in ("unavailable", "not_configured", "insufficient_history", None):
+            for anchor_field in ("currentSlot", "currentHour", None):
+                with self.subTest(status=status, anchor_field=anchor_field):
+                    house_forecast = {"status": "available"}
+                    if anchor_field is not None:
+                        house_forecast[anchor_field] = {"timestamp": CURRENT_SLOT_ID}
+                    coordinator._build_forecast_rebuild_pure = Mock(
+                        return_value=coordinator_module._ForecastRebuildSnapshot(
+                            adjusted_house_forecast=house_forecast,
+                            battery_forecast={"status": status},
+                            projection_plan=SimpleNamespace(),
+                            # Grid composition still returns a payload when the
+                            # battery forecast cannot provide usable rails.
+                            grid_forecast={"status": "unavailable", "series": []},
+                        )
+                    )
+
+                    with self.assertRaises(RuntimeError) as raised:
+                        coordinator._build_automation_snapshot_from_schedule_pure(
+                            schedule_document=_make_schedule_document(),
+                            input_bundle=_make_automation_bundle(),
+                            reference_time=REFERENCE_TIME,
+                            compute_inputs=ComputeInputs(),
+                        )
+
+                    message = str(raised.exception)
+                    self.assertIn("unusable battery forecast", message)
+                    self.assertIn(f"status={status!r}", message)
+                    anchor = CURRENT_SLOT_ID if anchor_field is not None else None
+                    self.assertIn(f"house_anchor={anchor!r}", message)
+
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._hass = SimpleNamespace()
@@ -2069,11 +2153,17 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 projection_schedule_document=_make_schedule_document(),
             ),
         ):
-            snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(
-                schedule_document=_make_schedule_document(),
-                input_bundle=_make_automation_bundle(),
-                reference_time=REFERENCE_TIME,
-            )
+            for status in ("available", "partial"):
+                with self.subTest(status=status):
+                    coordinator._build_forecast_rebuild_pure.return_value.battery_forecast[
+                        "status"
+                    ] = status
+                    snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(
+                        schedule_document=_make_schedule_document(),
+                        input_bundle=_make_automation_bundle(),
+                        reference_time=REFERENCE_TIME,
+                    )
+                    self.assertEqual(snapshot.battery_forecast["status"], status)
 
         self.assertEqual(snapshot.schedule, _make_schedule_document())
         self.assertEqual(snapshot.context.import_price_forecast["currentPrice"], 7.0)
