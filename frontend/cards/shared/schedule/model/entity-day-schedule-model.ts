@@ -85,6 +85,17 @@ export interface EntityActualSegment {
 export type EntityScheduleDrafts = Record<string, EntityScheduleDraft>;
 
 /**
+ * Block edges the user authored in the open dialog, keyed by lane key.
+ *
+ * A block is derived, not stored, so two touching runs carrying the same action
+ * would otherwise fold into one. These edges say "the user meant these to be
+ * separate series", and they live only as long as the dialog -- the saved slot
+ * array has nowhere to record them, and a reopened dialog is meant to read the
+ * saved schedule the way the config editor does.
+ */
+export type EntityScheduleBlockSplits = Record<string, ReadonlySet<number>>;
+
+/**
  * One entity's action in one slot.
  *
  * `null` and `{ kind: "empty" }` both mean "nothing scheduled" -- the appliance
@@ -356,11 +367,18 @@ export function buildEntityScheduleBlocks({
     target,
     draft,
     nowMs,
+    splitAtMs,
 }: {
     slots: readonly ScheduleSlot[];
     target: EntityScheduleTarget;
     draft: EntityScheduleDraft;
     nowMs: number;
+    /**
+     * Absolute ms the fold must never cross, so a block the user authored here
+     * stays its own series even when its neighbour carries an identical action.
+     * Absolute rather than day-relative, so it survives the day clipping below.
+     */
+    splitAtMs?: ReadonlySet<number>;
 }): EntityScheduleBlock[] {
     const orderedSlots = [...slots].sort((left, right) => left.startMs - right.startMs);
     const fallbackDurationMs = _resolveSlotDurationMs(orderedSlots);
@@ -385,6 +403,7 @@ export function buildEntityScheduleBlocks({
         if (
             previous !== undefined
             && previous.endMs === startMs
+            && splitAtMs?.has(startMs) !== true
             && areEntityScheduleActionsEqual(previous.action, action)
         ) {
             previous.endMs = endMs;

@@ -17,6 +17,7 @@ import {
     type EntityActualSlot,
     type EntityScheduleAction,
     type EntityScheduleBlock,
+    type EntityScheduleBlockSplits,
     type EntityScheduleDay,
     type EntityScheduleDrafts,
     type EntityScheduleLane,
@@ -236,17 +237,19 @@ export function formatLaneRunRange(
  * The roster resolved onto one day: what each lane has planned and what it
  * already did.
  *
- * `drafts` is the dialog's unsaved work; a read-only surface passes none and
- * gets the schedule as stored. `activeOnly` drops the lanes with nothing on
- * them at all, which is what a surface with no room for an empty track wants --
- * the dialog keeps them, because an entity you cannot see is an entity you
- * cannot schedule.
+ * `drafts` is the dialog's unsaved work and `splits` the block edges it
+ * authored; a read-only surface passes neither and gets the schedule as
+ * stored, with touching identical runs read as one series. `activeOnly` drops
+ * the lanes with nothing on them at all, which is what a surface with no room
+ * for an empty track wants -- the dialog keeps them, because an entity you
+ * cannot see is an entity you cannot schedule.
  */
 export function buildEntityDayBandLanes({
     lanes,
     slots,
     day,
     drafts = {},
+    splits = {},
     nowMs,
     activeOnly = false,
     projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
@@ -255,6 +258,8 @@ export function buildEntityDayBandLanes({
     slots: readonly ScheduleSlot[];
     day: EntityScheduleDay;
     drafts?: EntityScheduleDrafts;
+    /** Block edges the dialog authored; a read-only surface passes none. */
+    splits?: EntityScheduleBlockSplits;
     nowMs: number;
     activeOnly?: boolean;
     /** Projected consumption and SoC; the default index simply draws none. */
@@ -271,6 +276,7 @@ export function buildEntityDayBandLanes({
                     target: lane.target,
                     draft: drafts[lane.key] ?? {},
                     nowMs,
+                    splitAtMs: splits[lane.key],
                 }),
                 day,
             );
