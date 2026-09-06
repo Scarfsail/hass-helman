@@ -58,6 +58,8 @@ import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
 import {
   buildHistoryDaysFromAggregates,
+  calendarWindow,
+  resolveFirstWeekdayIndex,
   type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
@@ -732,6 +734,12 @@ export class HelmanSolarInspector extends LitElement {
    * either wants the whole picker or does not.
    */
   @state() private _navExpanded = false;
+  @state() private _browsedMonth = "";
+  @state() private _calendarAnchor = "";
+  @state() private _calendarReveal = 0;
+  private _calendarSelection = "";
+  private _calendarWasOpen = false;
+  private _historyRequestId = 0;
   /** The span the aggregate views draw, or null before the first load. */
   @state() private _span: SpanAggregatePayload | null = null;
   @state() private _spanLoading = false;
@@ -1608,6 +1616,12 @@ export class HelmanSolarInspector extends LitElement {
    */
   protected willUpdate(_changed: PropertyValues<this>) {
     this._todayKey = this._todayIso();
+    const open = this._viewMode === "day" && this._navExpanded;
+    if (open && (!this._calendarWasOpen || this._calendarSelection !== this._selectedDate)) {
+      this._slideDayCalendar(this._selectedDate || this._todayKey);
+    }
+    this._calendarWasOpen = open;
+    this._calendarSelection = this._selectedDate;
     const pillWindow = this._pillWindow(this._todayKey);
     this._pillWindowStart = pillWindow.start;
     this._pillWindowEnd = pillWindow.end;
@@ -1815,9 +1829,9 @@ export class HelmanSolarInspector extends LitElement {
             class="span-pills"
             .hass=${this.hass}
             .viewMode=${this._viewMode === "year" ? "year" : "month"}
-            .selectedDate=${this._selectedDate}
-            .minDate=${this._navFloor()}
-            .todayKey=${today}
+            .selectedDate=${this._viewMode === "day" ? this._browsedMonth : this._selectedDate}
+            .minDate=${this._viewMode === "day" ? this._dayRange?.minDate ?? "" : this._navFloor()}
+            .todayKey=${this._viewMode === "day" ? this._dayRange?.maxDate ?? today : today}
             .hoveredKey=${this._shapedKey("month", this._hoveredBucketKey)}
             .selectedBuckets=${this._shapedKeys("month")}
             .selectsSlot=${this._correlatedRow() === "month"}
@@ -1825,13 +1839,19 @@ export class HelmanSolarInspector extends LitElement {
             @span-pill-open=${this._handleSpanPillOpen}
             @span-pill-hover=${this._handleSpanPillHover}
           ></helman-solar-span-pills>`}
-          <!-- Expanded, the row is a whole month and reads as a calendar; the
-               window itself is derived in _pillWindow, so the layout named here
-               is only ever describing days that have already been chosen. -->
+          <!-- Detail browsing uses a bounded continuous calendar. Aggregate D
+               keeps its existing single-month calendar and column selection. -->
           ${!showDayPills ? "" : html`<helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
             .layout=${this._navExpanded ? "calendar" : "row"}
+            .continuous=${this._viewMode === "day" && this._navExpanded}
+            .browsedMonth=${this._browsedMonth}
+            .revealMonth=${this._calendarAnchor}
+            .revealVersion=${this._calendarReveal}
+            @calendar-month=${(event: CustomEvent<{ month: string }>) => { this._browsedMonth = event.detail.month; }}
+            @calendar-buffer=${(event: CustomEvent<{ month: string }>) => { this._calendarAnchor = event.detail.month; }}
+            @calendar-return=${() => this._slideDayCalendar(this._selectedDate)}
             .selectedDate=${this._viewMode === "day" ? this._selectedDate : ""}
             .currentDate=${today}
             .startDate=${this._pillWindowStart}
@@ -2230,43 +2250,15 @@ export class HelmanSolarInspector extends LitElement {
     this._showSpan(event.detail.date, this._viewMode);
   };
 
-  /**
-   * Move the expanded calendar to another month without leaving the day view.
-   *
-   * The day of the month is carried across, so paging from the 12th of March
-   * lands on the 12th of April rather than on a month's first day -- reading
-   * the same day across months is what the row is for. Two clamps make that
-   * safe: the 31st has to survive a move into February, and any day can land
-   * outside what the card can actually open, since a calendar month is drawn
-   * whole while the recorder's floor and the forecast's horizon both fall
-   * mid-month.
-   *
-   * There is no separate "browsed month" state. `_pillWindow` derives the
-   * window from `_selectedDate`, so moving the selection *is* moving the
-   * calendar, and a second anchor would be a second thing to keep in step.
-   */
+  /** Explicit browsing reveals a month; viewport feedback only updates its highlight. */
   private _slideDayCalendar(spanKey: string): void {
-    const { year, month } = this._parseIsoDate(spanKey);
-    const current = this._parseIsoDate(this._selectedDate || this._todayIso());
-    const lastOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const target = this._formatDateParts(year, month, Math.min(current.day, lastOfMonth));
-    const bounds = this._monthBounds(target);
-    const floor = this._dayRange?.minDate ?? "";
-    const horizon = this._dayRange?.maxDate ?? "";
-    // Clamped into the month, not into the whole range: a month entirely out
-    // of reach has no day worth landing on, and pulling the selection into a
-    // neighbouring month would move the calendar somewhere nobody clicked.
-    const low = floor !== "" && floor > bounds.start ? floor : bounds.start;
-    const high = horizon !== "" && horizon < bounds.end ? horizon : bounds.end;
-    if (low > high) {
-      return;
-    }
-    const clamped = target < low ? low : target > high ? high : target;
-    if (clamped === this._selectedDate) {
-      return;
-    }
-    this._selectedDate = clamped;
-    this._load();
+    const floor = this._dayRange?.minDate?.slice(0, 7) ?? "";
+    const horizon = this._dayRange?.maxDate?.slice(0, 7) ?? "";
+    let month = spanKey.slice(0, 7);
+    if (floor && month < floor) month = floor;
+    if (horizon && month > horizon) month = horizon;
+    this._browsedMonth = this._calendarAnchor = `${month}-01`;
+    this._calendarReveal++;
   }
 
   /**
@@ -5551,10 +5543,8 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The days the pill row offers, derived from the selected one.
    *
-   * Expanded, the row is the calendar month around the selection, whichever
-   * view is on screen — that is what makes the grid a calendar rather than an
-   * arbitrary run of days, and it is why the bounds come from `_monthBounds`
-   * rather than from the view-dependent span helpers.
+   * Expanded detail uses a three-month buffer around the browsing anchor.
+   * Aggregate views keep their single month around the focused bucket.
    *
    * Collapsed, the row is what it has always been: today to the end of the
    * forecast when the selection is not behind, and otherwise a fixed seven-day
@@ -5564,6 +5554,10 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _pillWindow(today: string): { start: string; end: string } {
     const selected = this._selectedDate || today;
+    if (this._navExpanded && this._viewMode === "day") {
+      return calendarWindow(this._calendarAnchor || selected, this._dayRange?.minDate ?? selected,
+        this._dayRange?.maxDate ?? today, resolveFirstWeekdayIndex(this.hass?.locale));
+    }
     if (this._navExpanded) {
       // Anchored on the bucket the aggregate views have selected, when they
       // have one, and only otherwise on the date. In the year view
@@ -5620,13 +5614,17 @@ export class HelmanSolarInspector extends LitElement {
     // window is today to the forecast's end, and it widens the moment the day
     // range lands, which under an unclamped key was a second request for the
     // same single measurable day.
+    const floor = this._viewMode === "day" ? this._dayRange?.minDate : this._spanRange?.minDate;
+    if (floor && start < floor) start = floor;
     const measuredEnd = end > this._todayKey ? this._todayKey : end;
     const key = `${start}..${measuredEnd}`;
     if (this._historyDaysFor === key) {
       return;
     }
     this._historyDaysFor = key;
-    if (start > this._todayKey) {
+    const requestId = ++this._historyRequestId;
+    this._historyDays = this._historyDays.filter((day) => day.dayKey >= start && day.dayKey <= end);
+    if (start > measuredEnd) {
       // A window that begins after today has no measured days. Clearing keeps a
       // past week's measurements from lingering after paging forward again; Lit
       // drops the assignment on `===` once the constant is already in place.
@@ -5645,16 +5643,12 @@ export class HelmanSolarInspector extends LitElement {
         start_date: start,
         end_date: measuredEnd,
       });
-      if (this._historyDaysFor !== key) {
+      if (this._historyDaysFor !== key || requestId !== this._historyRequestId) {
         return;
       }
-      this._historyDays = buildHistoryDaysFromAggregates(result?.days ?? []);
-    } catch (err) {
-      if (this._historyDaysFor === key) {
-        // A window with no measurements reads exactly like one that failed to
-        // load: bare pills. Not worth a banner over the day picker.
-        this._historyDays = EMPTY_HISTORY_DAYS;
-      }
+      this._historyDays = buildHistoryDaysFromAggregates((result?.days ?? []).filter((day) => day.date >= start && day.date <= measuredEnd));
+    } catch {
+      // Keep overlapping measurements available if the replacement read fails.
     }
     this.requestUpdate();
   }
@@ -5682,6 +5676,7 @@ export class HelmanSolarInspector extends LitElement {
     if (event.detail.date === this._selectedDate) {
       return;
     }
+    this._calendarSelection = event.detail.date;
     this._selectedDate = event.detail.date;
     this._load();
   };

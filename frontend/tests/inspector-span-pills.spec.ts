@@ -610,7 +610,7 @@ test.describe("the expanded picker in the day view", () => {
         await toggleMore(page);
 
         const from = await selectedDayPill(page);
-        const dayOfMonth = from.slice(8);
+        const requests = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._activeRequestId);
         const target = `${THIS_YEAR - 1}-03-01`;
         await clickSpanPill(page, "years", `${THIS_YEAR - 1}-01-01`);
         await clickSpanPill(page, "months", target);
@@ -620,12 +620,13 @@ test.describe("the expanded picker in the day view", () => {
         // day view lights a minutes stop.
         expect(await activeStops(page)).not.toEqual(["D"]);
         // The same day of the month, in the month that was picked.
-        expect(await selectedDayPill(page)).toBe(`${THIS_YEAR - 1}-03-${dayOfMonth}`);
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._selectedDate)).toBe(from);
+        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._activeRequestId)).toBe(requests);
         // And the calendar moved with it.
         expect(await dayPillDates(page)).toContain(`${THIS_YEAR - 1}-03-01`);
     });
 
-    test("a day of the month the target month does not have is clamped into it", async ({ page }) => {
+    test("browsing February preserves the selected January 31", async ({ page }) => {
         await mountInspector(page, false, "", `${THIS_YEAR - 2}-01-01`);
         await waitForDayChart(page);
         await toggleMore(page);
@@ -640,7 +641,7 @@ test.describe("the expanded picker in the day view", () => {
         await clickSpanPill(page, "months", `${THIS_YEAR - 1}-02-01`);
         await waitForDayChart(page);
         const landed = await selectedDayPill(page);
-        expect(landed.startsWith(`${THIS_YEAR - 1}-02-2`)).toBe(true);
+        expect(landed).toBe(`${THIS_YEAR - 1}-01-31`);
         expect(await dayPillDates(page)).not.toContain(`${THIS_YEAR - 1}-02-30`);
     });
 });
