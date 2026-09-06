@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import date
+from typing import TYPE_CHECKING
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
@@ -26,6 +27,9 @@ from .solar_bias_correction.websocket import (
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .storage import HelmanStorage
+
+if TYPE_CHECKING:
+    from homeassistant.core import Event
 
 ACTION_KIND_SCHEMA = vol.In(SCHEDULE_ACTION_KINDS)
 SCHEDULE_ACTION_SCHEMA = vol.Schema(
@@ -132,6 +136,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_schedule_explanation)
     async_register_command(hass, ws_get_condition_trace)
     async_register_command(hass, ws_inspect_entities)
+    async_register_command(hass, ws_subscribe_updates)
 
 
 @websocket_api.websocket_command({
@@ -613,6 +618,44 @@ async def ws_run_automation(
 
     result = await coordinator.run_automation(reason="websocket")
     connection.send_result(msg["id"], result.to_dict())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/subscribe_updates",
+})
+@callback
+def ws_subscribe_updates(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """The feed a card listens on to learn that its data has been rewritten.
+
+    The integration announces every rewrite as one coarse ``helman_data_changed``
+    on the event bus, but a client cannot subscribe to that bus directly:
+    ``subscribe_events`` refuses any event outside Home Assistant's fixed
+    ``SUBSCRIBE_ALLOWLIST`` to a non-admin user, and a custom integration's event
+    can never be in that set. A household member with a normal account would get
+    an error in the log and cards that never refresh on their own.
+
+    So the subscription is a command of our own instead, where the permission
+    rule is ours to make, and there is no admin check here. What it discloses is
+    one word per rewrite: a non-admin learns that *something* moved, including a
+    ``config`` whose contents ``helman/get_config`` would still refuse them. The
+    payload is the event's data unchanged -- one ``kind``, no config, no plan --
+    and the client does its own batching.
+    """
+
+    @callback
+    def _forward(event: Event) -> None:
+        connection.send_message(
+            websocket_api.event_message(msg["id"], dict(event.data))
+        )
+
+    connection.subscriptions[msg["id"]] = hass.bus.async_listen(
+        EVENT_DATA_CHANGED, _forward
+    )
+    connection.send_result(msg["id"])
 
 
 def _require_admin(

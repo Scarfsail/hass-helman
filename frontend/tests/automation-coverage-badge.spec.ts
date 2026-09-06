@@ -78,7 +78,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         const listeners: ((event: unknown) => void)[] = [];
         globals.__fireDataChanged = () => {
             for (const listener of listeners) {
-                listener({ data: { kind: "config" } });
+                listener({ kind: "config" });
             }
         };
         // Let a test move the stored config under a mounted band.
@@ -148,7 +148,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             locale: { language: "en" },
             states: {},
             connection: {
-                subscribeEvents: async (callback: (event: unknown) => void) => {
+                subscribeMessage: async (callback: (message: unknown) => void) => {
                     listeners.push(callback);
                     return () => {
                         listeners.splice(listeners.indexOf(callback), 1);

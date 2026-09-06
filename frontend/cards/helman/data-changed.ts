@@ -21,9 +21,9 @@
  * satisfies it.
  */
 export interface DataChangedConnection {
-    subscribeEvents?<EventType>(
-        callback: (event: EventType) => void,
-        eventType: string,
+    subscribeMessage?<ResultType>(
+        callback: (result: ResultType) => void,
+        subscribeMessage: { type: string },
     ): Promise<() => void>;
 }
 
@@ -51,7 +51,16 @@ export interface DataChangedFeed {
     subscribe(listener: DataChangedListener): () => void;
 }
 
-const EVENT_DATA_CHANGED = "helman_data_changed";
+/**
+ * The backend command that carries the feed.
+ *
+ * Not `subscribeEvents("helman_data_changed")`: Home Assistant refuses any
+ * event outside its own allowlist to a non-admin user, so a household member
+ * with a normal account got an error in the log and cards that never refreshed.
+ * The integration exposes the same announcements as a command of its own, which
+ * every user it answers may subscribe to. See `ws_subscribe_updates`.
+ */
+const SUBSCRIBE_UPDATES = { type: "helman/subscribe_updates" } as const;
 
 /**
  * How long to collect events before telling listeners.
@@ -120,16 +129,16 @@ class DataChangedFeedImpl implements DataChangedFeed {
             return;
         }
 
-        const subscribeEvents = this._connection?.subscribeEvents?.bind(this._connection);
-        if (!subscribeEvents) {
-            // A connection stub without the events API — the cards still mount
-            // and work, they just never hear about a change on their own.
+        const subscribeMessage = this._connection?.subscribeMessage?.bind(this._connection);
+        if (!subscribeMessage) {
+            // A connection stub without the subscribe API — the cards still
+            // mount and work, they just never hear about a change on their own.
             return;
         }
 
-        this._unsubscribeRequest = subscribeEvents<{ data?: { kind?: string } }>(
-            (event) => this._onEvent(event?.data?.kind),
-            EVENT_DATA_CHANGED,
+        this._unsubscribeRequest = subscribeMessage<{ kind?: string }>(
+            (message) => this._onEvent(message?.kind),
+            SUBSCRIBE_UPDATES,
         );
         // A failed subscription must not surface as an unhandled rejection; the
         // cards degrade to manual refresh, which is what they did before.

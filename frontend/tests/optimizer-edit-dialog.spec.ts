@@ -168,7 +168,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             const listeners: ((event: unknown) => void)[] = [];
             globals.__fireDataChanged = (kind: string) => {
                 for (const listener of listeners) {
-                    listener({ data: { kind } });
+                    listener({ kind });
                 }
             };
 
@@ -182,9 +182,9 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                 locale: { language: "en" },
                 user: { is_admin: admin },
                 connection: {
-                    subscribeEvents: async (
-                        callback: (event: unknown) => void,
-                        _eventType: string,
+                    subscribeMessage: async (
+                        callback: (message: unknown) => void,
+                        _request: { type: string },
                     ) => {
                         listeners.push(callback);
                         return () => {
