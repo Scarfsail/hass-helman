@@ -268,6 +268,24 @@ export class HelmanSolarDayPills extends LitElement {
             border-style: dashed;
         }
 
+        /* Forecast tracks and their fills carry the same dashed convention
+           as the chart, including today's forecast fill and SoC range. */
+        .pill:not(.history) .day-aggregate-gauge {
+            box-shadow: none;
+        }
+        .pill:not(.history) .day-aggregate-gauge::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            box-sizing: border-box;
+            border: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+            border-radius: inherit;
+            pointer-events: none;
+        }
+        .pill:not(.history) .day-aggregate-gauge-fill {
+            mask-image: repeating-linear-gradient(to right, #000 0 4px, transparent 4px 7px);
+        }
+
         .pill.selected:not(.history) { box-shadow: none; }
 
         .pill.selected .pill-label {
@@ -286,7 +304,6 @@ export class HelmanSolarDayPills extends LitElement {
 
         .pill-row:not(.calendar) .pill:has(.solar-paired) { min-width: 60px; }
         .solar-paired .day-aggregate-gauge-value { overflow: visible; white-space: normal; }
-        .solar-pair-unit { display: block; font-size: 0.5rem; }
         .calendar .solar-paired { padding: 0 1px; }
         .calendar .solar-paired .day-aggregate-gauge-value { font-size: 0.5rem; }
     `];

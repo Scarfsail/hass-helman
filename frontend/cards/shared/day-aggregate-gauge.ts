@@ -361,7 +361,7 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
                 ></span>
             ` : nothing}
             <span class="day-aggregate-gauge-value">${pair
-                ? html`<span>${pair.actualWh === null ? "—" : formatSolarGaugeValue(pair.actualWh)} / ${pair.forecastWh === null ? "—" : formatSolarGaugeValue(pair.forecastWh)}</span><span class="solar-pair-unit">kWh</span>`
+                ? html`<span>${pair.actualWh === null ? "—" : formatSolarGaugeValue(pair.actualWh)} / ${pair.forecastWh === null ? "—" : formatSolarGaugeValue(pair.forecastWh)}</span>`
                 : formatSolarGaugeValue(solarWh)}</span>
         </div>
     `;
