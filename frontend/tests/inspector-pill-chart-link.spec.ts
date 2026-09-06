@@ -472,13 +472,12 @@ test.describe("the pill row's border says which days have happened", () => {
             expect(pill.border).toBe(pill.history ? "solid" : "dashed");
         }
 
-        // Today is measured -- it has already partly happened -- and it stays
-        // measured when the picker closes. Its window changes; the day does not.
+        // Today contains forecast values in either layout.
         const today = FIXED_TODAY;
-        expect(styles.find((pill) => pill.day === today)?.border).toBe("solid");
+        expect(styles.find((pill) => pill.day === today)?.border).toBe("dashed");
         await toggleMore(page);
         const closed = await pillBorderStyles(page);
-        expect(closed.find((pill) => pill.day === today)?.border).toBe("solid");
+        expect(closed.find((pill) => pill.day === today)?.border).toBe("dashed");
     });
 });
 

@@ -21,7 +21,7 @@ import type {
     NormalizedScheduleModel,
     ScheduleOwnerSnapshot,
 } from "../shared/schedule/schedule-types";
-import { dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
+import { buildDaySolarPairTitle, dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
 import {
     buildDayPillCalendarCells,
     calendarWindow,
@@ -139,7 +139,7 @@ export class HelmanSolarDayPills extends LitElement {
         }
         .continuous .pill { min-width: 0; padding: 3px; position: relative; }
         .continuous .pill-label { overflow: hidden; text-overflow: ellipsis; }
-        .continuous .month-start { border-top: 2px solid var(--primary-color, #2563eb); }
+        .continuous .month-start { border-top-width: 2px; border-top-color: var(--primary-color, #2563eb); }
         .return-row { height: 30px; display: flex; align-items: center; }
         .return-selected { font: inherit; font-size: 0.75rem; color: var(--primary-text-color); background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 6px; cursor: pointer; }
 
@@ -268,6 +268,8 @@ export class HelmanSolarDayPills extends LitElement {
             border-style: dashed;
         }
 
+        .pill.selected:not(.history) { box-shadow: none; }
+
         .pill.selected .pill-label {
             color: var(--primary-color, #2563eb);
         }
@@ -282,6 +284,11 @@ export class HelmanSolarDayPills extends LitElement {
             font-size: 0.58rem;
         }
 
+        .pill-row:not(.calendar) .pill:has(.solar-paired) { min-width: 60px; }
+        .solar-paired .day-aggregate-gauge-value { overflow: visible; white-space: normal; }
+        .solar-pair-unit { display: block; font-size: 0.5rem; }
+        .calendar .solar-paired { padding: 0 1px; }
+        .calendar .solar-paired .day-aggregate-gauge-value { font-size: 0.5rem; }
     `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
@@ -567,6 +574,9 @@ export class HelmanSolarDayPills extends LitElement {
             || (this.reachableTo !== "" && pill.dayKey > this.reachableTo);
         const hovered = pill.dayKey === this.hoveredDate;
         const bucketSelected = this.selectedBuckets.includes(pill.dayKey);
+        const label = pill.solarPair
+            ? pill.label + " · " + buildDaySolarPairTitle(this._localize, pill.solarPair)
+            : pill.label;
         return html`
             <button
                 class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`
@@ -575,8 +585,8 @@ export class HelmanSolarDayPills extends LitElement {
                 type="button"
                 data-day=${pill.dayKey}
                 data-history=${pill.isHistory ? "true" : "false"}
-                title=${pill.label}
-                aria-label=${pill.label}
+                title=${label}
+                aria-label=${label}
                 ?disabled=${unreachable}
                 aria-pressed=${selected ? "true" : "false"}
                 @click=${() => this._select(pill.dayKey)}
@@ -589,6 +599,7 @@ export class HelmanSolarDayPills extends LitElement {
                 <span class="pill-label">${pill.label}</span>
                 ${renderDayAggregateGauge({
                     kind: "solar",
+                    solarPair: pill.solarPair,
                     aggregate: pill.aggregate,
                     scale: this._model.scale,
                     available: pill.availability.solar,
@@ -596,6 +607,7 @@ export class HelmanSolarDayPills extends LitElement {
                 })}
                 ${renderDayAggregateGauge({
                     kind: "battery",
+                    titlePrefix: pill.solarPair ? this._localize("bias_correction.inspector.battery_forecast") : undefined,
                     aggregate: pill.aggregate,
                     scale: this._model.scale,
                     available: pill.availability.battery,
@@ -783,6 +795,7 @@ export class HelmanSolarDayPills extends LitElement {
             slots,
             slotForecastMap,
             historyDays: this.historyDays,
+            forecastPayload: this._forecast,
             // The card's own "today" leads: `startDate` is only today while the
             // row looks forward, and a past week must not label its first day
             // "Today".

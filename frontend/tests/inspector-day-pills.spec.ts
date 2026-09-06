@@ -47,8 +47,9 @@ async function mountInspector(
     page: Page,
     minDaysBack = 30,
     firstWeekday = "language",
+    mixedToday = false,
 ): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday }) => {
+    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday, mixedToday }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -63,7 +64,7 @@ async function mountInspector(
 
         const schedule = {
             executionEnabled: true,
-            slots: slotIds.map((id) => ({
+            slots: slotIds.filter((id) => !mixedToday || Date.parse(id) >= todayMs + 12 * hourMs).map((id) => ({
                 id,
                 controllables: {},
             })),
@@ -80,9 +81,9 @@ async function mountInspector(
                 const daylight = hour >= 8 && hour < 16;
                 solarPoints.push({
                     timestamp,
-                    value: daylight ? 1000 / 2 ** day : 0,
+                    value: daylight ? (mixedToday ? 1250 : 1000) / 2 ** day : 0,
                 });
-                batterySeries.push({ timestamp, durationHours: 1, socPct: 40 + hour });
+                batterySeries.push({ timestamp, durationHours: 1, socPct: mixedToday ? (hour % 2 ? 80 : 40) : 40 + hour });
                 gridSeries.push({
                     timestamp,
                     durationHours: 1,
@@ -278,7 +279,7 @@ async function mountInspector(
                         cursor += dayMs
                     ) {
                         const day = new Date(cursor).toISOString().slice(0, 10);
-                        if (!isPast(day)) {
+                        if (!isPast(day) && !(mixedToday && day === isoDay(0))) {
                             continue;
                         }
                         days.push({
@@ -286,8 +287,8 @@ async function mountInspector(
                             solarWh: 6000,
                             gridImportKwh: 3.2,
                             gridExportKwh: 1.4,
-                            batteryMinSocPct: 30,
-                            batteryMaxSocPct: 84,
+                            batteryMinSocPct: mixedToday ? 10 : 30,
+                            batteryMaxSocPct: mixedToday ? 95 : 84,
                         });
                     }
                     return { days };
@@ -302,6 +303,7 @@ async function mountInspector(
         scheduledDays: SCHEDULED_DAYS,
         minDaysBack,
         firstWeekday,
+        mixedToday,
     });
 
     await page.waitForFunction((expected) => {
@@ -852,8 +854,8 @@ test.describe("solar inspector header layout", () => {
         expect(layout.scrolls).toBe(false);
     });
 
-    test("pills shrink to their labels before the row scrolls", async ({ page }) => {
-        await page.setViewportSize({ width: 560, height: 900 });
+    test("pills shrink while retaining room for the paired value before scrolling", async ({ page }) => {
+        await page.setViewportSize({ width: 600, height: 900 });
         await mountInspector(page);
 
         const layout = await readNavLayout(page);
@@ -1137,5 +1139,138 @@ test.describe("continuous detail calendar", () => {
         });
         expect((await calendarState(page)).top).toBe(before.top);
         expect((await calendarState(page)).requests).toEqual(before.requests);
+    });
+});
+
+test.describe("today actual / forecast", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, 30, "language", true);
+        await page.locator("helman-solar-inspector").evaluate((el: HTMLElement) => {
+            el.style.setProperty("--divider-color", "#d4d4d8");
+            el.style.setProperty("--card-background-color", "#ffffff");
+            el.style.setProperty("--primary-text-color", "#212121");
+        });
+    });
+
+    const today = (page: Page) => page.locator(`helman-solar-day-pills [data-day="${FIXED_TODAY}"]`);
+
+    test("full-day values survive midday schedule, selection and calendar layouts", async ({ page }) => {
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await expect(today(page).locator(".battery")).toHaveText("40 : 80");
+        await expect(today(page)).toHaveAttribute("aria-label", /actual so far: 6.0 kWh.*full-day forecast: 10 kWh/);
+        for (const width of [820, 360]) {
+            await page.setViewportSize({ width, height: 900 });
+            await expect.poll(() => today(page).evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(60);
+            await page.screenshot({ path: `/tmp/issue220-${width}-collapsed.png` });
+            await page.locator("helman-solar-inspector").evaluate((el: any) => { el._navExpanded = true; });
+            await expect(page.locator("helman-solar-day-pills .calendar")).toBeVisible();
+            await today(page).scrollIntoViewIfNeeded();
+            await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+            await today(page).hover();
+            await expect.poll(() => today(page).evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe("dashed");
+            await page.screenshot({ path: `/tmp/issue220-${width}-expanded.png` });
+            const sizes = await today(page).locator(".solar").evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
+            expect(sizes.scroll).toBeLessThanOrEqual(sizes.width);
+            await page.locator("helman-solar-inspector").evaluate((el: any) => { el._navExpanded = false; });
+        }
+        await page.locator('helman-solar-day-pills [data-day="2026-10-22"]').click();
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+    });
+
+    test("independent arrivals, missing sides and zeroes never use measured SoC", async ({ page }) => {
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            (window as any).__pillForecast = el._forecast;
+            (window as any).__pillHistory = el.historyDays;
+            el._forecast = null;
+        });
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / —kWh");
+        await expect(today(page).locator(".battery")).toHaveClass(/unavailable/);
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            el.historyDays = [];
+            el._forecast = (window as any).__pillForecast;
+        });
+        await expect(today(page).locator(".solar")).toHaveText("— / 10kWh");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            el.historyDays = (window as any).__pillHistory.map((day: any) => ({
+                ...day, aggregate: { ...day.aggregate, solarWh: 0 },
+            }));
+            el._forecast = {
+                ...el._forecast,
+                solar: { ...el._forecast.solar, adjustedPoints: [{ timestamp: "2026-10-21T00:00:00Z", value: 0 }] },
+                battery_capacity: { ...el._forecast.battery_capacity, series: [], actualHistory: [{ timestamp: "2026-10-21T00:00:00Z", socPct: 95 }] },
+            };
+        });
+        await expect(today(page).locator(".solar")).toHaveText("0.0 / 0.0kWh");
+        await expect(today(page).locator(".battery")).toHaveClass(/unavailable/);
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => { el.historyDays = []; el._forecast = null; });
+        await expect(today(page).locator(".solar")).toHaveText("— / —kWh");
+        await expect(today(page)).toHaveAttribute("data-history", "false");
+    });
+
+    test("both solar values share the scale, with forecast preferred for the fill", async ({ page }) => {
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            el._forecast = {
+                ...el._forecast,
+                solar: {
+                    ...el._forecast.solar,
+                    adjustedPoints: [{ timestamp: "2026-10-21T08:00:00Z", value: 10000 }],
+                    actualHistory: [{ timestamp: "2026-10-21T12:00:00Z", value: 100000 }],
+                },
+            };
+            el.historyDays = el.historyDays.map((day: any) => ({
+                ...day, aggregate: { ...day.aggregate, solarWh: 20000 },
+            }));
+        });
+        await expect(today(page).locator(".solar")).toHaveText("20 / 10kWh");
+        await expect(today(page).locator(".solar .day-aggregate-gauge-fill")).toHaveAttribute("style", "width:50%;");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => { el._forecast = null; });
+        await expect(today(page).locator(".solar")).toHaveText("20 / —kWh");
+        await expect(today(page).locator(".solar .day-aggregate-gauge-fill")).toHaveAttribute("style", "width:100%;");
+    });
+
+    test("local date boundaries and finite forecast-only values", async ({ page }) => {
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            el.timeZone = "Europe/Prague";
+            el._forecast = {
+                ...el._forecast,
+                solar: { ...el._forecast.solar, adjustedPoints: [
+                    { timestamp: "2026-10-20T21:59:00Z", value: 99000 },
+                    { timestamp: "2026-10-20T22:00:00Z", value: 4000 },
+                    { timestamp: "2026-10-21T21:59:00Z", value: 6000 },
+                    { timestamp: "2026-10-21T22:00:00Z", value: 99000 },
+                    { timestamp: "2026-10-21T12:00:00Z", value: NaN },
+                ] },
+                battery_capacity: { ...el._forecast.battery_capacity,
+                    actualHistory: [{ timestamp: "2026-10-21T12:00:00Z", socPct: 10 }],
+                    series: [
+                        { timestamp: "2026-10-20T21:59:00Z", socPct: 5 },
+                        { timestamp: "2026-10-20T22:00:00Z", socPct: 40 },
+                        { timestamp: "2026-10-21T21:59:00Z", socPct: 80 },
+                        { timestamp: "2026-10-21T22:00:00Z", socPct: 95 },
+                        { timestamp: "2026-10-21T12:00:00Z", socPct: NaN },
+                    ],
+                },
+            };
+        });
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await expect(today(page).locator(".battery")).toHaveText("40 : 80");
+    });
+
+    test("past without measurements stays solid; forecast borders survive all states", async ({ page }) => {
+        await expect(today(page).locator(".solar")).toHaveText("6.0 / 10kWh");
+        await page.locator("helman-solar-day-pills").evaluate((el: any) => {
+            el.startDate = "2026-10-20"; el.endDate = "2026-11-01";
+            el.historyDays = []; el.continuous = true;
+            el.selectedDate = "2026-11-01"; el.hoveredDate = "2026-11-01";
+            el.selectedBuckets = ["2026-11-01"];
+        });
+        for (const [date, style] of [["2026-10-20", "solid"], ["2026-10-21", "dashed"], ["2026-10-22", "dashed"], ["2026-11-01", "dashed"]]) {
+            const pill = page.locator(`helman-solar-day-pills [data-day="${date}"]`);
+            await expect.poll(() => pill.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe(style);
+        }
     });
 });

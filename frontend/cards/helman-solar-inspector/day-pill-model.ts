@@ -1,6 +1,7 @@
 import { getScheduleGridScaleMagnitude } from "../shared/schedule/model/grid-surplus-display";
 import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../shared/schedule/model/schedule-table-forecast";
-import { formatScheduleDayLabel } from "../shared/schedule/model/schedule-time";
+import { getEffectiveSolarForecastPoints, type ForecastPayload } from "../helman-api";
+import { getScheduleDayKey, formatScheduleDayLabel } from "../shared/schedule/model/schedule-time";
 import type { SlotForecastMap } from "../shared/schedule/model/slot-forecast-model";
 import type {
     ScheduleTableDayAggregateModel,
@@ -73,8 +74,9 @@ export interface SolarInspectorDayPill {
     /** Null when neither the schedule nor the day's actuals reach it. */
     aggregate: ScheduleTableDayAggregateModel | null;
     availability: SolarInspectorDayPillAvailability;
-    /** True for the reconstructed past day, which is only ever the shown one. */
+    /** Temporal classification, independent of data availability. */
     isHistory: boolean;
+    solarPair?: { actualWh: number | null; forecastWh: number | null };
 }
 
 /** A past day, rebuilt from what the inspector measured for it. */
@@ -181,6 +183,7 @@ export function buildSolarInspectorDayPills({
     slots,
     slotForecastMap,
     historyDays,
+    forecastPayload,
     currentDayKey,
     locale,
     timeZone,
@@ -193,6 +196,7 @@ export function buildSolarInspectorDayPills({
     slotForecastMap: SlotForecastMap;
     /** Past days measured for this row; one before it leads the row. */
     historyDays: readonly SolarInspectorHistoryDay[];
+    forecastPayload: ForecastPayload | null;
     currentDayKey: string | null;
     locale: string;
     timeZone: string;
@@ -245,40 +249,50 @@ export function buildSolarInspectorDayPills({
         grid: forecast.gridAvailable,
     };
 
-    const pills: SolarInspectorDayPill[] = sections.map((section) => ({
-        dayKey: section.dayKey,
-        label: section.dayLabel,
-        aggregate: section.dayAggregate,
-        availability,
-        isHistory: false,
-    }));
-
-    // The schedule and the forecast only reach forward, so a past day's pill
-    // can only come from what was measured. A day inside the row takes its
-    // measurements in place; one that sits before the row — the single past day
-    // shown while the row still looks forward — leads it instead.
-    // The schedule and the forecast only reach forward, so a past day's pill can
-    // only say what was measured. Those days take their measurements in place;
-    // a measured day the row does not offer is simply not drawn.
-    let scale = forecast.dayAggregateScale;
-    const pillIndexByDayKey = new Map(pills.map((pill, index) => [pill.dayKey, index]));
-    for (const historyDay of historyDays) {
-        const index = pillIndexByDayKey.get(historyDay.dayKey);
-        if (index === undefined) {
-            continue;
+    const historyByDay = new Map(historyDays.map((day) => [day.dayKey, day]));
+    const solarPoints = getEffectiveSolarForecastPoints(forecastPayload?.solar)
+        .filter((point) => Number.isFinite(point.value)
+            && getScheduleDayKey(point.timestamp, timeZone) === currentDayKey);
+    const solarWh = solarPoints.length ? solarPoints.reduce((sum, point) => sum + point.value, 0) : null;
+    const socValues = (forecastPayload?.battery_capacity?.series ?? [])
+        .filter((point) => Number.isFinite(point.socPct)
+            && getScheduleDayKey(point.timestamp, timeZone) === currentDayKey)
+        .map((point) => point.socPct);
+    // Scale the solar values actually displayed, excluding the shared timeline
+    // aggregate that today replaces (which may contain actual history).
+    let scale = { ...forecast.dayAggregateScale, solarMaxWh: 0 };
+    const pills: SolarInspectorDayPill[] = sections.map((section) => {
+        const history = historyByDay.get(section.dayKey);
+        const isHistory = currentDayKey !== null && section.dayKey < currentDayKey;
+        const isToday = section.dayKey === currentDayKey;
+        let aggregate = isHistory ? history?.aggregate ?? null : section.dayAggregate;
+        let pillAvailability = isHistory
+            ? history?.availability ?? { battery: false, solar: false, grid: false }
+            : availability;
+        const solarPair = isToday
+            ? { actualWh: history?.aggregate?.solarWh ?? null, forecastWh: solarWh }
+            : undefined;
+        if (solarPair) {
+            // Shared schedule projections merge history; today's SoC must use
+            // only the forecast series, even when measured extrema are present.
+            aggregate = {
+                gridImportKwh: null, gridExportKwh: null, availableSurplusKwh: null,
+                priceHasData: false, pricePositiveMin: null, pricePositiveMax: null,
+                priceNegativeMin: null, priceNegativeMax: null,
+                ...aggregate,
+                solarWh: solarPair.forecastWh ?? solarPair.actualWh,
+                batteryMinSocPct: socValues.length ? Math.min(...socValues) : null,
+                batteryMaxSocPct: socValues.length ? Math.max(...socValues) : null,
+            };
+            pillAvailability = { ...pillAvailability, solar: true, battery: socValues.length > 0 };
+            scale = { ...scale, solarMaxWh: Math.max(scale.solarMaxWh, solarPair.actualWh ?? 0) };
         }
-        pills[index] = {
-            dayKey: historyDay.dayKey,
-            label: pills[index].label,
-            aggregate: historyDay.aggregate,
-            availability: historyDay.availability,
-            isHistory: true,
+        scale = _extendScaleWithAggregate(scale, aggregate);
+        return {
+            dayKey: section.dayKey, label: section.dayLabel,
+            aggregate, availability: pillAvailability, isHistory, solarPair,
         };
-        // What was measured belongs on the same scale as what is forecast:
-        // yesterday's sun is only worth showing next to tomorrow's if the two
-        // bars mean the same thing.
-        scale = _extendScaleWithAggregate(scale, historyDay.aggregate);
-    }
+    });
 
     return { pills, scale };
 }

@@ -42,6 +42,8 @@ export interface DayAggregateGaugeOptions {
     /** Whether the metric exists at all — an unconfigured battery has no bar. */
     available: boolean;
     priceDisplayUnit?: string | null;
+    solarPair?: { actualWh: number | null; forecastWh: number | null };
+    titlePrefix?: string;
     localize: LocalizeFunction;
 }
 
@@ -313,7 +315,7 @@ function _renderBatteryGauge(options: DayAggregateGaugeOptions) {
 
     const startPct = Math.max(Math.min(aggregate.batteryMinSocPct, 100), 0);
     const widthPct = Math.max(Math.min(aggregate.batteryMaxSocPct, 100) - startPct, 0);
-    const title = buildDayBatteryAggregateTitle(
+    const title = (options.titlePrefix ? options.titlePrefix + " · " : "") + buildDayBatteryAggregateTitle(
         options.localize,
         aggregate.batteryMinSocPct,
         aggregate.batteryMaxSocPct,
@@ -337,17 +339,20 @@ function _renderBatteryGauge(options: DayAggregateGaugeOptions) {
 
 function _renderSolarGauge(options: DayAggregateGaugeOptions) {
     const aggregate = options.aggregate;
-    if (!options.available || aggregate === null || aggregate.solarWh === null) {
+    const pair = options.solarPair;
+    if (!pair && (!options.available || aggregate === null || aggregate.solarWh === null)) {
         return html`<div class="day-aggregate-gauge solar unavailable" aria-hidden="true"></div>`;
     }
 
+    const solarWh = aggregate?.solarWh ?? 0;
     const widthPct = options.scale.solarMaxWh > 0
-        ? Math.min((aggregate.solarWh / options.scale.solarMaxWh) * 100, 100)
+        ? Math.min((solarWh / options.scale.solarMaxWh) * 100, 100)
         : 0;
-    const title = buildDaySolarAggregateTitle(options.localize, aggregate.solarWh);
+    const title = pair ? buildDaySolarPairTitle(options.localize, pair)
+        : buildDaySolarAggregateTitle(options.localize, solarWh);
 
     return html`
-        <div class="day-aggregate-gauge solar" role="img" aria-label=${title} title=${title}>
+        <div class=${`day-aggregate-gauge solar${pair ? " solar-paired" : ""}`} role="img" aria-label=${title} title=${title}>
             ${widthPct > 0 ? html`
                 <span
                     class="day-aggregate-gauge-fill"
@@ -355,7 +360,9 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(aggregate.solarWh)}</span>
+            <span class="day-aggregate-gauge-value">${pair
+                ? html`<span>${pair.actualWh === null ? "—" : formatSolarGaugeValue(pair.actualWh)} / ${pair.forecastWh === null ? "—" : formatSolarGaugeValue(pair.forecastWh)}</span><span class="solar-pair-unit">kWh</span>`
+                : formatSolarGaugeValue(solarWh)}</span>
         </div>
     `;
 }
@@ -540,4 +547,11 @@ export function buildDayPriceAggregateTitle(
 
     const title = ranges.length > 0 ? ranges.join(" · ") : formatPriceValue(0, unit);
     return `${localize("scheduling.forecast.price_label")}: ${title}`;
+}
+
+export function buildDaySolarPairTitle(
+    localize: LocalizeFunction,
+    pair: { actualWh: number | null; forecastWh: number | null },
+): string {
+    return `${localize("bias_correction.inspector.solar_actual_so_far")}: ${pair.actualWh === null ? "—" : formatSolarGaugeTitle(pair.actualWh)} · ${localize("bias_correction.inspector.solar_full_day_forecast")}: ${pair.forecastWh === null ? "—" : formatSolarGaugeTitle(pair.forecastWh)}`;
 }
