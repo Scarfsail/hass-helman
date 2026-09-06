@@ -13,7 +13,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
-import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
+import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -475,6 +475,33 @@ export class HelmanSolarPriceStrip extends LitElement {
      * The export fill is the lighter of the two by design, so it takes dark ink
      * and the import fill takes white.
      */
+    /**
+     * Which cells keep their rates, decided per rate rather than per column.
+     *
+     * The two are separate series -- an export rate can be the interesting one
+     * in a cell whose import rate is flat -- and `_cellBars` orders by magnitude
+     * rather than by side, so a bar's position in that list is no series at all.
+     */
+    private _labelledCells(
+        cells: PriceCell[],
+        xForMinutes: (minutes: number) => number,
+    ): Record<"import" | "export", boolean[]> {
+        const width = cells.length === 0
+            ? 0
+            : this._cellSpan(cells[0], xForMinutes).width;
+        const anchorOffset = hourAnchorOffset(cells.map((cell) => cell.startMinutes));
+        const select = (pick: (cell: PriceCell) => number | null) => selectLabelledColumns(
+            cells.map((cell) => {
+                const value = pick(cell);
+                return value === null
+                    ? { value: null, text: null }
+                    : { value, text: value.toFixed(1) };
+            }),
+            { columnWidthPx: width, anchorOffset },
+        );
+        return { import: select((cell) => cell.importValue), export: select((cell) => cell.exportValue) };
+    }
+
     private _renderPairedLabels(
         cells: PriceCell[],
         ctx: {
@@ -484,14 +511,15 @@ export class HelmanSolarPriceStrip extends LitElement {
             xForMinutes: (minutes: number) => number;
         },
     ) {
-        return cells.map((cell) => {
+        const labelled = this._labelledCells(cells, ctx.xForMinutes);
+        return cells.map((cell, cellIndex) => {
             const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
-            if (!columnFitsLabel(width)) {
-                return "";
-            }
             const centre = left + width / 2;
             const bars = this._cellBars(cell);
             return bars.map(({ value, side }, index) => {
+                if (!labelled[side][cellIndex]) {
+                    return "";
+                }
                 const valueY = ctx.yForValue(value);
                 if (index === 0) {
                     const y = value >= 0

@@ -4,7 +4,7 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
 import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
-import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
+import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import {
   SLOT_MINUTES,
   accumulateBands,
@@ -4099,11 +4099,18 @@ export class HelmanSolarInspector extends LitElement {
         <!-- The percentages come after the marker so the line runs behind the
              two digits it crosses rather than through them. -->
         <g clip-path="url(#plot-clip-soc)">
-        ${columnFitsLabel(barWidth) ? bars.map((bar) => stripValueLabel({
-          x: layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2,
-          y: Math.max(yForPct(bar.pct) - 3, 9),
-          text: `${Math.round(bar.pct)}%`,
-        })) : ""}
+        ${(() => {
+          const labels = bars.map((bar) => ({ value: bar.pct, text: `${Math.round(bar.pct)}%` }));
+          const labelled = selectLabelledColumns(labels, {
+            columnWidthPx: barWidth,
+            anchorOffset: hourAnchorOffset(bars.map((bar) => bar.minutes)),
+          });
+          return bars.map((bar, index) => labelled[index] ? stripValueLabel({
+            x: layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2,
+            y: Math.max(yForPct(bar.pct) - 3, 9),
+            text: labels[index].text,
+          }) : "");
+        })()}
         </g>
       </svg>
     `;

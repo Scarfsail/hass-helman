@@ -30,6 +30,7 @@ import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
+import { hourAnchorOffset, selectLabelledColumns } from "../../strip-value-labels";
 import "../../optimizer/helman-optimizer-edit-dialog";
 import {
     getLaneAutomationCoverage,
@@ -58,12 +59,13 @@ const MIN_SOC_BOTH_WIDTH_PX = 96;
 /** Room the two levels take at a run's edges, which the centre figure gives up. */
 const SOC_ENDPOINT_ALLOWANCE_PX = 52;
 /**
- * A forecast slot narrower than this keeps its number to its tooltip.
+ * Room a forecast slot's number needs before its neighbour gets one too.
  *
  * Half a day of slots on a phone leaves single digits of room each, and a
- * clipped "12" that reads as "1" is worse than a column with nothing written on
- * it -- the hovered slot gets its number back regardless, which is the case
- * where the user is actually asking.
+ * clipped "12" that reads as "1" is worse than nothing -- so below this the row
+ * labels every second or third slot instead of every one. The hovered slot gets
+ * its number back regardless, which is the case where the user is actually
+ * asking.
  */
 const MIN_SLOT_VALUE_WIDTH_PX = 17;
 
@@ -2268,20 +2270,38 @@ export class SchedulingEntityDayBand extends LitElement {
      * readings impossible to scan across. Above the plot, so no number is ever
      * written on a bar.
      *
-     * A slot too narrow to hold its number goes without one -- except the slot
-     * under the pointer, which is the one slot somebody is asking about, and
-     * which is allowed to spill over its neighbours to be legible.
+     * Too narrow for every number, the row thins rather than empties: the shared
+     * selector picks the widest-spaced set that still fits. The slot under the
+     * pointer keeps its number whether or not it was picked -- it is the one
+     * slot somebody is asking about, and it is allowed to spill over its
+     * neighbours to be legible.
      */
     private _renderSlotValues(kind: "battery" | "solar" | "price") {
-        return this.day.slots.map((slot) => {
-            const text = this._buildSlotValueText(kind, slot);
+        const texts = this.day.slots.map((slot) => this._buildSlotValueText(kind, slot));
+        const labelled = selectLabelledColumns(
+            texts.map((text) => ({ text, value: text === null ? null : Number.parseFloat(text) })),
+            {
+                // Before the track is measured, label everything: a first paint
+                // that thins on a guessed width would visibly re-thin once the
+                // real one arrives.
+                columnWidthPx: this._trackWidthPx === 0 || this.day.slots.length === 0
+                    ? MIN_SLOT_VALUE_WIDTH_PX
+                    : (this._toSlotWidthPercent(this.day.slots[0]) / 100) * this._trackWidthPx,
+                minLabelWidthPx: MIN_SLOT_VALUE_WIDTH_PX,
+                anchorOffset: hourAnchorOffset(this.day.slots.map(
+                    (slot) => (slot.startMs - this.day.startMs) / MINUTE_MS,
+                )),
+            },
+        );
+        return this.day.slots.map((slot, index) => {
+            const text = texts[index];
             if (text === null) {
                 return nothing;
             }
 
             const hovered = this._hoveredSlotId === slot.id;
             const widthPct = this._toSlotWidthPercent(slot);
-            if (!hovered && !this._isWideEnoughForValue(widthPct)) {
+            if (!hovered && !labelled[index]) {
                 return nothing;
             }
 
@@ -2346,11 +2366,6 @@ export class SchedulingEntityDayBand extends LitElement {
         const perHour = durationMs <= 0 ? solarWh : solarWh * (3_600_000 / durationMs);
         const kwh = perHour / 1000;
         return kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
-    }
-
-    private _isWideEnoughForValue(widthPct: number): boolean {
-        return this._trackWidthPx === 0
-            || (widthPct / 100) * this._trackWidthPx >= MIN_SLOT_VALUE_WIDTH_PX;
     }
 
     private _buildSlotHitTitle(

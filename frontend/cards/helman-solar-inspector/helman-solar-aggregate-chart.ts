@@ -6,7 +6,7 @@ import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { CHART_COLORS } from "./chart-colors";
 import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-selection";
-import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
+import { selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
 import type { ApplianceComponent } from "./solar-inspector-model.js";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
@@ -133,8 +133,14 @@ const SELECTED_STYLE = "fill: color-mix(in srgb, var(--helman-grid-import) 13%, 
 const HOVER_STYLE = "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent);"
     + " stroke: var(--helman-selection); stroke-width: 1;";
 
-/** Below this column width a label cannot be written without colliding. */
-const MIN_LABEL_PX = 13;
+/**
+ * Room a bucket's date label needs, which is less than a value label's.
+ *
+ * A day number or a short month name is two or three characters where the
+ * strips' percentages and rates are four, so the axis stays dense a little
+ * longer than the numbers above it do.
+ */
+const MIN_BUCKET_LABEL_PX = 13;
 
 /**
  * The two rows drawn under the energy chart, on its x geometry.
@@ -556,10 +562,18 @@ export class HelmanSolarAggregateChart extends LitElement {
         columnWidth: number,
         yFor: (pct: number) => number,
     ) {
-        if (!columnFitsLabel(columnWidth)) return nothing;
+        // Selected on the pair's midpoint: the two marks are one reading of the
+        // column, so they are kept or dropped together.
+        const pairs = rows.map((row) => bounds(row));
+        const labelled = selectLabelledColumns(
+            pairs.map((pair) => pair === null
+                ? { value: null, text: null }
+                : { value: (pair.min + pair.max) / 2, text: `${Math.round(pair.max)}%` }),
+            { columnWidthPx: columnWidth },
+        );
         return rows.map((row, index) => {
-            const pair = bounds(row);
-            if (pair === null) return nothing;
+            const pair = pairs[index];
+            if (pair === null || !labelled[index]) return nothing;
             const centre = xFor(index) + columnWidth / 2;
             const low = svg`${stripValueLabel({
                 x: centre,
@@ -699,26 +713,34 @@ export class HelmanSolarAggregateChart extends LitElement {
         yFor: (value: number) => number,
         zeroY: number,
     ) {
-        if (!columnFitsLabel(columnWidth)) return nothing;
-        const worthLabelling = (amount: number | null): amount is number =>
-            amount !== null && Number.isFinite(amount) && Math.abs(amount) >= 0.05;
-        return rows.map((row, index) => {
+        // Cost and gain are two series, thinned apart: a day whose gain is the
+        // interesting one should not lose it because its cost was flat.
+        const candidates = (amount: (row: SpanAggregateRow) => number | null) =>
+            rows.map((row) => {
+                const value = amount(row);
+                return value !== null && Number.isFinite(value) && Math.abs(value) >= 0.05
+                    ? { value, text: formatMoneyTick(value) }
+                    : { value: null, text: null };
+            });
+        const costs = candidates((row) => row.moneyCost);
+        const gains = candidates((row) => row.moneyGain);
+        const labelledCosts = selectLabelledColumns(costs, { columnWidthPx: columnWidth });
+        const labelledGains = selectLabelledColumns(gains, { columnWidthPx: columnWidth });
+        return rows.map((_row, index) => {
             const centre = xFor(index) + columnWidth / 2;
-            const costValue = row.moneyCost;
-            const gainValue = row.moneyGain;
             return svg`
-                ${worthLabelling(costValue)
+                ${labelledCosts[index]
                     ? stripValueLabel({
                         x: centre,
-                        y: Math.max(yFor(costValue) - 3, 9),
-                        text: formatMoneyTick(costValue),
+                        y: Math.max(yFor(costs[index].value!) - 3, 9),
+                        text: costs[index].text!,
                     })
                     : nothing}
-                ${worthLabelling(gainValue)
+                ${labelledGains[index]
                     ? stripValueLabel({
                         x: centre,
-                        y: Math.max(yFor(-gainValue) + 8, zeroY + 8),
-                        text: formatMoneyTick(gainValue),
+                        y: Math.max(yFor(-gains[index].value!) + 8, zeroY + 8),
+                        text: gains[index].text!,
                     })
                     : nothing}
             `;
@@ -1063,14 +1085,16 @@ export class HelmanSolarAggregateChart extends LitElement {
         xFor: (index: number) => number,
         columnWidth: number,
     ) {
-        const stride = columnWidth >= MIN_LABEL_PX
-            ? 1
-            : columnWidth * 2 >= MIN_LABEL_PX
-                ? 2
-                : 5;
+        // Dates, not readings: `value: index` is monotone, which sends the
+        // selector down its evenly spaced branch -- the only sensible thinning
+        // for an axis.
+        const labelled = selectLabelledColumns(
+            rows.map((row, index) => ({ value: index, text: this._bucketLabel(row.date) })),
+            { columnWidthPx: columnWidth, minLabelWidthPx: MIN_BUCKET_LABEL_PX },
+        );
         const y = CHART.height - CHART.marginBottom + 14;
         return rows.map((row, index) => {
-            if (index % stride !== 0) return nothing;
+            if (!labelled[index]) return nothing;
             return svg`
                 <text
                     class="bucket-label"

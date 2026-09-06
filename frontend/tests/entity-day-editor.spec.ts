@@ -1031,11 +1031,18 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { pruned: true });
 
+        // Keyed by the slot's own position rather than by index: an hour whose
+        // reading repeats its neighbour's carries no number, so a row's cells
+        // are not one-per-hour and counting along them would find the wrong one.
         const values = await page.evaluate(() => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-            const read = (row: Element) =>
-                [...row.querySelectorAll(".slot-value")].map((cell) => cell.textContent?.trim());
+            const read = (row: Element) => Object.fromEntries(
+                [...row.querySelectorAll(".slot-value")].map((cell) => [
+                    Math.round(Number.parseFloat((cell as HTMLElement).style.left) / 100 * 24),
+                    cell.textContent?.trim(),
+                ]),
+            );
             const chartRows = band.shadowRoot.querySelectorAll(".context-row:not(.price)");
             return {
                 solar: read(chartRows[0]),
@@ -1046,14 +1053,12 @@ test.describe("entity day editor", () => {
 
         // Solar is kWh, the battery is whole percent, the price is its own unit
         // to one decimal -- the units belong to the row, not to the cell.
-        // 09:00 is the tenth hour: 0.81 kWh, 76 %, 2.45. The solar row is one
-        // short of the others -- midnight has no sun, and an explicit zero
-        // would be a reading where the row already says there is none.
-        expect(values.solar).toHaveLength(23);
-        expect(values.solar[8]).toBe("0.8");
-        expect(values.battery).toHaveLength(24);
+        // 09:00 is the tenth hour: 0.81 kWh and 76 %.
+        expect(values.solar[9]).toBe("0.8");
         expect(values.battery[9]).toBe("76");
-        expect(values.price[9]).toBe("2.5");
+        // This fixture prices the whole day at one rate, so the price row says
+        // it once and then leaves the bars to say it stayed there.
+        expect(values.price).toEqual({ 0: "2.5" });
     });
 
     /**
