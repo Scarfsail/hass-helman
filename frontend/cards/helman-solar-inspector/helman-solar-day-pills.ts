@@ -27,6 +27,7 @@ import {
     calendarWindow,
     MAX_CALENDAR_DAYS,
     buildDayPillKeys,
+    buildDayPillScaleForDays,
     buildSolarInspectorDayPills,
     resolveFirstWeekdayIndex,
     EMPTY_DAY_PILL_MODEL,
@@ -34,6 +35,7 @@ import {
     type SolarInspectorDayPillModel,
     type SolarInspectorHistoryDay,
 } from "./day-pill-model";
+import type { ScheduleTableDayAggregateScale } from "../shared/schedule/schedule-table-types";
 import { helmanColorVars } from "../color-vars";
 
 /**
@@ -268,6 +270,15 @@ export class HelmanSolarDayPills extends LitElement {
             border-style: dashed;
         }
 
+        /* Today, which is half measured and half predicted. The row reads left
+           to right as past into future, so the frame says what the solar fill
+           says: solid on the edge the day has already crossed, dashed around
+           the part still ahead. */
+        .pill.mixed {
+            border-style: dashed;
+            border-left-style: solid;
+        }
+
         .pill.selected .pill-label {
             color: var(--primary-color, #2563eb);
         }
@@ -352,6 +363,14 @@ export class HelmanSolarDayPills extends LitElement {
     @property({ type: String }) public revealMonth = "";
     @property({ type: Number }) public revealVersion = 0;
     @state() private _selectedDirection: "" | "above" | "below" = "";
+    /**
+     * The scale of the days on screen, while the calendar is a scrolling one.
+     *
+     * Null everywhere else, which is every layout that shows all of its pills at
+     * once -- there the days on screen are the row, and the model's own scale
+     * already is this one.
+     */
+    @state() private _visibleScale: ScheduleTableDayAggregateScale | null = null;
     private _frame = 0;
     private _resize?: ResizeObserver;
     private _observedRow?: HTMLElement;
@@ -406,6 +425,7 @@ export class HelmanSolarDayPills extends LitElement {
             this._observedRow = undefined;
             this._revealed = -1;
             this._restore = undefined;
+            this._visibleScale = null;
             this._revealSelectedPill();
             return;
         }
@@ -471,6 +491,18 @@ export class HelmanSolarDayPills extends LitElement {
         if (month !== this.browsedMonth) this._emitCalendar("calendar-month", month);
         this._selectedDirection = visible.some((pill) => pill.dataset.day === this.selectedDate) ? ""
             : this.selectedDate < visible[0].dataset.day! ? "above" : "below";
+        // Assigned only on a change, because this runs from the same frame the
+        // render schedules: an unconditional write would re-render, re-measure
+        // and never settle.
+        const scale = buildDayPillScaleForDays(
+            this._model.pills,
+            new Set(visible.map((pill) => pill.dataset.day!)),
+            this._model.scale,
+        );
+        if (scale.solarMaxWh !== this._visibleScale?.solarMaxWh
+            || scale.gridMaxKwh !== this._visibleScale?.gridMaxKwh) {
+            this._visibleScale = scale;
+        }
         // Only replace the buffer close to an edge. A visible date's offset is
         // captured before Lit changes the keyed cells and restored afterwards.
         if (row.scrollTop < 144 || row.scrollHeight - row.scrollTop - row.clientHeight < 144) {
@@ -556,6 +588,18 @@ export class HelmanSolarDayPills extends LitElement {
         `;
     }
 
+    /**
+     * What the bars are measured against.
+     *
+     * `_visibleScale` is cleared in `updated()`, which runs after the render
+     * that closed the picker -- so the layout is asked here rather than trusting
+     * the field to be null already, and the collapsed row never draws a frame
+     * against the calendar's viewport.
+     */
+    private _scale(): ScheduleTableDayAggregateScale {
+        return this.continuous ? this._visibleScale ?? this._model.scale : this._model.scale;
+    }
+
     private _renderPill(pill: SolarInspectorDayPill) {
         const selected = pill.dayKey === this.selectedDate;
         // Compared here rather than carried on the pill: it is two string
@@ -569,12 +613,13 @@ export class HelmanSolarDayPills extends LitElement {
         const bucketSelected = this.selectedBuckets.includes(pill.dayKey);
         return html`
             <button
-                class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`
+                class=${`pill${selected ? " selected" : ""}`
+                    + `${pill.dayState === "measured" ? " history" : ""}${pill.dayState === "mixed" ? " mixed" : ""}`
                     + `${this.continuous && pill.dayKey.endsWith("-01") ? " month-start" : ""}`
                     + `${hovered ? " hovered" : ""}${bucketSelected ? " bucket-selected" : ""}`}
                 type="button"
                 data-day=${pill.dayKey}
-                data-history=${pill.isHistory ? "true" : "false"}
+                data-day-state=${pill.dayState}
                 title=${pill.label}
                 aria-label=${pill.label}
                 ?disabled=${unreachable}
@@ -590,15 +635,21 @@ export class HelmanSolarDayPills extends LitElement {
                 ${renderDayAggregateGauge({
                     kind: "solar",
                     aggregate: pill.aggregate,
-                    scale: this._model.scale,
+                    scale: this._scale(),
                     available: pill.availability.solar,
+                    forecast: pill.dayState !== "measured",
+                    measuredWh: pill.measuredSolarWh,
                     localize: this._localize,
                 })}
                 ${renderDayAggregateGauge({
                     kind: "battery",
                     aggregate: pill.aggregate,
-                    scale: this._model.scale,
+                    scale: this._scale(),
                     available: pill.availability.battery,
+                    // Forecast on a mixed day too: the band it draws reaches
+                    // into slots that have not been lived through, so it is not
+                    // a measured claim even though half of it was measured.
+                    forecast: pill.dayState !== "measured",
                     localize: this._localize,
                 })}
             </button>

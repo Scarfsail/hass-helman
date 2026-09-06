@@ -213,7 +213,9 @@
       "net": "Netto",
       "import": "Import",
       "export": "Export",
-      "surplus": "Přebytek"
+      "surplus": "Přebytek",
+      "measured": "naměřeno",
+      "expected": "očekáváno"
     },
     "table": {
       "caption": "Tabulka plánu",

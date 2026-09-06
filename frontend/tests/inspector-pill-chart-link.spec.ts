@@ -466,15 +466,21 @@ test.describe("the pill row's border says which days have happened", () => {
         // pinned today and so holds both kinds of day at once.
         await toggleMore(page);
         const styles = await pillBorderStyles(page);
-        expect(styles.some((pill) => pill.history)).toBe(true);
-        expect(styles.some((pill) => !pill.history)).toBe(true);
+        expect(styles.some((pill) => pill.state === "measured")).toBe(true);
+        expect(styles.some((pill) => pill.state === "forecast")).toBe(true);
         for (const pill of styles) {
-            expect(pill.border).toBe(pill.history ? "solid" : "dashed");
+            expect(pill.border).toBe(pill.state === "measured" ? "solid" : "dashed");
+            // A day still ahead is dashed all the way round; one the reader is
+            // standing in is solid on the edge it has already crossed.
+            expect(pill.borderLeft).toBe(pill.state === "forecast" ? "dashed" : "solid");
         }
 
-        // Today is measured -- it has already partly happened -- and it stays
-        // measured when the picker closes. Its window changes; the day does not.
+        // Today has happened as far as it has got, and it says so whichever
+        // window it is in. This harness answers no forecast at all, so today is
+        // measured and nothing more -- the mixed day the real card draws is
+        // pinned in `inspector-day-pills.spec.ts`, which has both halves.
         const today = FIXED_TODAY;
+        expect(styles.find((pill) => pill.day === today)?.state).toBe("measured");
         expect(styles.find((pill) => pill.day === today)?.border).toBe("solid");
         await toggleMore(page);
         const closed = await pillBorderStyles(page);
@@ -485,15 +491,16 @@ test.describe("the pill row's border says which days have happened", () => {
 /** Every day pill's measured-ness and its resolved border style. */
 async function pillBorderStyles(
     page: Page,
-): Promise<Array<{ day: string; history: boolean; border: string }>> {
+): Promise<Array<{ day: string; state: string; border: string; borderLeft: string }>> {
     return page.evaluate(() => {
         const root = (document.querySelector("helman-solar-inspector") as any)
             .shadowRoot.querySelector("helman-solar-day-pills")?.shadowRoot;
         if (!root) return [];
         return [...root.querySelectorAll(".pill")].map((pill: Element) => ({
             day: pill.getAttribute("data-day") ?? "",
-            history: pill.getAttribute("data-history") === "true",
+            state: pill.getAttribute("data-day-state") ?? "",
             border: getComputedStyle(pill).borderTopStyle,
+            borderLeft: getComputedStyle(pill).borderLeftStyle,
         }));
     });
 }

@@ -42,6 +42,14 @@ export interface DayAggregateGaugeOptions {
     /** Whether the metric exists at all — an unconfigured battery has no bar. */
     available: boolean;
     priceDisplayUnit?: string | null;
+    /**
+     * The figures are predicted rather than measured, which the fill says by
+     * being hatched. Optional, so a caller that only ever draws one kind of day
+     * -- the schedule table, whose day rows are all forecast -- says nothing.
+     */
+    forecast?: boolean;
+    /** Solar only: the measured part of a mixed day, drawn solid over the fill. */
+    measuredWh?: number | null;
     localize: LocalizeFunction;
 }
 
@@ -107,11 +115,12 @@ export const dayAggregateGaugeStyles = css`
     }
 
     .day-aggregate-gauge.battery .day-aggregate-gauge-fill {
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             90deg,
             color-mix(in srgb, var(--helman-battery) 34%, white 4%),
             color-mix(in srgb, var(--helman-battery) 22%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
     }
 
     .day-aggregate-gauge.solar {
@@ -126,11 +135,42 @@ export const dayAggregateGaugeStyles = css`
     }
 
     .day-aggregate-gauge.solar .day-aggregate-gauge-fill {
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             90deg,
             color-mix(in srgb, var(--helman-solar) 24%, #2d2500),
             color-mix(in srgb, var(--helman-solar) 16%, #131000)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
+    }
+
+    /* Predicted figures, hatched. The border around a forecast pill is one
+       line and easy to miss next to the bars it encloses, so the bars carry
+       the same claim themselves: a hatched fill is a number that has not
+       happened yet. The hatch goes over the kind's own gradient rather than
+       replacing it, so a forecast bar is still recognisably its metric.
+
+       Named once and applied per kind, because the grid and price fills each
+       set their own background-image under a class more specific than this
+       one -- so they take the hatch where they are declared, further down,
+       rather than here. */
+    .day-aggregate-gauge {
+        --day-aggregate-gauge-hatch: repeating-linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--primary-text-color) 14%, transparent) 0 3px,
+            transparent 3px 6px
+        );
+    }
+
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill {
+        background-image:
+            var(--day-aggregate-gauge-hatch),
+            var(--day-aggregate-gauge-fill-image);
+    }
+
+    /* The measured left portion of a mixed day: flat, because that part of the
+       day is a measurement even though the bar it sits in ends in a forecast. */
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.measured {
+        background-image: var(--day-aggregate-gauge-fill-image);
     }
 
     .day-aggregate-gauge.grid {
@@ -160,31 +200,34 @@ export const dayAggregateGaugeStyles = css`
         inset: 0 auto 0 auto;
         right: 50%;
         left: auto;
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             270deg,
             color-mix(in srgb, #2563eb 42%, white 2%),
             color-mix(in srgb, #2563eb 20%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
         border-radius: 4px 0 0 4px;
     }
 
     .day-aggregate-gauge.grid .day-aggregate-gauge-fill.export {
         inset: 0 auto 0 50%;
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             90deg,
             color-mix(in srgb, var(--helman-grid-export) 42%, white 2%),
             color-mix(in srgb, var(--helman-grid-export) 20%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
         border-radius: 0 4px 4px 0;
     }
 
     .day-aggregate-gauge.grid .day-aggregate-gauge-fill.surplus {
         inset: 0 auto 0 50%;
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             90deg,
             color-mix(in srgb, #595959 76%, var(--primary-text-color)),
             color-mix(in srgb, #3a3a3a 56%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
         border-radius: 0 4px 4px 0;
     }
 
@@ -231,22 +274,38 @@ export const dayAggregateGaugeStyles = css`
     .day-aggregate-gauge.price .day-aggregate-gauge-fill.negative {
         inset: 0 auto 0 auto;
         left: auto;
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             270deg,
             color-mix(in srgb, var(--helman-price-negative) 40%, white 2%),
             color-mix(in srgb, var(--helman-price-negative) 18%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
         border-radius: 4px 0 0 4px;
     }
 
     .day-aggregate-gauge.price .day-aggregate-gauge-fill.positive {
         inset: 0 auto 0 auto;
-        background: linear-gradient(
+        --day-aggregate-gauge-fill-image: linear-gradient(
             90deg,
             color-mix(in srgb, var(--helman-price-positive) 40%, white 2%),
             color-mix(in srgb, var(--helman-price-positive) 18%, transparent)
         );
+        background-image: var(--day-aggregate-gauge-fill-image);
         border-radius: 0 4px 4px 0;
+    }
+
+    /* The grid and price fills, hatched where the solar and battery ones are.
+       Their own rules name a kind and a side, so they outrank the plain
+       forecast rule; these repeat that weight and come after them, which is the
+       whole reason they are written out rather than folded into it. */
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.import,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.export,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.surplus,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.negative,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.positive {
+        background-image:
+            var(--day-aggregate-gauge-hatch),
+            var(--day-aggregate-gauge-fill-image);
     }
 
     .day-aggregate-price-pair {
@@ -320,7 +379,7 @@ function _renderBatteryGauge(options: DayAggregateGaugeOptions) {
     );
 
     return html`
-        <div class="day-aggregate-gauge battery" role="img" aria-label=${title} title=${title}>
+        <div class=${`day-aggregate-gauge battery${options.forecast ? " forecast" : ""}`} role="img" aria-label=${title} title=${title}>
             ${widthPct > 0 ? html`
                 <span
                     class="day-aggregate-gauge-fill"
@@ -341,13 +400,21 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
         return html`<div class="day-aggregate-gauge solar unavailable" aria-hidden="true"></div>`;
     }
 
-    const widthPct = options.scale.solarMaxWh > 0
-        ? Math.min((aggregate.solarWh / options.scale.solarMaxWh) * 100, 100)
+    const scalePct = (wh: number) => options.scale.solarMaxWh > 0
+        ? Math.min((wh / options.scale.solarMaxWh) * 100, 100)
         : 0;
-    const title = buildDaySolarAggregateTitle(options.localize, aggregate.solarWh);
+    const widthPct = scalePct(aggregate.solarWh);
+    // The measured half of a mixed day, drawn as a second fill from the same
+    // left edge and after the first, so it paints over the hatched bar's left
+    // portion. Two fills rather than two segments because the day is one bar:
+    // what has been harvested is part of what the day will reach, not something
+    // sitting next to it.
+    const measuredWh = options.measuredWh ?? null;
+    const measuredPct = measuredWh === null ? 0 : Math.min(scalePct(measuredWh), widthPct);
+    const title = buildDaySolarAggregateTitle(options.localize, aggregate.solarWh, measuredWh);
 
     return html`
-        <div class="day-aggregate-gauge solar" role="img" aria-label=${title} title=${title}>
+        <div class=${`day-aggregate-gauge solar${options.forecast ? " forecast" : ""}`} role="img" aria-label=${title} title=${title}>
             ${widthPct > 0 ? html`
                 <span
                     class="day-aggregate-gauge-fill"
@@ -355,7 +422,22 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
                     aria-hidden="true"
                 ></span>
             ` : nothing}
-            <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(aggregate.solarWh)}</span>
+            ${measuredPct > 0 ? html`
+                <span
+                    class="day-aggregate-gauge-fill measured"
+                    style=${`width:${measuredPct}%;`}
+                    aria-hidden="true"
+                ></span>
+            ` : nothing}
+            <span class="day-aggregate-gauge-value">
+                ${measuredWh === null
+                    ? formatSolarGaugeValue(aggregate.solarWh)
+                    // Unspaced, because the pill is 74px at its widest and both
+                    // figures have to survive a phone-width card -- with the
+                    // spaces the strip ellipsised to "1.4" and the day the two
+                    // figures exist for was the one that lost them.
+                    : `${formatSolarGaugeValue(measuredWh)}/${formatSolarGaugeValue(aggregate.solarWh)}`}
+            </span>
         </div>
     `;
 }
@@ -387,7 +469,7 @@ function _renderGridGauge(options: DayAggregateGaugeOptions) {
 
     return html`
         <div
-            class=${`day-aggregate-gauge grid${positiveDisplay.kind === "surplus" ? " surplus" : ""}${!hasImport && !hasPositiveDisplay ? " zero" : ""}`}
+            class=${`day-aggregate-gauge grid${positiveDisplay.kind === "surplus" ? " surplus" : ""}${!hasImport && !hasPositiveDisplay ? " zero" : ""}${options.forecast ? " forecast" : ""}`}
             role="img"
             aria-label=${title}
             title=${title}
@@ -453,7 +535,7 @@ function _renderPriceGauge(options: DayAggregateGaugeOptions) {
 
     return html`
         <div
-            class=${`day-aggregate-gauge price${isZero ? " zero" : ""}`}
+            class=${`day-aggregate-gauge price${isZero ? " zero" : ""}${options.forecast ? " forecast" : ""}`}
             role="img"
             aria-label=${title}
             title=${title}
@@ -497,8 +579,19 @@ export function buildDayBatteryAggregateTitle(
     return `${localize("scheduling.forecast.battery_label")}: ${Math.round(minSocPct)}% : ${Math.round(maxSocPct)}%`;
 }
 
-export function buildDaySolarAggregateTitle(localize: LocalizeFunction, wh: number): string {
-    return `${localize("scheduling.forecast.solar_label")}: ${formatSolarGaugeTitle(wh)}`;
+export function buildDaySolarAggregateTitle(
+    localize: LocalizeFunction,
+    wh: number,
+    measuredWh: number | null = null,
+): string {
+    const label = localize("scheduling.forecast.solar_label");
+    if (measuredWh === null) {
+        return `${label}: ${formatSolarGaugeTitle(wh)}`;
+    }
+    // Both figures are spelled out, because "4.2 / 7.8" on the bar is only
+    // readable once something has said which of the two has already happened.
+    return `${label}: ${formatSolarGaugeTitle(measuredWh)} ${localize("scheduling.forecast.measured")}`
+        + ` · ${formatSolarGaugeTitle(wh)} ${localize("scheduling.forecast.expected")}`;
 }
 
 export function buildDayGridAggregateTitle(
