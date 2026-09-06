@@ -65,6 +65,8 @@ export interface SolarInspectorDayPillAvailability {
     grid: boolean;
 }
 
+export type SolarInspectorDayState = "measured" | "mixed" | "forecast";
+
 export interface SolarInspectorDayPill {
     /** Local ISO date; the same string the inspector selects days by. */
     dayKey: string;
@@ -73,8 +75,18 @@ export interface SolarInspectorDayPill {
     /** Null when neither the schedule nor the day's actuals reach it. */
     aggregate: ScheduleTableDayAggregateModel | null;
     availability: SolarInspectorDayPillAvailability;
-    /** True for the reconstructed past day, which is only ever the shown one. */
-    isHistory: boolean;
+    /**
+     * Where the day's numbers come from.
+     *
+     * Today is the day that has both halves: the meters have the part behind,
+     * and the schedule -- which prunes elapsed slots -- has exactly the part
+     * ahead. A day like that is neither a measurement nor a prediction, and
+     * drawing it as either one makes the row lie about the day the reader is
+     * standing in.
+     */
+    dayState: SolarInspectorDayState;
+    /** The measured half of a mixed day; null on any other day. */
+    measuredSolarWh: number | null;
 }
 
 /** A past day, rebuilt from what the inspector measured for it. */
@@ -250,7 +262,8 @@ export function buildSolarInspectorDayPills({
         label: section.dayLabel,
         aggregate: section.dayAggregate,
         availability,
-        isHistory: false,
+        dayState: "forecast",
+        measuredSolarWh: null,
     }));
 
     // The schedule and the forecast only reach forward, so a past day's pill
@@ -267,17 +280,36 @@ export function buildSolarInspectorDayPills({
         if (index === undefined) {
             continue;
         }
+        const forecastPill = pills[index];
+        // Only today mixes, and only when both halves are actually there: a
+        // measured day behind the row has no forecast left to add, and a today
+        // the schedule does not reach is a measurement and nothing more.
+        const mixed = historyDay.dayKey === currentDayKey
+            && historyDay.aggregate !== null
+            && forecastPill.aggregate !== null;
+        const aggregate = mixed
+            ? _mergeMeasuredWithForecast(historyDay.aggregate!, forecastPill.aggregate!)
+            : historyDay.aggregate;
         pills[index] = {
             dayKey: historyDay.dayKey,
-            label: pills[index].label,
-            aggregate: historyDay.aggregate,
-            availability: historyDay.availability,
-            isHistory: true,
+            label: forecastPill.label,
+            aggregate,
+            availability: mixed
+                ? {
+                    battery: historyDay.availability.battery || forecastPill.availability.battery,
+                    solar: historyDay.availability.solar || forecastPill.availability.solar,
+                    grid: historyDay.availability.grid || forecastPill.availability.grid,
+                }
+                : historyDay.availability,
+            dayState: mixed ? "mixed" : "measured",
+            measuredSolarWh: mixed ? historyDay.aggregate!.solarWh : null,
         };
         // What was measured belongs on the same scale as what is forecast:
         // yesterday's sun is only worth showing next to tomorrow's if the two
-        // bars mean the same thing.
-        scale = _extendScaleWithAggregate(scale, historyDay.aggregate);
+        // bars mean the same thing. Today goes on it as the merged day, so the
+        // scale covers what today is expected to reach and not the part of it
+        // that has happened.
+        scale = _extendScaleWithAggregate(scale, aggregate);
     }
 
     return { pills, scale };
@@ -336,6 +368,45 @@ export function buildHistoryDaysFromAggregates(
         });
     }
     return days;
+}
+
+/**
+ * Today's two halves as one day.
+ *
+ * Solar and the grid meters add up, because the two sides describe disjoint
+ * parts of the day; the SoC band is the union of the two ranges, because the
+ * battery's day is where it has been *and* where it is going. Surplus and the
+ * prices are forecast properties -- nothing measures a plan's headroom after
+ * the fact -- so they come from the forecast half alone.
+ */
+function _mergeMeasuredWithForecast(
+    measured: ScheduleTableDayAggregateModel,
+    forecast: ScheduleTableDayAggregateModel,
+): ScheduleTableDayAggregateModel {
+    return {
+        batteryMinSocPct: _combine(measured.batteryMinSocPct, forecast.batteryMinSocPct, Math.min),
+        batteryMaxSocPct: _combine(measured.batteryMaxSocPct, forecast.batteryMaxSocPct, Math.max),
+        solarWh: _combine(measured.solarWh, forecast.solarWh, (a, b) => a + b),
+        gridImportKwh: _combine(measured.gridImportKwh, forecast.gridImportKwh, (a, b) => a + b),
+        gridExportKwh: _combine(measured.gridExportKwh, forecast.gridExportKwh, (a, b) => a + b),
+        availableSurplusKwh: forecast.availableSurplusKwh,
+        priceHasData: forecast.priceHasData,
+        pricePositiveMin: forecast.pricePositiveMin,
+        pricePositiveMax: forecast.pricePositiveMax,
+        priceNegativeMin: forecast.priceNegativeMin,
+        priceNegativeMax: forecast.priceNegativeMax,
+    };
+}
+
+/** Either value where the other is missing: a half-known metric is still known. */
+function _combine(
+    measured: number | null,
+    forecast: number | null,
+    merge: (a: number, b: number) => number,
+): number | null {
+    if (measured === null) return forecast;
+    if (forecast === null) return measured;
+    return merge(measured, forecast);
 }
 
 function _extendScaleWithAggregate(

@@ -147,5 +147,11 @@
       "hours": "h ago",
       "days": "d ago"
     }
+  },
+  "scheduling": {
+    "forecast": {
+      "measured": "measured",
+      "expected": "expected"
+    }
   }
 }

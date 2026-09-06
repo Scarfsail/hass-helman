@@ -47,8 +47,14 @@ async function mountInspector(
     page: Page,
     minDaysBack = 30,
     firstWeekday = "language",
+    // Off by default: the fixture deliberately answers the day-aggregate read
+    // with past days only, so today's pill is pure forecast and every
+    // expectation written against that still holds. On, the meters have the
+    // part of today that has already happened -- which is what the real backend
+    // answers mid-day, and what makes today a mixed day.
+    measureToday = false,
 ): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday }) => {
+    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday, measureToday }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -278,6 +284,19 @@ async function mountInspector(
                         cursor += dayMs
                     ) {
                         const day = new Date(cursor).toISOString().slice(0, 10);
+                        if (day === isoDay(0) && measureToday) {
+                            // Today so far: a morning's production and a
+                            // battery that has been round part of a cycle.
+                            days.push({
+                                date: day,
+                                solarWh: 1400,
+                                gridImportKwh: 0.9,
+                                gridExportKwh: 0.4,
+                                batteryMinSocPct: 44,
+                                batteryMaxSocPct: 71,
+                            });
+                            continue;
+                        }
                         if (!isPast(day)) {
                             continue;
                         }
@@ -302,6 +321,7 @@ async function mountInspector(
         scheduledDays: SCHEDULED_DAYS,
         minDaysBack,
         firstWeekday,
+        measureToday,
     });
 
     await page.waitForFunction((expected) => {
@@ -318,9 +338,18 @@ type PillReadout = {
     label: string;
     title: string;
     selected: boolean;
-    isHistory: boolean;
+    /** "measured" / "mixed" / "forecast", as the pill labels its own day. */
+    dayState: string;
     /** Gauge kind → the figure it wrote, or "" when it wrote none. */
-    gauges: Array<{ kind: string; text: string; unavailable: boolean; fillWidth: string }>;
+    gauges: Array<{
+        kind: string;
+        text: string;
+        unavailable: boolean;
+        fillWidth: string;
+        forecast: boolean;
+        /** Every fill the bar drew, in paint order, and which is the measured one. */
+        fills: Array<{ width: string; measured: boolean }>;
+    }>;
 };
 
 async function readPills(page: Page): Promise<PillReadout[]> {
@@ -332,12 +361,17 @@ async function readPills(page: Page): Promise<PillReadout[]> {
             label: pill.querySelector(".pill-label")?.textContent?.trim() ?? "",
             title: pill.getAttribute("title") ?? "",
             selected: pill.getAttribute("aria-pressed") === "true",
-            isHistory: pill.getAttribute("data-history") === "true",
+            dayState: pill.getAttribute("data-day-state") ?? "",
             gauges: Array.from(pill.querySelectorAll(".day-aggregate-gauge")).map((gauge) => ({
                 kind: ["solar", "battery", "grid"].find((k) => gauge.classList.contains(k)) ?? "",
                 text: gauge.textContent?.trim() ?? "",
                 unavailable: gauge.classList.contains("unavailable"),
                 fillWidth: (gauge.querySelector(".day-aggregate-gauge-fill") as HTMLElement | null)?.style.width ?? "",
+                forecast: gauge.classList.contains("forecast"),
+                fills: Array.from(gauge.querySelectorAll(".day-aggregate-gauge-fill")).map((fill) => ({
+                    width: (fill as HTMLElement).style.width,
+                    measured: fill.classList.contains("measured"),
+                })),
             })),
         }));
     });
@@ -372,7 +406,7 @@ async function waitForHistoryPills(page: Page, count: number): Promise<void> {
     await page.waitForFunction((expected) => {
         const root = document.querySelector("helman-solar-inspector")
             ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-        return [...root!.querySelectorAll('.pill[data-history="true"]')].filter((pill) =>
+        return [...root!.querySelectorAll('.pill[data-day-state="measured"]')].filter((pill) =>
             !root!.querySelector(".continuous") || pill.getAttribute("data-day")!.slice(0, 7) === new Date().toISOString().slice(0, 7)).length === expected;
     }, count);
 }
@@ -541,6 +575,126 @@ test.describe("solar inspector day pills", () => {
     });
 });
 
+/**
+ * Today, the one day with both halves.
+ *
+ * The meters have the part of it that has happened and the schedule has the
+ * part that has not, and a pill drawn from either one alone says something
+ * false about the day the reader is standing in: the morning's harvest read as
+ * the whole day, or the whole day read as if none of it had happened yet.
+ */
+test.describe("solar inspector today, half measured", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("today's pill adds the measured half to the expected rest", async ({ page }) => {
+        await mountInspector(page, 30, "language", true);
+        await waitForMixedToday(page);
+
+        const [today] = await readPills(page);
+        expect(today.dayState).toBe("mixed");
+        const byKind = new Map(today.gauges.map((gauge) => [gauge.kind, gauge]));
+        // 1.4 kWh measured so far, against a fixture day whose forecast is
+        // 8 kWh of daylight -- so the day is expected to reach 9.4.
+        expect(byKind.get("solar")!.text).toBe("1.4 / 9.4");
+        // The band spans both halves: the floor is where the forecast takes the
+        // battery, the ceiling is where the morning already took it.
+        expect(byKind.get("battery")!.text).toBe("40 : 71");
+    });
+
+    test("the mixed solar bar draws the measured part inside the expected one", async ({ page }) => {
+        await mountInspector(page, 30, "language", true);
+        await waitForMixedToday(page);
+
+        const solar = (await readPills(page))[0].gauges.find((gauge) => gauge.kind === "solar")!;
+        expect(solar.fills).toHaveLength(2);
+        expect(solar.fills[0].measured).toBe(false);
+        expect(solar.fills[1].measured).toBe(true);
+        // Today is the brightest day of the row once its two halves are added,
+        // so it pins the shared scale and its expected fill is the full bar.
+        expect(Number.parseFloat(solar.fills[0].width)).toBeCloseTo(100, 1);
+        expect(Number.parseFloat(solar.fills[1].width))
+            .toBeLessThan(Number.parseFloat(solar.fills[0].width));
+    });
+
+    test("a predicted bar is hatched and a measured one is not", async ({ page }) => {
+        await mountInspector(page, 30, "language", true);
+        await waitForMixedToday(page);
+        const month = daysOfThisMonth();
+        const pastDays = month.filter((day) => day < dayAt(0)).length;
+        await pressMore(page);
+        await waitForDays(page, month);
+        await waitForHistoryPills(page, pastDays);
+
+        // A bar with nothing to draw carries no treatment either -- an
+        // unavailable gauge is a blank strip, not a claim about a day -- so the
+        // hatch is only asked about the bars that drew something.
+        const drawn = (pill: PillReadout) => pill.gauges.filter((gauge) => !gauge.unavailable);
+        const pills = await readMonthPills(page);
+        for (const pill of pills.filter((candidate) => candidate.dayState === "measured")) {
+            expect(drawn(pill).some((gauge) => gauge.forecast)).toBe(false);
+        }
+        const ahead = pills.filter((candidate) =>
+            candidate.dayState === "forecast" && candidate.day > dayAt(0) && drawn(candidate).length > 0);
+        expect(ahead.length).toBeGreaterThan(0);
+        for (const pill of ahead) {
+            expect(drawn(pill).every((gauge) => gauge.forecast)).toBe(true);
+        }
+        // Today's own gauges are predicted too: half of what they draw has not
+        // happened, which is not a measured claim.
+        const today = pills.find((pill) => pill.day === dayAt(0))!;
+        expect(drawn(today).every((gauge) => gauge.forecast)).toBe(true);
+    });
+
+    test("today's frame is dashed but solid on the edge it has crossed", async ({ page }) => {
+        await mountInspector(page, 30, "language", true);
+        await waitForMixedToday(page);
+        // `border: 1px solid var(--divider-color)` computes to `none` while the
+        // token is unset, so the bare test page has to supply it before any
+        // border style can be read.
+        await page.evaluate(() => {
+            (document.querySelector("helman-solar-inspector") as HTMLElement)
+                .style.setProperty("--divider-color", "#d4d4d8");
+        });
+
+        expect(await pillBorder(page, dayAt(0))).toEqual({ top: "dashed", left: "solid" });
+        expect(await pillBorder(page, dayAt(1))).toEqual({ top: "dashed", left: "dashed" });
+    });
+
+    test("with nothing measured for today, today is a forecast like any other", async ({ page }) => {
+        await mountInspector(page);
+        await page.evaluate(() => {
+            (document.querySelector("helman-solar-inspector") as HTMLElement)
+                .style.setProperty("--divider-color", "#d4d4d8");
+        });
+
+        const [today] = await readPills(page);
+        expect(today.dayState).toBe("forecast");
+        expect(today.gauges.find((gauge) => gauge.kind === "solar")!.text).not.toContain("/");
+        expect(await pillBorder(page, dayAt(0))).toEqual({ top: "dashed", left: "dashed" });
+    });
+});
+
+/** Wait until today's pill has both halves of the day in it. */
+async function waitForMixedToday(page: Page): Promise<void> {
+    await page.waitForFunction(() => {
+        const root = document.querySelector("helman-solar-inspector")
+            ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        return !!root?.querySelector('.pill[data-day-state="mixed"]');
+    });
+}
+
+/** The resolved border styles of one day's pill. */
+async function pillBorder(page: Page, day: string): Promise<{ top: string; left: string }> {
+    return page.evaluate((target) => {
+        const root = document.querySelector("helman-solar-inspector")
+            ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        const style = getComputedStyle(root!.querySelector(`.pill[data-day="${target}"]`)!);
+        return { top: style.borderTopStyle, left: style.borderLeftStyle };
+    }, day);
+}
+
 test.describe("solar inspector past days", () => {
     test.beforeEach(async ({ page }) => {
         await loadCardBundle(page);
@@ -549,7 +703,7 @@ test.describe("solar inspector past days", () => {
 
     test("no past day is offered until the picker is opened", async ({ page }) => {
         const pills = await readPills(page);
-        expect(pills.some((pill) => pill.isHistory)).toBe(false);
+        expect(pills.some((pill) => pill.dayState === "measured")).toBe(false);
     });
 
     /**
@@ -589,7 +743,7 @@ test.describe("solar inspector past days", () => {
         await waitForDays(page, month);
         await waitForHistoryPills(page, pastDays);
 
-        const target = (await readMonthPills(page)).find((pill) => pill.isHistory)!.day;
+        const target = (await readMonthPills(page)).find((pill) => pill.dayState === "measured")!.day;
         await page.locator(`helman-solar-day-pills [data-day="${target}"]`).click();
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),
@@ -615,8 +769,8 @@ test.describe("solar inspector past days", () => {
         await waitForHistoryPills(page, pastDays);
 
         const pills = await readMonthPills(page);
-        expect(pills.filter((pill) => pill.isHistory)).toHaveLength(pastDays);
-        for (const pill of pills.filter((candidate) => candidate.isHistory)) {
+        expect(pills.filter((pill) => pill.dayState === "measured")).toHaveLength(pastDays);
+        for (const pill of pills.filter((candidate) => candidate.dayState === "measured")) {
             const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
             expect(gauges.get("solar")!.text).not.toBe("");
             expect(gauges.get("battery")!.unavailable).toBe(false);
@@ -641,7 +795,7 @@ test.describe("solar inspector past days", () => {
             `${dayAt(-30)}..${dayAt(0)}`,
         ]);
 
-        const target = (await readMonthPills(page)).find((pill) => pill.isHistory)!.day;
+        const target = (await readMonthPills(page)).find((pill) => pill.dayState === "measured")!.day;
         await page.locator(`helman-solar-day-pills [data-day="${target}"]`).click();
         await page.waitForFunction(
             (day) => ((window as any).__requestedDates as string[]).includes(day),

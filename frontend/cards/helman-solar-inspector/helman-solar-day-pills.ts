@@ -268,6 +268,15 @@ export class HelmanSolarDayPills extends LitElement {
             border-style: dashed;
         }
 
+        /* Today, which is half measured and half predicted. The row reads left
+           to right as past into future, so the frame says what the solar fill
+           says: solid on the edge the day has already crossed, dashed around
+           the part still ahead. */
+        .pill.mixed {
+            border-style: dashed;
+            border-left-style: solid;
+        }
+
         .pill.selected .pill-label {
             color: var(--primary-color, #2563eb);
         }
@@ -569,12 +578,13 @@ export class HelmanSolarDayPills extends LitElement {
         const bucketSelected = this.selectedBuckets.includes(pill.dayKey);
         return html`
             <button
-                class=${`pill${selected ? " selected" : ""}${pill.isHistory ? " history" : ""}`
+                class=${`pill${selected ? " selected" : ""}`
+                    + `${pill.dayState === "measured" ? " history" : ""}${pill.dayState === "mixed" ? " mixed" : ""}`
                     + `${this.continuous && pill.dayKey.endsWith("-01") ? " month-start" : ""}`
                     + `${hovered ? " hovered" : ""}${bucketSelected ? " bucket-selected" : ""}`}
                 type="button"
                 data-day=${pill.dayKey}
-                data-history=${pill.isHistory ? "true" : "false"}
+                data-day-state=${pill.dayState}
                 title=${pill.label}
                 aria-label=${pill.label}
                 ?disabled=${unreachable}
@@ -592,6 +602,8 @@ export class HelmanSolarDayPills extends LitElement {
                     aggregate: pill.aggregate,
                     scale: this._model.scale,
                     available: pill.availability.solar,
+                    forecast: pill.dayState !== "measured",
+                    measuredWh: pill.measuredSolarWh,
                     localize: this._localize,
                 })}
                 ${renderDayAggregateGauge({
@@ -599,6 +611,10 @@ export class HelmanSolarDayPills extends LitElement {
                     aggregate: pill.aggregate,
                     scale: this._model.scale,
                     available: pill.availability.battery,
+                    // Forecast on a mixed day too: the band it draws reaches
+                    // into slots that have not been lived through, so it is not
+                    // a measured claim even though half of it was measured.
+                    forecast: pill.dayState !== "measured",
                     localize: this._localize,
                 })}
             </button>
