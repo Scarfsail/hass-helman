@@ -53,8 +53,14 @@ async function mountInspector(
     // part of today that has already happened -- which is what the real backend
     // answers mid-day, and what makes today a mixed day.
     measureToday = false,
+    // Off by default: the measured days are otherwise all equally bright, which
+    // says nothing about which of them a bar is scaled against. On, the days
+    // more than five weeks back are far brighter than today -- a summer the
+    // continuous calendar still holds in its buffer while an autumn month is on
+    // screen.
+    brightPast = false,
 ): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday, measureToday }) => {
+    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday, measureToday, brightPast }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -302,7 +308,7 @@ async function mountInspector(
                         }
                         days.push({
                             date: day,
-                            solarWh: 6000,
+                            solarWh: brightPast && day < isoDay(-35) ? 30000 : 6000,
                             gridImportKwh: 3.2,
                             gridExportKwh: 1.4,
                             batteryMinSocPct: 30,
@@ -322,6 +328,7 @@ async function mountInspector(
         minDaysBack,
         firstWeekday,
         measureToday,
+        brightPast,
     });
 
     await page.waitForFunction((expected) => {
@@ -1096,6 +1103,85 @@ async function browseMonth(page: Page, month: string) {
     await page.locator(`helman-solar-span-pills .months .pill[data-span="${month}-01"]`).click();
     await expect.poll(async () => (await calendarState(page)).month).toBe(`${month}-01`);
 }
+
+/**
+ * What a bar is measured against, once the calendar can be scrolled.
+ *
+ * The continuous calendar keeps about three months buffered so that scrolling
+ * does not reload, and every measured day in that buffer used to set the shared
+ * scale. One bright summer day then flattened every pill of the autumn month on
+ * screen -- today's most visibly, since its bar carries an expected total the
+ * reader can check against the figures written on it. The days on screen are
+ * what a reader is comparing, so they are what the bars are scaled to.
+ */
+test.describe("the scrolling calendar scales to what is on screen", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await loadCardBundle(page);
+        await mountInspector(page, 1100, "monday", true, true);
+        await waitForMixedToday(page);
+        await pressMore(page);
+        await waitForDays(page, daysOfThisMonth());
+    });
+
+    test("a brighter day still in the buffer does not shrink today's bar", async ({ page }) => {
+        const state = await page.evaluate(() => {
+            const picker = document.querySelector("helman-solar-inspector")!
+                .shadowRoot!.querySelector("helman-solar-day-pills") as any;
+            const root = picker.shadowRoot as ShadowRoot;
+            const row = root.querySelector(".continuous") as HTMLElement;
+            const box = row.getBoundingClientRect();
+            const onScreen = (pill: Element) => {
+                const rect = pill.getBoundingClientRect();
+                const midpoint = (rect.top + rect.bottom) / 2;
+                return midpoint >= box.top && midpoint < box.bottom;
+            };
+            const today = new Date().toISOString().slice(0, 10);
+            const pill = root.querySelector(`[data-day="${today}"]`)!;
+            const fill = pill.querySelector(".day-aggregate-gauge.solar .day-aggregate-gauge-fill") as HTMLElement;
+            return {
+                todayOnScreen: onScreen(pill),
+                rowScaleWh: picker._model.scale.solarMaxWh,
+                visibleScaleWh: picker._visibleScale?.solarMaxWh ?? null,
+                brightOnScreen: [...root.querySelectorAll("[data-day]")].some((cell) =>
+                    onScreen(cell) && (picker._model.pills.find((candidate: any) =>
+                        candidate.dayKey === (cell as HTMLElement).dataset.day)?.aggregate?.solarWh ?? 0) > 9400),
+                todayFillPct: Number.parseFloat(fill.style.width),
+            };
+        });
+
+        // The premise: today is on screen, a far brighter day is in the buffer
+        // and not on screen. Without both, the assertion below says nothing.
+        expect(state.todayOnScreen).toBe(true);
+        expect(state.rowScaleWh).toBe(30000);
+        expect(state.brightOnScreen).toBe(false);
+
+        // So the bar is drawn against the month being read -- today expects
+        // 9.4 kWh, the brightest thing on screen -- and fills its strip,
+        // instead of the 31 % that 30 kWh two months ago would have left it.
+        expect(state.visibleScaleWh).toBe(9400);
+        expect(state.todayFillPct).toBeCloseTo(100, 1);
+    });
+
+    test("scrolling the brighter month into view scales the days against it", async ({ page }) => {
+        await browseMonth(page, `${FIXED_TODAY.slice(0, 4)}-${String(Number(FIXED_TODAY.slice(5, 7)) - 1).padStart(2, "0")}`);
+        await expect.poll(async () => page.evaluate(() => {
+            const picker = document.querySelector("helman-solar-inspector")!
+                .shadowRoot!.querySelector("helman-solar-day-pills") as any;
+            return picker._visibleScale?.solarMaxWh ?? null;
+        })).toBe(30000);
+    });
+
+    test("closing the picker gives the row its own scale back", async ({ page }) => {
+        await pressMore(page);
+        await waitForDays(page, Array.from({ length: 8 }, (_, offset) => dayAt(offset)));
+        await expect.poll(async () => page.evaluate(() => {
+            const picker = document.querySelector("helman-solar-inspector")!
+                .shadowRoot!.querySelector("helman-solar-day-pills") as any;
+            return picker._visibleScale;
+        })).toBe(null);
+    });
+});
 
 test.describe("continuous detail calendar", () => {
     test.beforeEach(async ({ page }) => {

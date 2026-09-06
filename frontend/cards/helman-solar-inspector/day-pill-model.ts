@@ -409,6 +409,44 @@ function _combine(
     return merge(measured, forecast);
 }
 
+/**
+ * The scale of just the days named, falling back to the row's own.
+ *
+ * The continuous calendar buffers about three months so it can be scrolled
+ * without reloading, and one bright summer day anywhere in that buffer flattens
+ * every autumn pill against it -- including today, whose bar then stops matching
+ * the figures written on it. What a reader compares is what they can see, so the
+ * scrolling calendar scales to the days on screen rather than to the buffer
+ * behind them. A viewport whose days carry no figures at all keeps the row's
+ * scale: a zero scale draws no bars, which is worse than bars drawn against a
+ * day just out of view.
+ *
+ * Price is not derived here. It comes from the slots rather than from a day's
+ * aggregate, and the pills draw no price bar -- the row's value is carried
+ * through so the scale stays one whole thing.
+ */
+export function buildDayPillScaleForDays(
+    pills: readonly SolarInspectorDayPill[],
+    dayKeys: ReadonlySet<string>,
+    rowScale: ScheduleTableDayAggregateScale,
+): ScheduleTableDayAggregateScale {
+    let scale: ScheduleTableDayAggregateScale = {
+        solarMaxWh: 0,
+        gridMaxKwh: 0,
+        priceMaxAbs: rowScale.priceMaxAbs,
+    };
+    let drawn = false;
+    for (const pill of pills) {
+        if (!dayKeys.has(pill.dayKey) || pill.aggregate === null) {
+            continue;
+        }
+        drawn = true;
+        scale = _extendScaleWithAggregate(scale, pill.aggregate);
+    }
+
+    return drawn ? scale : rowScale;
+}
+
 function _extendScaleWithAggregate(
     scale: ScheduleTableDayAggregateScale,
     aggregate: ScheduleTableDayAggregateModel | null,
