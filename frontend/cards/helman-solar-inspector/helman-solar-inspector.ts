@@ -3253,7 +3253,7 @@ export class HelmanSolarInspector extends LitElement {
    * schedule owner knows nothing about — so watching the shared schedule is not
    * enough, even though the day pills already do.
    *
-   * Through the shared feed rather than a private `subscribeEvents`, so an
+   * Through the shared feed rather than a private subscription, so an
    * inspector and a scheduling card on one dashboard still cost one
    * subscription between them.
    */

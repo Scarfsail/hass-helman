@@ -89,7 +89,7 @@ async function mountEditor(page: Page, controllables: unknown[]): Promise<void> 
             locale: { language: "en" },
             user: { is_admin: true },
             connection: {
-                subscribeEvents: async () => () => undefined,
+                subscribeMessage: async () => () => undefined,
             },
             callWS: async (request: { type: string }) => {
                 if (request.type === "helman/get_config") {

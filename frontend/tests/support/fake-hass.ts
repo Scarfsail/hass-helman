@@ -230,7 +230,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
         const listeners: Array<(event: unknown) => void> = [];
         window.__fireDataChanged = (kind: string) => {
             for (const listener of listeners) {
-                listener({ event_type: "helman_data_changed", data: { kind } });
+                listener({ kind });
             }
         };
 
@@ -246,11 +246,11 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     }
                     return {};
                 },
-                subscribeEvents: async (
-                    listener: (event: unknown) => void,
-                    eventType: string,
+                subscribeMessage: async (
+                    listener: (message: unknown) => void,
+                    request: { type: string },
                 ) => {
-                    if (eventType !== "helman_data_changed") {
+                    if (request.type !== "helman/subscribe_updates") {
                         return () => undefined;
                     }
                     listeners.push(listener);

@@ -72,7 +72,7 @@ async function mountEditor(page: Page): Promise<Locator> {
             const listeners: Array<(event: unknown) => void> = [];
             window.__fireDataChanged = (kind: string) => {
                 for (const listener of listeners) {
-                    listener({ event_type: "helman_data_changed", data: { kind } });
+                    listener({ kind });
                 }
             };
 
@@ -84,11 +84,11 @@ async function mountEditor(page: Page): Promise<Locator> {
                 locale: { language: "en" },
                 user: { is_admin: true },
                 connection: {
-                    subscribeEvents: async (
-                        listener: (event: unknown) => void,
-                        eventType: string,
+                    subscribeMessage: async (
+                        listener: (message: unknown) => void,
+                        request: { type: string },
                     ) => {
-                        if (eventType !== "helman_data_changed") {
+                        if (request.type !== "helman/subscribe_updates") {
                             return () => undefined;
                         }
                         listeners.push(listener);
