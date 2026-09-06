@@ -639,10 +639,11 @@ def ws_subscribe_updates(
     an error in the log and cards that never refresh on their own.
 
     So the subscription is a command of our own instead, where the permission
-    rule is ours to make: reading it grants no more than the read commands the
-    same user already calls, so there is no admin check here. The payload is the
-    event's data unchanged -- one ``kind`` -- and the client does its own
-    batching.
+    rule is ours to make, and there is no admin check here. What it discloses is
+    one word per rewrite: a non-admin learns that *something* moved, including a
+    ``config`` whose contents ``helman/get_config`` would still refuse them. The
+    payload is the event's data unchanged -- one ``kind``, no config, no plan --
+    and the client does its own batching.
     """
 
     @callback
