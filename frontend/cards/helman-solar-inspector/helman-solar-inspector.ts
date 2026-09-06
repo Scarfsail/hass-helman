@@ -894,6 +894,19 @@ export class HelmanSolarInspector extends LitElement {
        the last pill rather than out among the settings. */
     .nav-more {
       flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* The one icon-button drawn from mdi rather than a glyph, so it needs the
+       centering the text buttons get from their line box. Sized to sit level
+       with the ☀ and ⟳ next to it. */
+    .nav-more ha-icon {
+      --mdc-icon-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     /* Takes the rest of the line, so what is inside it can split: the picker's
@@ -1886,7 +1899,7 @@ export class HelmanSolarInspector extends LitElement {
             title=${this._t("bias_correction.inspector.more_days")}
             aria-expanded=${this._navExpanded ? "true" : "false"}
             @click=${() => { this._navExpanded = !this._navExpanded; }}
-          >&#9776;</button>`}
+          ><ha-icon icon="mdi:calendar-month"></ha-icon></button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${VIEW_STOP_GROUPS.map((group) => html`
               <div class="stop-group">${group.map((stop) => {
