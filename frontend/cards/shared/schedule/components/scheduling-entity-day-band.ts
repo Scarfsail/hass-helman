@@ -2281,12 +2281,17 @@ export class SchedulingEntityDayBand extends LitElement {
         const labelled = selectLabelledColumns(
             texts.map((text) => ({ text, value: text === null ? null : Number.parseFloat(text) })),
             {
-                // Before the track is measured, label everything: a first paint
-                // that thins on a guessed width would visibly re-thin once the
-                // real one arrives.
-                columnWidthPx: this._trackWidthPx === 0 || this.day.slots.length === 0
+                // The widest slot, not the first: `_toSlotWidthPercent` clamps
+                // to the drawn window, so a day cropped past midnight reports 0
+                // for its leading slots -- and a zero width reads as "not
+                // measured yet" and turns the thinning off on exactly the
+                // cramped layout it exists for. Before the track is measured,
+                // label everything: a first paint that thins on a guessed width
+                // would visibly re-thin once the real one arrives.
+                columnWidthPx: this._trackWidthPx === 0
                     ? MIN_SLOT_VALUE_WIDTH_PX
-                    : (this._toSlotWidthPercent(this.day.slots[0]) / 100) * this._trackWidthPx,
+                    : (Math.max(0, ...this.day.slots.map((slot) => this._toSlotWidthPercent(slot)))
+                        / 100) * this._trackWidthPx,
                 minLabelWidthPx: MIN_SLOT_VALUE_WIDTH_PX,
                 anchorOffset: hourAnchorOffset(this.day.slots.map(
                     (slot) => (slot.startMs - this.day.startMs) / MINUTE_MS,

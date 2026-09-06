@@ -94,7 +94,14 @@ export function selectLabelledColumns(
     const candidates: number[] = [];
     let lastText: string | null = null;
     columns.forEach((column, index) => {
-        if (column.text === null || column.value === null || column.text === lastText) {
+        if (column.text === null || column.value === null) {
+            // A blank breaks the run: two equal numbers with unlabelled columns
+            // between them are not a repeat, because nothing carried the value
+            // across the gap for the reader to still have it.
+            lastText = null;
+            return;
+        }
+        if (column.text === lastText) {
             return;
         }
         lastText = column.text;
@@ -109,10 +116,13 @@ export function selectLabelledColumns(
         return flags;
     }
 
+    if (candidates.length === 0) {
+        return flags;
+    }
+
     if (_tooBusyForProminence(columns, candidates, stride)) {
-        const offset = ((options.anchorOffset ?? 0) % stride + stride) % stride;
-        for (const index of candidates) {
-            if (index % stride === offset) flags[index] = true;
+        for (const index of _evenlySpaced(candidates, stride, options.anchorOffset ?? 0)) {
+            flags[index] = true;
         }
         return flags;
     }
@@ -132,6 +142,33 @@ export function selectLabelledColumns(
         flags[index] = true;
     }
     return flags;
+}
+
+/**
+ * An evenly spaced set of candidates, anchored where the caller asked.
+ *
+ * Stepped from the anchor rather than sieved with `index % stride === offset`:
+ * the candidates are not every column -- a strip labels only the columns that
+ * have something to say -- so a lattice over *column* indices can miss them
+ * altogether and come back empty, and where it does hit them it hits every
+ * `lcm(gap, stride)` rather than every `stride`, leaving a row far emptier than
+ * its width called for. Stepping keeps it as dense as the columns allow however
+ * the gaps happen to fall.
+ */
+function _evenlySpaced(candidates: readonly number[], stride: number, anchor: number): number[] {
+    // The first anchored position at or after the first candidate, so the set
+    // lands on whole hours when the caller named one and the columns reach it.
+    const start = candidates[0] + (((anchor - candidates[0]) % stride) + stride) % stride;
+    const taken: number[] = [];
+    for (const index of candidates) {
+        const previous = taken[taken.length - 1];
+        if (taken.length === 0 ? index < start : index - previous < stride) {
+            continue;
+        }
+        taken.push(index);
+    }
+    // The anchor can sit past every candidate. A row is never emptied for it.
+    return taken.length > 0 ? taken : [candidates[0]];
 }
 
 /**

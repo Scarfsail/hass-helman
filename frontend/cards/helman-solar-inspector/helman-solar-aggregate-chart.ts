@@ -568,7 +568,13 @@ export class HelmanSolarAggregateChart extends LitElement {
         const labelled = selectLabelledColumns(
             pairs.map((pair) => pair === null
                 ? { value: null, text: null }
-                : { value: (pair.min + pair.max) / 2, text: `${Math.round(pair.max)}%` }),
+                : {
+                    value: (pair.min + pair.max) / 2,
+                    // Both marks, because both are drawn: keyed on the high one
+                    // alone, a run of buckets that all topped out at 100% would
+                    // read as a repeat and lose four distinct low-water marks.
+                    text: `${Math.round(pair.min)}-${Math.round(pair.max)}%`,
+                }),
             { columnWidthPx: columnWidth },
         );
         return rows.map((row, index) => {
@@ -1085,9 +1091,10 @@ export class HelmanSolarAggregateChart extends LitElement {
         xFor: (index: number) => number,
         columnWidth: number,
     ) {
-        // Dates, not readings: `value: index` is monotone, which sends the
-        // selector down its evenly spaced branch -- the only sensible thinning
-        // for an axis.
+        // Dates, not readings, so the axis has no peaks to prefer: `value:
+        // index` is monotone, which scores every bucket alike and leaves the
+        // selector spacing them evenly by its own stride -- exactly the 1/2/5
+        // ladder this used to spell out, without the ladder.
         const labelled = selectLabelledColumns(
             rows.map((row, index) => ({ value: index, text: this._bucketLabel(row.date) })),
             { columnWidthPx: columnWidth, minLabelWidthPx: MIN_BUCKET_LABEL_PX },

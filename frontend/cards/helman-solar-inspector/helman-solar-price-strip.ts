@@ -362,7 +362,10 @@ export class HelmanSolarPriceStrip extends LitElement {
                     <!-- The prices come after the marker so the line passes
                          behind the figure it crosses instead of through it. -->
                     <g clip-path="url(#price-plot-clip)">
-                    ${this._renderPairedLabels(cells, { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderPairedLabels(cells, {
+                        zeroY, yForValue, height, xForMinutes,
+                        window: { start: windowStart, end: windowEnd },
+                    })}
                     </g>
                 </svg>
             `}
@@ -459,6 +462,42 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
+     * Which cells keep their rates: one decision per column, not per rate.
+     *
+     * The two rates of a cell are one reading of it. Thinned apart they would
+     * be drawn on the same side of zero in neighbouring columns whenever the
+     * two are close, which is a collision the per-rate spacing cannot see --
+     * the money strip can afford separate series only because its cost and
+     * gain sit on opposite sides of a zero line.
+     *
+     * Ranked on the outer rate, the one `_cellBars` puts first and the one the
+     * eye lands on. Cells outside the drawn window are no candidates at all:
+     * `xForMinutes` does not clamp, so they are laid out past the plot and
+     * clipped, and letting them rank would spend the "keep the two ends" rule
+     * on columns nobody can see.
+     */
+    private _labelledCells(
+        cells: PriceCell[],
+        ctx: { xForMinutes: (minutes: number) => number; window: { start: number; end: number } },
+    ): boolean[] {
+        const visible = (cell: PriceCell) =>
+            cell.endMinutes > ctx.window.start && cell.startMinutes < ctx.window.end;
+        const first = cells.find(visible);
+        return selectLabelledColumns(
+            cells.map((cell) => {
+                const outer = this._cellBars(cell)[0];
+                return outer === undefined || !visible(cell)
+                    ? { value: null, text: null }
+                    : { value: outer.value, text: outer.value.toFixed(1) };
+            }),
+            {
+                columnWidthPx: first === undefined ? 0 : this._cellSpan(first, ctx.xForMinutes).width,
+                anchorOffset: hourAnchorOffset(cells.map((cell) => cell.startMinutes)),
+            },
+        );
+    }
+
+    /**
      * One label per rate. The outer rate is written past the end of the column
      * in the ordinary text colour, the way a single-series bar chart labels its
      * top. The inner one is written against a filled bar, so two things decide
@@ -475,33 +514,6 @@ export class HelmanSolarPriceStrip extends LitElement {
      * The export fill is the lighter of the two by design, so it takes dark ink
      * and the import fill takes white.
      */
-    /**
-     * Which cells keep their rates, decided per rate rather than per column.
-     *
-     * The two are separate series -- an export rate can be the interesting one
-     * in a cell whose import rate is flat -- and `_cellBars` orders by magnitude
-     * rather than by side, so a bar's position in that list is no series at all.
-     */
-    private _labelledCells(
-        cells: PriceCell[],
-        xForMinutes: (minutes: number) => number,
-    ): Record<"import" | "export", boolean[]> {
-        const width = cells.length === 0
-            ? 0
-            : this._cellSpan(cells[0], xForMinutes).width;
-        const anchorOffset = hourAnchorOffset(cells.map((cell) => cell.startMinutes));
-        const select = (pick: (cell: PriceCell) => number | null) => selectLabelledColumns(
-            cells.map((cell) => {
-                const value = pick(cell);
-                return value === null
-                    ? { value: null, text: null }
-                    : { value, text: value.toFixed(1) };
-            }),
-            { columnWidthPx: width, anchorOffset },
-        );
-        return { import: select((cell) => cell.importValue), export: select((cell) => cell.exportValue) };
-    }
-
     private _renderPairedLabels(
         cells: PriceCell[],
         ctx: {
@@ -509,17 +521,18 @@ export class HelmanSolarPriceStrip extends LitElement {
             yForValue: (value: number) => number;
             height: number;
             xForMinutes: (minutes: number) => number;
+            window: { start: number; end: number };
         },
     ) {
-        const labelled = this._labelledCells(cells, ctx.xForMinutes);
+        const labelled = this._labelledCells(cells, ctx);
         return cells.map((cell, cellIndex) => {
+            if (!labelled[cellIndex]) {
+                return "";
+            }
             const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
             const centre = left + width / 2;
             const bars = this._cellBars(cell);
             return bars.map(({ value, side }, index) => {
-                if (!labelled[side][cellIndex]) {
-                    return "";
-                }
                 const valueY = ctx.yForValue(value);
                 if (index === 0) {
                     const y = value >= 0

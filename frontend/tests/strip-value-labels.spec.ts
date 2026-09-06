@@ -122,6 +122,51 @@ test.describe("selectLabelledColumns", () => {
         expect(denser).toBeGreaterThan(narrow);
     });
 
+    // The evenly spaced branch used to sieve `index % stride === offset` over
+    // column indices, which the candidates -- only the columns with something
+    // to say -- can miss entirely or hit far more sparsely than the width asks.
+    test("a sparse busy series still gets labels, wherever its candidates fall", () => {
+        // Three adjacent readings in a 96-column day, shaped so the row counts
+        // as busy: the old lattice landed on none of them.
+        const sparse: LabelCandidate[] = Array.from({ length: 96 }, () => ({ value: null, text: null }));
+        [9, 10, 11].forEach((index, i) => {
+            sparse[index] = { value: [1, 9, 2][i], text: `${[1, 9, 2][i]}` };
+        });
+        expect(kept(selectLabelledColumns(sparse, { columnWidthPx: 4 })).length).toBeGreaterThan(0);
+    });
+
+    test("candidates on their own lattice thin by the stride, not by its multiple", () => {
+        // A sawtooth on every fourth column: with stride 5 a modulo sieve keeps
+        // one in twenty, where one in five is what the width allows.
+        const columns: LabelCandidate[] = Array.from({ length: 80 }, (_, index) =>
+            index % 4 === 0
+                ? { value: (index / 4) % 2 === 0 ? 0 : 5, text: `${(index / 4) % 2}` }
+                : { value: null, text: null });
+        const indices = kept(selectLabelledColumns(columns, { columnWidthPx: 3.2 }));
+        expect(indices.length).toBeGreaterThan(80 / 20);
+        for (let i = 1; i < indices.length; i += 1) {
+            expect(indices[i] - indices[i - 1]).toBeGreaterThanOrEqual(5);
+        }
+    });
+
+    test("an anchor past every candidate does not empty the row", () => {
+        const columns = series([0, 5, 0, 5, 0, 5]);
+        expect(kept(selectLabelledColumns(columns, { columnWidthPx: 4, anchorOffset: 99 })).length)
+            .toBeGreaterThan(0);
+    });
+
+    test("a blank between two equal values breaks the repeat", () => {
+        const flags = selectLabelledColumns(
+            [
+                { value: 1, text: "1.0" },
+                { value: null, text: null },
+                { value: 1, text: "1.0" },
+            ],
+            { columnWidthPx: 40 },
+        );
+        expect(kept(flags)).toEqual([0, 2]);
+    });
+
     test("an empty column list selects nothing and does not throw", () => {
         expect(selectLabelledColumns([], { columnWidthPx: 4 })).toEqual([]);
     });

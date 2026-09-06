@@ -285,7 +285,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
                     ${this._renderBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
                     <g clip-path="url(#money-plot-clip)">
-                    ${this._renderLabels(cells, { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderLabels(cells, {
+                        zeroY, yForValue, height, xForMinutes,
+                        window: { start: windowStart, end: windowEnd },
+                    })}
                     </g>
                     ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
                 </svg>
@@ -357,18 +360,25 @@ export class HelmanSolarMoneyStrip extends LitElement {
             yForValue: (value: number) => number;
             height: number;
             xForMinutes: (minutes: number) => number;
+            window: { start: number; end: number };
         },
     ) {
         // Cost and gain thin apart: they are two series, and a cell whose gain
         // is the reading worth keeping should not lose it to a flat cost.
-        const width = cells.length === 0 ? 0 : this._cellSpan(cells[0], ctx.xForMinutes).width;
+        // Scoped to the drawn window: `xForMinutes` does not clamp, so a cell
+        // outside it is laid out past the plot and clipped away, and ranking it
+        // would spend the "keep the two ends" rule on a column nobody sees.
+        const visible = (cell: MoneyCell) =>
+            cell.endMinutes > ctx.window.start && cell.startMinutes < ctx.window.end;
+        const first = cells.find(visible);
+        const width = first === undefined ? 0 : this._cellSpan(first, ctx.xForMinutes).width;
         const anchorOffset = hourAnchorOffset(cells.map((cell) => cell.startMinutes));
         // An amount that rounds to nothing gets no label: "0.0" over a hairline
         // bar says less than the bar already did. Nor does an unpriced
         // direction, which has no bar to label.
         const candidates = (pick: (cell: MoneyCell) => number | null) => cells.map((cell) => {
             const amount = pick(cell);
-            return amount !== null && Math.abs(amount) >= 0.05
+            return visible(cell) && amount !== null && Math.abs(amount) >= 0.05
                 ? { value: amount, text: this._formatAmount(amount) }
                 : { value: null, text: null };
         });
