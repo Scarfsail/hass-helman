@@ -470,8 +470,11 @@ export class HelmanSolarPriceStrip extends LitElement {
      * the money strip can afford separate series only because its cost and
      * gain sit on opposite sides of a zero line.
      *
-     * Ranked on the outer rate, the one `_cellBars` puts first and the one the
-     * eye lands on. Cells outside the drawn window are no candidates at all:
+     * Ranked and compared on *both* rates. Keyed on the outer one alone, a day
+     * whose import rate barely moves reads as one long repeat and loses every
+     * column after the first -- while the export rate, the one actually
+     * fluctuating, never gets a say. A column is a repeat only when neither of
+     * its rates has changed. Cells outside the drawn window are no candidates:
      * `xForMinutes` does not clamp, so they are laid out past the plot and
      * clipped, and letting them rank would spend the "keep the two ends" rule
      * on columns nobody can see.
@@ -485,10 +488,16 @@ export class HelmanSolarPriceStrip extends LitElement {
         const first = cells.find(visible);
         return selectLabelledColumns(
             cells.map((cell) => {
-                const outer = this._cellBars(cell)[0];
-                return outer === undefined || !visible(cell)
+                const bars = this._cellBars(cell);
+                return bars.length === 0 || !visible(cell)
                     ? { value: null, text: null }
-                    : { value: outer.value, text: outer.value.toFixed(1) };
+                    : {
+                        // Both rates in the key, so either one moving makes the
+                        // column a new reading; their sum as the value, so
+                        // either one swinging makes it a prominent one.
+                        text: bars.map(({ value }) => value.toFixed(1)).join("/"),
+                        value: bars.reduce((total, { value }) => total + value, 0),
+                    };
             }),
             {
                 columnWidthPx: first === undefined ? 0 : this._cellSpan(first, ctx.xForMinutes).width,

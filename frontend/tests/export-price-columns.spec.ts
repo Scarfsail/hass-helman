@@ -114,6 +114,34 @@ async function barsFor(
     }, { mounted: rails, day: DAY });
 }
 
+/**
+ * The labels the strip draws across a whole day on a plot wide enough for all
+ * of them, which is where the thinning should be doing nothing at all.
+ */
+async function dayLabelsFor(
+    page: Page,
+    rails: { importPrice?: RailPoint[]; exportPrice?: RailPoint[] },
+): Promise<string[]> {
+    return page.evaluate(async ({ mounted, day }) => {
+        const el = document.createElement("helman-solar-price-strip") as any;
+        el.hass = { language: "en", localize: () => "", states: {} };
+        el.timeZone = "UTC";
+        el.date = day;
+        el.slotMinutes = 60;
+        el.geometry = { width: 2400, marginLeft: 0, plotWidth: 2400, startMinutes: 0, endMinutes: 1440 };
+        el.nowMs = Date.parse(`${day}T23:59:00Z`);
+        el.importPrice = mounted.importPrice ?? [];
+        el.exportPrice = mounted.exportPrice ?? [];
+        el.unit = "CZK/kWh";
+        document.body.appendChild(el);
+        await el.updateComplete;
+        // Column labels only: the axis guides are drawn with the same element
+        // and the same formatting, and differ only by being a size larger.
+        return [...el.shadowRoot.querySelectorAll('text[font-size="9"]')]
+            .map((t: any) => t.textContent.trim());
+    }, { mounted: rails, day: DAY });
+}
+
 /** The value labels the strip drew, in document order. */
 async function labelsFor(
     page: Page,
@@ -358,6 +386,31 @@ test.describe("price columns", () => {
 
         expect(labels).toContain("7.3");
         expect(labels).toContain("-0.3");
+    });
+
+    /**
+     * A repeat is a repeat of the whole column, not of its outer rate.
+     *
+     * Keyed on the outer rate alone -- usually the import one -- a day on a
+     * fixed tariff read as one long repeat and drew a single label at midnight,
+     * while the export rate beside it swung all day with nothing written on it.
+     */
+    test("a flat import rate does not silence a fluctuating export one", async ({ page }) => {
+        const hours = Array.from({ length: 24 }, (_, hour) => hour);
+        const labels = await dayLabelsFor(page, {
+            importPrice: hours.map((hour) => ({ slot: `${String(hour).padStart(2, "0")}:00`, value: 6 })),
+            exportPrice: hours.map((hour) => ({
+                slot: `${String(hour).padStart(2, "0")}:00`,
+                value: Number((1 + (hour % 7) * 0.4).toFixed(1)),
+            })),
+        });
+
+        // Every hour's export rate is written, and the flat import rate is
+        // written beside each of them -- the column moved, so it is a reading.
+        for (const hour of hours) {
+            expect(labels, `hour ${hour}`).toContain((1 + (hour % 7) * 0.4).toFixed(1));
+        }
+        expect(labels.filter((label) => label === "6.0").length).toBe(24);
     });
 
     test("a cell with only one rate still draws its column", async ({ page }) => {
