@@ -45,6 +45,13 @@ export const GRID_EXPORT_COLOR = '#7dd3fc'; // sky-300
  */
 export const PRICE_NEGATIVE_COLOR = '#dc2626'; // red-600
 
+/**
+ * A rate that is the right way up -- exporting pays you. It borrows the export
+ * flow's hue rather than inventing one, so a positive export price reads the
+ * same in the price strip, the day gauge and the schedule editor's chart.
+ */
+export const PRICE_POSITIVE_COLOR = GRID_EXPORT_COLOR;
+
 /** Uncorrected forecast, drawn behind the corrected one. */
 export const FORECAST_RAW_COLOR = '#64748b'; // slate-500
 

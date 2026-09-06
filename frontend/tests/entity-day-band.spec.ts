@@ -586,6 +586,22 @@ test.describe("entity day band, forecast rows", () => {
             .toHaveAttribute("title", /1\.2 kWh\/h/);
     });
 
+    /**
+     * A bar whose fill names a custom property nothing defines is not a faint
+     * bar, it is no bar at all: the whole declaration drops and the price row
+     * renders empty for exactly the prices that are the normal way round.
+     */
+    test("a positive price is painted, not just laid out", async ({ page }) => {
+        await mountBand(page, { halfHourly: true, slotGrid: true });
+
+        const bar = page.locator("scheduling-entity-day-band")
+            .locator(".context-bar.price-positive").first();
+        await expect(bar).toHaveCount(1);
+        const background = await bar.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).not.toBe("rgba(0, 0, 0, 0)");
+        expect(background).not.toBe("transparent");
+    });
+
     test("the grid runs through the charts too", async ({ page }) => {
         await mountBand(page, { halfHourly: true, slotGrid: true });
 
