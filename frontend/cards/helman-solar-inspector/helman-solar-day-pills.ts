@@ -588,6 +588,18 @@ export class HelmanSolarDayPills extends LitElement {
         `;
     }
 
+    /**
+     * What the bars are measured against.
+     *
+     * `_visibleScale` is cleared in `updated()`, which runs after the render
+     * that closed the picker -- so the layout is asked here rather than trusting
+     * the field to be null already, and the collapsed row never draws a frame
+     * against the calendar's viewport.
+     */
+    private _scale(): ScheduleTableDayAggregateScale {
+        return this.continuous ? this._visibleScale ?? this._model.scale : this._model.scale;
+    }
+
     private _renderPill(pill: SolarInspectorDayPill) {
         const selected = pill.dayKey === this.selectedDate;
         // Compared here rather than carried on the pill: it is two string
@@ -623,7 +635,7 @@ export class HelmanSolarDayPills extends LitElement {
                 ${renderDayAggregateGauge({
                     kind: "solar",
                     aggregate: pill.aggregate,
-                    scale: this._visibleScale ?? this._model.scale,
+                    scale: this._scale(),
                     available: pill.availability.solar,
                     forecast: pill.dayState !== "measured",
                     measuredWh: pill.measuredSolarWh,
@@ -632,7 +644,7 @@ export class HelmanSolarDayPills extends LitElement {
                 ${renderDayAggregateGauge({
                     kind: "battery",
                     aggregate: pill.aggregate,
-                    scale: this._visibleScale ?? this._model.scale,
+                    scale: this._scale(),
                     available: pill.availability.battery,
                     // Forecast on a mixed day too: the band it draws reaches
                     // into slots that have not been lived through, so it is not

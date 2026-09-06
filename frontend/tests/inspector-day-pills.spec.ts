@@ -68,7 +68,14 @@ async function mountInspector(
 
         const slotIds: string[] = [];
         for (let day = 0; day < scheduledDays; day += 1) {
-            for (let hour = 0; hour < 24; hour += 1) {
+            // The backend prunes elapsed slots, so a schedule fetched mid-day
+            // begins at the slot running now -- which is what makes today's
+            // forecast half the *rest* of today and not the whole of it. The
+            // fixture only takes that shape where a test cares, because it is
+            // also what decides today's figures, and the rest of the suite is
+            // written against a whole-day schedule.
+            const firstHour = day === 0 && measureToday ? new Date().getUTCHours() : 0;
+            for (let hour = firstHour; hour < 24; hour += 1) {
                 slotIds.push(new Date(todayMs + day * dayMs + hour * hourMs).toISOString());
             }
         }
@@ -602,12 +609,14 @@ test.describe("solar inspector today, half measured", () => {
         const [today] = await readPills(page);
         expect(today.dayState).toBe("mixed");
         const byKind = new Map(today.gauges.map((gauge) => [gauge.kind, gauge]));
-        // 1.4 kWh measured so far, against a fixture day whose forecast is
-        // 8 kWh of daylight -- so the day is expected to reach 9.4.
-        expect(byKind.get("solar")!.text).toBe("1.4 / 9.4");
-        // The band spans both halves: the floor is where the forecast takes the
-        // battery, the ceiling is where the morning already took it.
-        expect(byKind.get("battery")!.text).toBe("40 : 71");
+        // 1.4 kWh measured so far, and the schedule that is left runs from
+        // noon, which in this fixture is four more hours of daylight at 1 kWh
+        // each -- so the day is expected to reach 5.4.
+        expect(byKind.get("solar")!.text).toBe("1.4/5.4");
+        // The band spans both halves: the floor is where the morning took the
+        // battery, the ceiling too, since the afternoon's forecast stays inside
+        // what has already been measured.
+        expect(byKind.get("battery")!.text).toBe("44 : 71");
     });
 
     test("the mixed solar bar draws the measured part inside the expected one", async ({ page }) => {
@@ -1143,24 +1152,26 @@ test.describe("the scrolling calendar scales to what is on screen", () => {
                 todayOnScreen: onScreen(pill),
                 rowScaleWh: picker._model.scale.solarMaxWh,
                 visibleScaleWh: picker._visibleScale?.solarMaxWh ?? null,
-                brightOnScreen: [...root.querySelectorAll("[data-day]")].some((cell) =>
-                    onScreen(cell) && (picker._model.pills.find((candidate: any) =>
-                        candidate.dayKey === (cell as HTMLElement).dataset.day)?.aggregate?.solarWh ?? 0) > 9400),
+                brightestOnScreenWh: Math.max(...[...root.querySelectorAll("[data-day]")]
+                    .filter(onScreen)
+                    .map((cell) => picker._model.pills.find((candidate: any) =>
+                        candidate.dayKey === (cell as HTMLElement).dataset.day)?.aggregate?.solarWh ?? 0)),
                 todayFillPct: Number.parseFloat(fill.style.width),
             };
         });
 
-        // The premise: today is on screen, a far brighter day is in the buffer
-        // and not on screen. Without both, the assertion below says nothing.
+        // The premise: today is on screen, the summer day is in the buffer and
+        // is not. Without both, the assertion below says nothing. The month on
+        // screen peaks at the 6 kWh its measured days carry.
         expect(state.todayOnScreen).toBe(true);
         expect(state.rowScaleWh).toBe(30000);
-        expect(state.brightOnScreen).toBe(false);
+        expect(state.brightestOnScreenWh).toBe(6000);
 
-        // So the bar is drawn against the month being read -- today expects
-        // 9.4 kWh, the brightest thing on screen -- and fills its strip,
-        // instead of the 31 % that 30 kWh two months ago would have left it.
-        expect(state.visibleScaleWh).toBe(9400);
-        expect(state.todayFillPct).toBeCloseTo(100, 1);
+        // So the bar is drawn against the month being read: today's expected
+        // 5.4 kWh against the 6 kWh beside it, and not the 18 % that a summer
+        // day two months back would have left it.
+        expect(state.visibleScaleWh).toBe(6000);
+        expect(state.todayFillPct).toBeCloseTo(90, 1);
     });
 
     test("scrolling the brighter month into view scales the days against it", async ({ page }) => {
@@ -1379,3 +1390,4 @@ test.describe("continuous detail calendar", () => {
         expect((await calendarState(page)).requests).toEqual(before.requests);
     });
 });
+

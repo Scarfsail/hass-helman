@@ -147,14 +147,23 @@ export const dayAggregateGaugeStyles = css`
        line and easy to miss next to the bars it encloses, so the bars carry
        the same claim themselves: a hatched fill is a number that has not
        happened yet. The hatch goes over the kind's own gradient rather than
-       replacing it, so a forecast bar is still recognisably its metric. */
+       replacing it, so a forecast bar is still recognisably its metric.
+
+       Named once and applied per kind, because the grid and price fills each
+       set their own background-image under a class more specific than this
+       one -- so they take the hatch where they are declared, further down,
+       rather than here. */
+    .day-aggregate-gauge {
+        --day-aggregate-gauge-hatch: repeating-linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--primary-text-color) 14%, transparent) 0 3px,
+            transparent 3px 6px
+        );
+    }
+
     .day-aggregate-gauge.forecast .day-aggregate-gauge-fill {
         background-image:
-            repeating-linear-gradient(
-                135deg,
-                color-mix(in srgb, var(--primary-text-color) 14%, transparent) 0 3px,
-                transparent 3px 6px
-            ),
+            var(--day-aggregate-gauge-hatch),
             var(--day-aggregate-gauge-fill-image);
     }
 
@@ -285,6 +294,20 @@ export const dayAggregateGaugeStyles = css`
         border-radius: 0 4px 4px 0;
     }
 
+    /* The grid and price fills, hatched where the solar and battery ones are.
+       Their own rules name a kind and a side, so they outrank the plain
+       forecast rule; these repeat that weight and come after them, which is the
+       whole reason they are written out rather than folded into it. */
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.import,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.export,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.surplus,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.negative,
+    .day-aggregate-gauge.forecast .day-aggregate-gauge-fill.positive {
+        background-image:
+            var(--day-aggregate-gauge-hatch),
+            var(--day-aggregate-gauge-fill-image);
+    }
+
     .day-aggregate-price-pair {
         display: flex;
         align-items: center;
@@ -409,7 +432,11 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
             <span class="day-aggregate-gauge-value">
                 ${measuredWh === null
                     ? formatSolarGaugeValue(aggregate.solarWh)
-                    : `${formatSolarGaugeValue(measuredWh)} / ${formatSolarGaugeValue(aggregate.solarWh)}`}
+                    // Unspaced, because the pill is 74px at its widest and both
+                    // figures have to survive a phone-width card -- with the
+                    // spaces the strip ellipsised to "1.4" and the day the two
+                    // figures exist for was the one that lost them.
+                    : `${formatSolarGaugeValue(measuredWh)}/${formatSolarGaugeValue(aggregate.solarWh)}`}
             </span>
         </div>
     `;
