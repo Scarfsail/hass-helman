@@ -825,6 +825,20 @@ export class HelmanSolarInspector extends LitElement {
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
   private _nowTimer?: number;
+  /**
+   * Scrolling invalidates the popup, because the popup is `position: fixed`.
+   *
+   * It is placed at the pointer's viewport coordinates, so once the page moves
+   * under it the slot it describes is no longer where it points. A mouse fixes
+   * that by itself -- the next move re-places it -- but a touch leaves the
+   * popup pinned to a stale spot with nothing to correct it, which is exactly
+   * how it is read on a phone: tap a slot, then scroll to see the rest.
+   */
+  private _dismissTooltipOnScroll = () => {
+    // Only the popup goes: the hover highlight is drawn inside the chart, so it
+    // scrolls with the slot it marks and stays true.
+    if (this._tooltip) this._clearTooltip();
+  };
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
@@ -1599,6 +1613,10 @@ export class HelmanSolarInspector extends LitElement {
     this._nowTimer = window.setInterval(() => {
       this._nowMs = Date.now();
     }, NOW_RESOLUTION_MS);
+    // Capture, because the scroller is an ancestor of this card (HA's view), not
+    // the window: a bubbling listener would never hear it.
+    window.addEventListener("scroll", this._dismissTooltipOnScroll, { capture: true, passive: true });
+    window.addEventListener("resize", this._dismissTooltipOnScroll, { passive: true });
   }
 
   protected disconnectedCallback() {
@@ -1607,6 +1625,8 @@ export class HelmanSolarInspector extends LitElement {
       window.clearInterval(this._nowTimer);
       this._nowTimer = undefined;
     }
+    window.removeEventListener("scroll", this._dismissTooltipOnScroll, { capture: true });
+    window.removeEventListener("resize", this._dismissTooltipOnScroll);
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
