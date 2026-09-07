@@ -13,7 +13,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
-import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
+import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -362,7 +362,10 @@ export class HelmanSolarPriceStrip extends LitElement {
                     <!-- The prices come after the marker so the line passes
                          behind the figure it crosses instead of through it. -->
                     <g clip-path="url(#price-plot-clip)">
-                    ${this._renderPairedLabels(cells, { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderPairedLabels(cells, {
+                        zeroY, yForValue, height, xForMinutes,
+                        window: { start: windowStart, end: windowEnd },
+                    })}
                     </g>
                 </svg>
             `}
@@ -459,6 +462,51 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
+     * Which cells keep their rates: one decision per column, not per rate.
+     *
+     * The two rates of a cell are one reading of it. Thinned apart they would
+     * be drawn on the same side of zero in neighbouring columns whenever the
+     * two are close, which is a collision the per-rate spacing cannot see --
+     * the money strip can afford separate series only because its cost and
+     * gain sit on opposite sides of a zero line.
+     *
+     * Ranked and compared on *both* rates. Keyed on the outer one alone, a day
+     * whose import rate barely moves reads as one long repeat and loses every
+     * column after the first -- while the export rate, the one actually
+     * fluctuating, never gets a say. A column is a repeat only when neither of
+     * its rates has changed. Cells outside the drawn window are no candidates:
+     * `xForMinutes` does not clamp, so they are laid out past the plot and
+     * clipped, and letting them rank would spend the "keep the two ends" rule
+     * on columns nobody can see.
+     */
+    private _labelledCells(
+        cells: PriceCell[],
+        ctx: { xForMinutes: (minutes: number) => number; window: { start: number; end: number } },
+    ): boolean[] {
+        const visible = (cell: PriceCell) =>
+            cell.endMinutes > ctx.window.start && cell.startMinutes < ctx.window.end;
+        const first = cells.find(visible);
+        return selectLabelledColumns(
+            cells.map((cell) => {
+                const bars = this._cellBars(cell);
+                return bars.length === 0 || !visible(cell)
+                    ? { value: null, text: null }
+                    : {
+                        // Both rates in the key, so either one moving makes the
+                        // column a new reading; their sum as the value, so
+                        // either one swinging makes it a prominent one.
+                        text: bars.map(({ value }) => value.toFixed(1)).join("/"),
+                        value: bars.reduce((total, { value }) => total + value, 0),
+                    };
+            }),
+            {
+                columnWidthPx: first === undefined ? 0 : this._cellSpan(first, ctx.xForMinutes).width,
+                anchorOffset: hourAnchorOffset(cells.map((cell) => cell.startMinutes)),
+            },
+        );
+    }
+
+    /**
      * One label per rate. The outer rate is written past the end of the column
      * in the ordinary text colour, the way a single-series bar chart labels its
      * top. The inner one is written against a filled bar, so two things decide
@@ -482,13 +530,15 @@ export class HelmanSolarPriceStrip extends LitElement {
             yForValue: (value: number) => number;
             height: number;
             xForMinutes: (minutes: number) => number;
+            window: { start: number; end: number };
         },
     ) {
-        return cells.map((cell) => {
-            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
-            if (!columnFitsLabel(width)) {
+        const labelled = this._labelledCells(cells, ctx);
+        return cells.map((cell, cellIndex) => {
+            if (!labelled[cellIndex]) {
                 return "";
             }
+            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
             const centre = left + width / 2;
             const bars = this._cellBars(cell);
             return bars.map(({ value, side }, index) => {

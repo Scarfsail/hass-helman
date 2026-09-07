@@ -144,12 +144,13 @@ test.describe("solar inspector SoC strip grouping", () => {
             // axis is drawn with the same element on the left margin.
             return [...svg.querySelectorAll('text[text-anchor="middle"]')]
                 .map((text) => ({ x: Number(text.getAttribute("x")), label: text.textContent ?? "" }))
-                .sort((a, b) => a.x - b.x)
-                .map((entry) => entry.label);
+                .sort((a, b) => a.x - b.x);
         });
         // 40% held until 10:00, then 5% per quarter hour: 60% by 11:00, 80% by
-        // 12:00, and held there after.
-        expect(labels.slice(9, 14)).toEqual(["40%", "60%", "80%", "80%", "80%"]);
+        // 12:00, and held there after -- so the strip reads 40, 60, 80, each
+        // written on the hour that reaches it. The flat runs between them carry
+        // no label: a level repeated is a level the previous column already gave.
+        expect(labels.map((entry) => entry.label)).toEqual(["40%", "60%", "80%"]);
     });
 
     /**

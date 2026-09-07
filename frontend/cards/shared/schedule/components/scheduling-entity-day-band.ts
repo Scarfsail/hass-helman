@@ -30,6 +30,7 @@ import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
+import { hourAnchorOffset, selectLabelledColumns } from "../../strip-value-labels";
 import "../../optimizer/helman-optimizer-edit-dialog";
 import {
     getLaneAutomationCoverage,
@@ -58,14 +59,30 @@ const MIN_SOC_BOTH_WIDTH_PX = 96;
 /** Room the two levels take at a run's edges, which the centre figure gives up. */
 const SOC_ENDPOINT_ALLOWANCE_PX = 52;
 /**
- * A forecast slot narrower than this keeps its number to its tooltip.
+ * Room a forecast slot's number needs before its neighbour gets one too.
  *
  * Half a day of slots on a phone leaves single digits of room each, and a
- * clipped "12" that reads as "1" is worse than a column with nothing written on
- * it -- the hovered slot gets its number back regardless, which is the case
- * where the user is actually asking.
+ * clipped "12" that reads as "1" is worse than nothing -- so below this the row
+ * labels every second or third slot instead of every one. The hovered slot gets
+ * its number back regardless, which is the case where the user is actually
+ * asking.
  */
 const MIN_SLOT_VALUE_WIDTH_PX = 17;
+
+/**
+ * Where a forecast row's number sits: how far up the plot its bar reaches, and
+ * which end of the bar the number goes on.
+ *
+ * A percentage of the plot rather than pixels, because that is what the bars
+ * themselves are sized in -- the two have to move together or the number drifts
+ * off its column at some row height nobody tested.
+ */
+interface SlotValueAnchor {
+    /** The bar's end, as a percentage of the plot measured from its bottom. */
+    pct: number;
+    /** True for a bar that hangs below the zero line, whose number goes under it. */
+    below?: boolean;
+}
 
 export type { EntityDayBandLane };
 
@@ -371,10 +388,11 @@ export class SchedulingEntityDayBand extends LitElement {
                 height: 38px;
             }
 
-            /* The bars live below the strip the numbers take, rather than under
-               it: a column scaled to the whole row would grow up through its own
-               label, and a number written over a solid bar is a number read
-               twice as slowly as one written on the row's own background. */
+            /* The bars stop short of the row's top edge by exactly one label's
+               height. Each number sits on top of its own column, so the tallest
+               column in the row needs somewhere for its number to go -- and
+               giving every row the same reserve keeps the full-height case from
+               being the one that clips. */
             .context-row .plot {
                 position: absolute;
                 left: 0;
@@ -387,13 +405,18 @@ export class SchedulingEntityDayBand extends LitElement {
                 position: absolute;
             }
 
-            /* One slot's reading, over the slot it belongs to. Centred on the
-               column and clipped to it, so a number never claims a neighbour's
-               minutes. Inert: the hit layer above it is what answers the
-               pointer, and the whole strip is a readout. */
+            /* One slot's reading, riding on top of the column it belongs to --
+               the way the solar inspector's strips write theirs. A number level
+               with its own bar says the shape and the value in one glance,
+               where a number in a row along the top makes the eye travel down
+               to find which column it belongs to.
+               Centred on the column and clipped to it, so a number never claims
+               a neighbour's minutes. Inert: the hit layer above it is what
+               answers the pointer, and the whole strip is a readout.
+               The offset that puts it there comes from the bar's own height and
+               is set inline. */
             .slot-value {
                 position: absolute;
-                top: 0;
                 height: 11px;
                 display: flex;
                 align-items: center;
@@ -1436,6 +1459,7 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
+        const anchors = new Map(columns.map(({ slot, socPct }) => [slot.id, { pct: socPct }]));
         return html`
             ${this._renderContextHeading("scheduling.forecast.battery_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
@@ -1446,8 +1470,8 @@ export class SchedulingEntityDayBand extends LitElement {
                             style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
                         ></span>
                     `)}
+                    ${this._renderSlotValues("battery", anchors)}
                 </div>
-                ${this._renderSlotValues("battery")}
                 ${this._renderSlotHits("battery")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.battery_label")}
@@ -1491,6 +1515,8 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
+        const anchors = new Map(values.map(({ slot, value }) =>
+            [slot.id, { pct: this._toBarPct(value, maxWh) }]));
         return html`
             ${this._renderContextHeading("scheduling.forecast.solar_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
@@ -1501,8 +1527,8 @@ export class SchedulingEntityDayBand extends LitElement {
                             style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
                         ></span>
                     `)}
+                    ${this._renderSlotValues("solar", anchors)}
                 </div>
-                ${this._renderSlotValues("solar")}
                 ${this._renderSlotHits("solar")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.solar_label")}
@@ -1518,29 +1544,37 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
+        // Each half owns 50% of the plot, so a bar's own percentage is halved to
+        // stay inside it -- and its number is measured from the zero line the
+        // bar grows out of, up for a positive rate and down for a negative one.
+        const halfHeight = ({ value }: { value: number }) =>
+            this._toBarPct(Math.abs(value), value > 0 ? maxPositive : maxNegative) / 2;
+        const anchors = new Map(values.map((entry) => [
+            entry.slot.id,
+            entry.value < 0
+                ? { pct: 50 - halfHeight(entry), below: true }
+                : { pct: 50 + halfHeight(entry) },
+        ]));
         return html`
             ${this._renderContextHeading("scheduling.forecast.price_label")}
             <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
                 <div class="plot">
                     <span class="zero-line"></span>
-                    ${values.map(({ slot, value }) => {
-                        if (value === 0) {
+                    ${values.map((entry) => {
+                        if (entry.value === 0) {
                             return nothing;
                         }
 
-                        const positive = value > 0;
-                        // Each half owns 50% of the plot, so a bar's own
-                        // percentage is halved to stay inside it.
-                        const heightPct = this._toBarPct(Math.abs(value), positive ? maxPositive : maxNegative) / 2;
+                        const positive = entry.value > 0;
                         return html`
                             <span
                                 class=${`context-bar ${positive ? "price-positive" : "price-negative"}`}
-                                style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${heightPct}%`}
+                                style=${`left: ${this._toPercent(entry.slot.startMs)}%; width: ${this._toSlotWidthPercent(entry.slot)}%; height: ${halfHeight(entry)}%`}
                             ></span>
                         `;
                     })}
+                    ${this._renderSlotValues("price", anchors)}
                 </div>
-                ${this._renderSlotValues("price")}
                 ${this._renderSlotHits("price")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.price_label")}
@@ -2260,35 +2294,74 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * What each slot of a forecast row is worth, written over the row.
+     * What each slot of a forecast row is worth, written on the column it
+     * belongs to.
      *
-     * The strip along the top rather than a label on each bar: the bars are the
-     * shape of the day and the numbers are the day itself, and a value pinned to
-     * the top of its own column moves as the column does, which makes a row of
-     * readings impossible to scan across. Above the plot, so no number is ever
-     * written on a bar.
+     * Level with its own bar rather than in a row along the top, which is how
+     * the solar inspector's strips write theirs: a number that rides its column
+     * says the value and the shape in one glance, where a number in a fixed row
+     * makes the eye travel down the chart to work out which column it is for.
+     * It sits just clear of the bar's end -- above a column that grows up,
+     * below one that hangs down -- except where the bar reaches its own extreme
+     * and there is no room left on that side, when the number is drawn over the
+     * fill rather than dropped. The same trade the inspector's strips make: a
+     * column at the day's maximum is exactly the one worth reading.
      *
-     * A slot too narrow to hold its number goes without one -- except the slot
-     * under the pointer, which is the one slot somebody is asking about, and
-     * which is allowed to spill over its neighbours to be legible.
+     * Too narrow for every number, the row thins rather than empties: the shared
+     * selector picks the widest-spaced set that still fits. The slot under the
+     * pointer keeps its number whether or not it was picked -- it is the one
+     * slot somebody is asking about, and it is allowed to spill over its
+     * neighbours to be legible.
      */
-    private _renderSlotValues(kind: "battery" | "solar" | "price") {
-        return this.day.slots.map((slot) => {
-            const text = this._buildSlotValueText(kind, slot);
+    private _renderSlotValues(
+        kind: "battery" | "solar" | "price",
+        anchors: ReadonlyMap<string, SlotValueAnchor>,
+    ) {
+        const texts = this.day.slots.map((slot) => this._buildSlotValueText(kind, slot));
+        const labelled = selectLabelledColumns(
+            texts.map((text) => ({ text, value: text === null ? null : Number.parseFloat(text) })),
+            {
+                // The widest slot, not the first: `_toSlotWidthPercent` clamps
+                // to the drawn window, so a day cropped past midnight reports 0
+                // for its leading slots -- and a zero width reads as "not
+                // measured yet" and turns the thinning off on exactly the
+                // cramped layout it exists for. Before the track is measured,
+                // label everything: a first paint that thins on a guessed width
+                // would visibly re-thin once the real one arrives.
+                columnWidthPx: this._trackWidthPx === 0
+                    ? MIN_SLOT_VALUE_WIDTH_PX
+                    : (Math.max(0, ...this.day.slots.map((slot) => this._toSlotWidthPercent(slot)))
+                        / 100) * this._trackWidthPx,
+                minLabelWidthPx: MIN_SLOT_VALUE_WIDTH_PX,
+                anchorOffset: hourAnchorOffset(this.day.slots.map(
+                    (slot) => (slot.startMs - this.day.startMs) / MINUTE_MS,
+                )),
+            },
+        );
+        return this.day.slots.map((slot, index) => {
+            const text = texts[index];
             if (text === null) {
                 return nothing;
             }
 
             const hovered = this._hoveredSlotId === slot.id;
             const widthPct = this._toSlotWidthPercent(slot);
-            if (!hovered && !this._isWideEnoughForValue(widthPct)) {
+            if (!hovered && !labelled[index]) {
                 return nothing;
             }
 
+            const anchor = anchors.get(slot.id) ?? { pct: 0, below: false };
+            // `min()` keeps a bar at its own extreme from pushing its number out
+            // of the row: the plot reserves one label's height above the bars,
+            // which is where a full-height column's number lands, and a column
+            // hanging to the floor has that much room below it and no more.
+            const place = anchor.below
+                ? `top: min(${100 - anchor.pct}%, 100% - 11px)`
+                : `bottom: min(${anchor.pct}%, 100%)`;
             return html`
                 <span
                     class=${`slot-value${hovered ? " hovered" : ""}`}
-                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${widthPct}%`}
+                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${widthPct}%; ${place}`}
                 >${text}</span>
             `;
         });
@@ -2346,11 +2419,6 @@ export class SchedulingEntityDayBand extends LitElement {
         const perHour = durationMs <= 0 ? solarWh : solarWh * (3_600_000 / durationMs);
         const kwh = perHour / 1000;
         return kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
-    }
-
-    private _isWideEnoughForValue(widthPct: number): boolean {
-        return this._trackWidthPx === 0
-            || (widthPct / 100) * this._trackWidthPx >= MIN_SLOT_VALUE_WIDTH_PX;
     }
 
     private _buildSlotHitTitle(

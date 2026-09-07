@@ -13,7 +13,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
-import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
+import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { EMPTY_MONEY, moneyNet, type MoneyPoint } from "./money-model";
 
 const MINUTES_PER_DAY = 1440;
@@ -285,7 +285,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
                     ${this._renderBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
                     <g clip-path="url(#money-plot-clip)">
-                    ${this._renderLabels(cells, { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderLabels(cells, {
+                        zeroY, yForValue, height, xForMinutes,
+                        window: { start: windowStart, end: windowEnd },
+                    })}
                     </g>
                     ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
                 </svg>
@@ -357,27 +360,42 @@ export class HelmanSolarMoneyStrip extends LitElement {
             yForValue: (value: number) => number;
             height: number;
             xForMinutes: (minutes: number) => number;
+            window: { start: number; end: number };
         },
     ) {
-        return cells.map((cell) => {
-            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
-            if (!columnFitsLabel(width)) {
-                return "";
-            }
-            const centre = left + width / 2;
-            const label = (amount: number, y: number) =>
-                stripValueLabel({ x: centre, y, text: this._formatAmount(amount) });
-            // An amount that rounds to nothing gets no label: "0.0" over a
-            // hairline bar says less than the bar already did. Nor does an
-            // unpriced direction, which has no bar to label.
-            const worthLabelling = (amount: number | null): amount is number =>
-                amount !== null && Math.abs(amount) >= 0.05;
+        // Cost and gain thin apart: they are two series, and a cell whose gain
+        // is the reading worth keeping should not lose it to a flat cost.
+        // Scoped to the drawn window: `xForMinutes` does not clamp, so a cell
+        // outside it is laid out past the plot and clipped away, and ranking it
+        // would spend the "keep the two ends" rule on a column nobody sees.
+        const visible = (cell: MoneyCell) =>
+            cell.endMinutes > ctx.window.start && cell.startMinutes < ctx.window.end;
+        const first = cells.find(visible);
+        const width = first === undefined ? 0 : this._cellSpan(first, ctx.xForMinutes).width;
+        const anchorOffset = hourAnchorOffset(cells.map((cell) => cell.startMinutes));
+        // An amount that rounds to nothing gets no label: "0.0" over a hairline
+        // bar says less than the bar already did. Nor does an unpriced
+        // direction, which has no bar to label.
+        const candidates = (pick: (cell: MoneyCell) => number | null) => cells.map((cell) => {
+            const amount = pick(cell);
+            return visible(cell) && amount !== null && Math.abs(amount) >= 0.05
+                ? { value: amount, text: this._formatAmount(amount) }
+                : { value: null, text: null };
+        });
+        const costs = candidates((cell) => cell.cost);
+        const gains = candidates((cell) => cell.gain);
+        const labelledCosts = selectLabelledColumns(costs, { columnWidthPx: width, anchorOffset });
+        const labelledGains = selectLabelledColumns(gains, { columnWidthPx: width, anchorOffset });
+        return cells.map((cell, index) => {
+            const { left, width: cellWidth } = this._cellSpan(cell, ctx.xForMinutes);
+            const centre = left + cellWidth / 2;
+            const label = (text: string, y: number) => stripValueLabel({ x: centre, y, text });
             return [
-                worthLabelling(cell.cost)
-                    ? label(cell.cost, Math.max(ctx.yForValue(cell.cost) - 3, 9))
+                labelledCosts[index]
+                    ? label(costs[index].text!, Math.max(ctx.yForValue(costs[index].value!) - 3, 9))
                     : "",
-                worthLabelling(cell.gain)
-                    ? label(cell.gain, Math.min(ctx.yForValue(-cell.gain) + 9, ctx.height - 3))
+                labelledGains[index]
+                    ? label(gains[index].text!, Math.min(ctx.yForValue(-gains[index].value!) + 9, ctx.height - 3))
                     : "",
             ];
         });
