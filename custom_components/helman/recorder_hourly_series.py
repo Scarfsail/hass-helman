@@ -259,6 +259,160 @@ async def query_cumulative_slot_energy_changes(
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
 
 
+#: How many windows one raw-history read covers when a caller wants several.
+#:
+#: The recorder answers one query at a time on one thread, so a ninety-day
+#: training window read a day at a time is ninety serial round-trips. A week of
+#: one meter's raw states is a few thousand rows, which is small enough to hold
+#: and large enough to make the trip worth taking -- and bounding the chunk is
+#: what keeps a long window from turning into one unbounded read.
+_MAX_WINDOWS_PER_HISTORY_READ = 7
+
+
+class _RestampedState:
+    """A recorder row moved to a window's start, the way the recorder does it.
+
+    ``include_start_time_state`` hands back the last row before the window
+    stamped at the window start rather than at its own instant. A window carved
+    out of a wider read has to do the same, or its opening carry arrives older
+    than the recorder would have reported it and the first boundaries read as
+    stale for no reason.
+    """
+
+    __slots__ = ("attributes", "last_updated", "state")
+
+    def __init__(self, source: Any, instant: datetime) -> None:
+        self.last_updated = instant
+        self.state = getattr(source, "state", None)
+        self.attributes = getattr(source, "attributes", None)
+
+
+async def query_cumulative_slot_energy_changes_for_windows(
+    hass: HomeAssistant,
+    entity_id: str,
+    windows: Sequence[tuple[datetime, datetime]],
+    *,
+    interval_minutes: int,
+    max_windows_per_read: int = _MAX_WINDOWS_PER_HISTORY_READ,
+) -> list[dict[datetime, float]]:
+    """One meter's per-slot deltas for several windows, a few windows per read.
+
+    Window for window, the same result
+    :func:`query_cumulative_slot_energy_changes` returns for each of them on its
+    own. Each window is still parsed, unwrapped and sampled by itself, over its
+    own staleness lookback and with its own opening carry, so counter resets and
+    boundary sampling see exactly the rows the single-window read would have
+    seen. The only thing that changes is how many times the recorder is asked.
+
+    Returns one dict per window, in the order the windows were given. A window
+    with no slots in it comes back empty, matching the singular function.
+    """
+    results: list[dict[datetime, float]] = [{} for _ in windows]
+    if not entity_id or not windows:
+        return results
+
+    staleness_limit = _carry_staleness_limit(interval_minutes)
+    #: ``{window index: (query start, utc boundaries)}`` for windows with slots.
+    prepared: dict[int, tuple[datetime, list[datetime]]] = {}
+    for index, (local_start, local_end) in enumerate(windows):
+        local_slot_starts = _build_local_slot_starts_until(
+            local_start,
+            local_end,
+            interval_minutes=interval_minutes,
+        )
+        if not local_slot_starts:
+            continue
+        utc_boundaries = [
+            dt_util.as_utc(boundary) for boundary in [*local_slot_starts, local_end]
+        ]
+        prepared[index] = (utc_boundaries[0] - staleness_limit, utc_boundaries)
+
+    if not prepared:
+        return results
+
+    default_unit = None
+    current_state = hass.states.get(entity_id)
+    if current_state is not None:
+        default_unit = current_state.attributes.get("unit_of_measurement")
+    # See the singular query for why the attributes join can only be dropped
+    # once the live state has supplied a unit.
+    no_attributes = default_unit is not None
+
+    indices = sorted(prepared)
+    chunks = [
+        indices[offset : offset + max_windows_per_read]
+        for offset in range(0, len(indices), max_windows_per_read)
+    ]
+
+    for chunk in chunks:
+        query_start = min(prepared[index][0] for index in chunk)
+        query_end = max(prepared[index][1][-1] for index in chunk)
+
+        def _query_and_parse(
+            chunk: list[int] = chunk,
+            query_start: datetime = query_start,
+            query_end: datetime = query_end,
+        ) -> dict[int, dict[datetime, float]]:
+            history = state_changes_during_period(
+                hass,
+                query_start,
+                query_end,
+                entity_id,
+                no_attributes,
+                False,
+                None,
+                True,
+            )
+            states = [
+                state
+                for state in _states_for_entity(history, entity_id)
+                if getattr(state, "last_updated", None) is not None
+            ]
+            instants = [dt_util.as_utc(state.last_updated) for state in states]
+            return {
+                index: _slot_energy_changes_from_states(
+                    _states_within(
+                        states,
+                        instants,
+                        prepared[index][0],
+                        prepared[index][1][-1],
+                    ),
+                    default_unit=default_unit,
+                    utc_boundaries=prepared[index][1],
+                    staleness_limit=staleness_limit,
+                )
+                for index in chunk
+            }
+
+        for index, values in (
+            await get_instance(hass).async_add_executor_job(_query_and_parse)
+        ).items():
+            results[index] = values
+
+    return results
+
+
+def _states_within(
+    states: list[Any],
+    instants: list[datetime],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[Any]:
+    """The rows a read of ``(window_start, window_end]`` alone would have returned.
+
+    ``instants`` is ``states`` mapped to UTC, ascending, so the slice is two
+    bisections rather than a scan of the whole chunk per window. The row before
+    the window is prepended restamped, which is what the recorder's own
+    ``include_start_time_state`` does with it.
+    """
+    first = bisect_right(instants, window_start)
+    last = bisect_right(instants, window_end)
+    within = states[first:last]
+    if first == 0:
+        return within
+    return [_RestampedState(states[first - 1], window_start), *within]
+
+
 @dataclass(frozen=True)
 class SlotEnergyBatch:
     """A batched meter read: the per-entity deltas, and what the read saw of the recorder.
