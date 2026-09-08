@@ -558,6 +558,43 @@ test.describe("solar inspector aggregate views", () => {
             .shadowRoot.querySelector(".hover-tooltip"));
     });
     /**
+     * The popup is placed from the pointer report that opened it, not from
+     * whatever the day view left behind: both views stage their hovers through
+     * the same coalescer, so an aggregate column hovered after a day slot still
+     * puts the popup under the cursor.
+     */
+    test("a column popup follows the pointer even after a day-view hover", async ({ page }) => {
+        await waitForDayChart(page);
+        const chartBox = await page.evaluate(() => {
+            const svg = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".chart-wrap svg") as SVGElement;
+            const box = svg.getBoundingClientRect();
+            return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        });
+        await page.mouse.move(chartBox.x, chartBox.y);
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        const point = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            const box = (chart.shadowRoot.querySelectorAll(".bucket-column")[2] as SVGElement)
+                .getBoundingClientRect();
+            return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        });
+        await page.mouse.move(point.x, point.y);
+        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".hover-tooltip"));
+
+        const placed = await page.evaluate(() => {
+            const popup = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".hover-tooltip") as HTMLElement;
+            return { left: parseFloat(popup.style.left), top: parseFloat(popup.style.top) };
+        });
+        expect(Math.abs(placed.left - point.x)).toBeLessThan(2);
+        expect(Math.abs(placed.top - point.y)).toBeLessThan(2);
+    });
+    /**
      * The SoC row draws two grounded bars per bucket, the way the day view's SoC
      * strip draws its one: a column standing on the baseline, not a ribbon
      * floating at the level. The high-water mark gives the column its height and

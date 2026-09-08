@@ -939,7 +939,8 @@ export class HelmanSolarInspector extends LitElement {
   private _dismissTooltipOnScroll = () => {
     // Only the popup goes: the hover highlight is drawn inside the chart, so it
     // scrolls with the slot it marks and stays true.
-    if (this._tooltip) this._clearTooltip();
+    if (this._pendingPointer !== null) delete this._pendingPointer.tooltip;
+    if (this._tooltip) this._applyTooltip(null);
   };
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
@@ -2897,12 +2898,12 @@ export class HelmanSolarInspector extends LitElement {
     // popup needs the numbers.
     this._setHoveredBucket(key);
     if (key === null) {
-      this._clearTooltip();
+      this._reportPointer({ tooltip: null });
       return;
     }
     const row = (this._span?.days ?? []).find((candidate) => candidate.date === key);
     if (!row) {
-      this._clearTooltip();
+      this._reportPointer({ tooltip: null });
       return;
     }
     const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
@@ -2946,13 +2947,9 @@ export class HelmanSolarInspector extends LitElement {
       // repeat -- and the net is the figure a reader is usually after.
       amount("net_cost", money.net, CHART_COLORS.grid);
     }
-    this._tooltip = {
-      x,
-      y,
-      title: this._formatBucket(key),
-      hasActual: false,
-      rows,
-    };
+    this._reportPointer({
+      tooltip: { x, y, title: this._formatBucket(key), hasActual: false, rows },
+    });
   };
 
   /**
@@ -3597,7 +3594,7 @@ export class HelmanSolarInspector extends LitElement {
       this._clearHover();
       return;
     }
-    this._setHoverMinutes(this._minutesForSvgX(layout, svgX));
+    this._reportPointer({ minutes: this._minutesForSvgX(layout, svgX) });
   }
 
   /** Invert the plot's x scale: a viewBox x back to its minute-of-day. */
@@ -3829,10 +3826,6 @@ export class HelmanSolarInspector extends LitElement {
 
   private _clearHover() {
     this._reportPointer({ minutes: null, tooltip: null });
-  }
-
-  private _clearTooltip() {
-    this._applyTooltip(null);
   }
 
   /** The popup's contents for a hovered slot, at the pointer's viewport position. */
