@@ -11,6 +11,7 @@ import { ForecastLoader } from "../../../helman/forecast-loader";
 import { getSharedHelmanStore } from "../../../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import { dispatchWatchedEntities } from "../../hass-change";
+import { startNowClock } from "../../now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../schedule-owner";
 import "./scheduling-entity-day-editor";
 import type { EntityScheduleSaveDetail } from "./scheduling-entity-day-editor";
@@ -51,10 +52,8 @@ import type {
     NormalizedScheduleModel,
     ScheduleOwnerError,
     ScheduleOwnerSnapshot,
+    ScheduleSlot,
 } from "../schedule-types";
-
-/** How far the clock has to move before the day is worth rebuilding. */
-const NOW_RESOLUTION_MS = 30_000;
 
 /**
  * Fired whenever the derived day changes, so a host rendering off the getters
@@ -154,7 +153,7 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     @state() private _editorSaveError: ScheduleOwnerError | null = null;
 
-    private _nowTimer?: number;
+    private _stopNowClock?: () => void;
     private _localizeFn?: LocalizeFunction;
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
@@ -173,6 +172,18 @@ export class SchedulingDayEditorHost extends LitElement {
     private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
 
+    /**
+     * The clock, snapped back to the schedule's own grid.
+     *
+     * Everything derived below reads the clock the same way -- `startMs > now`,
+     * `endMs <= now` -- so no answer can move until the clock crosses a slot
+     * edge. Keying the derivation on the raw `_nowMs` therefore rebuilt the
+     * forecast map, the day view, the lanes and the days twice a minute to
+     * arrive at exactly what was already there. The marker still runs on
+     * `_nowMs`; only the model waits for the boundary.
+     */
+    public clockSlotMs = 0;
+
     private _dayView: EntityScheduleDayView = EMPTY_DAY_VIEW;
     private _lanes: EntityScheduleLane[] = [];
     private _days: EntityScheduleDay[] = [];
@@ -184,7 +195,8 @@ export class SchedulingDayEditorHost extends LitElement {
         history: unknown;
         forecast: unknown;
         projections: unknown;
-        nowMs: number;
+        states: unknown;
+        clockSlotMs: number;
         timeZone: string;
     } | null = null;
 
@@ -265,6 +277,7 @@ export class SchedulingDayEditorHost extends LitElement {
             }
         }
         this._rebuildNormalizedIfNeeded();
+        this.clockSlotMs = _resolveClockSlotMs(this._normalized.slots, this._nowMs);
         this._rebuildDerivedIfNeeded();
     }
 
@@ -273,19 +286,17 @@ export class SchedulingDayEditorHost extends LitElement {
         // The wall clock owns a timer, because `hass` churn is not a clock: the
         // card above filters `hass` down to the entities this host actually
         // reads, so on an idle installation nothing else would move the day on.
-        // Coarse on purpose: every move rebuilds it.
-        this._nowMs = Date.now();
-        this._nowTimer = window.setInterval(() => {
+        // Coarse on purpose, and stopped while the page is hidden -- see
+        // `now-clock`.
+        this._stopNowClock = startNowClock(() => {
             this._nowMs = Date.now();
-        }, NOW_RESOLUTION_MS);
+        });
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
-        if (this._nowTimer !== undefined) {
-            window.clearInterval(this._nowTimer);
-            this._nowTimer = undefined;
-        }
+        this._stopNowClock?.();
+        this._stopNowClock = undefined;
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
         this._scheduleOwner = undefined;
@@ -600,6 +611,11 @@ export class SchedulingDayEditorHost extends LitElement {
         );
     }
 
+    /** `hass.states`, or null while no roster has named anything to read in it. */
+    private get _watchedStates(): unknown {
+        return this._controllableEntities.length === 0 ? null : this.hass?.states;
+    }
+
     private get _controllableEntityStatuses(): ControllableEntityStatus[] {
         return buildControllableEntityStatuses({
             controllableEntities: this._controllableEntities,
@@ -635,7 +651,15 @@ export class SchedulingDayEditorHost extends LitElement {
             // them out of the memo and the run labels keep the blank index the
             // refresh installed until some unrelated update happens by.
             && previous.projections === this._projectionIndex
-            && previous.nowMs === this._nowMs
+            // The statuses below read `hass.states`, and the clock is no
+            // substitute for it: every card holding this host filters `hass`
+            // down to the entities the host itself named, so a new `states`
+            // means one of them moved -- a lane's icon or availability, which
+            // the band draws. Gated on the roster having landed, because until
+            // it does there is nothing to read out of `states` and an
+            // unfiltered `hass` would rebuild an empty day at the churn rate.
+            && previous.states === this._watchedStates
+            && previous.clockSlotMs === this.clockSlotMs
             && previous.timeZone === this.timeZone
         ) {
             return;
@@ -648,7 +672,8 @@ export class SchedulingDayEditorHost extends LitElement {
             history: this._actualHistory,
             forecast: this._forecast,
             projections: this._projectionIndex,
-            nowMs: this._nowMs,
+            states: this._watchedStates,
+            clockSlotMs: this.clockSlotMs,
             timeZone: this.timeZone,
         };
         this._forecastMap = this._buildForecastMap();
@@ -707,6 +732,29 @@ export class SchedulingDayEditorHost extends LitElement {
 
         return typeof navigator !== "undefined" ? navigator.language : "cs";
     }
+}
+
+/**
+ * The last slot edge the clock has reached, or 0 before it reaches the first.
+ *
+ * Everything derived from the clock here is a slot-boundary test, so bucketing
+ * the clock by `[edge, next edge)` is what makes "the model cannot have moved"
+ * decidable. The builders are still handed the real `_nowMs`, so the one value
+ * this cannot distinguish is a model first derived at the very millisecond of
+ * an edge -- where a `startMs >= nowMs` test still counts the slot that is only
+ * just starting. `Date.now()` does not land there.
+ */
+function _resolveClockSlotMs(slots: readonly ScheduleSlot[], nowMs: number): number {
+    let boundary = 0;
+    for (const slot of slots) {
+        if (slot.startMs <= nowMs && slot.startMs > boundary) {
+            boundary = slot.startMs;
+        }
+        if (slot.endMs !== null && slot.endMs <= nowMs && slot.endMs > boundary) {
+            boundary = slot.endMs;
+        }
+    }
+    return boundary;
 }
 
 declare global {

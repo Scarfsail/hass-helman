@@ -139,6 +139,7 @@ import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
 import { getSharedDataChangedFeed } from "../helman/data-changed";
+import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
@@ -185,9 +186,6 @@ const VIEW_STOP_GROUPS: readonly (readonly ViewStop[])[] = [
   [{ label: "D", mode: "month" }],
   [{ label: "M", mode: "year" }],
 ];
-
-/** How far the clock has to move before the "now" line is worth redrawing. */
-const NOW_RESOLUTION_MS = 30_000;
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
@@ -653,7 +651,8 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The clock behind the "now" line on every chart. Coarse on purpose: it is
    * advanced by a timer owned by `connectedCallback`, and each move of it
-   * redraws the whole stack.
+   * redraws the whole stack -- which is why `_tickNow` only moves it when
+   * something on screen is reading it.
    */
   @state() private _nowMs = Date.now();
   /** The one day editor this card opens, however it was asked for. */
@@ -905,7 +904,15 @@ export class HelmanSolarInspector extends LitElement {
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
-  private _nowTimer?: number;
+  private _stopNowClock?: () => void;
+  /**
+   * The day view's payload no longer matches the backend.
+   *
+   * Set when a change is announced while an aggregate view is up: the day is
+   * not on screen, so re-reading it then would be a full day's series fetched
+   * for nobody. Returning to the day view is what spends the request.
+   */
+  private _dayStale = false;
   /**
    * Where the popup sits, kept out of reactive state on purpose.
    *
@@ -1711,11 +1718,10 @@ export class HelmanSolarInspector extends LitElement {
     // and stop the card ever rolling over to the next day (`_todayIso()` is read
     // at render time, and with no render there is no rollover). Coarse on
     // purpose, and the same resolution the schedule band uses, so the two lines
-    // never disagree about where "now" is.
-    this._nowMs = Date.now();
-    this._nowTimer = window.setInterval(() => {
-      this._nowMs = Date.now();
-    }, NOW_RESOLUTION_MS);
+    // never disagree about where "now" is -- and stopped while the page is
+    // hidden, which is `now-clock`'s half of the arrangement. `_tickNow` owns
+    // the other half: which ticks are worth a render.
+    this._stopNowClock = startNowClock(this._tickNow);
     // Capture, because the scroller is an ancestor of this card (HA's view), not
     // the window: a bubbling listener would never hear it.
     window.addEventListener("scroll", this._dismissTooltipOnScroll, { capture: true, passive: true });
@@ -1724,10 +1730,8 @@ export class HelmanSolarInspector extends LitElement {
 
   protected disconnectedCallback() {
     super.disconnectedCallback();
-    if (this._nowTimer !== undefined) {
-      window.clearInterval(this._nowTimer);
-      this._nowTimer = undefined;
-    }
+    this._stopNowClock?.();
+    this._stopNowClock = undefined;
     window.removeEventListener("scroll", this._dismissTooltipOnScroll, { capture: true });
     window.removeEventListener("resize", this._dismissTooltipOnScroll);
     if (this._pointerFrame !== 0) {
@@ -1742,6 +1746,26 @@ export class HelmanSolarInspector extends LitElement {
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
   }
+
+  /**
+   * The clock moved. Whether that is a change *this card* has to draw is a
+   * second question, and it is asked here.
+   *
+   * `_nowMs` is reactive, so writing it re-renders the whole stack -- every
+   * chart, both strips and the schedule band. Two things on screen read it: the
+   * "now" line, which only today's day view draws, and the day rollover, which
+   * moves the pill window, the navigation bounds and which day counts as today
+   * wherever the card happens to be. A past day and the aggregate views mark no
+   * moment at all, so between two midnights the clock reaches nothing there and
+   * the tick is dropped.
+   */
+  private _tickNow = (): void => {
+    const today = this._todayIso();
+    if (today !== this._todayKey
+      || (this._viewMode === "day" && this._selectedDate === today)) {
+      this._nowMs = Date.now();
+    }
+  };
 
   /**
    * Derive the pill window once per cycle, before anything renders.
@@ -2075,7 +2099,7 @@ export class HelmanSolarInspector extends LitElement {
             class="icon-button"
             title=${this._t("bias_correction.inspector.refresh")}
             ?disabled=${this._loading || this._spanLoading}
-            @click=${() => this._reloadActiveView()}
+            @click=${() => this._refreshActiveView(false)}
           >⟳</button>
         </div>
       </div>
@@ -2436,16 +2460,6 @@ export class HelmanSolarInspector extends LitElement {
       year: "numeric",
       month: "long",
     });
-  }
-
-  /** Whichever view is on screen, asked for again. */
-  private _reloadActiveView() {
-    if (this._viewMode === "day") {
-      this._load();
-      return;
-    }
-    this._spanRequestKey = null;
-    this._loadSpan();
   }
 
   /**
@@ -3106,7 +3120,7 @@ export class HelmanSolarInspector extends LitElement {
    * what it needs".
    */
   private _ensureDayLoaded() {
-    if (this._payload?.date !== this._selectedDate) {
+    if (this._dayStale || this._payload?.date !== this._selectedDate) {
       this._load();
     }
   }
@@ -3520,7 +3534,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Reload the drawn day whenever the backend says its data moved.
+   * Reload whatever is drawn whenever the backend says its data moved.
    *
    * The card's own payload comes from `helman/solar_bias/inspector`, which the
    * schedule owner knows nothing about — so watching the shared schedule is not
@@ -3537,8 +3551,38 @@ export class HelmanSolarInspector extends LitElement {
     }
 
     this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-      void this._load({ silent: true });
+      this._refreshActiveView(true);
     });
+  }
+
+  /**
+   * Whichever view is on screen, asked for again -- and whatever is not, marked.
+   *
+   * Both ways in land here: the refresh button, which is a navigation and shows
+   * itself (`silent` false), and the announced change, which must not disturb
+   * the day the reader is on. What they share is the decision of *which* of the
+   * three loads the card owns is worth a round trip. At D or M the day view is
+   * not drawn, and asking for a full day of series, actuals and training so
+   * that nothing can read it is the request this exists to stop; the day is
+   * marked instead, and `_ensureDayLoaded` spends the request when the reader
+   * comes back to it.
+   *
+   * Both request keys are cleared rather than left standing, because they
+   * answer "is this the window we asked for" and the answer is still yes -- it
+   * is the *contents* that moved. Without this the guard in `_loadSpan` reads
+   * the announcement as nothing to do, which is exactly the case that needs the
+   * fetch. The pills are keyed the same way and re-read on the next update, but
+   * only where they are drawn: `willUpdate` asks that question already.
+   */
+  private _refreshActiveView(silent: boolean): void {
+    this._spanRequestKey = null;
+    this._historyDaysFor = null;
+    if (this._viewMode === "day") {
+      void this._load({ silent });
+      return;
+    }
+    this._dayStale = true;
+    void this._loadSpan();
   }
 
   private _handleToggleExecution = (event: Event): void => {
@@ -5792,6 +5836,9 @@ export class HelmanSolarInspector extends LitElement {
       this._selectedDate = this._todayIso();
     }
     const silent = options.silent === true;
+    // Whatever this request is answering, it is answering it for the selected
+    // day, so nothing is owed on the day's behalf once it is out.
+    this._dayStale = false;
     const requestedDate = this._selectedDate;
     if (
       (this._loading || this._refreshing) &&
@@ -6089,9 +6136,10 @@ export class HelmanSolarInspector extends LitElement {
    *
    * It is asked for several times per render and the answer only changes at
    * midnight, so a second of staleness is invisible -- but only a second: this
-   * deliberately does not ride `NOW_RESOLUTION_MS`, because half a minute of
-   * lag at midnight is a visibly wrong answer. The time zone is part of the key
-   * because it really does change, when a payload lands carrying its own.
+   * deliberately does not ride the coarse `now-clock` resolution, because half
+   * a minute of lag at midnight is a visibly wrong answer. The time zone is
+   * part of the key because it really does change, when a payload lands
+   * carrying its own.
    */
   private _todayIsoMemo: { second: number; timeZone: string | undefined; value: string } | null = null;
 

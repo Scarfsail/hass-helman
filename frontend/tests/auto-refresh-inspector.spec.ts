@@ -1,6 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import {
+    STOP_MONTH_VIEW,
+    STOP_SLOT_60,
+    clickStop,
+    waitForAggregateChart,
+} from "./support/inspector-aggregate-harness";
 
 /**
  * The solar inspector refreshing under the user rather than at them.
@@ -174,3 +180,60 @@ test("an announced change refreshes the drawn day without disturbing it", async 
     expect(after.selectedDay).toBe(before.selectedDay);
     expect(after.hasChart).toBe(true);
 });
+
+/**
+ * The same announcement, arriving while the reader is at M.
+ *
+ * The day view is not on screen there, and a full inspector day — every
+ * series, the actuals, the training explainability — fetched so that nothing
+ * can draw it is the request this pair exists to stop. What the reader *is*
+ * looking at is the span, which the subscriber used never to ask for at all:
+ * `_loadSpan`'s key guard reads "the window has not moved" as "there is
+ * nothing to fetch", which is exactly the case an announcement is about.
+ */
+test("an announced change at M refreshes the span, not the day", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const daysBefore = await page.evaluate(() => window.__requestedDates.length);
+    const spansBefore = await spanReads(page);
+    expect(spansBefore).toHaveLength(1);
+
+    await page.evaluate(() => window.__fireDataChanged("plan"));
+
+    // The span is asked for again, for the very window already on screen.
+    await expect.poll(() => spanReads(page).then((reads) => reads.length)).toBe(2);
+    const spansAfter = await spanReads(page);
+    expect(spansAfter[1]).toEqual(spansBefore[0]);
+    // And nothing was spent on the day nobody is looking at.
+    expect(await page.evaluate(() => window.__requestedDates.length)).toBe(daysBefore);
+});
+
+test("returning to the day view spends the day request the aggregate view saved", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const daysBefore = await page.evaluate(() => window.__requestedDates.length);
+    await page.evaluate(() => window.__fireDataChanged("plan"));
+    await expect.poll(() => spanReads(page).then((reads) => reads.length)).toBe(2);
+
+    // Back to the day view. The payload it still holds is the one the
+    // announcement invalidated, so the day is read again even though the
+    // selected date never moved -- which is what the date guard alone would
+    // have called "already loaded".
+    await clickStop(page, STOP_SLOT_60);
+    await page.waitForFunction(
+        (count) => window.__requestedDates.length === count + 1,
+        daysBefore,
+    );
+    await page.evaluate(() => window.__releaseInspector());
+    await expect.poll(() => readCard(page)).toMatchObject({ hasChart: true });
+});
+
+/** The span reads only: the day pills share the command without a bucket. */
+function spanReads(page: Page): Promise<Array<{ start: string; end: string; bucket: string | null }>> {
+    return page.evaluate(() =>
+        window.__aggregateRequests.filter((request) => request.bucket !== null));
+}

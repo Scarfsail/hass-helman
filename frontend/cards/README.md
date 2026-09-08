@@ -68,6 +68,8 @@ strip `_nowMs` is the only memo key that moves on an idle installation, so its
 whole derived model freezes with it while the parts that read `hass.states` keep
 repainting. Anything that needs the wall clock owns a timer.
 
+But a timer is not a licence either, and [`shared/now-clock.ts`](shared/now-clock.ts) is where the limits on one live. It does not run while `document.hidden`, and it ticks once on the way back rather than leaving the reader up to half a minute behind. Each tick then has to earn its write: `helman-solar-inspector`'s `_tickNow` moves `_nowMs` only for the two things that read it — today's "now" line and the day rollover — so a past day or a month of totals, which mark no moment anywhere, cost nothing between two midnights. And a model keyed on the clock is keyed on the clock's *meaning* to it: everything `scheduling-day-editor-host` derives is a slot-boundary test, so its memo takes `clockSlotMs`, the edge the clock last reached, and the forecast map, day view, lanes and days stand until the schedule actually moves under them. The marker keeps the fine clock; only the model waits.
+
 ---
 
 Measurement lives next door in [`../perf/README.md`](../perf/README.md), which

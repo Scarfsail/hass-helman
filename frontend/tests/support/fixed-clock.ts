@@ -38,6 +38,19 @@ export const FIXED_YEAR = Number(FIXED_NOW_ISO.slice(0, 4));
  * all, rather than by remembering to ask for it. Node-side date arithmetic in
  * the specs has to use the constants above to match.
  */
-export async function installFixedClock(page: Page): Promise<void> {
+export async function installFixedClock(
+    page: Page,
+    options: { timers?: boolean } = {},
+): Promise<void> {
+    if (options.timers === true) {
+        // Timers under the test's control as well as the date, for the specs
+        // about *what the clock costs*: those have to advance the wall clock
+        // rather than only agree with it. Everything else takes the frozen
+        // date and leaves timers real, because a spec that fakes them has to
+        // poll from Node — `page.waitForFunction` polls inside the page, on
+        // the very timers it just took away.
+        await page.clock.install({ time: new Date(FIXED_NOW_ISO) });
+        return;
+    }
     await page.clock.setFixedTime(new Date(FIXED_NOW_ISO));
 }
