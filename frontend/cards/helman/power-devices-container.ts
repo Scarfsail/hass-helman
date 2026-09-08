@@ -49,9 +49,10 @@ export class PowerDevicesContainer extends LitElement {
 
         // The scale every row below shares. The buffer is mutated in place, so its
         // identity says which array to scan and `historyRevision` says the numbers
-        // in it moved; a feeder that builds a fresh array each time (the solar
-        // inspector) carries no revision and is caught by the identity alone.
-        if (changedProperties.has('parentPowerHistory') || changedProperties.has('historyRevision')) {
+        // in it moved. A feeder that carries no revision at all gets no cache: it
+        // may still be mutating in place, and a frozen scale is silent.
+        if (this.historyRevision === undefined
+            || changedProperties.has('parentPowerHistory') || changedProperties.has('historyRevision')) {
             this._parentMaxPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : undefined;
         }
 
@@ -61,8 +62,11 @@ export class PowerDevicesContainer extends LitElement {
             // and the revision that moved them — never the current power, which
             // churns without reordering anything and stands still while a rolling
             // bucket reverses the totals.
-            const key = `${this.historyRevision ?? 0}|${this.devices.map(d => `${d.id}:${d.name}`).join(',')}`;
-            if (key !== this._sortKey || changedProperties.has('devices')) {
+            // No revision, no cache -- for the same reason the maximum above has none.
+            const key = this.historyRevision === undefined
+                ? undefined
+                : `${this.historyRevision}|${this.devices.map(d => `${d.id}:${d.name}`).join(',')}`;
+            if (key === undefined || key !== this._sortKey || changedProperties.has('devices')) {
                 this._sortedIds = sortedIdsByHistoryAndName(this.devices);
                 this._sortKey = key;
             }
