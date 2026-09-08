@@ -29,6 +29,7 @@ export class NodeDetailHouseContent extends LitElement {
                             .parentPowerHistory=${p.consumptionNode?.powerHistory}
                             .historyBuckets=${p.historyBuckets}
                             .historyBucketDuration=${p.historyBucketDuration}
+                            .historyRevision=${p.historyRevision}
                         ></power-device>
                     </div>
                 ` : nothing}
@@ -38,6 +39,7 @@ export class NodeDetailHouseContent extends LitElement {
                         .devices=${p.devices}
                         .historyBuckets=${p.historyBuckets}
                         .historyBucketDuration=${p.historyBucketDuration}
+                        .historyRevision=${p.historyRevision}
                         .currentParentPower=${p.power}
                         .parentPowerHistory=${p.parentPowerHistory}
                         .devices_full_width=${true}

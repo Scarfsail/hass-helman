@@ -61,6 +61,19 @@ export class HelmanPowerHistoryBars extends LitElement {
     @property({ type: String }) public historyBarColor!: string;
     /** Per-bucket source split, index-aligned with `historyToRender`. Omit for a flat bar. */
     @property({ attribute: false }) public sourceHistory?: (BucketSourceMix | undefined)[];
+    /**
+     * Bumped by the power card once per history tick; see
+     * `helman-card._historyRevision`.
+     *
+     * `HistoryEngine` mutates the rolling buffers in place, so on a live card the
+     * arrays below never change identity and the four properties above cannot say
+     * that the buckets moved. The counter can, and it is the *only* thing that
+     * moves on an idle house — which is what lets the card hand the buffers down
+     * by reference and stop rebuilding these paths on every `hass` replacement.
+     * Feeders that build their buckets fresh (the solar inspector's per-slot rows)
+     * omit it and keep being dirty-checked by identity.
+     */
+    @property({ type: Number }) public historyRevision?: number;
 
     @state() private _paths: ColorPath[] = [];
     @state() private _bucketCount = 0;
@@ -69,7 +82,8 @@ export class HelmanPowerHistoryBars extends LitElement {
         if (!changedProperties.has('historyToRender')
             && !changedProperties.has('maxHistoryPower')
             && !changedProperties.has('sourceHistory')
-            && !changedProperties.has('historyBarColor')) {
+            && !changedProperties.has('historyBarColor')
+            && !changedProperties.has('historyRevision')) {
             return;
         }
 

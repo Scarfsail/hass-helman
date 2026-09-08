@@ -22,6 +22,15 @@ export class PowerDevice extends LitElement {
     /** Bumped by the card once per history tick; see `helman-card._historyRevision`. */
     @property({ type: Number }) public historyRevision?: number;
     @property({ attribute: false }) public parentPowerHistory?: number[];
+    /**
+     * The full-height value the bars scale against, when a container already
+     * worked it out. Every sibling shares one parent, so the scan over
+     * `parentPowerHistory` belongs once in the container rather than once per row;
+     * `power-devices-container` computes it per history revision and hands it
+     * down. Callers that mount a single row on its own (the node-detail panels)
+     * pass only the history and get the scan here.
+     */
+    @property({ type: Number }) public parentMaxPower?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
 
     @state() private _childrenCollapsed = true;
@@ -180,19 +189,17 @@ export class PowerDevice extends LitElement {
         const currentPower = this.device.powerValue ?? 0;
         const isOff = currentPower === 0;
 
-        // Handed to the bars below as a copy (`[...historyToRender]`), and that copy
-        // is load-bearing rather than paranoia: `HistoryEngine._advanceTree` mutates
-        // `powerHistory` in place (push / shift / index assignment), and
-        // `helman-power-history-bars.willUpdate` early-returns unless one of its four
-        // properties is in `changedProperties`. Passed by reference the array's
-        // identity would never change and the bars would freeze permanently — the
-        // copy is the change signal that reaches them. Its sibling `.sourceHistory`
-        // is passed by reference precisely because it rides on this one. What gets
-        // this row to re-render in the first place is `historyRevision`, bumped once
-        // per tick by the card. See `frontend/cards/README.md`, "Card rendering
+        // Both buffers go to the bars by reference: `HistoryEngine._advanceTree`
+        // mutates them in place (push / shift / index assignment), so a copy would
+        // be a new object on every render while carrying the very same buckets —
+        // "a pointer is not a data change", and the bars would rebuild their paths
+        // at the rate Home Assistant replaces `hass`. What tells them the buckets
+        // actually moved is `historyRevision`, bumped once per tick by the card and
+        // passed straight through. See `frontend/cards/README.md`, "Card rendering
         // discipline".
         const historyToRender = this.device.powerHistory;
-        const maxHistoryPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender);
+        const maxHistoryPower = this.parentMaxPower
+            ?? (this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender));
         const childrenToRender = device.children;
 
         // Only the typed top-level nodes carry a domain color of their own.
@@ -222,9 +229,10 @@ export class PowerDevice extends LitElement {
                     ...(tintColor ? {'--device-tint': tintColor} : {}),
                 })}>
                     <helman-power-history-bars
-                        .historyToRender=${[...historyToRender]}
+                        .historyToRender=${historyToRender}
                         .maxHistoryPower=${maxHistoryPower}
                         .historyBarColor=${historyBarColor}
+                        .historyRevision=${this.historyRevision}
                         .sourceHistory=${device.isSource ? undefined : device.sourcePowerHistory}>
                     </helman-power-history-bars>
                     <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">

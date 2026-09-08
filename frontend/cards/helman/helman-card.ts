@@ -316,6 +316,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
             historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,
+            historyRevision: this._historyRevision,
             uiConfig: this._uiConfig,
         };
     }
