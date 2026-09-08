@@ -516,7 +516,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             this._rebuildWatchedEntityIds();
             return true;
         } catch (err) {
-            if (obsolete()) return false;
+            // Logged even for an obsolete load: the guard is there to keep stale data
+            // out of the card, not to hide a backend failure that raced a detach.
             console.error("helman-simple-card: failed to load backend data", err);
             return false;
         } finally {

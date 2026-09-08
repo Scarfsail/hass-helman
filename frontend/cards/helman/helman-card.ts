@@ -363,7 +363,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._deviceTree, this._sourceNodes);
         } catch (error) {
-            if (obsolete()) return;
+            // Logged even for an obsolete load: the guard is there to keep stale data
+            // out of the card, not to hide a backend failure that raced a detach.
             console.error('Helman: failed to load backend data', error);
         }
     }
