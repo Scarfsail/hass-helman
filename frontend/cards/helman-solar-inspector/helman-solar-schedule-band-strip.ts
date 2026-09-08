@@ -123,7 +123,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         lanes: unknown;
         slots: unknown;
         day: EntityScheduleDay | null;
-        nowMs: number;
+        clockSlotMs: number;
         projectionIndex: unknown;
     } | null = null;
     /** The grid the lanes are ruled by, one array per window it is drawn in. */
@@ -166,7 +166,11 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             && previous.lanes === host?.lanes
             && previous.slots === host?.dayView.slots
             && previous.day === day
-            && previous.nowMs === (host?.nowMs ?? 0)
+            // The host's clock snapped to the schedule's grid, not its raw
+            // `nowMs`: every lane the builder cuts is bounded by slot edges, so
+            // the geometry cannot move between two of them and keying on the
+            // 30 s marker clock rebuilt every lane on the page twice a minute.
+            && previous.clockSlotMs === (host?.clockSlotMs ?? 0)
             && previous.projectionIndex === host?.projectionIndex
         ) {
             return;
@@ -176,7 +180,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             lanes: host?.lanes,
             slots: host?.dayView.slots,
             day,
-            nowMs: host?.nowMs ?? 0,
+            clockSlotMs: host?.clockSlotMs ?? 0,
             projectionIndex: host?.projectionIndex,
         };
         this._bandLanes = host === null || day === null ? [] : this._buildBandLanes(host, day);

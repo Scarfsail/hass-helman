@@ -1,6 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import {
+    STOP_MONTH_VIEW,
+    STOP_SLOT_60,
+    clickStop,
+    waitForAggregateChart,
+} from "./support/inspector-aggregate-harness";
 
 /**
  * The solar inspector refreshing under the user rather than at them.
@@ -174,3 +180,133 @@ test("an announced change refreshes the drawn day without disturbing it", async 
     expect(after.selectedDay).toBe(before.selectedDay);
     expect(after.hasChart).toBe(true);
 });
+
+/**
+ * The same announcement, arriving while the reader is at M.
+ *
+ * The day view is not on screen there, and a full inspector day — every
+ * series, the actuals, the training explainability — fetched so that nothing
+ * can draw it is the request this pair exists to stop. What the reader *is*
+ * looking at is the span, which the subscriber used never to ask for at all:
+ * `_loadSpan`'s key guard reads "the window has not moved" as "there is
+ * nothing to fetch", which is exactly the case an announcement is about.
+ */
+test("an announced change at M refreshes the span, not the day", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const daysBefore = await page.evaluate(() => window.__requestedDates.length);
+    const spansBefore = await spanReads(page);
+    expect(spansBefore).toHaveLength(1);
+
+    await page.evaluate(() => window.__fireDataChanged("plan"));
+
+    // The span is asked for again, for the very window already on screen.
+    await expect.poll(() => spanReads(page).then((reads) => reads.length)).toBe(2);
+    const spansAfter = await spanReads(page);
+    expect(spansAfter[1]).toEqual(spansBefore[0]);
+    // And nothing was spent on the day nobody is looking at.
+    expect(await page.evaluate(() => window.__requestedDates.length)).toBe(daysBefore);
+});
+
+test("returning to the day view spends the day request the aggregate view saved", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const daysBefore = await page.evaluate(() => window.__requestedDates.length);
+    await page.evaluate(() => window.__fireDataChanged("plan"));
+    await expect.poll(() => spanReads(page).then((reads) => reads.length)).toBe(2);
+
+    // Back to the day view. The payload it still holds is the one the
+    // announcement invalidated, so the day is read again even though the
+    // selected date never moved -- which is what the date guard alone would
+    // have called "already loaded".
+    await clickStop(page, STOP_SLOT_60);
+    await page.waitForFunction(
+        (count) => window.__requestedDates.length === count + 1,
+        daysBefore,
+    );
+    await page.evaluate(() => window.__releaseInspector());
+    await expect.poll(() => readCard(page)).toMatchObject({ hasChart: true });
+});
+
+/**
+ * What a background span refresh is allowed to do to the reader.
+ *
+ * The announcement path carries `silent` through to the span the same way it
+ * carries it to the day: the reader is studying the month, and a re-plan they
+ * did not ask for must not dim it under a loading chip. The refresh button, a
+ * navigation the reader did ask for, still shows itself.
+ */
+test("an announced span refresh is silent, the refresh button is not", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const shown = await page.evaluate(() => {
+        const card = document.querySelector("helman-solar-inspector") as any;
+        const hass = card.hass;
+        const original = hass.callWS;
+        // Held open, so both loads are still in flight when they are read.
+        hass.callWS = () => new Promise(() => { /* never lands */ });
+        // The key answers "same window", which is exactly the case here; the
+        // refresh path clears it, so do that rather than fake a navigation.
+        card._spanRequestKey = null;
+        void card._loadSpan(true);
+        const silent = card._spanLoading;
+        card._spanRequestKey = null;
+        void card._loadSpan(false);
+        const loud = card._spanLoading;
+        hass.callWS = original;
+        return { silent, loud };
+    });
+
+    expect(shown).toEqual({ silent: false, loud: true });
+});
+
+/**
+ * Two reads of the same window, and which one is allowed to land.
+ *
+ * An announcement asks for the window already on screen, so the request key
+ * cannot tell the two apart -- both carry `bucket:start..end`. Without a
+ * monotonic id the older answer passes the guard and paints the data the
+ * announcement was about to replace.
+ */
+test("a slow span answer cannot land on top of a newer one", async ({ page }) => {
+    await mountInspector(page);
+    await clickStop(page, STOP_MONTH_VIEW);
+    await waitForAggregateChart(page);
+
+    const landed = await page.evaluate(async () => {
+        const card = document.querySelector("helman-solar-inspector") as any;
+        const hass = card.hass;
+        const original = hass.callWS;
+        const sample = card._span.days[0];
+
+        let releaseStale: ((value: unknown) => void) | null = null;
+        hass.callWS = () => new Promise((resolve) => { releaseStale = resolve; });
+        card._spanRequestKey = null;
+        const stale = card._loadSpan(true);
+
+        // The same window again, and this answer is the current one.
+        hass.callWS = async () => ({ currency: "CZK", days: [sample, { ...sample }] });
+        card._spanRequestKey = null;
+        await card._loadSpan(true);
+        const afterFresh = card._span.days.length;
+
+        releaseStale!({ currency: "CZK", days: [] });
+        await stale;
+        hass.callWS = original;
+        return { afterFresh, afterStale: card._span.days.length, loading: card._spanLoading };
+    });
+
+    expect(landed).toEqual({ afterFresh: 2, afterStale: 2, loading: false });
+});
+
+/** The span reads only: the day pills share the command without a bucket. */
+function spanReads(page: Page): Promise<Array<{ start: string; end: string; bucket: string | null }>> {
+    return page.evaluate(() =>
+        window.__aggregateRequests.filter((request) => request.bucket !== null));
+}
