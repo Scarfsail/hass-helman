@@ -6,6 +6,7 @@ import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
 import {
+    EMPTY_SELECTED_MINUTES,
     stripMinutesForSvgX,
     stripWindow,
     type ScheduleStripGeometry,
@@ -103,7 +104,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
-    @property({ attribute: false }) public selectedMinutes: number[] = [];
+    @property({ attribute: false }) public selectedMinutes: readonly number[] = EMPTY_SELECTED_MINUTES;
     @property({ attribute: false }) public hoverMinutes: number | null = null;
     @property({ type: Number }) public slotMinutes = 15;
     @property({ type: Number }) public nowMs = Date.now();
@@ -120,11 +121,50 @@ export class HelmanSolarMoneyStrip extends LitElement {
         return localize(key);
     }
 
+    /**
+     * The day's cells, and the inputs they were bucketed from.
+     *
+     * Money per cell is a function of the two series, the slot width and the
+     * seam -- and of nothing else the strip is handed. The seam is compared as
+     * the minute it resolves to rather than as the clock behind it, so the
+     * inspector's 30-second tick only rebuilds these when it actually moves
+     * the boundary between what was spent and what is projected.
+     */
+    private _cells: MoneyCell[] = [];
+    private _cellsFor: {
+        actual: readonly MoneyPoint[];
+        forecast: readonly MoneyPoint[];
+        slot: number;
+        seam: number;
+    } | null = null;
+
+    protected willUpdate(): void {
+        this._rebuildCellsIfNeeded();
+    }
+
+    private _rebuildCellsIfNeeded(): void {
+        const previous = this._cellsFor;
+        const slot = this._slotSpan();
+        const seam = this._seamMinutes();
+        if (
+            previous !== null
+            && previous.actual === this.moneyActual
+            && previous.forecast === this.moneyForecast
+            && previous.slot === slot
+            && previous.seam === seam
+        ) {
+            return;
+        }
+        this._cellsFor = { actual: this.moneyActual, forecast: this.moneyForecast, slot, seam };
+        this._cells = this._buildCells(seam);
+    }
+
     render() {
         if (!this.hass || this.geometry === null) {
             return nothing;
         }
-        const cells = this._buildCells();
+        // Bucketed in `willUpdate`; nothing is derived here.
+        const cells = this._cells;
         if (cells.length === 0) {
             return nothing;
         }
@@ -148,9 +188,8 @@ export class HelmanSolarMoneyStrip extends LitElement {
      * zero, so a cell keeps whichever side its rails could price and reports
      * the other as unknown.
      */
-    private _buildCells(): MoneyCell[] {
+    private _buildCells(seam: number): MoneyCell[] {
         const slot = this._slotSpan();
-        const seam = this._seamMinutes();
         const cells = new Map<number, MoneyCell>();
         const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
             for (const point of points ?? []) {

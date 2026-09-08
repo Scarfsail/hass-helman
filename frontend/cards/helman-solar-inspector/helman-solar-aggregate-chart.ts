@@ -307,20 +307,41 @@ export class HelmanSolarAggregateChart extends LitElement {
         return localize(key);
     }
 
+    /**
+     * The stack and its slot order, and the rows they were built from.
+     *
+     * A hover or a selection redraws this chart without changing a single
+     * band, so the six meters are stacked once per span rather than once per
+     * pointer report -- the highlights stay reactive on their own.
+     */
+    private _stack: StackSet | null = null;
+    private _stackIndices: number[] = [];
+    private _stackFor: readonly SpanAggregateRow[] | null = null;
+
+    protected willUpdate(): void {
+        const rows = this.rows ?? [];
+        if (this._stackFor === rows) {
+            return;
+        }
+        this._stackFor = rows;
+        this._stack = rows.length === 0 ? null : this._buildStack(rows);
+        this._stackIndices = this._stack === null ? [] : stackSlots(this._stack, 1);
+    }
+
     render() {
         const rows = this.rows ?? [];
-        if (rows.length === 0) {
+        // `_stack` is null exactly when there are no rows, and deliberately not
+        // when the stack it holds is *empty*. A span whose energy meters have
+        // no statistics -- purged, or never configured -- still has SoC bounds
+        // and money to show, and the energy chart is where the hit rects live,
+        // so bailing there would take the pointing surface with it. The chart
+        // draws its axis over an empty field instead, which is the honest
+        // reading of "no energy here", and the two rows below carry on.
+        if (rows.length === 0 || this._stack === null) {
             return nothing;
         }
-        // Deliberately no bail on an empty stack. A span whose energy meters
-        // have no statistics -- purged, or never configured -- still has SoC
-        // bounds and money to show, and the energy chart is where the hit rects
-        // live, so dropping it would take the pointing surface with it. The
-        // chart draws its axis over an empty field instead, which is the honest
-        // reading of "no energy here", and the two rows below carry on.
-        const set = this._buildStack(rows);
-        const indices = stackSlots(set, 1);
-        return this._renderChart(rows, set, indices);
+        // Stacked in `willUpdate`; nothing is derived here.
+        return this._renderChart(rows, this._stack, this._stackIndices);
     }
 
     /**

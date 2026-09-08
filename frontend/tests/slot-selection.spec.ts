@@ -167,7 +167,7 @@ async function chartGeom(page: Page): Promise<ChartGeom> {
         const el = document.querySelector("helman-solar-inspector") as any;
         const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
         const r = svg.getBoundingClientRect();
-        const layout = el._lastLayoutForStrip;
+        const layout = el._layout;
         return {
             rect: { left: r.left, top: r.top, width: r.width, height: r.height },
             viewWidth: layout.width,
