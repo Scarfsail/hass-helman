@@ -66,6 +66,17 @@ async function installReader(page: Page): Promise<void> {
     });
 }
 
+/** Read back the row names in the order the container drew them. */
+async function installOrderReader(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        (window as any).__rowNames = (root: any) =>
+            Array.from(root.querySelectorAll("power-device")).map((row: any) =>
+                (row.shadowRoot?.querySelector(".deviceName")?.textContent ?? "?")
+                    .replace(/[\u25BA\u25BC]\s*$/, "")
+                    .trim());
+    });
+}
+
 /** One consumer node shaped the way the card's hydrated tree shapes them. */
 function fakeNode(id: string, name: string, labels: string[] = []) {
     return {
@@ -159,5 +170,125 @@ test.describe("history tick reaches the rendered bars", () => {
 
         expect(colours.before["Kitchen (🍳)"]).toEqual([SOLAR_RGB, SOLAR_RGB]);
         expect(colours.after["Kitchen (🍳)"]).toEqual([SOLAR_RGB, SOLAR_RGB, GRID_RGB]);
+    });
+});
+
+/**
+ * The other half of the same signal: what must *not* happen between two ticks.
+ *
+ * Because `historyRevision` says when the buckets moved, the rolling buffers can
+ * be handed to `helman-power-history-bars` by reference. A `hass` replacement
+ * then reaches the row — its icon and its info read live sensors — without the
+ * bars seeing a single changed property, so no path is rebuilt. That is finding
+ * F2 of #229: 30 accepted `hass` updates used to cost 30 rebuilds of a fixed
+ * 60-bucket history, because the row copied the array on every render.
+ */
+test.describe("an unchanged history costs nothing", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+    });
+
+    test("repeated hass replacements re-render the row but rebuild no paths", async ({ page }) => {
+        const counts = await page.evaluate(async (node) => {
+            const el = document.createElement("power-devices-container") as any;
+            el.hass = { states: {}, locale: { language: "en" } };
+            el.devices = [node];
+            el.historyBuckets = 3;
+            el.historyBucketDuration = 1;
+            el.historyRevision = 0;
+            el.devices_full_width = true;
+            document.body.appendChild(el);
+            await el.updateComplete;
+
+            const row = el.shadowRoot.querySelector("power-device") as any;
+            await row.updateComplete;
+            const bars = row.shadowRoot.querySelector("helman-power-history-bars") as any;
+            await bars.updateComplete;
+
+            let rowUpdates = 0;
+            let barUpdates = 0;
+            row.updated = () => { rowUpdates += 1; };
+            bars.updated = () => { barUpdates += 1; };
+
+            // Exactly what Home Assistant pushes 17-24 times a second: a new
+            // object carrying the same states. Nothing about the history moved.
+            for (let i = 0; i < 30; i += 1) {
+                el.hass = { states: {}, locale: { language: "en" } };
+                await el.updateComplete;
+                await row.updateComplete;
+            }
+            const idle = { rowUpdates, barUpdates };
+
+            // And the counter still gets through, so the zero above is a filter
+            // rather than a disconnected wire.
+            node.powerHistory.push(100);
+            node.sourcePowerHistory.push({ solar: { power: 100, color: "#facc15" } });
+            el.historyRevision = 1;
+            await el.updateComplete;
+            await row.updateComplete;
+            await bars.updateComplete;
+
+            return { idle, barUpdatesAfterTick: barUpdates - idle.barUpdates };
+        }, fakeNode("washer", "Washer"));
+
+        // The row itself keeps up with `hass` — its icon and info read live sensors.
+        expect(counts.idle.rowUpdates).toBe(30);
+        // Hard zero, as in `render-discipline.spec.ts`: this is the rule, not a budget.
+        expect(counts.idle.barUpdates).toBe(0);
+        expect(counts.barUpdatesAfterTick).toBe(1);
+    });
+});
+
+/**
+ * Sorting ranks rows by their history total, so the history is what has to
+ * invalidate the order.
+ *
+ * The cache key used to be the current power of every row, which is neither
+ * necessary nor sufficient: it churns on live sensors that reorder nothing, and
+ * it stands perfectly still while a rolling bucket reverses the totals — which is
+ * finding F8 of #229. The revision is the correct key, and the totals are summed
+ * once per row rather than re-reduced inside every comparison.
+ */
+test.describe("sorting follows the histories", () => {
+    test.beforeEach(async ({ page }) => {
+        await loadCardBundle(page);
+        await installOrderReader(page);
+    });
+
+    test("a rolling history reorders rows while the current power stands still", async ({ page }) => {
+        const order = await page.evaluate(async (nodes) => {
+            const el = document.createElement("power-devices-container") as any;
+            el.hass = { states: {}, locale: { language: "en" } };
+            el.devices = nodes;
+            el.historyBuckets = 3;
+            el.historyBucketDuration = 1;
+            el.historyRevision = 0;
+            el.devices_full_width = true;
+            el.sortChildrenByPower = true;
+            document.body.appendChild(el);
+            await el.updateComplete;
+            const before = (window as any).__rowNames(el.shadowRoot);
+
+            // One tick, rolling the oldest bucket off both rows: the totals swap
+            // while both rows keep the power value they already had.
+            const [dryer, washer] = nodes;
+            dryer.powerHistory.shift();
+            dryer.powerHistory.push(0);
+            washer.powerHistory.shift();
+            washer.powerHistory.push(900);
+            el.historyRevision = 1;
+            await el.updateComplete;
+            const after = (window as any).__rowNames(el.shadowRoot);
+
+            return { before, after, powers: nodes.map((n: any) => n.powerValue) };
+        }, [
+            { ...fakeNode("dryer", "Dryer"), powerValue: 100, powerHistory: [900, 0, 0] },
+            { ...fakeNode("washer", "Washer"), powerValue: 100, powerHistory: [0, 0, 0] },
+        ]);
+
+        expect(order.before).toEqual(["Dryer", "Washer"]);
+        expect(order.after).toEqual(["Washer", "Dryer"]);
+        // The thing the old key watched never moved.
+        expect(order.powers).toEqual([100, 100]);
     });
 });

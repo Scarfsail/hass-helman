@@ -192,6 +192,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _flowGlows?:  { solar: string; grid: string; battery: string };
 
     // 5. State properties
+    /**
+     * Bumped once per history tick, exactly as `helman-card._historyRevision` is.
+     * The simple card draws no bars itself, but its node-detail panels draw the
+     * card's rows off the buffers `HistoryEngine` mutates in place, and a bare
+     * `requestUpdate()` is not a signal those rows can dirty-check against.
+     */
+    @state() private _historyRevision = 0;
     @state() private _hass?: HomeAssistant;
     @state() private _energy: EnergyValues = EMPTY_ENERGY;
     @state() private _loading = true;
@@ -482,7 +489,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             this._historyEngine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
-                () => this.requestUpdate(),
+                () => { this._historyRevision++; },
             );
             this._historyEngine.applyHistory(history, HistoryEngine.walkTree(this._topLevelNodes()), this._sourceNodes);
             this._historyEngine.start(
@@ -577,6 +584,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             houseNode: this._houseNode,
             historyBuckets,
             historyBucketDuration,
+            historyRevision: this._historyRevision,
             uiConfig: this._uiConfig,
         };
     }

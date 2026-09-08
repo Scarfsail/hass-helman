@@ -28,6 +28,7 @@ export class NodeDetailSolarContent extends LitElement {
                             .parentPowerHistory=${p.productionNode?.powerHistory}
                             .historyBuckets=${p.historyBuckets}
                             .historyBucketDuration=${p.historyBucketDuration}
+                            .historyRevision=${p.historyRevision}
                         ></power-device>
                     </div>
                 ` : nothing}

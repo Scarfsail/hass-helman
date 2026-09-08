@@ -107,6 +107,7 @@ export class NodeDetailBatteryContent extends LitElement {
                                     .parentPowerHistory=${p.productionNode?.powerHistory}
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
+                                    .historyRevision=${p.historyRevision}
                                 ></power-device>
                             </div>
                         ` : nothing}
@@ -120,6 +121,7 @@ export class NodeDetailBatteryContent extends LitElement {
                                     .parentPowerHistory=${p.consumptionNode?.powerHistory}
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
+                                    .historyRevision=${p.historyRevision}
                                 ></power-device>
                             </div>
                         ` : nothing}
