@@ -59,6 +59,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     // 3. Private properties
     private config!: HelmanCardConfig;
     private _historyEngine?: HistoryEngine;
+    /**
+     * Bumped on every disconnect and on every load that replaces another. A load
+     * that resolves after its generation was superseded commits nothing: the card
+     * may already be detached, and installing a `HistoryEngine` on it would start
+     * an interval nothing ever stops (#232).
+     */
+    private _loadGeneration = 0;
     private _localize?: LocalizeFunction;
     private _sourceNodes: DeviceNode[] = [];
     private _watchedEntityIds: Set<string> = new Set();
@@ -144,6 +151,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         super.disconnectedCallback();
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
+        this._loadGeneration += 1;
         this._historyEngine?.stop();
     }
 
@@ -322,32 +330,40 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private async _loadBackendData(): Promise<void> {
+        const generation = ++this._loadGeneration;
+        // Superseded by a later load, or the card is gone. Either way this
+        // response belongs to nobody: commit none of it.
+        const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
         this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
             const treePayload = await store.getDeviceTree();
+            if (obsolete()) return;
             this._uiConfig = treePayload.uiConfig;
             this._deviceTree = this._hydrateDeviceNodes(treePayload);
             this._sourceNodes = this._collectSourceNodes(this._deviceTree);
             this._rebuildWatchedEntityIds();
 
             const history = await store.getHistory();
+            if (obsolete()) return;
             const histBuckets = this._uiConfig.history_buckets;
-            this._historyEngine = new HistoryEngine(
+            const engine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
                 () => { this._historyRevision++; },
             );
-            this._historyEngine.applyHistory(history, HistoryEngine.walkTree(this._deviceTree), this._sourceNodes);
+            engine.applyHistory(history, HistoryEngine.walkTree(this._deviceTree), this._sourceNodes);
+            this._historyEngine = engine;
             this.requestUpdate();
 
-            this._historyEngine.start(
+            engine.start(
                 this._uiConfig.history_bucket_duration,
                 () => this._deviceTree,
                 () => this._sourceNodes,
             );
-            this._historyEngine.advanceBuckets(this._deviceTree, this._sourceNodes);
+            engine.advanceBuckets(this._deviceTree, this._sourceNodes);
         } catch (error) {
+            if (obsolete()) return;
             console.error('Helman: failed to load backend data', error);
         }
     }
