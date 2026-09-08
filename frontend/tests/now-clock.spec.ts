@@ -264,10 +264,15 @@ test.describe("the schedule host's clock", () => {
         // The marker's clock moved, so the band's "now" line still travels.
         expect(await page.evaluate(() => (window as any).__host.nowMs as number))
             .toBeGreaterThanOrEqual(Date.parse(FIXED_NOW_ISO) + TICK_SPAN_MS - 30_000);
-        // The model's did not, so nothing behind it was rebuilt or announced.
+        // The model's did not, so nothing behind it was rebuilt. The tick is
+        // still announced -- the band reads `nowMs` through a getter and re-renders
+        // only when this host says so, and its own keys then find nothing to
+        // rebuild -- so the marker travels without the day being derived again.
         expect(await page.evaluate(() => (window as any).__host.clockSlotMs as number))
             .toBe(clockSlotMs);
-        expect(await derivedAgain(page)).toEqual({ rebuilt: false, announcements: 0 });
+        const after = await derivedAgain(page);
+        expect(after.rebuilt).toBe(false);
+        expect(after.announcements).toBeGreaterThan(0);
     });
 
     test("crossing a slot boundary rebuilds the day and says so", async ({ page }) => {
@@ -296,6 +301,7 @@ test.describe("the schedule host's clock", () => {
         // data refresh rather than clock work.
         await page.clock.runFor(5 * 60_000);
         expect(await page.evaluate(() => (window as any).__host.nowMs as number)).toBe(before);
+        // No tick at all while hidden, so not even the marker's announcement.
         expect(await derivedAgain(page)).toEqual({ rebuilt: false, announcements: 0 });
 
         await setHidden(page, false);

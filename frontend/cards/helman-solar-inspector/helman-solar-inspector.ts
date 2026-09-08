@@ -715,6 +715,8 @@ export class HelmanSolarInspector extends LitElement {
    * first answer land last.
    */
   private _spanRequestKey: string | null = null;
+  /** Which span answer is the current one; see `_loadSpan`. */
+  private _spanRequestId = 0;
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -2471,7 +2473,7 @@ export class HelmanSolarInspector extends LitElement {
    * discipline `_loadDayAggregates` established for the pills, which share this
    * endpoint.
    */
-  private async _loadSpan() {
+  private async _loadSpan(silent = false) {
     if (!this.hass) return;
     if (!this._selectedDate) this._selectedDate = this._todayIso();
     const bucket = this._spanBucket();
@@ -2490,7 +2492,13 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._spanRequestKey = key;
-    this._spanLoading = true;
+    // The key answers "is this the window we asked for", which stays true when
+    // a re-plan asks for the same window again; only this counter can say which
+    // of two live requests for one window is the current one.
+    const requestId = ++this._spanRequestId;
+    // An announced change must not flash an overlay over the span the reader is
+    // studying, exactly as it must not disturb the day view.
+    if (!silent) this._spanLoading = true;
     this._spanError = "";
     // The previous span stays put -- see the matching comment in `_load` --
     // and is overwritten below on success or left in place under the error
@@ -2507,7 +2515,7 @@ export class HelmanSolarInspector extends LitElement {
         // never read.
         house_breakdown: true,
       });
-      if (this._spanRequestKey !== key) return;
+      if (requestId !== this._spanRequestId) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
       // Drop anything the new span has no column for, exactly as the day load
       // re-grids its slot selection: a selection the chart cannot draw is a
@@ -2517,10 +2525,10 @@ export class HelmanSolarInspector extends LitElement {
       // the card, so this is where the floor arrives when no day was ever loaded.
       if (result?.range) this._spanRange = result.range;
     } catch (err: any) {
-      if (this._spanRequestKey !== key) return;
+      if (requestId !== this._spanRequestId) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
     } finally {
-      if (this._spanRequestKey === key) this._spanLoading = false;
+      if (requestId === this._spanRequestId) this._spanLoading = false;
       this.requestUpdate();
     }
   }
@@ -3582,7 +3590,7 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._dayStale = true;
-    void this._loadSpan();
+    void this._loadSpan(silent);
   }
 
   private _handleToggleExecution = (event: Event): void => {
@@ -5836,9 +5844,6 @@ export class HelmanSolarInspector extends LitElement {
       this._selectedDate = this._todayIso();
     }
     const silent = options.silent === true;
-    // Whatever this request is answering, it is answering it for the selected
-    // day, so nothing is owed on the day's behalf once it is out.
-    this._dayStale = false;
     const requestedDate = this._selectedDate;
     if (
       (this._loading || this._refreshing) &&
@@ -5893,6 +5898,10 @@ export class HelmanSolarInspector extends LitElement {
       payload.houseUnmeasuredLabel ??= null;
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+        // Cleared here rather than on the way out: a request dropped as a
+        // duplicate or one that fails leaves the day owed, so returning to it
+        // asks again instead of drawing what the announcement superseded.
+        this._dayStale = false;
         this._payload = payload;
         this._emitWatchedEntities(payload);
         this._dayRange = payload.range;

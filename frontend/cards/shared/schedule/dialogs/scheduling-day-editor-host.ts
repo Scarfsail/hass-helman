@@ -290,6 +290,11 @@ export class SchedulingDayEditorHost extends LitElement {
         // `now-clock`.
         this._stopNowClock = startNowClock(() => {
             this._nowMs = Date.now();
+            // The band draws its now-marker off `nowMs` through a getter and only
+            // re-renders when this host says so. The derived model no longer moves
+            // on a tick inside a slot, so the tick has to say so itself; the band's
+            // own keys then decide there is nothing to rebuild.
+            this.dispatchEvent(new CustomEvent(SCHEDULE_DAY_MODEL_CHANGED_EVENT));
         });
     }
 
