@@ -40,15 +40,30 @@ export class HistoryEngine {
                 node.historyBuckets = buckets;
             }
             if (node.isSource) continue;
+            // One source bucket per *actual* power bucket, never per configured
+            // capacity: the backend returns the live deque contents, which are
+            // shorter than `buckets` until the buffers have filled (startup, or a
+            // subscription rebuild). Sized by `buckets` the two series started out
+            // different lengths, and since `_advanceTree` appends to both, that
+            // offset survived every push and trim — attribution ended up describing
+            // a different bucket than the one it was painted on (#227).
             node.sourcePowerHistory = [];
-            if (!rawHistory) continue;
-            for (let i = 0; i < buckets; i++) {
+            // The buffers are all appended in lockstep and share one maxlen, so the
+            // newest sample of every series is its last one. Align from the end, so
+            // a series that started later still lines its samples up in time.
+            const ratioOffsets = new Map<string, number>();
+            for (const src of sourceNodes) {
+                if (!src.ratioSensorId) continue;
+                const ratioHistory = entity_history[src.ratioSensorId];
+                if (ratioHistory) ratioOffsets.set(src.ratioSensorId, ratioHistory.length - node.powerHistory.length);
+            }
+            for (let i = 0; i < node.powerHistory.length; i++) {
                 const bucket: { [sourceId: string]: { power: number; color: string } } = {};
                 const consumerPower = node.powerHistory[i] ?? 0;
                 for (const src of sourceNodes) {
                     if (!src.ratioSensorId) continue;
                     const ratioHistory = entity_history[src.ratioSensorId];
-                    const ratio = (ratioHistory?.[i] ?? 0) / 100;
+                    const ratio = (ratioHistory?.[i + (ratioOffsets.get(src.ratioSensorId) ?? 0)] ?? 0) / 100;
                     if (ratio > 0 && consumerPower > 0) {
                         bucket[src.id] = { power: consumerPower * ratio, color: nodeAccentColor(src.sourceType) };
                     }
@@ -99,13 +114,12 @@ export class HistoryEngine {
         for (const node of nodes) {
             if (node.powerHistory.length > 0) {
                 node.powerHistory.push(node.powerHistory[node.powerHistory.length - 1]);
-                if (node.sourcePowerHistory) {
+                if (node.sourcePowerHistory && node.sourcePowerHistory.length > 0) {
                     node.sourcePowerHistory.push(node.sourcePowerHistory[node.sourcePowerHistory.length - 1]);
                 }
             }
             if (node.powerHistory.length > maxBuckets) {
                 node.powerHistory.shift();
-                node.sourcePowerHistory?.shift();
             }
             if (node.powerSensorId) {
                 const rawPower = parseFloat(hass.states[node.powerSensorId]?.state ?? '0') || 0;
@@ -115,17 +129,27 @@ export class HistoryEngine {
                 node.powerValue = power;
             }
             this._advanceTree(node.children, sourceNodes);
-            if (!node.isSource && node.powerSensorId && node.sourcePowerHistory && node.sourcePowerHistory.length > 0) {
-                const bucket: { [sourceId: string]: { power: number; color: string } } = {};
-                const powerVal = node.powerValue || 0;
-                if (powerVal > 0) {
-                    for (const src of sourceNodes) {
-                        if (!src.ratioSensorId) continue;
-                        const ratio = parseFloat(hass.states[src.ratioSensorId]?.state ?? '0') / 100;
-                        if (ratio > 0) bucket[src.id] = { power: powerVal * ratio, color: nodeAccentColor(src.sourceType) };
+            if (!node.isSource && node.powerSensorId) {
+                // The two series are re-squared to the same length on every tick, so
+                // bucket i of one always describes bucket i of the other. This is also
+                // what gives a consumer that the history payload omitted its first
+                // attribution: without it the source series stayed empty forever and
+                // every one of that consumer's bars fell back to its own colour.
+                const sourceHistory = node.sourcePowerHistory ?? (node.sourcePowerHistory = []);
+                while (sourceHistory.length > node.powerHistory.length) sourceHistory.shift();
+                while (sourceHistory.length < node.powerHistory.length) sourceHistory.unshift({});
+                if (sourceHistory.length > 0) {
+                    const bucket: { [sourceId: string]: { power: number; color: string } } = {};
+                    const powerVal = node.powerValue || 0;
+                    if (powerVal > 0) {
+                        for (const src of sourceNodes) {
+                            if (!src.ratioSensorId) continue;
+                            const ratio = parseFloat(hass.states[src.ratioSensorId]?.state ?? '0') / 100;
+                            if (ratio > 0) bucket[src.id] = { power: powerVal * ratio, color: nodeAccentColor(src.sourceType) };
+                        }
                     }
+                    sourceHistory[sourceHistory.length - 1] = bucket;
                 }
-                node.sourcePowerHistory[node.sourcePowerHistory.length - 1] = bucket;
             }
         }
     }

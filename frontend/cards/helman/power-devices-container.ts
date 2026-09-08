@@ -25,6 +25,8 @@ export class PowerDevicesContainer extends LitElement {
     @property({ attribute: false }) public parentPowerHistory?: number[];
     @property({ type: Number }) public historyBuckets!: number;
     @property({ type: Number }) public historyBucketDuration!: number;
+    /** Bumped by the card once per history tick; see `helman-card._historyRevision`. */
+    @property({ type: Number }) public historyRevision?: number;
     @property({ type: Boolean }) public devices_full_width?: boolean;
     @property({ type: Boolean }) public sortChildrenByPower?: boolean;
     @property({ type: Number }) public show_only_top_children?: number;
@@ -105,6 +107,7 @@ export class PowerDevicesContainer extends LitElement {
                         .parentPowerHistory=${this.parentPowerHistory}
                         .historyBuckets=${this.historyBuckets}
                         .historyBucketDuration=${this.historyBucketDuration}
+                        .historyRevision=${this.historyRevision}
                         .openNodeDetailOnIcon=${this.openNodeDetailOnIcon}
                     ></power-device>
                 `)}

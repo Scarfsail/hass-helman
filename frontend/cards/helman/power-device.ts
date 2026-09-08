@@ -19,6 +19,8 @@ export class PowerDevice extends LitElement {
     @property({ type: Number }) public currentParentPower?: number;
     @property({ type: Number }) public historyBuckets!: number;
     @property({ type: Number }) public historyBucketDuration!: number;
+    /** Bumped by the card once per history tick; see `helman-card._historyRevision`. */
+    @property({ type: Number }) public historyRevision?: number;
     @property({ attribute: false }) public parentPowerHistory?: number[];
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
 
@@ -149,6 +151,7 @@ export class PowerDevice extends LitElement {
                     .parentPowerHistory=${historyToRender}
                     .historyBuckets=${this.historyBuckets}
                     .historyBucketDuration=${this.historyBucketDuration}
+                    .historyRevision=${this.historyRevision}
                     .devices_full_width=${device.children_full_width}
                     .sortChildrenByPower=${device.sortChildrenByPower}
                 ></power-devices-container>
@@ -183,9 +186,11 @@ export class PowerDevice extends LitElement {
         // `helman-power-history-bars.willUpdate` early-returns unless one of its four
         // properties is in `changedProperties`. Passed by reference the array's
         // identity would never change and the bars would freeze permanently — the
-        // copy is the only change signal that reaches them. Its sibling
-        // `.sourceHistory` is passed by reference precisely because it rides on this
-        // one. See `frontend/cards/README.md`, "Card rendering discipline".
+        // copy is the change signal that reaches them. Its sibling `.sourceHistory`
+        // is passed by reference precisely because it rides on this one. What gets
+        // this row to re-render in the first place is `historyRevision`, bumped once
+        // per tick by the card. See `frontend/cards/README.md`, "Card rendering
+        // discipline".
         const historyToRender = this.device.powerHistory;
         const maxHistoryPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender);
         const childrenToRender = device.children;

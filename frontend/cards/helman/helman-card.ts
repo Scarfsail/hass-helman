@@ -70,6 +70,16 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     @state() private _hass?: HomeAssistant;
     @state() private _deviceTree: DeviceNode[] = [];
     @state() private _dialogNodeType: NodeType | null = null;
+    /**
+     * Bumped once per history tick. `HistoryEngine` mutates the node histories in
+     * place, so nothing a child is handed changes identity when a bucket rolls —
+     * same nodes, same arrays, and on an idle house the same power values too.
+     * Without a signal of its own the containers' dirty checks saw nothing and the
+     * bars below them froze until an unrelated HA state change happened to shake
+     * the tree (#227). A counter is the whole signal: it moves exactly when the
+     * histories moved, and never otherwise.
+     */
+    @state() private _historyRevision = 0;
     @state() private _uiConfig?: HelmanUiConfig;
     @state() private _computedNodes?: {
         sourcesNode: DeviceNode | undefined;
@@ -170,6 +180,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .devices=${sourcesChildren}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
+                        .historyRevision=${this._historyRevision}
                         .currentParentPower=${sourcesNode!.powerValue}
                         .parentPowerHistory=${sourcesNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
@@ -181,6 +192,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .devices=${consumerNode ? [consumerNode] : []}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
+                        .historyRevision=${this._historyRevision}
                         .devices_full_width=${true}
                     ></power-devices-container>
                     <power-flow-arrows .devices=${[...consumersChildren]} .maxPower=${this.config?.max_power}></power-flow-arrows>
@@ -190,6 +202,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .devices=${consumersChildren}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
+                        .historyRevision=${this._historyRevision}
                         .currentParentPower=${consumerNode!.powerValue}
                         .parentPowerHistory=${consumerNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
@@ -200,6 +213,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .devices=${houseDevices}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
+                        .historyRevision=${this._historyRevision}
                         .currentParentPower=${houseNode!.powerValue}
                         .parentPowerHistory=${houseNode!.powerHistory}
                         .devices_full_width=${true}
@@ -321,7 +335,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             this._historyEngine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
-                () => this.requestUpdate(),
+                () => { this._historyRevision++; },
             );
             this._historyEngine.applyHistory(history, HistoryEngine.walkTree(this._deviceTree), this._sourceNodes);
             this.requestUpdate();
