@@ -94,6 +94,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         consumerNode: DeviceNode | undefined;
         consumersChildren: readonly DeviceNode[];
         houseNode: DeviceNode | undefined;
+        houseArrowDevices: (DeviceNode | undefined)[];
         houseDevices: readonly DeviceNode[];
     };
 
@@ -164,7 +165,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             const consumersChildren = consumerNode?.children ?? EMPTY_ARRAY;
             const houseNode = consumersChildren.find((device) => device.id === "house");
             const houseDevices = houseNode?.children ?? EMPTY_ARRAY;
-            this._computedNodes = { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices };
+            // The house arrow row draws one arrow in three columns; built here so
+            // the row is not handed a fresh array on every render.
+            const houseArrowDevices = [houseNode, undefined, undefined];
+            this._computedNodes = { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseArrowDevices, houseDevices };
         }
     }
 
@@ -173,7 +177,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         if (!this._hass || this._deviceTree.length === 0 || !this._computedNodes || !this._uiConfig) {
             return html``;
         }
-        const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes;
+        const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseArrowDevices, houseDevices } = this._computedNodes;
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
         const dialogParams = this._dialogNodeType !== null
@@ -193,7 +197,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .parentPowerHistory=${sourcesNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
                     ></power-devices-container>
-                    <power-flow-arrows .devices=${[...sourcesChildren]} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
                     <power-devices-container
                         .hass=${this._hass!}
@@ -203,7 +207,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .historyRevision=${this._historyRevision}
                         .devices_full_width=${true}
                     ></power-devices-container>
-                    <power-flow-arrows .devices=${[...consumersChildren]} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${consumersChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
                     <power-devices-container
                         .hass=${this._hass!}
@@ -215,7 +219,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .parentPowerHistory=${consumerNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
                     ></power-devices-container>
-                    <power-flow-arrows .devices=${[houseNode, undefined, undefined]} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${houseArrowDevices} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
                     <power-house-devices-section
                         .hass=${this._hass!}
                         .devices=${houseDevices}
