@@ -29,6 +29,16 @@ const STRIPS = html`
 export class PowerFlowArrows extends LitElement {
     @property({ type: Array }) devices: (DeviceNode | undefined)[] = [];
     @property({ type: Number }) maxPower?: number; // Default max power for 3-phase system and 25A per phase
+    /**
+     * Bumped by the card once per history tick; see `helman-card._historyRevision`.
+     *
+     * Nothing here reads it. `powerValue` is written in place on the very nodes
+     * `devices` holds, so the array's identity never moves and this is the only
+     * signal that the widths changed -- the card used to spread the array on
+     * every render to say the same thing, at `hass` churn rate rather than at
+     * the tick the value actually moves on.
+     */
+    @property({ type: Number }) historyRevision?: number;
 
     private _observer?: IntersectionObserver;
     private _onScreen = true;
@@ -40,6 +50,11 @@ export class PowerFlowArrows extends LitElement {
             this._observer = new IntersectionObserver(entries => {
                 this._onScreen = entries[entries.length - 1].isIntersecting;
                 this._syncPaused();
+            }, {
+                // Resumed just before it is on screen: `animation-play-state`
+                // freezes the strips mid-fade, and un-pausing at the viewport's
+                // very edge shows that still frame for a frame or two.
+                rootMargin: "200px",
             });
             this._observer.observe(this);
         }
@@ -50,6 +65,9 @@ export class PowerFlowArrows extends LitElement {
         document.removeEventListener("visibilitychange", this._onVisibilityChange);
         this._observer?.disconnect();
         this._observer = undefined;
+        // A remount starts before the fresh observer has reported anything, so
+        // the verdict it starts from must not be the one this mount ended on.
+        this._onScreen = true;
         super.disconnectedCallback();
     }
 

@@ -101,6 +101,59 @@ test("a hidden page pauses the arrows, and coming back resumes them", async ({ p
     await expect.poll(() => playStates(page)).toEqual(["running"]);
 });
 
+test("an element remounted after being scrolled away starts running", async ({ page }) => {
+    await mountArrows(page, [MAX_POWER / 2]);
+
+    // Off screen, so this mount ends on a paused verdict.
+    await page.evaluate(() => window.scrollTo(0, 3000));
+    await expect.poll(() => playStates(page)).toEqual(["paused"]);
+
+    // The dashboard moves the card: same element, back at the top of the page.
+    // The fresh observer has reported nothing yet, so the verdict it starts from
+    // is the one the element carries.
+    const pausedOnRemount = await page.evaluate(() => {
+        const el = document.querySelector("power-flow-arrows") as any;
+        el.remove();
+        window.scrollTo(0, 0);
+        document.getElementById("stage")!.appendChild(el);
+        // Read before yielding: the observer's first callback is a task away, and
+        // what is drawn until it lands is this verdict -- a still frame of
+        // half-lit strips if the element kept the one it was removed on.
+        return el.hasAttribute("paused");
+    });
+
+    expect(pausedOnRemount).toBe(false);
+    expect(await playStates(page)).toEqual(["running"]);
+});
+
+/**
+ * `powerValue` is written in place on the nodes the array holds, so the array
+ * never changes identity and the widths would stand still. The card used to say
+ * so by spreading the array on every render -- at `hass` churn rate, which is
+ * not the rate the value moves at. The revision is the rate it moves at.
+ */
+test("a bumped revision moves the widths, and nothing else does", async ({ page }) => {
+    await mountArrows(page, [MAX_POWER / 4]);
+
+    const widths = await page.evaluate(async (maxPower: number) => {
+        const el = document.querySelector("power-flow-arrows") as any;
+        const width = () => (el.shadowRoot.querySelector(".animated-arrow") as HTMLElement).style.width;
+        const before = width();
+
+        // The same node object, twice the power: exactly what a tick does.
+        el.devices[0].powerValue = maxPower / 2;
+        await el.updateComplete;
+        const untold = width();
+
+        el.historyRevision = 1;
+        await el.updateComplete;
+        return { before, untold, told: width() };
+    }, MAX_POWER);
+
+    expect(widths.untold).toBe(widths.before);
+    expect(widths.told).not.toBe(widths.before);
+});
+
 test("repeated mount and unmount leaves no listener or observer behind", async ({ page }) => {
     await mountArrows(page, [MAX_POWER / 2]);
 
