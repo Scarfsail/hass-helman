@@ -6,6 +6,7 @@ import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
 import {
+    EMPTY_SELECTED_MINUTES,
     stripMinutesForSvgX,
     stripWindow,
     type ScheduleStripGeometry,
@@ -138,7 +139,7 @@ export class HelmanSolarPriceStrip extends LitElement {
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
     /** Minute-of-day of the selected slot; its price cell reads as selected (blue). */
     /** Minute-of-day of every selected slot; each gets a blue band. */
-    @property({ attribute: false }) public selectedMinutes: number[] = [];
+    @property({ attribute: false }) public selectedMinutes: readonly number[] = EMPTY_SELECTED_MINUTES;
     /** Minute-of-day under the pointer; its price cell reads as hovered (orange). */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
     /** The chart's active slot width, so the seam lands on the same grid it does. */
@@ -155,6 +156,43 @@ export class HelmanSolarPriceStrip extends LitElement {
     @property({ attribute: false }) public exportPrice: readonly PriceRailPoint[] = [];
     /** The currency-per-energy unit both rails are quoted in, e.g. `CZK/kWh`. */
     @property({ type: String }) public unit = "";
+
+    /**
+     * Both rails laid out on the slot grid, and the inputs they were laid out
+     * from.
+     *
+     * The columns are a function of the rails and the slot width alone, and
+     * every other property here -- the hover minute above all -- moves without
+     * touching either. Built once per change of those two, so a pointer sweep
+     * across the strip re-renders it without re-bucketing a single price.
+     */
+    private _importColumns: PriceColumn[] = [];
+    private _exportColumns: PriceColumn[] = [];
+    private _columnsFor: {
+        importPrice: readonly PriceRailPoint[];
+        exportPrice: readonly PriceRailPoint[];
+        slot: number;
+    } | null = null;
+
+    protected willUpdate(): void {
+        this._rebuildColumnsIfNeeded();
+    }
+
+    private _rebuildColumnsIfNeeded(): void {
+        const previous = this._columnsFor;
+        const slot = this._slotSpan();
+        if (
+            previous !== null
+            && previous.importPrice === this.importPrice
+            && previous.exportPrice === this.exportPrice
+            && previous.slot === slot
+        ) {
+            return;
+        }
+        this._columnsFor = { importPrice: this.importPrice, exportPrice: this.exportPrice, slot };
+        this._importColumns = this._buildColumns(this.importPrice);
+        this._exportColumns = this._buildColumns(this.exportPrice);
+    }
 
     protected updated(changed: PropertyValues<this>): void {
         // The inspector's own selected-slot panel wants this day's prices already
@@ -175,8 +213,8 @@ export class HelmanSolarPriceStrip extends LitElement {
         this.dispatchEvent(
             new CustomEvent<PriceColumnsDetail>("price-columns", {
                 detail: {
-                    importColumns: this._buildColumns(this.importPrice),
-                    exportColumns: this._buildColumns(this.exportPrice),
+                    importColumns: this._importColumns,
+                    exportColumns: this._exportColumns,
                     unit: this.unit,
                 },
                 bubbles: true,
@@ -189,8 +227,9 @@ export class HelmanSolarPriceStrip extends LitElement {
         if (!this.hass || this.geometry === null) {
             return nothing;
         }
-        const importColumns = this._buildColumns(this.importPrice);
-        const exportColumns = this._buildColumns(this.exportPrice);
+        // Built in `willUpdate`; nothing is derived here.
+        const importColumns = this._importColumns;
+        const exportColumns = this._exportColumns;
         if (importColumns.length === 0 && exportColumns.length === 0) {
             return nothing;
         }

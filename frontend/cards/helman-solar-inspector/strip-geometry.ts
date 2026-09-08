@@ -1,6 +1,16 @@
 const MINUTES_PER_DAY = 1440;
 
 /**
+ * "Nothing is selected", for every strip that bands the inspector's selection.
+ *
+ * One frozen array rather than a fresh `[]` per render: the strips compare the
+ * property by identity, and the ordinary state while a pointer sweeps the
+ * chart is exactly this one -- a new empty array each time would re-render all
+ * three rows on every move.
+ */
+export const EMPTY_SELECTED_MINUTES: readonly number[] = Object.freeze([]);
+
+/**
  * How a strip under the inspector's charts maps a minute-of-day to a horizontal
  * fraction of the chart viewBox.
  *

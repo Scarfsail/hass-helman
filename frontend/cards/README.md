@@ -51,6 +51,14 @@ The same rule forbids dispatching derived facts from `render()`: the
 `helman-watched-entities` event is dispatched from the load that resolved the
 ids, never from the render that draws them.
 
+## Corollary: a pointer is not a data change
+
+A mouse reports far more often than the screen repaints, and what it reports is where the pointer is — never what the day contains. So nothing derived from the data may be built on the pointer's path. `helman-solar-inspector` derives its whole day model in `willUpdate` behind keys naming the inputs each step actually reads (`_rebuildDayModelIfNeeded`), and the strips below it do the same for their columns, cells and lanes; a hover then changes a highlight and a popup and reaches nothing else.
+
+Two habits make that hold. Pointer reports are coalesced to one `requestAnimationFrame`, so a burst between two frames costs one update rather than ten. And the popup's *coordinates* never enter reactive state at all — they are written onto its element directly, because they change with every pixel while what the popup says changes only at a slot boundary.
+
+[`../tests/inspector-hover-cost.spec.ts`](../tests/inspector-hover-cost.spec.ts) is the guard, and like the discipline tests it states hard zeros rather than budgets.
+
 ## Corollary: `hass` churn is not a clock
 
 `_nowMs` in `helman-solar-inspector` and `helman-solar-schedule-band-strip` used

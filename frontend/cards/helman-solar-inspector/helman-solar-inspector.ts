@@ -142,6 +142,7 @@ import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
+import { EMPTY_SELECTED_MINUTES, type ScheduleStripGeometry } from "./strip-geometry";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
@@ -359,6 +360,9 @@ const EMPTY_HISTORY_DAYS: readonly SolarInspectorHistoryDay[] = Object.freeze([]
  */
 const EMPTY_BUCKET_KEYS: readonly string[] = Object.freeze([]);
 
+/** The empty SoC model, for a day whose columns have not been derived yet. */
+const EMPTY_SOC_BARS: readonly SocBar[] = Object.freeze([]);
+
 const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
   schedule: null,
   loading: false,
@@ -477,6 +481,31 @@ type TooltipContent = {
   hasActual: boolean;
   rows: TooltipRow[];
 };
+
+/** Two popup cells saying the same thing, coordinates excluded by construction. */
+function sameTooltipCell(a: TooltipCell, b: TooltipCell): boolean {
+  if (a === null || b === null) return a === b;
+  return a.value === b.value && a.color === b.color && a.toneClass === b.toneClass;
+}
+
+/**
+ * Whether two popups say the same thing.
+ *
+ * Compared by value rather than by identity because every source builds its
+ * rows fresh per pointer report -- and by contents rather than by position,
+ * which is what makes a sweep across one column cost nothing: see
+ * `_applyTooltip`.
+ */
+function sameTooltipContent(a: TooltipContent | null, b: TooltipContent | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.title !== b.title || a.hasActual !== b.hasActual || a.rows.length !== b.rows.length) {
+    return false;
+  }
+  return a.rows.every((row, index) =>
+    row.label === b.rows[index].label
+    && sameTooltipCell(row.actual, b.rows[index].actual)
+    && sameTooltipCell(row.forecast, b.rows[index].forecast));
+}
 
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
@@ -799,14 +828,66 @@ export class HelmanSolarInspector extends LitElement {
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
-  private _lastLayoutForStrip: ChartLayout | null = null;
-  private _lastForecastFillFrom = Number.NEGATIVE_INFINITY;
+  /**
+   * The day view's derived model, and the inputs each half of it was derived
+   * from.
+   *
+   * Everything below the payload -- the re-bucketed view, the coverage marks,
+   * the two stacks, the axis, the SoC columns, the strips' geometry and the
+   * selection the strips band -- used to be built inside `render()`, so a
+   * pointer report over the chart rebuilt the whole day at the rate a mouse
+   * moves. It is built in `willUpdate` instead, behind keys naming exactly the
+   * inputs each step reads: a resize does not re-bucket the day, a legend
+   * toggle does not re-derive an axis it cannot move, and a hover rebuilds
+   * nothing at all.
+   *
+   * Keys are compared field by field, and every field in one is itself
+   * identity-stable -- see `../README.md`, "Card rendering discipline".
+   */
+  private _view: InspectorPayload | null = null;
+  private _viewFor: { payload: InspectorPayload; slot: number } | null = null;
+  private _coverageFor:
+    | { payload: InspectorPayload; slot: number; hidden: ReadonlySet<SeriesKey> }
+    | null = null;
+  private _stacks: ChartStacks | null = null;
+  private _stacksFor: { view: InspectorPayload; hidden: ReadonlySet<SeriesKey> } | null = null;
+  /**
+   * The first slot the forecast has to speak for alone, off the current stacks.
+   * The SoC columns and the popup's actual/forecast split read it, so it is
+   * derived with the stacks rather than by whichever render got there first.
+   */
+  private _forecastFillFromMinutes = Number.NEGATIVE_INFINITY;
+  private _layout: ChartLayout | null = null;
+  private _layoutFor:
+    | {
+        view: InspectorPayload;
+        stacks: ChartStacks;
+        width: number;
+        slot: number;
+        daylightOnly: boolean;
+        threshold: number;
+        hidden: ReadonlySet<SeriesKey>;
+      }
+    | null = null;
+  /** The x scale the three strips share, one object per layout. */
+  private _stripGeometry: ScheduleStripGeometry | null = null;
+  private _socBarsModel: readonly SocBar[] = EMPTY_SOC_BARS;
+  private _socBarsFor:
+    | { view: InspectorPayload; hidden: ReadonlySet<SeriesKey>; fillFrom: number }
+    | null = null;
+  private _selectedMinutesModel: readonly number[] = EMPTY_SELECTED_MINUTES;
+  private _selectedMinutesFor:
+    | { view: InspectorPayload; selection: SlotSelectionState }
+    | null = null;
+  /** The combined chart's popup, one build per hovered slot. */
+  private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
+  private _chartTooltipFor: { payload: InspectorPayload; slot: string } | null = null;
   /**
    * The wider-bucket starts the current view drew over a hole in one of its
    * Wh series, each mapped to how many native slots each short series is
    * missing there — the breakdown, not just a count, because the mark has to
    * name what is missing and not only how much of it — set
-   * once per `_viewForSlot` call, alongside `_lastForecastFillFrom`, so the
+   * once per `_computeCoverage` call, alongside `_partialSeries`, so the
    * chart's scrim and the selected-slot panel's caveat read off one
    * computation rather than two that could drift apart.
    */
@@ -825,6 +906,27 @@ export class HelmanSolarInspector extends LitElement {
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
   private _nowTimer?: number;
+  /**
+   * Where the popup sits, kept out of reactive state on purpose.
+   *
+   * The coordinates change with every pixel the mouse travels while the
+   * content they carry changes only at a slot boundary, so putting them in
+   * `_tooltip` made a re-render of the whole card the price of moving a popup
+   * 3 px. They are written straight onto the popup's own element instead
+   * (`_positionTooltip`), and the template reads this field so the first frame
+   * of a popup still lands under the cursor.
+   */
+  private _tooltipPoint: { x: number; y: number } | null = null;
+  /**
+   * Pointer reports, coalesced to one frame.
+   *
+   * A mouse reports more often than the screen repaints, and each report used
+   * to be its own Lit update. The hovered minute and the popup's contents are
+   * staged here and applied once per frame; the popup's position is applied
+   * within that same frame, so it still follows the cursor smoothly.
+   */
+  private _pendingPointer: { minutes?: number | null; tooltip?: TooltipContent | null } | null = null;
+  private _pointerFrame = 0;
   /**
    * Scrolling invalidates the popup, because the popup is `position: fixed`.
    *
@@ -1627,6 +1729,11 @@ export class HelmanSolarInspector extends LitElement {
     }
     window.removeEventListener("scroll", this._dismissTooltipOnScroll, { capture: true });
     window.removeEventListener("resize", this._dismissTooltipOnScroll);
+    if (this._pointerFrame !== 0) {
+      cancelAnimationFrame(this._pointerFrame);
+      this._pointerFrame = 0;
+      this._pendingPointer = null;
+    }
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
@@ -1665,6 +1772,7 @@ export class HelmanSolarInspector extends LitElement {
     if (this._dayPillsVisible()) {
       void this._loadDayAggregates(pillWindow.start, pillWindow.end);
     }
+    this._rebuildDayModelIfNeeded();
   }
 
   /**
@@ -1766,21 +1874,31 @@ export class HelmanSolarInspector extends LitElement {
     return this._renderBody();
   }
 
+  /**
+   * The day payload the card may draw, or null.
+   *
+   * Stale is still drawable, and it stays drawable a beat past the request
+   * itself: a failed load leaves `_selectedDate` already moved but nothing
+   * new to show for it, and the error note reads as a lie next to a card
+   * that has gone blank under it. So the payload is kept up, dimmed, for
+   * the error too -- not only while the request that would replace it is
+   * still in flight.
+   *
+   * Asked in `willUpdate` as well as in the render, because the whole day
+   * model is derived from it and that derivation does not belong in a render.
+   */
+  private _drawablePayload(): InspectorPayload | null {
+    const stale = this._viewLoading() || !!(this._viewMode === "day" ? this._error : this._spanError);
+    return this._payload?.date === this._selectedDate || (stale && this._payload)
+      ? this._payload
+      : null;
+  }
+
   private _renderBody() {
     const loading = this._viewLoading();
     const error = this._viewMode === "day" ? this._error : this._spanError;
-    // Stale is still drawable, and it stays drawable a beat past the request
-    // itself: a failed load leaves `_selectedDate` already moved but nothing
-    // new to show for it, and the error note reads as a lie next to a card
-    // that has gone blank under it. So the payload is kept up, dimmed, for
-    // the error too -- not only while the request that would replace it is
-    // still in flight.
     const stale = loading || !!error;
-    const payload =
-      this._payload?.date === this._selectedDate || (stale && this._payload)
-        ? this._payload
-        : null;
-    const content = this._renderContent(payload);
+    const content = this._renderContent(this._drawablePayload());
     // The empty string is the sentinel both branches of `_renderContent` use
     // for "nothing to draw at all" -- a payload-less day, or a span with no
     // rows. Only that state gets the height floor: a *stale* render, however
@@ -1977,16 +2095,12 @@ export class HelmanSolarInspector extends LitElement {
       return "";
     }
     // Everything below renders from the slot-collapsed view; only the daily
-    // totals it carries through are slot-width independent.
-    const view = this._viewForSlot(payload);
-    const hasAnySeries =
-      view.availability.hasRawForecast ||
-      view.availability.hasCorrectedForecast ||
-      view.availability.hasActuals ||
-      view.availability.hasInvalidated;
-
-    const stacks = hasAnySeries ? this._buildStacks(view) : null;
-    const layout = stacks ? this._computeChartLayout(view, stacks) : null;
+    // totals it carries through are slot-width independent. All three were
+    // derived in `willUpdate`; nothing is built or assigned here.
+    const view = this._view ?? payload;
+    const stacks = this._stacks;
+    const layout = this._layout;
+    const hasAnySeries = stacks !== null && layout !== null;
 
     return html`
       ${this._payloadGranularity(payload) > 15
@@ -2002,11 +2116,11 @@ export class HelmanSolarInspector extends LitElement {
                  in, so moving between the two is not a re-read. -->
             ${this._renderTooltip()}
             <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
-            ${this._impactStripVisible && this._lastLayoutForStrip
-              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
+            ${this._impactStripVisible
+              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, layout)}</div>`
               : ""}
-            ${this._lastLayoutForStrip && this._socBars(view).length
-              ? this._renderSocSection(view, this._lastLayoutForStrip)
+            ${this._socBarsModel.length
+              ? this._renderSocSection(view, layout)
               : ""}
             ${this._renderPriceStrip(view, layout)}
             ${this._renderScheduleActionsStrip(view, layout)}
@@ -3027,11 +3141,130 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The payload re-bucketed to the active slot width. Daily totals, availability
-   * and the 15-minute training explainability are slot-width independent and
-   * carry through untouched; only the time series are collapsed.
+   * Derive everything the day view draws from, once per change of its inputs.
+   *
+   * Called from `willUpdate`, so the render only reads. Each step is keyed on
+   * what that step actually reads -- the re-bucketing on the payload and the
+   * slot width, the coverage marks on those plus the legend, the stacks on the
+   * view and the legend, the axis on the stacks and the box they have to fit
+   * in, the SoC columns on the view and the seam the stacks put the forecast
+   * at -- so a resize does not re-bucket the day and a pointer report rebuilds
+   * nothing at all.
    */
-  private _viewForSlot(payload: InspectorPayload): InspectorPayload {
+  private _rebuildDayModelIfNeeded(): void {
+    const payload = this._viewMode === "day" ? this._drawablePayload() : null;
+    if (payload === null) {
+      this._view = null;
+      this._viewFor = null;
+      this._coverageFor = null;
+      this._stacks = null;
+      this._stacksFor = null;
+      this._layout = null;
+      this._layoutFor = null;
+      this._stripGeometry = null;
+      this._socBarsModel = EMPTY_SOC_BARS;
+      this._socBarsFor = null;
+      this._selectedMinutesModel = EMPTY_SELECTED_MINUTES;
+      this._selectedMinutesFor = null;
+      return;
+    }
+
+    const slot = this._slotMinutes;
+    const hidden = this._hiddenSeries;
+
+    if (this._viewFor === null
+      || this._viewFor.payload !== payload
+      || this._viewFor.slot !== slot) {
+      this._viewFor = { payload, slot };
+      this._view = this._viewForSlot(payload);
+    }
+    const view = this._view!;
+
+    if (this._coverageFor === null
+      || this._coverageFor.payload !== payload
+      || this._coverageFor.slot !== slot
+      || this._coverageFor.hidden !== hidden) {
+      this._coverageFor = { payload, slot, hidden };
+      this._computeCoverage(payload);
+    }
+
+    if (this._stacksFor === null
+      || this._stacksFor.view !== view
+      || this._stacksFor.hidden !== hidden) {
+      this._stacksFor = { view, hidden };
+      // "Nothing to draw" is a fact about the view alone, so it is decided
+      // here with the stacks rather than beside them in the render.
+      const hasAnySeries = view.availability.hasRawForecast
+        || view.availability.hasCorrectedForecast
+        || view.availability.hasActuals
+        || view.availability.hasInvalidated;
+      this._stacks = hasAnySeries ? this._buildStacks(view) : null;
+      this._forecastFillFromMinutes = this._stacks === null
+        ? Number.NEGATIVE_INFINITY
+        : this._forecastFillFrom(this._stacks);
+    }
+
+    const stacks = this._stacks;
+    if (stacks === null) {
+      this._layout = null;
+      this._layoutFor = null;
+      this._stripGeometry = null;
+    } else if (this._layoutFor === null
+      || this._layoutFor.view !== view
+      || this._layoutFor.stacks !== stacks
+      || this._layoutFor.width !== this._chartWidth
+      || this._layoutFor.slot !== slot
+      || this._layoutFor.daylightOnly !== this._daylightOnly
+      || this._layoutFor.threshold !== this.daylightThresholdW
+      || this._layoutFor.hidden !== hidden) {
+      this._layoutFor = {
+        view,
+        stacks,
+        width: this._chartWidth,
+        slot,
+        daylightOnly: this._daylightOnly,
+        threshold: this.daylightThresholdW,
+        hidden,
+      };
+      const layout = this._computeChartLayout(view, stacks);
+      this._layout = layout;
+      // One object per layout: the three strips compare it by identity, and a
+      // fresh literal per render would re-render all three on every hover.
+      this._stripGeometry = {
+        width: layout.width,
+        marginLeft: layout.margin.left,
+        plotWidth: layout.plotWidth,
+        startMinutes: layout.dayStartMinutes,
+        endMinutes: layout.dayEndMinutes,
+      };
+    }
+
+    const fillFrom = this._forecastFillFromMinutes;
+    if (this._socBarsFor === null
+      || this._socBarsFor.view !== view
+      || this._socBarsFor.hidden !== hidden
+      || this._socBarsFor.fillFrom !== fillFrom) {
+      this._socBarsFor = { view, hidden, fillFrom };
+      this._socBarsModel = this._socBars(view);
+    }
+
+    if (this._selectedMinutesFor === null
+      || this._selectedMinutesFor.view !== view
+      || this._selectedMinutesFor.selection !== this._slotSelection) {
+      this._selectedMinutesFor = { view, selection: this._slotSelection };
+      const minutes = this._selectedMinutes(view);
+      this._selectedMinutesModel = minutes.length === 0 ? EMPTY_SELECTED_MINUTES : minutes;
+    }
+  }
+
+  /**
+   * Which native slots the day is short of, and where.
+   *
+   * Its own step rather than a side effect of the re-bucketing below, because
+   * its inputs are not the same: the marks follow the legend, which cannot
+   * move a single bucketed sum.
+   */
+  private _computeCoverage(payload: InspectorPayload): void {
     const slot = this._slotMinutes;
     const s = payload.series;
     // Coverage is read off the series as the backend actually served them, not
@@ -3077,6 +3310,16 @@ export class HelmanSolarInspector extends LitElement {
         .filter(([, coverage]) => coverage.missing.length > 0)
         .map(([key, coverage]) => [key, { missing: coverage.missing.length, expected: coverage.expected }]),
     );
+  }
+
+  /**
+   * The payload re-bucketed to the active slot width. Daily totals, availability
+   * and the 15-minute training explainability are slot-width independent and
+   * carry through untouched; only the time series are collapsed.
+   */
+  private _viewForSlot(payload: InspectorPayload): InspectorPayload {
+    const slot = this._slotMinutes;
+    const s = payload.series;
     if (slot <= SLOT_MINUTES) return payload;
     // A wider bucket is only history once the measurements span all of it; the
     // slot we are still inside would otherwise sum a part-hour of actuals into a
@@ -3314,19 +3557,11 @@ export class HelmanSolarInspector extends LitElement {
         .date=${payload.date}
         .timeZone=${this._haTimeZone() ?? "UTC"}
         .slotMinutes=${this._slotMinutes}
-        .geometry=${{
-          width: layout.width,
-          marginLeft: layout.margin.left,
-          plotWidth: layout.plotWidth,
-          startMinutes: layout.dayStartMinutes,
-          endMinutes: layout.dayEndMinutes,
-        }}
-        .selectedMinutes=${this._selectedMinutes(payload)}
+        .geometry=${this._stripGeometry}
+        .selectedMinutes=${this._selectedMinutesModel}
         .hoverMinutes=${this._hoveredMinutes}
-        @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
-          this._setHoverMinutes(event.detail?.minutes ?? null)}
-        @slot-tooltip=${(event: CustomEvent<ScheduleHoverTooltipContent | null>) =>
-          this._setScheduleTooltip(event.detail)}
+        @slot-hover=${this._handleStripHover}
+        @slot-tooltip=${this._handleScheduleTooltip}
       ></helman-solar-schedule-band-strip>
     `;
   }
@@ -3353,7 +3588,7 @@ export class HelmanSolarInspector extends LitElement {
    * Positions in the axis gutter clear the hover.
    */
   private _handleChartHover(event: MouseEvent, _payload: InspectorPayload) {
-    const layout = this._lastLayoutForStrip;
+    const layout = this._layout;
     if (!layout) return;
     const svgEl = event.currentTarget as SVGSVGElement;
     const rect = svgEl.getBoundingClientRect();
@@ -3392,19 +3627,33 @@ export class HelmanSolarInspector extends LitElement {
     }
     const minutes = this._minutesForSvgX(layout, svgX);
     const slot = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
-    const rows = this._allSeriesTooltipRows(payload, minutesToSlot(slot));
-    if (!rows.length) {
+    const model = this._chartTooltipModel(payload, minutesToSlot(slot));
+    if (!model.rows.length) {
       this._clearHover();
       return;
     }
-    this._setHoverMinutes(slot);
-    const hasActual = slot < this._lastForecastFillFrom;
-    this._setTooltip(
-      event,
-      rows,
-      hasActual,
-      this._formatSelectionRange([minutesToSlot(slot)]),
-    );
+    this._reportPointer({
+      minutes: slot,
+      tooltip: this._tooltipAt(event, model.rows, slot < this._forecastFillFromMinutes, model.title),
+    });
+  }
+
+  /**
+   * The popup's contents for one slot of the combined chart, built once per
+   * slot rather than once per pointer report: sweeping across a column asks
+   * this the same question thirty times over.
+   */
+  private _chartTooltipModel(payload: InspectorPayload, slot: string): { rows: TooltipRow[]; title: string } {
+    if (this._chartTooltipFor === null
+      || this._chartTooltipFor.payload !== payload
+      || this._chartTooltipFor.slot !== slot) {
+      this._chartTooltipFor = { payload, slot };
+      this._chartTooltip = {
+        rows: this._allSeriesTooltipRows(payload, slot),
+        title: this._formatSelectionRange([slot]),
+      };
+    }
+    return this._chartTooltip!;
   }
 
   /** EXPERIMENT: every series' row for the hovered slot, in one popup. */
@@ -3522,6 +3771,33 @@ export class HelmanSolarInspector extends LitElement {
     }
   }
 
+  /**
+   * Stage one pointer report, and apply it on the next frame.
+   *
+   * A mouse reports far more often than the screen repaints, and every report
+   * used to be its own Lit update. Reports are merged here field by field --
+   * the rows report the hovered minute and the popup as two separate events on
+   * one move -- and applied once per frame. The popup's *position* is applied
+   * in that same frame without going through Lit at all, so it keeps following
+   * the cursor while nothing re-renders.
+   */
+  private _reportPointer(update: { minutes?: number | null; tooltip?: TooltipContent | null }): void {
+    this._pendingPointer = { ...(this._pendingPointer ?? {}), ...update };
+    if (update.tooltip) {
+      this._tooltipPoint = { x: update.tooltip.x, y: update.tooltip.y };
+    }
+    if (this._pointerFrame !== 0) return;
+    this._pointerFrame = requestAnimationFrame(() => {
+      this._pointerFrame = 0;
+      const pending = this._pendingPointer;
+      this._pendingPointer = null;
+      if (pending === null) return;
+      if ("minutes" in pending) this._setHoverMinutes(pending.minutes ?? null);
+      if ("tooltip" in pending) this._applyTooltip(pending.tooltip ?? null);
+      this._positionTooltip();
+    });
+  }
+
   /** Store the hovered minute at whole-minute resolution, skipping redundant updates. */
   private _setHoverMinutes(minutes: number | null) {
     const next = minutes === null ? null : Math.round(minutes);
@@ -3529,40 +3805,74 @@ export class HelmanSolarInspector extends LitElement {
     this._hoveredMinutes = next;
   }
 
-  private _clearHover() {
-    this._setHoverMinutes(null);
-    this._clearTooltip();
+  /**
+   * Adopt what the popup says, but only when it actually differs.
+   *
+   * The coordinates are deliberately not part of the comparison: they move
+   * with every pixel and are written straight onto the element. What is left
+   * is what the popup *says*, which changes only when the pointer crosses into
+   * another slot -- so a sweep across one column re-renders nothing.
+   */
+  private _applyTooltip(next: TooltipContent | null) {
+    if (sameTooltipContent(this._tooltip, next)) return;
+    this._tooltip = next;
   }
 
-  /** Show the popup at the pointer's viewport position, fixed so it escapes the shadow root's own layout. */
-  private _setTooltip(event: MouseEvent, rows: TooltipRow[], hasActual: boolean, title?: string) {
-    this._tooltip = { x: event.clientX, y: event.clientY, title, hasActual, rows };
+  /** Move the popup to the pointer without re-rendering anything. */
+  private _positionTooltip() {
+    const point = this._tooltipPoint;
+    const popup = this.renderRoot?.querySelector(".hover-tooltip") as HTMLElement | null;
+    if (point === null || popup === null) return;
+    popup.style.left = point.x + "px";
+    popup.style.top = point.y + "px";
+  }
+
+  private _clearHover() {
+    this._reportPointer({ minutes: null, tooltip: null });
   }
 
   private _clearTooltip() {
-    this._tooltip = null;
+    this._applyTooltip(null);
   }
+
+  /** The popup's contents for a hovered slot, at the pointer's viewport position. */
+  private _tooltipAt(event: MouseEvent, rows: TooltipRow[], hasActual: boolean, title?: string): TooltipContent {
+    return { x: event.clientX, y: event.clientY, title, hasActual, rows };
+  }
+
+  /** A strip reported the minute under its pointer. */
+  private _handleStripHover = (event: CustomEvent<{ minutes: number | null }>): void => {
+    this._reportPointer({ minutes: event.detail?.minutes ?? null });
+  };
+
+  /** A strip reported its own popup, already in the shared shape. */
+  private _handleStripTooltip = (event: CustomEvent<TooltipContent | null>): void => {
+    this._reportPointer({ tooltip: event.detail ?? null });
+  };
 
   /**
    * The schedule band's own popup shape (one row per lane, no actual/forecast
    * duality) mapped onto the shared table -- always the forecast-only layout,
    * same as price's, with the tone class carrying the row's colour.
    */
-  private _setScheduleTooltip(content: ScheduleHoverTooltipContent | null) {
-    this._tooltip = content === null
-      ? null
-      : {
-          x: content.x,
-          y: content.y,
-          title: content.title,
-          hasActual: false,
-          rows: content.rows.map((row) => ({
-            label: row.label,
-            actual: null,
-            forecast: { value: row.value, toneClass: row.toneClass },
-          })),
-        };
-  }
+  private _handleScheduleTooltip = (event: CustomEvent<ScheduleHoverTooltipContent | null>): void => {
+    const content = event.detail ?? null;
+    this._reportPointer({
+      tooltip: content === null
+        ? null
+        : {
+            x: content.x,
+            y: content.y,
+            title: content.title,
+            hasActual: false,
+            rows: content.rows.map((row) => ({
+              label: row.label,
+              actual: null,
+              forecast: { value: row.value, toneClass: row.toneClass },
+            })),
+          },
+    });
+  };
 
   private _renderTooltipCell(cell: TooltipCell) {
     if (!cell) return html`<span class="hover-tooltip-cell">—</span>`;
@@ -3587,7 +3897,11 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _renderTooltip() {
     if (!this._tooltip) return "";
-    const { x, y, title, hasActual, rows } = this._tooltip;
+    const { title, hasActual, rows } = this._tooltip;
+    // Position comes from `_tooltipPoint`, not from the content: the popup is
+    // moved by writing this element's style directly, and this binding only
+    // has to put a freshly-created popup where the cursor already is.
+    const { x, y } = this._tooltipPoint ?? { x: this._tooltip.x, y: this._tooltip.y };
     return html`
       <div class="hover-tooltip" style="left: ${x}px; top: ${y}px;">
         ${title ? html`<div class="hover-tooltip-title">${title}</div>` : ""}
@@ -3652,23 +3966,15 @@ export class HelmanSolarInspector extends LitElement {
                 .unit=${payload.priceUnit ?? ""}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
-                .selectedMinutes=${this._selectedMinutes(payload)}
-                .geometry=${{
-                  width: layout.width,
-                  marginLeft: layout.margin.left,
-                  plotWidth: layout.plotWidth,
-                  startMinutes: layout.dayStartMinutes,
-                  endMinutes: layout.dayEndMinutes,
-                }}
+                .selectedMinutes=${this._selectedMinutesModel}
+                .geometry=${this._stripGeometry}
                 .hoverMinutes=${this._hoveredMinutes}
                 .slotMinutes=${this._slotMinutes}
                 .nowMs=${this._nowMs}
                 @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
                   this._handleStripSlotPick(event, payload)}
-                @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
-                  this._setHoverMinutes(event.detail?.minutes ?? null)}
-                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
-                  { this._tooltip = event.detail ?? null; }}
+                @slot-hover=${this._handleStripHover}
+                @slot-tooltip=${this._handleStripTooltip}
                 @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
                   this._importPriceColumns = event.detail.importColumns;
                   this._exportPriceColumns = event.detail.exportColumns;
@@ -3696,23 +4002,15 @@ export class HelmanSolarInspector extends LitElement {
                 .currency=${currencyFromPriceUnit(payload.priceUnit)}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
-                .selectedMinutes=${this._selectedMinutes(payload)}
-                .geometry=${{
-                  width: layout.width,
-                  marginLeft: layout.margin.left,
-                  plotWidth: layout.plotWidth,
-                  startMinutes: layout.dayStartMinutes,
-                  endMinutes: layout.dayEndMinutes,
-                }}
+                .selectedMinutes=${this._selectedMinutesModel}
+                .geometry=${this._stripGeometry}
                 .hoverMinutes=${this._hoveredMinutes}
                 .slotMinutes=${this._slotMinutes}
                 .nowMs=${this._nowMs}
                 @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
                   this._handleStripSlotPick(event, payload)}
-                @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
-                  this._setHoverMinutes(event.detail?.minutes ?? null)}
-                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
-                  { this._tooltip = event.detail ?? null; }}
+                @slot-hover=${this._handleStripHover}
+                @slot-tooltip=${this._handleStripTooltip}
               ></helman-solar-money-strip>
             `
           : ""}
@@ -3758,11 +4056,10 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderChart(payload: InspectorPayload, stacks: ChartStacks, layout: ChartLayout) {
-    const forecastFillFrom = this._forecastFillFrom(stacks);
-    this._lastLayoutForStrip = layout;
-    // The strip below renders from the same seam, so its columns turn forecast
-    // where the stacks above turn hatched.
-    this._lastForecastFillFrom = forecastFillFrom;
+    // The seam is derived with the stacks in `willUpdate`; the strips below
+    // read the same field, so their columns turn forecast where the stacks
+    // above turn hatched.
+    const forecastFillFrom = this._forecastFillFromMinutes;
     return svg`
       <svg
         viewBox="0 0 ${layout.width} ${layout.height}"
@@ -4058,7 +4355,7 @@ export class HelmanSolarInspector extends LitElement {
    * full.
    */
   private _renderSocStrip(payload: InspectorPayload, layout: ChartLayout) {
-    const bars = this._socBars(payload);
+    const bars = this._socBarsModel;
     if (!bars.length) return "";
     const { height } = SOC_STRIP;
     const yForPct = (pct: number) => this._yForSocPct(pct);
@@ -4153,7 +4450,7 @@ export class HelmanSolarInspector extends LitElement {
     const forecast = this._isSeriesVisible("batterySocForecast")
       ? payload.series.batterySocForecast
       : [];
-    return buildSocBars(actual, forecast, this._lastForecastFillFrom);
+    return buildSocBars(actual, forecast, this._forecastFillFromMinutes);
   }
 
   /**
@@ -4201,7 +4498,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _renderSocForecastLine(
     payload: InspectorPayload,
-    socBars: SocBar[],
+    socBars: readonly SocBar[],
     layout: ChartLayout,
     yForPct: (pct: number) => number,
   ) {
@@ -4258,7 +4555,7 @@ export class HelmanSolarInspector extends LitElement {
     event: MouseEvent,
     payload: InspectorPayload,
     layout: ChartLayout,
-    bars: SocBar[],
+    bars: readonly SocBar[],
   ) {
     const svgEl = event.currentTarget as SVGSVGElement;
     const rect = svgEl.getBoundingClientRect();
@@ -4276,7 +4573,6 @@ export class HelmanSolarInspector extends LitElement {
       this._clearHover();
       return;
     }
-    this._setHoverMinutes(bar.minutes);
     // The bar itself is either the actual reading or, ahead of it, the
     // forecast standing in alone -- never both -- so only a measured bar has
     // a real actual column to show.
@@ -4306,7 +4602,10 @@ export class HelmanSolarInspector extends LitElement {
         forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
       },
     ];
-    this._setTooltip(event, rows, hasActual, bar.slot);
+    this._reportPointer({
+      minutes: bar.minutes,
+      tooltip: this._tooltipAt(event, rows, hasActual, bar.slot),
+    });
   }
 
   /** The two levels a column is read against: empty and full. */
@@ -5970,7 +6269,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _handleChartClick(event: MouseEvent, payload: InspectorPayload) {
-    const layout = this._lastLayoutForStrip;
+    const layout = this._layout;
     if (!layout) return;
     const svgEl = event.currentTarget as SVGSVGElement;
     const rect = svgEl.getBoundingClientRect();
