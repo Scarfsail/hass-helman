@@ -24,7 +24,7 @@ import {
     type EntityDayBandLane,
 } from "../shared/schedule/model/entity-lane-source";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
+import { EMPTY_SELECTED_MINUTES, stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
 import { slotGridTicks } from "../shared/slot-gridlines";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";
@@ -94,7 +94,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /** Inspector slot width, in minutes; how wide a highlighted slot reads. */
     @property({ attribute: false }) public slotMinutes = SLOT_MINUTES;
     /** Minute-of-day of every slot in the inspector's selection. */
-    @property({ attribute: false }) public selectedMinutes: number[] = [];
+    @property({ attribute: false }) public selectedMinutes: readonly number[] = EMPTY_SELECTED_MINUTES;
     /** Minute-of-day under the pointer, wherever in the inspector it is. */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
     /**
@@ -108,8 +108,33 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     @property({ attribute: false }) public editorHost: SchedulingDayEditorHost | null = null;
 
     private _localizeFn?: LocalizeFunction;
-    /** The lanes actually drawn on the last render, for the hover popup to read. */
-    private _lastBandLanes: EntityDayBandLane[] = [];
+    /**
+     * The lanes drawn, and what they were built from.
+     *
+     * Lanes are a function of the host's day alone -- its roster, its schedule
+     * and its coarse clock. The pointer is not one of those inputs, so a sweep
+     * across the band re-renders it without rebuilding a lane; and the band
+     * below compares `.lanes` by identity, so keeping the array as well as its
+     * contents is what stops that re-derivation propagating into it.
+     */
+    private _bandLanes: EntityDayBandLane[] = [];
+    private _bandLanesFor: {
+        host: SchedulingDayEditorHost | null;
+        lanes: unknown;
+        slots: unknown;
+        day: EntityScheduleDay | null;
+        clockSlotMs: number;
+        projectionIndex: unknown;
+    } | null = null;
+    /** The grid the lanes are ruled by, one array per window it is drawn in. */
+    private _gridTicks: EntityDayBandGridTick[] = [];
+    private _gridTicksFor: {
+        dayStartMs: number;
+        startMinutes: number;
+        endMinutes: number;
+        slotMinutes: number;
+        plotWidth: number;
+    } | null = null;
     private _observedHost: SchedulingDayEditorHost | null = null;
 
     protected willUpdate(changed: PropertyValues<this>): void {
@@ -119,6 +144,57 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         if (changed.has("editorHost")) {
             this._observeHost();
         }
+        this._rebuildBandLanesIfNeeded();
+        this._rebuildGridTicksIfNeeded();
+    }
+
+    /**
+     * The host's day as lanes, once per change of the day itself.
+     *
+     * Keyed on the host's own inputs rather than on this element's properties:
+     * the day model is read through plain getters and changes behind a
+     * `SCHEDULE_DAY_MODEL_CHANGED_EVENT`, so the key names the four things the
+     * builder actually reads and the event only has to bring us here.
+     */
+    private _rebuildBandLanesIfNeeded(): void {
+        const host = this.editorHost;
+        const day = this._selectedDay();
+        const previous = this._bandLanesFor;
+        if (
+            previous !== null
+            && previous.host === host
+            && previous.lanes === host?.lanes
+            && previous.slots === host?.dayView.slots
+            && previous.day === day
+            // The host's clock snapped to the schedule's grid, not its raw
+            // `nowMs`: every lane the builder cuts is bounded by slot edges, so
+            // the geometry cannot move between two of them and keying on the
+            // 30 s marker clock rebuilt every lane on the page twice a minute.
+            && previous.clockSlotMs === (host?.clockSlotMs ?? 0)
+            && previous.projectionIndex === host?.projectionIndex
+        ) {
+            return;
+        }
+        this._bandLanesFor = {
+            host,
+            lanes: host?.lanes,
+            slots: host?.dayView.slots,
+            day,
+            clockSlotMs: host?.clockSlotMs ?? 0,
+            projectionIndex: host?.projectionIndex,
+        };
+        this._bandLanes = host === null || day === null ? [] : this._buildBandLanes(host, day);
+    }
+
+    private _buildBandLanes(host: SchedulingDayEditorHost, day: EntityScheduleDay): EntityDayBandLane[] {
+        return buildEntityDayBandLanes({
+            lanes: host.lanes,
+            slots: host.dayView.slots,
+            day,
+            nowMs: host.nowMs,
+            activeOnly: true,
+            projectionIndex: host.projectionIndex,
+        });
     }
 
     connectedCallback(): void {
@@ -173,11 +249,11 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             return nothing;
         }
 
-        const lanes = this._buildBandLanes(day);
+        // Built in `willUpdate`; nothing is derived here.
+        const lanes = this._bandLanes;
         if (lanes.length === 0) {
             return nothing;
         }
-        this._lastBandLanes = lanes;
 
         const { start, end } = stripWindow(this.geometry);
         // The wrap spans the card, and only the tracks are inset to the plot
@@ -204,7 +280,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     .windowStartMs=${day.startMs + start * MINUTE_MS}
                     .windowEndMs=${day.startMs + end * MINUTE_MS}
                     .highlightRanges=${this._buildHighlights(day)}
-                    .timeGridTicks=${this._buildGridTicks(day, start, end)}
+                    .timeGridTicks=${this._gridTicks}
                     .laneLabels=${"track"}
                     .readonly=${true}
                     .showForecastRows=${false}
@@ -223,19 +299,46 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
      *
      * Computed from the same geometry and slot size the charts above use, so
      * the lanes are ruled by the very lines the chart is: the band is a row of
-     * the inspector, not a diagram that happens to sit under one.
+     * the inspector, not a diagram that happens to sit under one. Built in
+     * `willUpdate` behind its own key, because the band compares the array by
+     * identity and the pointer is not one of its inputs.
      */
-    private _buildGridTicks(
-        day: EntityScheduleDay,
-        startMinutes: number,
-        endMinutes: number,
-    ): EntityDayBandGridTick[] {
-        const plotWidth = this.geometry?.plotWidth ?? 0;
-        return slotGridTicks({ startMinutes, endMinutes, slotMinutes: this.slotMinutes, plotWidth })
-            .map((tick) => ({
-                atMs: day.startMs + tick.minutes * MINUTE_MS,
-                major: tick.hour !== null,
-            }));
+    private _rebuildGridTicksIfNeeded(): void {
+        const day = this._selectedDay();
+        const geometry = this.geometry;
+        if (day === null || geometry === null) {
+            this._gridTicks = [];
+            this._gridTicksFor = null;
+            return;
+        }
+        const { start, end } = stripWindow(geometry);
+        const previous = this._gridTicksFor;
+        if (
+            previous !== null
+            && previous.dayStartMs === day.startMs
+            && previous.startMinutes === start
+            && previous.endMinutes === end
+            && previous.slotMinutes === this.slotMinutes
+            && previous.plotWidth === geometry.plotWidth
+        ) {
+            return;
+        }
+        this._gridTicksFor = {
+            dayStartMs: day.startMs,
+            startMinutes: start,
+            endMinutes: end,
+            slotMinutes: this.slotMinutes,
+            plotWidth: geometry.plotWidth,
+        };
+        this._gridTicks = slotGridTicks({
+            startMinutes: start,
+            endMinutes: end,
+            slotMinutes: this.slotMinutes,
+            plotWidth: geometry.plotWidth,
+        }).map((tick) => ({
+            atMs: day.startMs + tick.minutes * MINUTE_MS,
+            major: tick.hour !== null,
+        }));
     }
 
     /**
@@ -273,22 +376,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
      */
     private _selectedDay(): EntityScheduleDay | null {
         return this.editorHost?.days.find((day) => day.dayKey === this.date) ?? null;
-    }
-
-    private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
-        const host = this.editorHost;
-        if (host === null) {
-            return [];
-        }
-
-        return buildEntityDayBandLanes({
-            lanes: host.lanes,
-            slots: host.dayView.slots,
-            day,
-            nowMs: host.nowMs,
-            activeOnly: true,
-            projectionIndex: host.projectionIndex,
-        });
     }
 
     /**
@@ -345,7 +432,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             return;
         }
         const rows: ScheduleHoverTooltipRow[] = [];
-        for (const lane of this._lastBandLanes) {
+        for (const lane of this._bandLanes) {
             const run =
                 lane.actualSegments.find((segment) => atMs >= segment.startMs && atMs < segment.endMs)
                 ?? lane.blocks.find((block) => atMs >= block.startMs && atMs < block.endMs);

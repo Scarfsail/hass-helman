@@ -109,7 +109,7 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
 async function chargingColumnMinutes(page: Page): Promise<number[]> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const layout = el._lastLayoutForStrip;
+        const layout = el._layout;
         const span = layout.dayEndMinutes - layout.dayStartMinutes;
         const minutesForX = (x: number) =>
             layout.dayStartMinutes + ((x - 0.5 - layout.margin.left) / layout.plotWidth) * span;

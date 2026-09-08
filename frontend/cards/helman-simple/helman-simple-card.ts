@@ -187,11 +187,25 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _productionNode:     DeviceNode | null = null;
     private _consumptionNode:    DeviceNode | null = null;
     private _historyEngine?: HistoryEngine;
+    /**
+     * Bumped on every disconnect and on every load that replaces another. A load
+     * that resolves after its generation was superseded commits nothing: the card
+     * may already be detached, and installing a `HistoryEngine` on it would start
+     * an interval nothing ever stops (#232).
+     */
+    private _loadGeneration = 0;
     private _uiConfig?: HelmanUiConfig;
     private _flowColors?: { solar: string; grid: string; battery: string };
     private _flowGlows?:  { solar: string; grid: string; battery: string };
 
     // 5. State properties
+    /**
+     * Bumped once per history tick, exactly as `helman-card._historyRevision` is.
+     * The simple card draws no bars itself, but its node-detail panels draw the
+     * card's rows off the buffers `HistoryEngine` mutates in place, and a bare
+     * `requestUpdate()` is not a signal those rows can dirty-check against.
+     */
+    @state() private _historyRevision = 0;
     @state() private _hass?: HomeAssistant;
     @state() private _energy: EnergyValues = EMPTY_ENERGY;
     @state() private _loading = true;
@@ -241,6 +255,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this._loadGeneration += 1;
         this._historyEngine?.stop();
     }
 
@@ -442,10 +457,15 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     private async _loadFromBackend(): Promise<boolean> {
+        const generation = ++this._loadGeneration;
+        // Superseded by a later load, or the card is gone. Either way this
+        // response belongs to nobody: commit none of it.
+        const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
         this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
             const payload = await store.getDeviceTree();
+            if (obsolete()) return false;
             this._uiConfig = payload.uiConfig;
             this._entityMap = this._buildEntityMap(payload);
             this._energy = this._readEnergyValues(this._latestHass!, this._entityMap);
@@ -479,25 +499,29 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             if (this._consumptionNode) this._consumptionNode.isSource = true;
 
             const history = await store.getHistory();
-            this._historyEngine = new HistoryEngine(
+            if (obsolete()) return false;
+            const engine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
-                () => this.requestUpdate(),
+                () => { this._historyRevision++; },
             );
-            this._historyEngine.applyHistory(history, HistoryEngine.walkTree(this._topLevelNodes()), this._sourceNodes);
-            this._historyEngine.start(
+            engine.applyHistory(history, HistoryEngine.walkTree(this._topLevelNodes()), this._sourceNodes);
+            this._historyEngine = engine;
+            engine.start(
                 this._uiConfig.history_bucket_duration,
                 () => this._topLevelNodes(),
                 () => this._sourceNodes,
             );
-            this._historyEngine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
+            engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
             return true;
         } catch (err) {
+            // Logged even for an obsolete load: the guard is there to keep stale data
+            // out of the card, not to hide a backend failure that raced a detach.
             console.error("helman-simple-card: failed to load backend data", err);
             return false;
         } finally {
-            this._loading = false;
+            if (!obsolete()) this._loading = false;
         }
     }
 
@@ -577,6 +601,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             houseNode: this._houseNode,
             historyBuckets,
             historyBucketDuration,
+            historyRevision: this._historyRevision,
             uiConfig: this._uiConfig,
         };
     }

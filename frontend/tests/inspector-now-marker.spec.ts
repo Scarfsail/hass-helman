@@ -186,7 +186,7 @@ async function mountBand(page: Page, date: string): Promise<void> {
         wrap.appendChild(band);
         document.body.appendChild(wrap);
 
-        const layout = (document.querySelector("helman-solar-inspector") as any)._lastLayoutForStrip;
+        const layout = (document.querySelector("helman-solar-inspector") as any)._layout;
         const startPct = (layout.margin.left / layout.width) * 100;
         const endPct = Math.max(0, 100 - startPct - (layout.plotWidth / layout.width) * 100);
         wrap.style.setProperty("--entity-day-band-track-inset-start", `${startPct}%`);
@@ -216,7 +216,7 @@ async function expectedNowX(page: Page): Promise<number> {
         const el = document.querySelector("helman-solar-inspector") as any;
         const now = new Date();
         const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-        return Math.round(el._lastLayoutForStrip.xForMinutes(minutes));
+        return Math.round(el._layout.xForMinutes(minutes));
     });
 }
 

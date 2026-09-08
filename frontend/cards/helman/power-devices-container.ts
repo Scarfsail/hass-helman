@@ -3,13 +3,23 @@ import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { DeviceNode, isNodeVisible } from "./DeviceNode";
 
-function sortDevicesByPowerAndName(devices: DeviceNode[]): DeviceNode[] {
-    return [...devices].sort((a, b) => {
-        const powerA = a.powerHistory.reduce((acc, val) => acc + val, 0);
-        const powerB = b.powerHistory.reduce((acc, val) => acc + val, 0);
-        if (powerB !== powerA) return powerB - powerA;
-        return a.name.localeCompare(b.name);
-    });
+/**
+ * The rows in the order they are drawn, ranked by history total then by name.
+ *
+ * Each history is summed once and the comparator reads the sum, rather than
+ * re-reducing both operands at every comparison — the same ordering for
+ * O(devices x history) instead of O(devices x log(devices) x history).
+ */
+function sortedIdsByHistoryAndName(devices: DeviceNode[]): string[] {
+    const totals = new Map<string, number>();
+    for (const device of devices) {
+        let total = 0;
+        for (const value of device.powerHistory) total += value;
+        totals.set(device.id, total);
+    }
+    return [...devices]
+        .sort((a, b) => (totals.get(b.id)! - totals.get(a.id)!) || a.name.localeCompare(b.name))
+        .map(device => device.id);
 }
 import "./power-device";
 
@@ -18,9 +28,11 @@ export class PowerDevicesContainer extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property({ attribute: false }) public devices!: DeviceNode[];
     
-    // Sorting cache: Store sorted ORDER (IDs), not the array itself
-    private _lastSortedIds?: string[];
-    private _lastDevicesPowerSnapshot?: string;
+    // Sorting cache: the sorted ORDER (ids), not the array itself.
+    private _sortedIds?: string[];
+    private _sortKey?: string;
+    /** `Math.max` over `parentPowerHistory`, scanned once for all the rows below. */
+    private _parentMaxPower?: number;
     @property({ type: Number }) public currentParentPower?: number;
     @property({ attribute: false }) public parentPowerHistory?: number[];
     @property({ type: Number }) public historyBuckets!: number;
@@ -34,23 +46,34 @@ export class PowerDevicesContainer extends LitElement {
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
-        
+
+        // The scale every row below shares. The buffer is mutated in place, so its
+        // identity says which array to scan and `historyRevision` says the numbers
+        // in it moved. A feeder that carries no revision at all gets no cache: it
+        // may still be mutating in place, and a frozen scale is silent.
+        if (this.historyRevision === undefined
+            || changedProperties.has('parentPowerHistory') || changedProperties.has('historyRevision')) {
+            this._parentMaxPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : undefined;
+        }
+
         // Only recalculate sort order if sortChildrenByPower is enabled
         if (this.sortChildrenByPower && this.devices) {
-            // Create snapshot of device IDs and their power values
-            const powerSnapshot = this.devices.map(d => `${d.id}:${d.powerValue}`).join(',');
-            
-            // Only re-sort if power values changed
-            if (powerSnapshot !== this._lastDevicesPowerSnapshot) {
-                const sorted = sortDevicesByPowerAndName(this.devices);
-                // Cache the SORTED ORDER (just IDs)
-                this._lastSortedIds = sorted.map(d => d.id);
-                this._lastDevicesPowerSnapshot = powerSnapshot;
+            // The order is a function of the histories, so the key names the roster
+            // and the revision that moved them — never the current power, which
+            // churns without reordering anything and stands still while a rolling
+            // bucket reverses the totals.
+            // No revision, no cache -- for the same reason the maximum above has none.
+            const key = this.historyRevision === undefined
+                ? undefined
+                : `${this.historyRevision}|${this.devices.map(d => `${d.id}:${d.name}`).join(',')}`;
+            if (key === undefined || key !== this._sortKey || changedProperties.has('devices')) {
+                this._sortedIds = sortedIdsByHistoryAndName(this.devices);
+                this._sortKey = key;
             }
         } else {
             // Clear cache if sorting is disabled
-            this._lastSortedIds = undefined;
-            this._lastDevicesPowerSnapshot = undefined;
+            this._sortedIds = undefined;
+            this._sortKey = undefined;
         }
     }
 
@@ -80,11 +103,11 @@ export class PowerDevicesContainer extends LitElement {
         let devicesToRender: DeviceNode[];
         
         // Use cached sort order if available, but create FRESH array reference
-        if (this.sortChildrenByPower && this._lastSortedIds) {
+        if (this.sortChildrenByPower && this._sortedIds) {
             // Create map for O(1) lookup
             const deviceMap = new Map(this.devices.map(d => [d.id, d]));
             // Return NEW array using cached order - Lit will detect the change
-            devicesToRender = this._lastSortedIds.map(id => deviceMap.get(id)!).filter(d => d);
+            devicesToRender = this._sortedIds.map(id => deviceMap.get(id)!).filter(d => d);
         } else {
             devicesToRender = this.devices;
         }
@@ -104,7 +127,7 @@ export class PowerDevicesContainer extends LitElement {
                         .hass=${this.hass}
                         .device=${device}
                         .currentParentPower=${this.currentParentPower}
-                        .parentPowerHistory=${this.parentPowerHistory}
+                        .parentMaxPower=${this._parentMaxPower}
                         .historyBuckets=${this.historyBuckets}
                         .historyBucketDuration=${this.historyBucketDuration}
                         .historyRevision=${this.historyRevision}

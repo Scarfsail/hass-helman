@@ -19,6 +19,12 @@ export interface NodeDetailContext {
     houseNode: DeviceNode | null;
     historyBuckets: number;
     historyBucketDuration: number;
+    /**
+     * Bumped once per history tick by the card that owns the `HistoryEngine`. The
+     * panels draw the very same rows the card does, off the very same in-place
+     * buffers, so they need the same signal that the buckets moved.
+     */
+    historyRevision: number;
     uiConfig?: HelmanUiConfig;
 }
 
@@ -37,6 +43,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
                 consumptionNode: context.consumptionNode,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
+                historyRevision: context.historyRevision,
             };
         case "solar":
             return {
@@ -45,6 +52,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
                 productionNode: context.productionNode,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
+                historyRevision: context.historyRevision,
             };
         case "grid":
             return {
@@ -55,6 +63,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
                 consumptionNode: context.consumptionNode,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
+                historyRevision: context.historyRevision,
             };
         case "house":
             return {
@@ -65,6 +74,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
                 consumptionNode: context.consumptionNode,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
+                historyRevision: context.historyRevision,
                 uiConfig: context.uiConfig,
                 houseNode: context.houseNode,
             };

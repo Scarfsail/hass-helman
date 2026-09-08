@@ -132,7 +132,7 @@ async function hourLabels(page: Page): Promise<string[]> {
 async function chartXForMinutes(page: Page, minutes: number): Promise<number> {
     return page.evaluate((m) => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const layout = el._lastLayoutForStrip;
+        const layout = el._layout;
         const span = layout.dayEndMinutes - layout.dayStartMinutes;
         return layout.margin.left + ((m - layout.dayStartMinutes) / span) * layout.plotWidth;
     }, minutes);

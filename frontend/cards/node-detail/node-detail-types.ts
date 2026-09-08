@@ -15,6 +15,7 @@ export interface BatteryDetailParams {
     consumptionNode?: DeviceNode | null;
     historyBuckets: number;
     historyBucketDuration: number;
+    historyRevision: number;
 }
 
 export interface SolarDetailParams {
@@ -23,6 +24,7 @@ export interface SolarDetailParams {
     productionNode?: DeviceNode | null;
     historyBuckets: number;
     historyBucketDuration: number;
+    historyRevision: number;
 }
 
 export interface GridDetailParams {
@@ -33,6 +35,7 @@ export interface GridDetailParams {
     consumptionNode?: DeviceNode | null;
     historyBuckets: number;
     historyBucketDuration: number;
+    historyRevision: number;
 }
 
 export interface HouseDetailParams {
@@ -43,6 +46,7 @@ export interface HouseDetailParams {
     consumptionNode?: DeviceNode | null;
     historyBuckets: number;
     historyBucketDuration: number;
+    historyRevision: number;
     uiConfig?: HelmanUiConfig;
     houseNode: DeviceNode | null;
 }

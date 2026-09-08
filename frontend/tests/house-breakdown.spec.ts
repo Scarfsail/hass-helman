@@ -291,7 +291,7 @@ async function chartGeom(page: Page): Promise<ChartGeom> {
         const el = document.querySelector("helman-solar-inspector") as any;
         const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
         const r = svg.getBoundingClientRect();
-        const layout = el._lastLayoutForStrip;
+        const layout = el._layout;
         return {
             rect: { left: r.left, top: r.top, width: r.width, height: r.height },
             viewWidth: layout.width,
@@ -928,7 +928,7 @@ async function bandExtent(
         return {
             top: Math.min(...ys),
             bottom: Math.max(...ys),
-            baseline: el._lastLayoutForStrip.yForW(0),
+            baseline: el._layout.yForW(0),
         };
     }, fill);
 }
@@ -957,7 +957,7 @@ async function forecastBandOutline(
             }
         }
         if (!ys.length) return null;
-        return { y: Math.max(...ys), baseline: el._lastLayoutForStrip.yForW(0) };
+        return { y: Math.max(...ys), baseline: el._layout.yForW(0) };
     }, stroke);
 }
 

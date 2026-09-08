@@ -51,6 +51,14 @@ The same rule forbids dispatching derived facts from `render()`: the
 `helman-watched-entities` event is dispatched from the load that resolved the
 ids, never from the render that draws them.
 
+## Corollary: a pointer is not a data change
+
+A mouse reports far more often than the screen repaints, and what it reports is where the pointer is — never what the day contains. So nothing derived from the data may be built on the pointer's path. `helman-solar-inspector` derives its whole day model in `willUpdate` behind keys naming the inputs each step actually reads (`_rebuildDayModelIfNeeded`), and the strips below it do the same for their columns, cells and lanes; a hover then changes a highlight and a popup and reaches nothing else.
+
+Two habits make that hold. Pointer reports are coalesced to one `requestAnimationFrame`, so a burst between two frames costs one update rather than ten. And the popup's *coordinates* never enter reactive state at all — they are written onto its element directly, because they change with every pixel while what the popup says changes only at a slot boundary.
+
+[`../tests/inspector-hover-cost.spec.ts`](../tests/inspector-hover-cost.spec.ts) is the guard, and like the discipline tests it states hard zeros rather than budgets.
+
 ## Corollary: `hass` churn is not a clock
 
 `_nowMs` in `helman-solar-inspector` and `helman-solar-schedule-band-strip` used
@@ -59,6 +67,8 @@ the moment the churn is filtered out, the "now" marker freezes — and in the ba
 strip `_nowMs` is the only memo key that moves on an idle installation, so its
 whole derived model freezes with it while the parts that read `hass.states` keep
 repainting. Anything that needs the wall clock owns a timer.
+
+But a timer is not a licence either, and [`shared/now-clock.ts`](shared/now-clock.ts) is where the limits on one live. It does not run while `document.hidden`, and it ticks once on the way back rather than leaving the reader up to half a minute behind. Each tick then has to earn its write: `helman-solar-inspector`'s `_tickNow` moves `_nowMs` only for the two things that read it — today's "now" line and the day rollover — so a past day or a month of totals, which mark no moment anywhere, cost nothing between two midnights. And a model keyed on the clock is keyed on the clock's *meaning* to it: everything `scheduling-day-editor-host` derives is a slot-boundary test, so its memo takes `clockSlotMs`, the edge the clock last reached, and the forecast map, day view, lanes and days stand until the schedule actually moves under them. The marker keeps the fine clock; only the model waits.
 
 ---
 

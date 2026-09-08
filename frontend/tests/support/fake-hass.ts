@@ -27,6 +27,14 @@ declare global {
         __fakeHass: Record<string, unknown>;
         /** Every date `helman/solar_bias/inspector` was asked for, in order. */
         __requestedDates: string[];
+        /**
+         * Every `helman/solar_bias/day_aggregates` read, in order.
+         *
+         * The pills and the aggregate views share the command, so `bucket` is
+         * how a spec tells a span read from a pill window: only the views ask
+         * for a bucket.
+         */
+        __aggregateRequests: Array<{ start: string; end: string; bucket: string | null }>;
         /** How many `helman/get_forecast` calls the subtree has made. */
         __forecastCalls: number;
         /** Let the oldest still-pending inspector request return. */
@@ -42,6 +50,8 @@ declare global {
 export interface FakeHassOptions {
     /** Days the inspector offers, counting today as day 0. */
     pillDays: number;
+    /** Put the page's timers under the test's control too. See `fixed-clock`. */
+    fakeTimers?: boolean;
 }
 
 /**
@@ -55,7 +65,7 @@ export interface FakeHassOptions {
 export async function installFakeHass(page: Page, options: FakeHassOptions): Promise<void> {
     // The payloads below are dated from the page's clock, so it is fixed first.
     // See `fixed-clock`.
-    await installFixedClock(page);
+    await installFixedClock(page, { timers: options.fakeTimers === true });
     await page.evaluate(({ pillDays }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
@@ -220,6 +230,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
         });
 
         window.__requestedDates = [];
+        window.__aggregateRequests = [];
         window.__forecastCalls = 0;
         const pending: Array<() => void> = [];
         window.__pendingInspector = () => pending.length;
@@ -260,12 +271,29 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 },
             },
             states: {},
-            callWS: async (msg: { type: string; date?: string; start_date?: string; end_date?: string }) => {
+            callWS: async (msg: {
+                type: string;
+                date?: string;
+                start_date?: string;
+                end_date?: string;
+                bucket?: string;
+            }) => {
                 if (msg.type === "helman/get_schedule") {
                     return schedule;
                 }
                 if (msg.type === "helman/solar_bias/day_aggregates") {
-                    return dayAggregates(msg.start_date ?? "", msg.end_date ?? "");
+                    const start = msg.start_date ?? "";
+                    const end = msg.end_date ?? "";
+                    window.__aggregateRequests.push({ start, end, bucket: msg.bucket ?? null });
+                    return {
+                        ...dayAggregates(start, end),
+                        bucket: msg.bucket ?? "day",
+                        currency: "CZK",
+                        // The span views navigate off the payload's own bounds,
+                        // so a card taken to D or M without a day load first
+                        // still knows how far back it may go.
+                        range: { minDate: isoDay(-30), maxDate: isoDay(pillDays - 1) },
+                    };
                 }
                 if (msg.type === "helman/solar_bias/inspector") {
                     const date = msg.date ?? "";
