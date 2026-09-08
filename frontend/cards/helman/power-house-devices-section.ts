@@ -13,6 +13,8 @@ export class PowerHouseDevicesSection extends LitElement {
     @property({ attribute: false }) public devices: DeviceNode[] = [];
     @property({ type: Number }) public historyBuckets!: number;
     @property({ type: Number }) public historyBucketDuration!: number;
+    /** Bumped by the card once per history tick; see `helman-card._historyRevision`. */
+    @property({ type: Number }) public historyRevision?: number;
     @property({ type: Number }) public currentParentPower?: number;
     @property({ attribute: false }) public parentPowerHistory?: number[];
     @property({ attribute: false }) public uiConfig?: HelmanUiConfig;
@@ -44,7 +46,10 @@ export class PowerHouseDevicesSection extends LitElement {
 
         const devices = this.devices || [];
         const ui = this.uiConfig;
-        const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${ui?.others_group_label ?? ''}`;
+        // The revision is part of the key because the group nodes hold *copies* of
+        // their children's histories: a tick mutates the children in place and the
+        // aggregate would otherwise keep painting the bucket it was built from.
+        const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${ui?.others_group_label ?? ''}|${this.historyRevision ?? 0}`;
 
         const inputsChanged =
             changedProperties.has('devices') ||
@@ -251,6 +256,7 @@ export class PowerHouseDevicesSection extends LitElement {
                     .devices=${devicesToShow}
                     .historyBuckets=${this.historyBuckets}
                     .historyBucketDuration=${this.historyBucketDuration}
+                    .historyRevision=${this.historyRevision}
                     .currentParentPower=${this.currentParentPower}
                     .parentPowerHistory=${this.parentPowerHistory}
                     .devices_full_width=${this.devices_full_width}
