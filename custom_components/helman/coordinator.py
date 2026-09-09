@@ -3472,6 +3472,7 @@ class HelmanCoordinator:
         )
         return ComputeInputs(
             battery_live_state=battery_live_state,
+            appliances_registry=self._appliances_registry,
             battery_actual_history=battery_actual_history,
             vehicle_remaining_capacity_kwh_by_vehicle_id=(
                 read_vehicle_remaining_capacity_kwh_by_vehicle_id(
@@ -3812,6 +3813,18 @@ class HelmanCoordinator:
             actual_history=actual_history,
         )
 
+    def _pinned_appliances_registry(
+        self, compute_inputs: ComputeInputs
+    ) -> AppliancesRuntimeRegistry:
+        """The registry this run computes against.
+
+        Taken from the inputs pinned on the event loop, so a rebind of
+        ``_appliances_registry`` mid-build cannot make one half of a run
+        disagree with the other. The attribute is the fallback for a caller
+        that built its inputs without one.
+        """
+        return compute_inputs.appliances_registry or self._appliances_registry
+
     def _build_forecast_rebuild_pure(
         self,
         *,
@@ -3836,7 +3849,7 @@ class HelmanCoordinator:
         )
         projection_plan = build_appliance_projection_plan(
             generated_at=started_at.isoformat(),
-            registry=self._appliances_registry,
+            registry=self._pinned_appliances_registry(compute_inputs),
             schedule_document=projection_schedule_document,
             inputs=input_bundle,
             hass=None,
@@ -4070,7 +4083,7 @@ class HelmanCoordinator:
                     current_price_field="currentExportPrice",
                     points_field="exportPricePoints",
                 ),
-                appliance_registry=self._appliances_registry,
+                appliance_registry=self._pinned_appliances_registry(compute_inputs),
                 when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
                     input_bundle.when_active_hourly_energy_kwh_by_appliance_id
                 ),
@@ -4226,6 +4239,9 @@ class HelmanCoordinator:
         # Taken before the awaits: anything that invalidates the cache while the
         # history gather or the simulation is in flight makes this build's result
         # obsolete, and an obsolete build must not overwrite the newer state.
+        # The revision alone is not enough, because the snapshots this build was
+        # handed were read by the caller long before it got here: see
+        # :meth:`_cache_holds_newer_pipeline`.
         revision = self._forecast_cache_revision
         compute_inputs = await self._async_gather_compute_inputs(
             started_at=started_at,
@@ -4249,7 +4265,11 @@ class HelmanCoordinator:
             projection_plan=rebuild.projection_plan,
             battery_forecast=rebuild.battery_forecast,
         )
-        if revision == self._forecast_cache_revision:
+        if revision == self._forecast_cache_revision and not (
+            self._cache_holds_newer_pipeline(
+                house_forecast=house_forecast, started_at=started_at
+            )
+        ):
             self._store_battery_forecast_cache(
                 pipeline=pipeline,
                 solar_forecast=solar_forecast,
@@ -4264,7 +4284,7 @@ class HelmanCoordinator:
             # asked for; the cache keeps the newer state and the next reader
             # rebuilds against it.
             _LOGGER.debug(
-                "Appliance forecast pipeline was invalidated while building; "
+                "Appliance forecast pipeline was superseded while building; "
                 "serving the build without caching it"
             )
         return pipeline
@@ -4399,6 +4419,38 @@ class HelmanCoordinator:
 
     def _invalidate_appliance_projection_cache(self) -> None:
         self._cached_appliance_projection_schedule_signature = None
+
+    def _cache_holds_newer_pipeline(
+        self,
+        *,
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> bool:
+        """Whether the cache already holds a pipeline this build would set back.
+
+        A caller reads the canonical house and solar snapshots and only then
+        works its way here, so a build can be handed superseded snapshots and
+        still find the cache revision untouched: the refresh that published the
+        newer snapshots invalidated the cache and then filled it again, all
+        before this build sampled the revision. Storing at that point would put
+        the older forecast back, and the readers that serve it without a
+        signature -- the current battery forecast, the adjusted house forecast,
+        the house composition -- would publish it for the rest of the slot.
+        """
+        cached = getattr(self, "_cached_appliance_forecast_pipeline", None)
+        if cached is None:
+            return False
+        if dt_util.as_utc(cached.started_at) > dt_util.as_utc(started_at):
+            return True
+        cached_generated_at = dt_util.parse_datetime(
+            getattr(self, "_cached_battery_forecast_house_generated_at", None) or ""
+        )
+        generated_at = dt_util.parse_datetime(house_forecast.get("generatedAt") or "")
+        return (
+            cached_generated_at is not None
+            and generated_at is not None
+            and cached_generated_at > generated_at
+        )
 
     def _has_valid_battery_forecast_cache(
         self,

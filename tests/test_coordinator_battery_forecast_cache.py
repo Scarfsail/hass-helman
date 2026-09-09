@@ -1933,6 +1933,97 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator._cached_appliance_forecast_pipeline)
         self.assertIsNone(coordinator._cached_battery_forecast)
 
+    async def test_a_superseded_build_does_not_set_the_cache_back(self) -> None:
+        """A build handed older snapshots must not overwrite a newer entry.
+
+        The caller reads the canonical snapshots and only then works its way
+        down here, so a refresh can publish newer ones -- invalidating the
+        cache and filling it again -- while it is still on its way. The
+        revision it samples on arrival is then already the new one, and only
+        the snapshots it is holding say the build is behind.
+        """
+        coordinator = self._make_gated_coordinator()[0]
+        coordinator._async_gather_compute_inputs = (
+            HelmanCoordinator._async_gather_compute_inputs.__get__(coordinator)
+        )
+
+        fresh = await coordinator._async_get_appliance_forecast_pipeline(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(
+                generated_at="2026-03-20T21:20:00+01:00"
+            ),
+            started_at=REFERENCE_TIME,
+        )
+        revision = coordinator._forecast_cache_revision
+
+        stale = await coordinator._async_get_appliance_forecast_pipeline(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(
+                generated_at="2026-03-20T21:05:00+01:00"
+            ),
+            started_at=REFERENCE_TIME,
+        )
+
+        # It gets the forecast it asked for -- and the cache keeps the newer
+        # one, so the signature-less readers go on serving that.
+        self.assertIsNot(stale, fresh)
+        self.assertIs(coordinator._cached_appliance_forecast_pipeline, fresh)
+        self.assertEqual(
+            coordinator._cached_battery_forecast_house_generated_at,
+            "2026-03-20T21:20:00+01:00",
+        )
+        # Nothing was invalidated: the revision guard alone would have let the
+        # store through.
+        self.assertEqual(coordinator._forecast_cache_revision, revision)
+
+    async def test_the_run_computes_against_the_registry_it_pinned(self) -> None:
+        """The registry travels with the other inputs pinned on the loop.
+
+        ``_refresh_climate_appliance_capabilities`` rebinds
+        ``_appliances_registry``, and several loop-side request handlers call
+        it. With the simulation on a worker, a rebind between the gather and
+        the build would otherwise cost the projection against a different
+        version of an appliance than the run pinned.
+        """
+        coordinator = _make_coordinator()
+        coordinator._build_battery_forecast_sync = Mock(
+            return_value=_make_battery_forecast()
+        )
+        pinned = coordinator._appliances_registry
+        gather = coordinator._async_gather_compute_inputs
+        used: list[object] = []
+
+        async def gather_then_swap(**kwargs):
+            compute_inputs = await gather(**kwargs)
+            # Stands in for a climate entity coming back from unavailable
+            # while this run is in flight.
+            coordinator._appliances_registry = (
+                coordinator_module.AppliancesRuntimeRegistry()
+            )
+            return compute_inputs
+
+        coordinator._async_gather_compute_inputs = gather_then_swap
+
+        def record_registry(**kwargs):
+            used.append(kwargs["registry"])
+            return _make_projection_plan()
+
+        with patch.object(
+            coordinator_module,
+            "build_appliance_projection_plan",
+            side_effect=record_registry,
+        ):
+            await coordinator._async_get_appliance_forecast_pipeline(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+
+        # Identity, not equality: two empty registries compare equal.
+        self.assertEqual(len(used), 1)
+        self.assertIs(used[0], pinned)
+        self.assertIsNot(coordinator._appliances_registry, pinned)
+
     async def test_pipeline_build_simulates_off_the_loop_without_touching_states(
         self,
     ) -> None:
