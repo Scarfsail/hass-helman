@@ -685,6 +685,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator = object.__new__(coordinator_module.HelmanCoordinator)
             coordinator._hass = SimpleNamespace()
             coordinator._active_config = {}
+            coordinator._forecast_cache_revision = 0
             coordinator._cached_forecast = {"status": "available"}
             coordinator._cached_solar_forecast = {
                 "status": "available",
