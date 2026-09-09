@@ -128,9 +128,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.query_cumulative_hourly_energy_changes = (
         _query_cumulative_hourly_energy_changes
     )
-    recorder_slots_mod.query_slot_boundary_state_values = (
-        lambda *args, **kwargs: {}
-    )
     recorder_slots_mod.query_cumulative_hourly_energy_changes = (
         lambda *args, **kwargs: []
     )
@@ -145,6 +142,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
             return {}
 
     recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
+
+    class _TodaySlotBoundaryStateReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_boundary_state_values(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotBoundaryStateReader = _TodaySlotBoundaryStateReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")

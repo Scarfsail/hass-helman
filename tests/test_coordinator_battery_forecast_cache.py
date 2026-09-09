@@ -122,6 +122,15 @@ def _install_import_stubs() -> None:
             return {}
 
     recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
+
+    class _TodaySlotBoundaryStateReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_boundary_state_values(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotBoundaryStateReader = _TodaySlotBoundaryStateReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     battery_history_mod = types.ModuleType(

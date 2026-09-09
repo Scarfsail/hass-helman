@@ -122,6 +122,7 @@ from .point_forecast_response import build_solar_forecast_response
 from .power_polarity import is_power_inverted
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
+    TodaySlotBoundaryStateReader,
     TodaySlotEnergyReader,
     get_local_current_slot_start,
     query_active_hours_by_local_date,
@@ -726,6 +727,11 @@ class HelmanCoordinator:
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
         self._slot_history = TodaySlotEnergyReader(hass)
+        # The same bargain for the battery's state of charge, whose completed
+        # boundaries are equally immutable. One reader for the whole
+        # integration is what lets the forecast warm-up and the automation run
+        # that follows it share the day they have both already read.
+        self._battery_boundary_history = TodaySlotBoundaryStateReader(hass)
         # The rebuild currently in flight, if any, so a second trigger joins it
         # instead of starting its own 56-day recorder scan.
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
@@ -3097,6 +3103,7 @@ class HelmanCoordinator:
             raw_forecast = await HelmanForecastBuilder(
                 self._hass,
                 self._active_config,
+                self._slot_history,
             ).build(reference_time=request_now)
             solar_snapshot = self._build_canonical_solar_forecast(
                 raw_forecast["solar"],
@@ -3697,7 +3704,7 @@ class HelmanCoordinator:
 
         try:
             return await build_battery_actual_history(
-                self._hass,
+                self._battery_boundary_history,
                 entity_config.capacity_entity_id,
                 started_at,
                 interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
