@@ -50,6 +50,7 @@ async def _load_actuals_for_day(*args, **kwargs):
     return {}
 actuals_mod.load_actuals_window = _load_actuals_window
 actuals_mod.load_actuals_for_day = _load_actuals_for_day
+actuals_mod.slot_actuals_from_batched_slot_energy = lambda *args, **kwargs: {}
 sys.modules[actuals_mod.__name__] = actuals_mod
 
 forecast_history_mod = types.ModuleType("custom_components.helman.solar_bias_correction.forecast_history")

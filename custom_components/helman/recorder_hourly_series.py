@@ -436,9 +436,10 @@ class SlotEnergyBatch:
     across every entity in it, sorted. It is the batch's own evidence that the
     recorder was recording at those moments, which is what tells a quiet meter
     apart from an outage (see :func:`_is_carry_stale`). It travels with the
-    deltas because a caller reading one more meter on its own -- the
-    inspector's solar series does exactly that -- has no way to gather one and
-    would otherwise fall back on age alone, which is issue #208.
+    deltas so that a caller reading one more meter on its own can pass the
+    trace to that read rather than fall back on age alone, which is issue #208:
+    the inspector's solar series took it that way until it began reading the
+    solar column out of the batch itself.
     """
 
     by_entity: dict[str, dict[datetime, float]]

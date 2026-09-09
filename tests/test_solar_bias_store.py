@@ -165,6 +165,7 @@ def _install_service_import_stubs() -> None:
 
     actuals_mod.load_actuals_window = _load_actuals_window
     actuals_mod.load_actuals_for_day = _load_actuals_for_day
+    actuals_mod.slot_actuals_from_batched_slot_energy = lambda *args, **kwargs: {}
     sys.modules[actuals_mod.__name__] = actuals_mod
 
     forecast_history_mod = types.ModuleType(

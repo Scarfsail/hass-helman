@@ -385,12 +385,10 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
         ]
 
         old_now = service_mod.dt_util.now
-        old_actuals = service_mod.load_actuals_for_day
         try:
             service_mod.dt_util.now = lambda: datetime.fromisoformat(
                 "2026-05-11T10:00:00+02:00"
             )
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
             with patch.object(
                 service_mod,
                 "load_house_forecast_points_for_day",
@@ -398,7 +396,9 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
             ), patch.object(
                 service, "_load_house_actual_for_date", AsyncMock(return_value=[])
             ), patch.object(
-                service, "_load_battery_soc_actual_for_date", AsyncMock(return_value=[])
+                service,
+                "_load_numeric_history_by_slot_for_entities",
+                AsyncMock(return_value={}),
             ), patch.object(
                 service,
                 "_load_grid_actual_for_date",
@@ -409,7 +409,6 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
                 payload = await service.async_get_inspector_day(TARGET_DATE)
         finally:
             service_mod.dt_util.now = old_now
-            service_mod.load_actuals_for_day = old_actuals
 
         self.assertEqual(
             [p["valueWh"] for p in payload["series"]["gridActual"]], [-300.0, 800.0]
