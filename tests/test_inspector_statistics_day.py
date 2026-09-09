@@ -146,6 +146,9 @@ service_mod = importlib.import_module(
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
 )
+recorder_series_mod = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+)
 
 SOLAR_METER = "sensor.solar_total"
 HOUSE_METER = "sensor.house_energy"
@@ -322,11 +325,10 @@ class TestSourceChoice(unittest.IsolatedAsyncioTestCase):
         # the raw read is attempted and its result is the answer.
         _set_rows({})
         service = _make_service()
-        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
-        try:
-            payload = await service.async_get_inspector_day(PURGED_DAY)
-        finally:
-            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
+        service._load_slot_energy_kwh_for_entities = _solar_meter_batch(
+            {"08:00": 500.0}
+        )
+        payload = await service.async_get_inspector_day(PURGED_DAY)
 
         self.assertEqual(payload["dataGranularityMinutes"], 15)
         self.assertEqual(payload["totals"]["actualWh"], 500.0)
@@ -374,12 +376,11 @@ class TestSourceChoice(unittest.IsolatedAsyncioTestCase):
         # states the recorder is deliberately still holding.
         _set_rows({})
         service = _make_service()
-        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
-        try:
-            with _purging_after(10, auto_purge=False):
-                payload = await service.async_get_inspector_day(PURGED_DAY)
-        finally:
-            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
+        service._load_slot_energy_kwh_for_entities = _solar_meter_batch(
+            {"08:00": 500.0}
+        )
+        with _purging_after(10, auto_purge=False):
+            payload = await service.async_get_inspector_day(PURGED_DAY)
 
         self.assertEqual(payload["dataGranularityMinutes"], 15)
 
@@ -674,14 +675,26 @@ class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["availability"]["hasActuals"])
 
 
-#: ``load_actuals_for_day`` as the service imported it, so a test that stubs the
-#: raw solar read can put it back.
-_REAL_LOAD_ACTUALS = service_mod.load_actuals_for_day
+def _solar_meter_batch(by_slot_wh: dict[str, float]):
+    """A batched meter read whose solar column carries ``{"HH:MM": wh}``.
 
+    The day's solar actuals are that column cut off at the current completed
+    slot rather than a read of their own, so a test that wants raw actuals to
+    exist seeds the batch the inspector already issues.
+    """
 
-def _actuals_returning(by_slot: dict[str, float]):
-    async def _load(hass, cfg, target_date, *, local_now, liveness_instants=None):
-        return dict(by_slot)
+    async def _load(entity_ids, target_date, local_tz):
+        return recorder_series_mod.SlotEnergyBatch(
+            by_entity={
+                SOLAR_METER: {
+                    datetime.fromisoformat(
+                        f"{target_date.isoformat()}T{slot}:00"
+                    ).replace(tzinfo=PRAGUE): wh / 1000.0
+                    for slot, wh in by_slot_wh.items()
+                }
+            },
+            liveness_instants=[],
+        )
 
     return _load
 

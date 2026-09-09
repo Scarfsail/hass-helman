@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
-from .actuals import load_actuals_for_day, load_actuals_window
+from .actuals import load_actuals_window, slot_actuals_from_batched_slot_energy
 from .adjuster import adjust
 from .battery_forecast_history import (
     BATTERY_NET_FORECAST_CURRENT_ENTITY,
@@ -661,6 +661,22 @@ class SolarBiasCorrectionService:
             _entity_id(self._battery_discharge_energy_entity_id_provider),
         )
 
+    def _solar_meter_entity_id(self) -> str | None:
+        """The configured solar meter, or ``None`` -- and never raising.
+
+        Three inspector call sites need it and all three want the same
+        degradation: a config that cannot say costs the solar series and
+        nothing else. It comes from :meth:`_energy_meter_entity_ids` rather
+        than from ``cfg`` directly so there is one definition of which entity
+        the meter is.
+        """
+        try:
+            solar_entity_id, *_ = self._energy_meter_entity_ids()
+        except Exception:
+            _LOGGER.exception("Failed to resolve the solar meter for inspector")
+            return None
+        return solar_entity_id
+
     async def _async_history_floor(self, local_now: datetime) -> date:
         """The oldest date the inspector may be browsed back to.
 
@@ -862,11 +878,7 @@ class SolarBiasCorrectionService:
                 _LOGGER.exception("Entity id provider failed for inspector statistics day")
                 return None
 
-        try:
-            solar_entity, *_ = self._energy_meter_entity_ids()
-        except Exception:
-            _LOGGER.exception("Failed to resolve the solar meter for inspector statistics day")
-            solar_entity = None
+        solar_entity = self._solar_meter_entity_id()
         return await load_statistics_day(
             self._hass,
             target_date,
@@ -938,11 +950,13 @@ class SolarBiasCorrectionService:
         # came from did: a roster that cannot be built costs the breakdown, and a
         # recorder that cannot be read costs the meter series, neither the other.
         #
-        # The batch runs before the solar actuals, which keep their own read (the
-        # invalidation rules live on that path), so that it can hand them its
-        # liveness trace: the solar meter is silent from dusk to dawn and cannot
-        # prove on its own that the recorder was up while it said nothing. See
-        # ``_is_carry_stale`` and issue #208.
+        # The solar actuals are that same batch's solar column, cut off at the
+        # current completed slot -- not a read of their own. The batch already
+        # has to carry the meter for its liveness trace (the meter is silent
+        # from dusk to dawn and cannot prove on its own that the recorder was up
+        # while it said nothing -- see ``_is_carry_stale`` and issue #208), and
+        # it parses and samples that column with the very helper the actuals
+        # reader called, so the second read bought nothing (#245).
         #
         # A statistics-backed day reads the same meters from the same one query,
         # only against the hourly long-term table -- and it brings back every
@@ -967,12 +981,13 @@ class SolarBiasCorrectionService:
                 _LOGGER.exception(
                     "Failed to load house consumer breakdown for inspector"
                 )
+            solar_meter_entity_id = self._solar_meter_entity_id()
             meter_entity_ids = self._cumulative_meter_entity_ids(
-                breakdown_consumers_for_day
+                breakdown_consumers_for_day,
+                solar_entity_id=solar_meter_entity_id,
             )
             if not reads_statistics:
                 meters_answered = True
-                liveness_instants: list[datetime] = []
                 try:
                     meter_batch = await self._load_slot_energy_kwh_for_entities(
                         meter_entity_ids,
@@ -985,13 +1000,18 @@ class SolarBiasCorrectionService:
                     meters_answered = False
                 else:
                     slot_energy_by_entity = meter_batch.by_entity
-                    liveness_instants = meter_batch.liveness_instants
-                actuals_by_slot = await load_actuals_for_day(
-                    self._hass,
-                    self._cfg,
+                # The solar meter is *in* that batch, parsed and sampled by the
+                # same helper the actuals reader used and against the same
+                # liveness trace, so the day's actuals are a cutoff away from
+                # deltas already in hand rather than a second read of the same
+                # meter (#245). A batch that failed leaves them empty, which is
+                # what a failed read has always left them.
+                actuals_by_slot = slot_actuals_from_batched_slot_energy(
+                    slot_energy_by_entity.get(solar_meter_entity_id)
+                    if solar_meter_entity_id
+                    else None,
                     target_date,
                     local_now=local_now,
-                    liveness_instants=liveness_instants,
                 )
                 # Nothing anywhere in raw state on an elapsed day, with no
                 # horizon to have predicted it: the recorder has been trimmed
@@ -1128,6 +1148,19 @@ class SolarBiasCorrectionService:
             + timedelta(days=1)
         )
 
+        # The day's numeric (non-cumulative) sensors, resolved once and read
+        # together: the battery SoC sensor and the two SoC-bound sensors sample
+        # the same day onto the same grid, so they are one recorder round-trip
+        # rather than three (#245). SoC drops out of the roster on a statistics
+        # day because the hourly read already carries it, and adding it here
+        # would put back exactly the raw-state read that path exists to avoid.
+        soc_entity_id = self._battery_soc_entity_id()
+        bounds_entity_ids = self._battery_soc_bounds_entity_ids()
+        numeric_entity_ids = [
+            *([] if reads_statistics or not need_past else [soc_entity_id]),
+            *(bounds_entity_ids if need_past else ()),
+        ]
+
         # Independent recorder/snapshot reads, so overlap them rather than
         # awaiting in turn.
         past_coros = (
@@ -1142,11 +1175,8 @@ class SolarBiasCorrectionService:
                     self._load_house_actual_for_date(target_date, slot_energy_by_entity),
                     "house actual",
                 ),
-                self._already(statistics_day.battery_soc_points)
-                if reads_statistics
-                else self._guarded_points(
-                    self._load_battery_soc_actual_for_date(target_date, timezone),
-                    "battery SoC actual",
+                self._load_numeric_history_by_slot_for_entities(
+                    numeric_entity_ids, target_date, timezone
                 ),
                 self._guarded_point_sets(
                     self._load_grid_actual_for_date(target_date, slot_energy_by_entity),
@@ -1201,6 +1231,7 @@ class SolarBiasCorrectionService:
         house_forecast_history_points: list[dict] = []
         house_actual_points: list[dict] = []
         battery_soc_actual_points: list[dict] = []
+        numeric_history_by_entity: dict[str, dict[str, float]] = {}
         grid_actual_series: tuple[list[dict], list[dict], list[dict]] = ([], [], [])
         battery_actual_points: list[dict] = []
         breakdown_consumers: list[dict] = []
@@ -1214,12 +1245,19 @@ class SolarBiasCorrectionService:
             (
                 house_forecast_history_points,
                 house_actual_points,
-                battery_soc_actual_points,
+                numeric_history_by_entity,
                 grid_actual_series,
                 battery_actual_points,
                 recorded_price_series,
                 battery_forecast_series,
             ) = gathered[:7]
+            battery_soc_actual_points = (
+                statistics_day.battery_soc_points
+                if reads_statistics
+                else self._battery_soc_actual_points(
+                    soc_entity_id, numeric_history_by_entity
+                )
+            )
             recorded_import_price_points, recorded_export_price_points = (
                 recorded_price_series
             )
@@ -1513,8 +1551,8 @@ class SolarBiasCorrectionService:
             is_today=target_date == today,
             is_future=target_date > today,
             training_explainability=self._explainability if has_profile else None,
-            battery_soc_bounds=await self._battery_soc_bounds_for_date(
-                target_date, timezone, need_past=need_past
+            battery_soc_bounds=self._battery_soc_bounds_for_date(
+                bounds_entity_ids, numeric_history_by_entity
             ),
             house_unmeasured_label=self._house_unmeasured_label(),
             price_unit=price_unit,
@@ -1540,27 +1578,27 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("Battery SoC bounds entity id provider failed")
             return (None, None)
 
-    async def _battery_soc_bounds_for_date(
-        self, target_date: date, local_tz: ZoneInfo, *, need_past: bool
+    def _battery_soc_bounds_for_date(
+        self,
+        bounds_entity_ids: tuple[str | None, str | None],
+        numeric_history_by_entity: dict[str, dict[str, float]],
     ) -> list[BatterySocBoundsPoint]:
         """The SoC window per slot: recorded where the day has elapsed.
 
         Slots the clock has not reached — and elapsed slots the recorder has no
         reading for — fall back to the bounds set right now, which is the only
-        window the battery forecast beyond them was ever built against.
+        window the battery forecast beyond them was ever built against. That
+        fallback is also what a failed read leaves behind, which is why the two
+        bound sensors joining the SoC sensor's one batched read (#245) cannot
+        turn a recorder problem into a drawn zero.
         """
-        min_entity_id, max_entity_id = self._battery_soc_bounds_entity_ids()
-        min_by_slot: dict[str, float] = {}
-        max_by_slot: dict[str, float] = {}
-        if need_past and (min_entity_id or max_entity_id):
-            min_by_slot, max_by_slot = await asyncio.gather(
-                self._load_numeric_history_by_slot(
-                    min_entity_id, target_date, local_tz, label="battery min SoC"
-                ),
-                self._load_numeric_history_by_slot(
-                    max_entity_id, target_date, local_tz, label="battery max SoC"
-                ),
-            )
+        min_entity_id, max_entity_id = bounds_entity_ids
+        min_by_slot = (
+            numeric_history_by_entity.get(min_entity_id) or {} if min_entity_id else {}
+        )
+        max_by_slot = (
+            numeric_history_by_entity.get(max_entity_id) or {} if max_entity_id else {}
+        )
 
         live_min, live_max = self._live_battery_soc_bounds()
         points: list[BatterySocBoundsPoint] = []
@@ -1728,7 +1766,9 @@ class SolarBiasCorrectionService:
             interval_minutes=15,
         )
 
-    def _cumulative_meter_entity_ids(self, consumers: list[dict]) -> list[str]:
+    def _cumulative_meter_entity_ids(
+        self, consumers: list[dict], *, solar_entity_id: str | None = None
+    ) -> list[str]:
         """Every cumulative meter the inspector's actual series read for a day.
 
         The house meter, both grid sides, both battery sides, the solar meter
@@ -1736,10 +1776,11 @@ class SolarBiasCorrectionService:
         to cover. Missing providers and unconfigured meters drop out; the batch
         de-duplicates.
 
-        The solar meter is in the roster even though its series is built from
-        its own read: what the batch needs from it is its publishes, which are
-        part of the evidence that the recorder was up (issue #208). One more
-        entity on a query that already carries a dozen costs nothing.
+        The solar meter is in the roster twice over: its publishes are part of
+        the evidence that the recorder was up (issue #208), and its own actual
+        series is the batch's solar column rather than a read of its own
+        (#245). ``solar_entity_id`` is passed in when the caller has already
+        resolved it, so one inspector day resolves it once.
 
         A provider that raises costs only its own meter here. Its series still
         calls it and still fails, and its own error boundary still degrades that
@@ -1756,11 +1797,8 @@ class SolarBiasCorrectionService:
                 _LOGGER.exception("Meter entity id provider failed for inspector")
                 return None
 
-        try:
-            solar_entity_id, *_ = self._energy_meter_entity_ids()
-        except Exception:
-            _LOGGER.exception("Failed to resolve the solar meter for inspector")
-            solar_entity_id = None
+        if solar_entity_id is None:
+            solar_entity_id = self._solar_meter_entity_id()
 
         candidates = [
             solar_entity_id,
@@ -2163,36 +2201,54 @@ class SolarBiasCorrectionService:
         }
         return _slot_energy_points(net_wh_by_slot, target_date)
 
-    async def _load_battery_soc_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo
-    ) -> list[dict]:
-        """Load per-15-min battery SoC history for target_date."""
+    def _battery_soc_entity_id(self) -> str | None:
+        """The configured SoC sensor, or ``None`` -- and never raising.
+
+        Resolved before the numeric batch is issued rather than inside the
+        series that draws it, so a provider that raises costs the SoC series and
+        leaves the bounds -- which now share its read -- alone.
+        """
         if self._battery_soc_entity_id_provider is None:
+            return None
+        try:
+            return self._battery_soc_entity_id_provider()
+        except Exception:
+            _LOGGER.exception("Battery SoC entity id provider failed for inspector")
+            return None
+
+    @staticmethod
+    def _battery_soc_actual_points(
+        soc_entity_id: str | None,
+        numeric_history_by_entity: dict[str, dict[str, float]],
+    ) -> list[dict]:
+        """Per-15-min battery SoC history, shaped out of the numeric batch."""
+        if not soc_entity_id:
             return []
-        by_slot = await self._load_numeric_history_by_slot(
-            self._battery_soc_entity_id_provider(),
-            target_date,
-            local_tz,
-            label="battery SoC",
-        )
+        by_slot = numeric_history_by_entity.get(soc_entity_id) or {}
         return [{"slot": slot, "pct": pct} for slot, pct in by_slot.items()]
 
-    async def _load_numeric_history_by_slot(
+    async def _load_numeric_history_by_slot_for_entities(
         self,
-        entity_id: str | None,
+        entity_ids: Sequence[str | None],
         target_date: date,
         local_tz: ZoneInfo,
-        *,
-        label: str,
-    ) -> dict[str, float]:
-        """Sample a numeric entity's history onto the day's 15-minute slots.
+    ) -> dict[str, dict[str, float]]:
+        """Sample several numeric entities' history onto the day's 15-minute slots.
 
-        A slot takes the last value the entity held at or before its start, so
-        an entity that goes unavailable holds its previous reading rather than
-        leaving a hole. Slots before the entity's first reading are absent, as
-        are slots the clock has not reached yet.
+        The battery SoC sensor and the two SoC-bound sensors share a day, a grid
+        and a sampling rule, and used to cost a recorder round-trip each. The
+        recorder answers from one DB executor thread, so those were three serial
+        trips however they were awaited; ``get_significant_states`` takes a list
+        of entity ids, which makes them one (#245). Each entity's timeline is
+        still parsed and sampled on its own, so nothing about the per-series
+        semantics changes -- only how often the recorder is asked.
+
+        Returned keyed by entity id; an entity the recorder has nothing for maps
+        to ``{}``, and so does every entity when the read fails, which leaves
+        each series to its own missing-data fallback rather than to zeros.
         """
-        if not entity_id:
+        entity_ids = [entity_id for entity_id in dict.fromkeys(entity_ids) if entity_id]
+        if not entity_ids:
             return {}
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
         local_end = local_start + timedelta(days=1)
@@ -2200,47 +2256,20 @@ class SolarBiasCorrectionService:
         end_utc = dt_util.as_utc(local_end)
         try:
             states_by_entity = await _get_significant_states_safe(
-                self._hass, start_utc, end_utc, [entity_id]
+                self._hass, start_utc, end_utc, list(entity_ids)
             )
         except Exception:
-            _LOGGER.exception("Failed to load %s history for inspector", label)
+            _LOGGER.exception("Failed to load numeric history for inspector")
             return {}
-        states = (states_by_entity or {}).get(entity_id) or []
-        if not states:
-            return {}
-        timeline: list[tuple[datetime, float]] = []
-        for state in states:
-            raw = getattr(state, "state", None)
-            try:
-                value = float(raw)
-            except (TypeError, ValueError):
-                continue
-            ts = getattr(state, "last_changed", None) or getattr(
-                state, "last_updated", None
+        return {
+            entity_id: _numeric_history_by_slot(
+                (states_by_entity or {}).get(entity_id) or [],
+                target_date,
+                local_start=local_start,
+                local_tz=local_tz,
             )
-            if ts is None:
-                continue
-            timeline.append((dt_util.as_local(ts), value))
-        if not timeline:
-            return {}
-        timeline.sort(key=lambda pair: pair[0])
-        _SLOT_MINUTES = 15
-        local_now = datetime.now(local_tz)
-        is_today = target_date == local_now.date()
-        by_slot: dict[str, float] = {}
-        cursor = 0
-        current: float | None = None
-        for slot_index in range(96):
-            slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
-            if is_today and slot_start > local_now:
-                break
-            while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
-                current = timeline[cursor][1]
-                cursor += 1
-            if current is None:
-                continue
-            by_slot[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = current
-        return by_slot
+            for entity_id in entity_ids
+        }
 
     @property
     def _current_fingerprint(self) -> str:
@@ -2689,6 +2718,57 @@ def _actual_points_for_date(
         except (TypeError, ValueError):
             continue
     return points
+
+
+def _numeric_history_by_slot(
+    states: list,
+    target_date: date,
+    *,
+    local_start: datetime,
+    local_tz: ZoneInfo,
+) -> dict[str, float]:
+    """One numeric entity's recorder rows, sampled onto the day's 15-minute slots.
+
+    A slot takes the last value the entity held at or before its start, so an
+    entity that goes unavailable holds its previous reading rather than leaving
+    a hole. Slots before the entity's first reading are absent, as are slots the
+    clock has not reached yet.
+    """
+    if not states:
+        return {}
+    timeline: list[tuple[datetime, float]] = []
+    for state in states:
+        raw = getattr(state, "state", None)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        ts = getattr(state, "last_changed", None) or getattr(
+            state, "last_updated", None
+        )
+        if ts is None:
+            continue
+        timeline.append((dt_util.as_local(ts), value))
+    if not timeline:
+        return {}
+    timeline.sort(key=lambda pair: pair[0])
+    _SLOT_MINUTES = 15
+    local_now = datetime.now(local_tz)
+    is_today = target_date == local_now.date()
+    by_slot: dict[str, float] = {}
+    cursor = 0
+    current: float | None = None
+    for slot_index in range(96):
+        slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
+        if is_today and slot_start > local_now:
+            break
+        while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
+            current = timeline[cursor][1]
+            cursor += 1
+        if current is None:
+            continue
+        by_slot[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = current
+    return by_slot
 
 
 async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):

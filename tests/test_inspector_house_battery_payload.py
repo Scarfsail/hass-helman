@@ -109,9 +109,6 @@ HOUSE_FC_POINTS = [
 HOUSE_ACTUAL_POINTS = [
     {"timestamp": f"{TARGET_DATE}T00:00:00+02:00", "wh": 180.0}
 ]
-BATTERY_SOC_ACTUAL = [
-    {"slot": "00:00", "pct": 88.0}
-]
 BATTERY_SNAPSHOT = {
     "status": "available",
     "series": [
@@ -162,7 +159,10 @@ def _slot_energy_kwh_by_entity(
 
 
 async def _inspector_payload(
-    _history=None, _consumer_slot_by_entity=None, **service_kwargs
+    _history=None,
+    _consumer_slot_by_entity=None,
+    _numeric_read_fails=False,
+    **service_kwargs,
 ):
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
@@ -191,16 +191,28 @@ async def _inspector_payload(
         last_outcome="profile_trained",
     )
 
-    if _history is not None:
-        service._load_numeric_history_by_slot = _history
+    # The battery SoC sensor and the two SoC-bound sensors come out of one
+    # batched numeric read, so a test seeds that one read by entity id.
+    numeric_history = {"sensor.battery_soc": {"00:00": 88.0}, **(_history or {})}
+
+    async def _numeric_batch(entity_ids, *args, **kwargs):
+        # What the reader itself returns when the recorder read raises: nothing
+        # for anybody, rather than an empty map per entity.
+        if _numeric_read_fails:
+            return {}
+        return {
+            entity_id: numeric_history.get(entity_id, {})
+            for entity_id in entity_ids
+            if entity_id
+        }
+
+    service._load_numeric_history_by_slot_for_entities = _numeric_batch
 
     old_now = service_mod.dt_util.now
-    old_actuals = service_mod.load_actuals_for_day
     try:
         service_mod.dt_util.now = lambda: datetime.fromisoformat(
             "2026-05-11T10:00:00+02:00"
         )
-        service_mod.load_actuals_for_day = AsyncMock(return_value={})
         with patch.object(
             service_mod,
             "load_house_forecast_points_for_day",
@@ -209,10 +221,6 @@ async def _inspector_payload(
             service,
             "_load_house_actual_for_date",
             AsyncMock(return_value=HOUSE_ACTUAL_POINTS),
-        ), patch.object(
-            service,
-            "_load_battery_soc_actual_for_date",
-            AsyncMock(return_value=BATTERY_SOC_ACTUAL),
         ), patch.object(
             service,
             "_load_slot_energy_kwh_for_entities",
@@ -226,7 +234,6 @@ async def _inspector_payload(
             return await service.async_get_inspector_day(TARGET_DATE)
     finally:
         service_mod.dt_util.now = old_now
-        service_mod.load_actuals_for_day = old_actuals
 
 
 class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
@@ -439,18 +446,16 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
     async def test_battery_soc_bounds_prefer_recorded_history_per_slot(self):
         # The floor was raised to 30% for the second slot of the day; the rest of
         # the day has no reading and falls back to the bounds set right now.
-        async def _history(entity_id, *args, **kwargs):
-            if entity_id == "sensor.min_soc":
-                return {"00:00": 10.0, "00:15": 30.0}
-            return {"00:00": 95.0, "00:15": 80.0}
-
         payload = await _inspector_payload(
             battery_soc_bounds_provider=lambda: (10.0, 100.0),
             battery_soc_bounds_entity_id_provider=lambda: (
                 "sensor.min_soc",
                 "sensor.max_soc",
             ),
-            _history=_history,
+            _history={
+                "sensor.min_soc": {"00:00": 10.0, "00:15": 30.0},
+                "sensor.max_soc": {"00:00": 95.0, "00:15": 80.0},
+            },
         )
 
         bounds = {b["slot"]: b for b in payload["batterySocBounds"]}
@@ -470,3 +475,23 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         payload = await _inspector_payload(battery_soc_bounds_provider=_boom)
 
         self.assertEqual(payload["batterySocBounds"], [])
+
+    async def test_a_failed_numeric_read_falls_back_and_manufactures_no_zeros(self):
+        # SoC and both bounds share one recorder read now, so a read that fails
+        # costs all three at once. Each still degrades the way it always did:
+        # the bounds fall back to the window set right now — never to zero — and
+        # the SoC series is absent rather than a flat line at nought.
+        payload = await _inspector_payload(
+            battery_soc_bounds_provider=lambda: (10.0, 95.0),
+            battery_soc_bounds_entity_id_provider=lambda: (
+                "sensor.min_soc",
+                "sensor.max_soc",
+            ),
+            _numeric_read_fails=True,
+        )
+
+        bounds = payload["batterySocBounds"]
+        self.assertEqual(len(bounds), 96)
+        self.assertEqual(bounds[0], {"slot": "00:00", "minPct": 10.0, "maxPct": 95.0})
+        self.assertEqual(payload["series"]["batterySocActual"], [])
+        self.assertFalse(payload["availability"]["hasBatterySocActual"])

@@ -350,6 +350,42 @@ def _day_window(
     return local_start, local_end
 
 
+def slot_actuals_from_batched_slot_energy(
+    slot_energy_kwh: dict[datetime, float] | None,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> dict[str, float]:
+    """The day's solar actuals out of a batched meter read, not a second one.
+
+    The inspector already reads the solar meter as part of its one cumulative
+    meter batch -- it has to, because the batch's liveness trace is what tells
+    that meter's quiet nights apart from a recorder outage (#208) -- and the
+    batch parses, unwraps and samples it exactly as :func:`load_actuals_for_day`
+    would. All that is left is the day's own cutoff: the batch spans the whole
+    local day for every meter, while the actuals stop at the current *completed*
+    slot on today, so the running slot and the slots after it are dropped here.
+    An elapsed day keeps every slot.
+
+    ``slot_energy_kwh`` is keyed by UTC slot start and carries kWh, the shape
+    :class:`~custom_components.helman.recorder_hourly_series.SlotEnergyBatch`
+    hands back per entity; the result is ``{"HH:MM": wh}`` like every other
+    actuals reader. ``None`` -- no solar meter configured, or a read that
+    failed -- gives an empty day, never a day of zeros.
+    """
+    if not slot_energy_kwh:
+        return {}
+    _, local_end = _day_window(target_date, local_now=local_now)
+    end_utc = dt_util.as_utc(local_end)
+    return _slot_actuals_from_slot_energy(
+        {
+            slot_start: value_kwh
+            for slot_start, value_kwh in slot_energy_kwh.items()
+            if slot_start < end_utc
+        }
+    )
+
+
 def _slot_actuals_from_slot_energy(
     values_by_slot: dict[datetime, float],
 ) -> dict[str, float]:
