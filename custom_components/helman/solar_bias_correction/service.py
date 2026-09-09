@@ -652,12 +652,8 @@ class SolarBiasCorrectionService:
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
 
-        raw_solar_entity = self._cfg.total_energy_entity_id
-        solar_entity = (
-            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
-        )
         return (
-            solar_entity,
+            self._configured_solar_meter_entity_id(),
             _entity_id(self._grid_import_energy_entity_id_provider),
             _entity_id(self._grid_export_energy_entity_id_provider),
             _entity_id(self._house_energy_entity_id_provider),
@@ -665,21 +661,22 @@ class SolarBiasCorrectionService:
             _entity_id(self._battery_discharge_energy_entity_id_provider),
         )
 
-    def _solar_meter_entity_id(self) -> str | None:
-        """The configured solar meter, or ``None`` -- and never raising.
-
-        Three inspector call sites need it and all three want the same
-        degradation: a config that cannot say costs the solar series and
-        nothing else. It comes from :meth:`_energy_meter_entity_ids` rather
-        than from ``cfg`` directly so there is one definition of which entity
-        the meter is.
-        """
-        try:
-            solar_entity_id, *_ = self._energy_meter_entity_ids()
-        except Exception:
-            _LOGGER.exception("Failed to resolve the solar meter for inspector")
+    def _configured_solar_meter_entity_id(self) -> str | None:
+        """The normalized solar meter id from bias configuration."""
+        raw_entity_id = self._cfg.total_energy_entity_id
+        if not isinstance(raw_entity_id, str):
             return None
-        return solar_entity_id
+        entity_id = raw_entity_id.strip()
+        return entity_id or None
+
+    def _solar_meter_entity_id(self) -> str | None:
+        """The configured solar meter, or ``None``.
+
+        Resolve it independently of the other meter providers so a failure in
+        one of those providers only costs its own series. Both inspector meter
+        rosters share the normalization helper above.
+        """
+        return self._configured_solar_meter_entity_id()
 
     async def _async_history_floor(self, local_now: datetime) -> date:
         """The oldest date the inspector may be browsed back to.

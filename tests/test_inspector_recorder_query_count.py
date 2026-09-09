@@ -292,6 +292,51 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
         # is that batch's solar column, not a second read of the same meter.
         self.assertEqual(_reads_touching(SOLAR_METER), [QUERIES["batched"][0]])
 
+    async def test_unrelated_provider_failure_keeps_solar_actuals(self):
+        service = _make_service()
+
+        def _raise_house_provider():
+            raise RuntimeError("house meter unavailable")
+
+        service._house_energy_entity_id_provider = _raise_house_provider
+        requested_entity_ids: list[str] = []
+
+        async def _load_meter_batch(entity_ids, target_date, local_tz):
+            requested_entity_ids.extend(entity_ids)
+            slot_start = datetime.combine(
+                target_date,
+                datetime.min.time(),
+                tzinfo=local_tz,
+            ).replace(hour=8)
+            return recorder_series_mod.SlotEnergyBatch(
+                by_entity={SOLAR_METER: {slot_start: 0.25}},
+                liveness_instants=[slot_start],
+            )
+
+        service._load_slot_energy_kwh_for_entities = _load_meter_batch
+
+        with _counting_queries(), _keeping_raw_states(), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            payload = await service.async_get_inspector_day(TARGET_DATE)
+
+        self.assertIn(SOLAR_METER, requested_entity_ids)
+        self.assertEqual(
+            payload["series"]["actual"],
+            [
+                {
+                    "timestamp": "2026-05-10T08:00:00+02:00",
+                    "valueWh": 250.0,
+                }
+            ],
+        )
+
     async def test_soc_and_both_bounds_cost_one_numeric_read(self):
         service = _make_service()
 
