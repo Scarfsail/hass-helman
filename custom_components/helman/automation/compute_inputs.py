@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..appliances.state import AppliancesRuntimeRegistry
     from ..battery_state import BatteryLiveState
 
 
@@ -66,6 +67,13 @@ class ComputeInputs:
     """
 
     battery_live_state: "BatteryLiveState | None" = None
+    # The registry the run computes against, pinned on the loop with everything
+    # else. The coordinator rebinds ``_appliances_registry`` whenever a climate
+    # entity's capabilities are re-resolved, which several loop-side request
+    # handlers do; a compute path reading the attribute from a worker could
+    # otherwise cost the projection against one version of an appliance and
+    # optimize against another within a single run.
+    appliances_registry: "AppliancesRuntimeRegistry | None" = None
     battery_actual_history: list[dict[str, Any]] = field(default_factory=list)
     vehicle_remaining_capacity_kwh_by_vehicle_id: dict[str, float | None] = field(
         default_factory=dict
