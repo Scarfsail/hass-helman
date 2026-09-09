@@ -350,27 +350,28 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
                 _FakeDtUtil.as_utc(DAY + timedelta(minutes=30)),
             ),
         )
-        # The last read of the day is an hour, not twenty-four: the boundaries
-        # the write margin still leaves open, plus the quarter hour since the
-        # previous refresh.
+        # The last read of the day is an hour and a quarter, not twenty-four:
+        # the boundaries the write margin still leaves open -- half an hour
+        # measured from the read, so back to 22:45 -- plus the rest of the slot
+        # in progress.
         last_start, last_end = warm_recorder.windows[-1]
         self.assertEqual(
             (last_start, last_end),
             (
-                _FakeDtUtil.as_utc(DAY + timedelta(hours=23)),
+                _FakeDtUtil.as_utc(DAY + timedelta(hours=22, minutes=45)),
                 _FakeDtUtil.as_utc(DAY + timedelta(days=1)),
             ),
         )
         # Every read but the first is bounded by the same rule.
         self.assertTrue(
             all(
-                end - start <= timedelta(hours=1, minutes=15)
+                end - start <= timedelta(hours=1, minutes=30)
                 for start, end in warm_recorder.windows[1:]
             )
         )
         # Which is the reduction the issue asked to be measured: rows, not
         # awaits. The cold sequence rereads the day 95 times.
-        self.assertLess(warm_recorder.rows_returned * 10, cold_recorder.rows_returned)
+        self.assertLess(warm_recorder.rows_returned * 8, cold_recorder.rows_returned)
 
     async def test_a_dip_and_rebound_is_read_as_the_reading_it_was(self) -> None:
         """SoC is a level, not a counter: no reset logic may touch it.
@@ -475,6 +476,43 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(warm, cold)
         self.assertNotEqual(warm[boundary], carried)
         self.assertAlmostEqual(warm[boundary], 90.0, places=6)
+
+    async def test_the_settle_margin_survives_an_hourly_grid(self) -> None:
+        """The margin is measured from the read, not from the open slot's end.
+
+        ``build_battery_actual_history`` reads on an hourly grid. Measured
+        against the end of the slot in progress, the thirty-minute write margin
+        would already be spent by the time that slot closed, and the 13:59
+        reading -- committed just after the 14:00 refresh read past it -- would
+        be frozen at the stale carry for the rest of the day.
+        """
+        states = _soc_states(
+            start=DAY + timedelta(hours=10),
+            end=DAY + timedelta(hours=13),
+            step=timedelta(minutes=30),
+            first_value=60.0,
+            increment=0.5,
+        )
+        recorder = _Recorder(states)
+        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+
+        early = await self._read(
+            reader, recorder, DAY + timedelta(hours=14), interval_minutes=60
+        )
+        boundary = _FakeDtUtil.as_utc(DAY + timedelta(hours=13))
+        carried = early[boundary]
+
+        recorder.states.append(_state(DAY + timedelta(hours=13, minutes=59), 99.0))
+        warm = await self._read(
+            reader, recorder, DAY + timedelta(hours=15), interval_minutes=60
+        )
+        cold, _ = await self._read_cold(
+            recorder.states, DAY + timedelta(hours=15), interval_minutes=60
+        )
+
+        self.assertEqual(warm, cold)
+        self.assertNotEqual(warm[boundary], carried)
+        self.assertAlmostEqual(warm[boundary], 99.0, places=6)
 
     async def test_a_failed_read_freezes_nothing(self) -> None:
         states = self._eventful_day()
@@ -661,13 +699,12 @@ class SharedReaderAcrossConsumersTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(warming), 48)
         first_window, second_window = recorder.windows
         self.assertEqual(first_window[0], _FakeDtUtil.as_utc(DAY))
-        # Forty-five minutes instead of twelve hours: everything settled is
-        # already held.
+        # An hour instead of twelve hours: everything settled is already held.
         self.assertEqual(
             second_window[0],
-            _FakeDtUtil.as_utc(DAY + timedelta(hours=11, minutes=30)),
+            _FakeDtUtil.as_utc(DAY + timedelta(hours=11, minutes=15)),
         )
-        self.assertEqual(second_window[1] - second_window[0], timedelta(minutes=45))
+        self.assertEqual(second_window[1] - second_window[0], timedelta(hours=1))
 
 
 if __name__ == "__main__":

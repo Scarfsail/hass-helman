@@ -922,7 +922,6 @@ class TodaySlotBoundaryStateReader:
         ]
         freeze_at = self._find_freeze_boundary(
             boundaries,
-            utc_end=utc_end,
             slot_duration=slot_duration,
         )
 
@@ -971,19 +970,23 @@ class TodaySlotBoundaryStateReader:
     def _find_freeze_boundary(
         boundaries: list[datetime],
         *,
-        utc_end: datetime,
         slot_duration: timedelta,
     ) -> datetime | None:
         """The newest boundary whose reading can never change again.
 
-        Its own slot has to have ended inside the queried span, with the
-        recorder's write margin on top -- see
+        The margin is measured from the read, which is inside the last
+        boundary's own slot -- not from ``utc_end``, which is that slot's end
+        and so up to a whole slot in the future. Measuring against the end
+        would spend the write margin on time that has not passed yet, leaving
+        nothing of it at an interval of thirty minutes or more, and a reading
+        the recorder commits late would be frozen stale -- see
         ``_BOUNDARY_WRITE_SETTLE_WINDOW``.
         """
+        read_at = boundaries[-1]
         settled = [
             boundary
             for boundary in boundaries
-            if boundary + slot_duration + _BOUNDARY_WRITE_SETTLE_WINDOW <= utc_end
+            if boundary + slot_duration + _BOUNDARY_WRITE_SETTLE_WINDOW <= read_at
         ]
         return settled[-1] if settled else None
 
