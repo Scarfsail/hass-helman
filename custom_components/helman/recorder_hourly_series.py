@@ -4,7 +4,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import (
@@ -44,6 +44,16 @@ _ENERGY_TOLERANCE_KWH = 1e-6
 #: the meter's own value, which is why the threshold has to be relative to it
 #: rather than an absolute number of kWh.
 _RESET_FRACTION = 0.9
+
+#: How long after a slot has ended its boundary sample can still move.
+#:
+#: A boundary reading is settled once every write that could claim it is in the
+#: past, which is one slot after the boundary itself -- but the recorder commits
+#: a row some time after the instant it stamps it with, so a write made just
+#: before a slot ended can still land in the database after it has. The margin
+#: is what keeps a settled prefix from freezing a sample the recorder had not
+#: finished writing; two extra quarter-hour boundaries is a cheap price for it.
+_BOUNDARY_WRITE_SETTLE_WINDOW = timedelta(minutes=30)
 
 
 def _carry_staleness_limit(interval_minutes: int) -> timedelta:
@@ -591,12 +601,60 @@ async def query_cumulative_hourly_energy_changes(
 
 
 @dataclass(frozen=True)
-class _FrozenSlotBoundaries:
-    """A day's settled boundary samples, and where to resume reading them."""
+class _FrozenDayPrefix:
+    """What a kept prefix of today has to agree on before it can be resumed.
+
+    The three fields are the whole of the reuse key. ``local_date`` restarts
+    the series at local midnight -- which is also what a timezone change moves
+    -- ``interval_minutes`` because a prefix sampled on one grid says nothing
+    about another, and ``frozen_through`` because a prefix reaching past the
+    window that is being asked for is a clock that stepped backwards. The
+    entity is the key the prefix is stored under, so a reconfigured entity id
+    simply finds nothing.
+    """
 
     local_date: date
     interval_minutes: int
     frozen_through: datetime
+
+
+_FrozenPrefixT = TypeVar("_FrozenPrefixT", bound=_FrozenDayPrefix)
+
+
+def _take_resumable_prefix(
+    frozen_by_entity: dict[str, _FrozenPrefixT],
+    entity_id: str,
+    *,
+    local_date: date,
+    interval_minutes: int,
+    utc_end: datetime,
+) -> _FrozenPrefixT | None:
+    """The kept prefix this read may resume from, dropping it if it may not.
+
+    A new local day restarts the series, a different interval samples a
+    different grid, and a clock that stepped backwards leaves the prefix ahead
+    of the window. Any of them and the prefix cannot be resumed, so it is
+    discarded and the day is read in full once.
+    """
+    frozen = frozen_by_entity.get(entity_id)
+    if frozen is None:
+        return None
+
+    if (
+        frozen.local_date != local_date
+        or frozen.interval_minutes != interval_minutes
+        or frozen.frozen_through > utc_end
+    ):
+        del frozen_by_entity[entity_id]
+        return None
+
+    return frozen
+
+
+@dataclass(frozen=True)
+class _FrozenSlotBoundaries(_FrozenDayPrefix):
+    """A day's settled boundary samples, and where to resume reading them."""
+
     samples: dict[datetime, _BoundarySample]
     unwrap_state: _UnwrapState
 
@@ -649,7 +707,8 @@ class TodaySlotEnergyReader:
             dt_util.as_utc(boundary) for boundary in [*local_slot_starts, local_end]
         ]
         utc_end = utc_boundaries[-1]
-        frozen = self._take_resumable_prefix(
+        frozen = _take_resumable_prefix(
+            self._frozen_by_entity,
             entity_id,
             local_date=local_day_start.date(),
             interval_minutes=interval_minutes,
@@ -755,31 +814,6 @@ class TodaySlotEnergyReader:
         ]
         return settled[-1] if settled else None
 
-    def _take_resumable_prefix(
-        self,
-        entity_id: str,
-        *,
-        local_date: date,
-        interval_minutes: int,
-        utc_end: datetime,
-    ) -> _FrozenSlotBoundaries | None:
-        frozen = self._frozen_by_entity.get(entity_id)
-        if frozen is None:
-            return None
-
-        if (
-            frozen.local_date != local_date
-            or frozen.interval_minutes != interval_minutes
-            or frozen.frozen_through > utc_end
-        ):
-            # A new local day restarts the series, and a clock that stepped
-            # backwards leaves the prefix ahead of the window. Either way the
-            # prefix cannot be resumed and the day is read in full once.
-            del self._frozen_by_entity[entity_id]
-            return None
-
-        return frozen
-
     def _freeze(
         self,
         entity_id: str,
@@ -810,37 +844,180 @@ class TodaySlotEnergyReader:
         )
 
 
-async def query_slot_boundary_state_values(
-    hass: HomeAssistant,
-    entity_id: str,
-    reference_time: datetime,
-    *,
-    interval_minutes: int,
-) -> dict[datetime, float]:
-    local_boundaries = get_today_completed_local_slot_boundaries(
-        reference_time,
-        interval_minutes=interval_minutes,
-    )
-    if not local_boundaries:
-        return {}
+@dataclass(frozen=True)
+class _FrozenBoundaryValues(_FrozenDayPrefix):
+    """A day's settled boundary readings of one numeric entity.
 
-    boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
-    history = await get_instance(hass).async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            boundaries[0],
-            None,
-            entity_id,
-            True,
-            False,
-            None,
-            True,
+    ``carried_value`` is the reading in force at ``frozen_through``. A boundary
+    with no write inside its own slot lives off the last one before it, which
+    can be hours old and can be hidden from the resumed window by an
+    ``unavailable`` row the recorder replays in its place -- so the value is
+    kept rather than re-derived.
+    """
+
+    values: dict[datetime, float]
+    carried_value: float | None
+
+
+class TodaySlotBoundaryStateReader:
+    """Today's numeric state at every slot boundary, re-reading only what is new.
+
+    The counterpart of :class:`TodaySlotEnergyReader` for an entity whose state
+    *is* the value -- battery state of charge is the one this exists for. It
+    keeps the numeric-state semantics of
+    :func:`_sample_rate_values_at_boundaries` exactly: a boundary takes the
+    first write made inside its own slot and falls back to the last reading
+    before it, and nothing here unwraps a counter or looks for a reset, because
+    a percentage that falls has simply fallen.
+
+    That sampling rule is also what settles a boundary: once its own slot has
+    ended, no future write can claim it, so everything but the newest couple of
+    boundaries is kept and only the tail is queried again. Instances have to
+    outlive a single refresh to be worth anything; the coordinator owns one and
+    hands it to every consumer of the same series.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._frozen_by_entity: dict[str, _FrozenBoundaryValues] = {}
+
+    async def async_query_slot_boundary_state_values(
+        self,
+        entity_id: str,
+        reference_time: datetime,
+        *,
+        interval_minutes: int,
+    ) -> dict[datetime, float]:
+        local_boundaries = get_today_completed_local_slot_boundaries(
+            reference_time,
+            interval_minutes=interval_minutes,
         )
-    )
-    states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    return _sample_rate_values_at_boundaries(
-        states, boundaries, interval_minutes=interval_minutes
-    )
+        if not local_boundaries:
+            return {}
+
+        boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+        slot_duration = timedelta(minutes=interval_minutes)
+        # The newest boundary prefers a write made inside its own slot, so the
+        # window has to reach one slot past it -- and no further. The read this
+        # replaces left the end open, which asks the recorder for every row to
+        # the end of the table when the last one that can matter is this.
+        utc_end = boundaries[-1] + slot_duration
+        local_date = _get_local_day_start(reference_time).date()
+        frozen = _take_resumable_prefix(
+            self._frozen_by_entity,
+            entity_id,
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            utc_end=utc_end,
+        )
+        # Resuming from the frozen boundary itself rather than from the first
+        # boundary still open: the recorder replays the reading in force at the
+        # window start, which is exactly the carry the first pending boundary
+        # falls back on when its own slot holds no write.
+        query_start = frozen.frozen_through if frozen else boundaries[0]
+        pending_boundaries = [
+            boundary
+            for boundary in boundaries
+            if frozen is None or boundary > frozen.frozen_through
+        ]
+        freeze_at = self._find_freeze_boundary(
+            boundaries,
+            slot_duration=slot_duration,
+        )
+
+        carried_value = frozen.carried_value if frozen else None
+
+        def _query_and_parse() -> tuple[dict[datetime, float], float | None]:
+            history = state_changes_during_period(
+                self._hass,
+                query_start,
+                utc_end,
+                entity_id,
+                True,
+                False,
+                None,
+                True,
+            )
+            parsed = _parse_state_values(_states_for_entity(history, entity_id))
+            return (
+                _sample_rate_values_from_parsed(
+                    parsed,
+                    pending_boundaries,
+                    interval_minutes=interval_minutes,
+                    carried_value=carried_value,
+                ),
+                None
+                if freeze_at is None
+                else _value_in_force_at(parsed, freeze_at, fallback=carried_value),
+            )
+
+        pending_values, carry_at_freeze = await get_instance(
+            self._hass
+        ).async_add_executor_job(_query_and_parse)
+        values = {**(frozen.values if frozen else {}), **pending_values}
+        self._freeze(
+            entity_id,
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            freeze_at=freeze_at,
+            previously_frozen_through=frozen.frozen_through if frozen else None,
+            values=values,
+            carried_value=carry_at_freeze,
+        )
+        return values
+
+    @staticmethod
+    def _find_freeze_boundary(
+        boundaries: list[datetime],
+        *,
+        slot_duration: timedelta,
+    ) -> datetime | None:
+        """The newest boundary whose reading can never change again.
+
+        The margin is measured from the read, which is inside the last
+        boundary's own slot -- not from ``utc_end``, which is that slot's end
+        and so up to a whole slot in the future. Measuring against the end
+        would spend the write margin on time that has not passed yet, leaving
+        nothing of it at an interval of thirty minutes or more, and a reading
+        the recorder commits late would be frozen stale -- see
+        ``_BOUNDARY_WRITE_SETTLE_WINDOW``.
+        """
+        read_at = boundaries[-1]
+        settled = [
+            boundary
+            for boundary in boundaries
+            if boundary + slot_duration + _BOUNDARY_WRITE_SETTLE_WINDOW <= read_at
+        ]
+        return settled[-1] if settled else None
+
+    def _freeze(
+        self,
+        entity_id: str,
+        *,
+        local_date: date,
+        interval_minutes: int,
+        freeze_at: datetime | None,
+        previously_frozen_through: datetime | None,
+        values: dict[datetime, float],
+        carried_value: float | None,
+    ) -> None:
+        if freeze_at is None or (
+            previously_frozen_through is not None
+            and freeze_at <= previously_frozen_through
+        ):
+            return
+
+        self._frozen_by_entity[entity_id] = _FrozenBoundaryValues(
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            frozen_through=freeze_at,
+            values={
+                boundary: value
+                for boundary, value in values.items()
+                if boundary <= freeze_at
+            },
+            carried_value=carried_value,
+        )
 
 
 async def query_slot_boundary_state_values_for_entities(
@@ -856,7 +1033,7 @@ async def query_slot_boundary_state_values_for_entities(
     The caller names the window the way :func:`query_cumulative_slot_energy_changes`
     does, so a day that ended a week ago can be sampled as readily as the one in
     progress -- the difference from the today-scoped
-    :func:`query_slot_boundary_state_values`.
+    :class:`TodaySlotBoundaryStateReader`.
 
     Boundaries are the slot *starts* in ``[local_start, local_end)``. Each takes
     the first state written *inside* its own slot, and only falls back to the
@@ -1119,11 +1296,45 @@ def _build_slot_energy_changes_from_boundaries(
     return values_by_slot
 
 
+def _parse_state_values(states: list[Any]) -> list[tuple[datetime, float]]:
+    """A recorder's rows as ``(instant, value)``, oldest first.
+
+    Rows without a timestamp and rows whose state is not a number --
+    ``unavailable`` and ``unknown``, which every sensor emits sooner or later --
+    are dropped rather than read as a value.
+    """
+    parsed: list[tuple[datetime, float]] = []
+    for state in states:
+        last_updated = getattr(state, "last_updated", None)
+        if last_updated is None:
+            continue
+        value = _read_float(getattr(state, "state", None))
+        if value is None:
+            continue
+        parsed.append((dt_util.as_utc(last_updated), value))
+    parsed.sort(key=lambda item: item[0])
+    return parsed
+
+
+def _value_in_force_at(
+    parsed: list[tuple[datetime, float]],
+    instant: datetime,
+    *,
+    fallback: float | None,
+) -> float | None:
+    """The last reading written at or before ``instant``, else ``fallback``."""
+    for parsed_instant, value in reversed(parsed):
+        if parsed_instant <= instant:
+            return value
+    return fallback
+
+
 def _sample_rate_values_at_boundaries(
     states: list[Any],
     boundaries: list[datetime],
     *,
     interval_minutes: int,
+    carried_value: float | None = None,
 ) -> dict[datetime, float]:
     """Sample a rate entity per slot, preferring the write made inside the slot.
 
@@ -1143,26 +1354,36 @@ def _sample_rate_values_at_boundaries(
     single value can do better, and the alternative errs by a whole slot instead
     of part of one.
     """
-    if not states or not boundaries:
-        return {}
+    return _sample_rate_values_from_parsed(
+        _parse_state_values(states),
+        boundaries,
+        interval_minutes=interval_minutes,
+        carried_value=carried_value,
+    )
 
-    parsed: list[tuple[datetime, float]] = []
-    for state in states:
-        last_updated = getattr(state, "last_updated", None)
-        if last_updated is None:
-            continue
-        value = _read_float(getattr(state, "state", None))
-        if value is None:
-            continue
-        parsed.append((dt_util.as_utc(last_updated), value))
-    if not parsed:
+
+def _sample_rate_values_from_parsed(
+    parsed: list[tuple[datetime, float]],
+    boundaries: list[datetime],
+    *,
+    interval_minutes: int,
+    carried_value: float | None = None,
+) -> dict[datetime, float]:
+    """:func:`_sample_rate_values_at_boundaries` over rows already parsed.
+
+    ``carried_value`` is the reading in force before the window opened, which a
+    resumed read holds from its settled prefix. It cannot be recovered from the
+    window's own rows: the recorder replays whatever was last written, and a
+    sensor that went ``unavailable`` before the window replays as nothing at
+    all, which would drop every boundary that had been living off the carry.
+    """
+    if not boundaries:
         return {}
-    parsed.sort(key=lambda item: item[0])
 
     span = timedelta(minutes=interval_minutes)
     samples: dict[datetime, float] = {}
     index = 0
-    carried: float | None = None
+    carried = carried_value
     for boundary in boundaries:
         # Everything written before this slot began is only a fallback for it.
         while index < len(parsed) and parsed[index][0] < boundary:
