@@ -14,7 +14,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
-from .actuals import load_actuals_window, slot_actuals_from_batched_slot_energy
+from .actuals import (
+    load_actuals_for_day,
+    load_actuals_window,
+    slot_actuals_from_batched_slot_energy,
+)
 from .adjuster import adjust
 from .battery_forecast_history import (
     BATTERY_NET_FORECAST_CURRENT_ENTITY,
@@ -1004,15 +1008,34 @@ class SolarBiasCorrectionService:
                 # same helper the actuals reader used and against the same
                 # liveness trace, so the day's actuals are a cutoff away from
                 # deltas already in hand rather than a second read of the same
-                # meter (#245). A batch that failed leaves them empty, which is
-                # what a failed read has always left them.
-                actuals_by_slot = slot_actuals_from_batched_slot_energy(
-                    slot_energy_by_entity.get(solar_meter_entity_id)
-                    if solar_meter_entity_id
-                    else None,
-                    target_date,
-                    local_now=local_now,
-                )
+                # meter (#245).
+                if meters_answered:
+                    actuals_by_slot = slot_actuals_from_batched_slot_energy(
+                        slot_energy_by_entity.get(solar_meter_entity_id)
+                        if solar_meter_entity_id
+                        else None,
+                        target_date,
+                        local_now=local_now,
+                    )
+                elif self._cfg is not None:
+                    # The solar series used to be its own read, so a batch that
+                    # failed cost the meter series and left the solar curve
+                    # drawn. Keeping that: the batch is one query for nineteen
+                    # meters, and letting all of them take the solar series down
+                    # with them would blank the whole day -- the purge heuristic
+                    # below cannot rescue it either, since it only trusts a read
+                    # that answered. One extra query, on the failure path only.
+                    try:
+                        actuals_by_slot = await load_actuals_for_day(
+                            self._hass,
+                            self._cfg,
+                            target_date,
+                            local_now=local_now,
+                        )
+                    except Exception:
+                        _LOGGER.exception(
+                            "Failed to load solar actuals for inspector"
+                        )
                 # Nothing anywhere in raw state on an elapsed day, with no
                 # horizon to have predicted it: the recorder has been trimmed
                 # past this day even though it will not say so. Judged on the
@@ -1154,10 +1177,14 @@ class SolarBiasCorrectionService:
         # rather than three (#245). SoC drops out of the roster on a statistics
         # day because the hourly read already carries it, and adding it here
         # would put back exactly the raw-state read that path exists to avoid.
-        soc_entity_id = self._battery_soc_entity_id()
+        # Resolved only where it is read: a provider that raises should not log
+        # a traceback on a future day, or on a statistics day, neither of which
+        # asks the SoC sensor anything.
+        wants_raw_soc = need_past and not reads_statistics
+        soc_entity_id = self._battery_soc_entity_id() if wants_raw_soc else None
         bounds_entity_ids = self._battery_soc_bounds_entity_ids()
         numeric_entity_ids = [
-            *([] if reads_statistics or not need_past else [soc_entity_id]),
+            *([soc_entity_id] if wants_raw_soc else []),
             *(bounds_entity_ids if need_past else ()),
         ]
 
@@ -1744,7 +1771,8 @@ class SolarBiasCorrectionService:
 
         ``by_entity`` is keyed by entity id, each value keyed by UTC slot start,
         and ``liveness_instants`` is the read's record of when the recorder was
-        writing — which the solar actuals read borrows. Daily-resetting
+        writing, which is how a meter that is simply quiet is told apart from a
+        recorder that was down (see ``_is_carry_stale``). Daily-resetting
         meters are fine here: the query unwraps total_increasing resets, and a
         single local day never spans the midnight reset boundary.
 
@@ -1767,7 +1795,7 @@ class SolarBiasCorrectionService:
         )
 
     def _cumulative_meter_entity_ids(
-        self, consumers: list[dict], *, solar_entity_id: str | None = None
+        self, consumers: list[dict], *, solar_entity_id: str | None
     ) -> list[str]:
         """Every cumulative meter the inspector's actual series read for a day.
 
@@ -1796,9 +1824,6 @@ class SolarBiasCorrectionService:
             except Exception:
                 _LOGGER.exception("Meter entity id provider failed for inspector")
                 return None
-
-        if solar_entity_id is None:
-            solar_entity_id = self._solar_meter_entity_id()
 
         candidates = [
             solar_entity_id,
@@ -2259,7 +2284,13 @@ class SolarBiasCorrectionService:
                 self._hass, start_utc, end_utc, list(entity_ids)
             )
         except Exception:
-            _LOGGER.exception("Failed to load numeric history for inspector")
+            # Named, because one read now carries the SoC sensor and both bound
+            # sensors: without the ids the log no longer says which series went
+            # missing, and all three go at once.
+            _LOGGER.exception(
+                "Failed to load numeric history for inspector: %s",
+                ", ".join(entity_ids),
+            )
             return {}
         return {
             entity_id: _numeric_history_by_slot(

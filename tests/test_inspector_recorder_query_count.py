@@ -359,23 +359,23 @@ class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase
             "get_significant_states",
             _count_soc_reads,
         ), patch.multiple(
-                span_mod,
-                statistics_during_period=_statistics_during_period,
-                get_instance=lambda hass: purging_recorder,
-            ), patch(
-                "homeassistant.components.recorder.get_instance",
-                lambda hass: purging_recorder,
-            ), patch.object(
-                service_mod,
-                "load_house_forecast_points_for_day",
-                AsyncMock(return_value=[]),
-            ), patch.object(
-                service,
-                "_load_recorded_price_rails",
-                AsyncMock(return_value=([], [])),
-            ):
-                # today - 1 with one day kept: the day the purge cuts through, so
-                # it reads statistics along with everything older.
+            span_mod,
+            statistics_during_period=_statistics_during_period,
+            get_instance=lambda hass: purging_recorder,
+        ), patch(
+            "homeassistant.components.recorder.get_instance",
+            lambda hass: purging_recorder,
+        ), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            # today - 1 with one day kept: the day the purge cuts through, so
+            # it reads statistics along with everything older.
             await service.async_get_inspector_day("2026-05-10")
 
         self.assertEqual(len(hourly_id_lists), 1)
