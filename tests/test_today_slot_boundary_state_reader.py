@@ -129,7 +129,7 @@ def _replay_window(
     reading in force when the window opens, stamped with the window start --
     which is what a resumed read leans on for its opening carry.
     """
-    window = [state for state in states if start <= state.last_updated < end]
+    window = [state for state in states if start < state.last_updated < end]
     earlier = [state for state in states if state.last_updated < start]
     if earlier:
         window.insert(
@@ -185,6 +185,22 @@ def _soc_states(
 
 
 class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_keeps_change_exactly_on_frozen_boundary(self) -> None:
+        states = [
+            _state(DAY + timedelta(minutes=1), 50),
+            _state(DAY + timedelta(hours=1), 60),
+        ]
+        recorder = _Recorder(states)
+        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        await self._read(reader, recorder, DAY + timedelta(hours=1, minutes=45))
+        # Repeat after the tail itself has settled, to check the saved carry too.
+        for hours in (2, 3):
+            at = DAY + timedelta(hours=hours)
+            actual = await self._read(reader, recorder, at)
+            expected, _ = await self._read_cold(states, at)
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual[_FakeDtUtil.as_utc(at)], 60)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls._dt_patcher = patch.object(

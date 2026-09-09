@@ -389,6 +389,7 @@ async def query_cumulative_slot_energy_changes_for_windows(
                         instants,
                         prepared[index][0],
                         prepared[index][1][-1],
+                        query_start=query_start,
                     ),
                     default_unit=default_unit,
                     utc_boundaries=prepared[index][1],
@@ -410,6 +411,8 @@ def _states_within(
     instants: list[datetime],
     window_start: datetime,
     window_end: datetime,
+    *,
+    query_start: datetime,
 ) -> list[Any]:
     """The rows a read of ``(window_start, window_end)`` alone would have returned.
 
@@ -419,6 +422,11 @@ def _states_within(
     the last row stamped strictly before the start; the carry is prepended
     restamped, which is what ``include_start_time_state`` does with it.
     """
+    # At the outer query's start, a row stamped exactly there is its opening
+    # replay, not a real boundary write. Keep it for every window sharing that
+    # start; interior windows still exclude real writes at their start.
+    if window_start == query_start:
+        return states[: bisect_left(instants, window_end)]
     before = bisect_left(instants, window_start)
     first = bisect_right(instants, window_start)
     last = bisect_left(instants, window_end)
@@ -914,10 +922,9 @@ class TodaySlotBoundaryStateReader:
             interval_minutes=interval_minutes,
             utc_end=utc_end,
         )
-        # Resuming from the frozen boundary itself rather than from the first
-        # boundary still open: the recorder replays the reading in force at the
-        # window start, which is exactly the carry the first pending boundary
-        # falls back on when its own slot holds no write.
+        # Resume at the frozen boundary and retain its cached carry. The
+        # recorder's opening replay precedes that boundary, so it may be older
+        # than a real write exactly on the boundary that we already sampled.
         query_start = frozen.frozen_through if frozen else boundaries[0]
         pending_boundaries = [
             boundary
@@ -943,6 +950,8 @@ class TodaySlotBoundaryStateReader:
                 True,
             )
             parsed = _parse_state_values(_states_for_entity(history, entity_id))
+            if frozen is not None:
+                parsed = [item for item in parsed if item[0] > query_start]
             return (
                 _sample_rate_values_from_parsed(
                     parsed,
@@ -1371,7 +1380,9 @@ class ApplianceRuntimeHistoryReader:
             ]:
                 history = get_significant_states(
                     self._hass,
-                    utc_start,
+                    # Recorder bounds are exclusive. Include a transition at
+                    # midnight, then clip intervals to the requested day below.
+                    utc_start - timedelta(microseconds=1),
                     utc_end,
                     entity_ids=entity_ids,
                     filters=None,

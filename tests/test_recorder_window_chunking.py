@@ -191,6 +191,29 @@ class ChunkedWindowReadTests(unittest.IsolatedAsyncioTestCase):
                     math.ceil(self.DAYS / min(chunk_size, self.DAYS)),
                 )
 
+    async def test_each_chunk_keeps_its_opening_replay(self) -> None:
+        windows = _day_windows(self.FIRST_DAY, 4)
+        recorder = _Recorder(first_day=self.FIRST_DAY, days=4)
+        recorder.states = []
+        for index, (start, _) in enumerate(windows):
+            start = start.astimezone(UTC)
+            recorder.states.extend(
+                [
+                    _FakeState(10 + index * 3, start - timedelta(hours=1)),
+                    _FakeState(11 + index * 3, start + timedelta(minutes=5)),
+                    _FakeState(12 + index * 3, start + timedelta(minutes=20)),
+                ]
+            )
+        expected = await self._read_one_by_one(recorder, windows)
+        for chunk_size in (1, 2, 4):
+            with self.subTest(chunk_size=chunk_size):
+                actual = await self._read(
+                    recorder, windows=windows, chunk_size=chunk_size
+                )
+                self.assertEqual(actual, expected)
+                for (start, _), values in zip(windows, actual):
+                    self.assertEqual(values[start.astimezone(UTC)], 1.0)
+
     async def test_every_window_keeps_its_own_staleness_lookback(self) -> None:
         """Each day is still queried from half an hour before its own midnight."""
         recorder = _Recorder(first_day=self.FIRST_DAY, days=self.DAYS)

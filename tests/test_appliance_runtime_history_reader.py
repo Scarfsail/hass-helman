@@ -151,7 +151,7 @@ def _runs(
 class _Recorder:
     """Several entities' history, honouring the real window bounds.
 
-    ``get_significant_states`` keeps rows stamped at or after the start and
+    ``get_significant_states`` keeps rows stamped strictly after the start and
     strictly before the end, and replays the row in force at the window start
     stamped with the start itself. That last part is what a resumed read leans
     on for the state carried into its first day.
@@ -172,7 +172,7 @@ class _Recorder:
         history: dict[str, list[SimpleNamespace]] = {}
         for entity_id in entity_ids:
             states = self.states_by_entity.get(entity_id, [])
-            window = [row for row in states if start <= row.last_updated < end]
+            window = [row for row in states if start < row.last_updated < end]
             earlier = [row for row in states if row.last_updated < start]
             if earlier:
                 window.insert(
@@ -248,6 +248,26 @@ def _at(day_offset: int, hour: int, minute: int = 0) -> datetime:
 class QueryCountTests(_ReaderHarness):
     """Round-trips follow the windows, not the appliance count."""
 
+    async def test_resume_includes_midnight_transitions(self) -> None:
+        for start, end in ((_at(0, 0), _at(0, 2)), (_at(-1, 22), _at(0, 0))):
+            with self.subTest(start=start, end=end):
+                recorder = _Recorder({"switch.pool": _runs((start, end))})
+                requests = [_request("pool", "switch.pool")]
+                reader = ApplianceRuntimeHistoryReader(_make_hass())
+                await self._query(reader, recorder, requests, at=_at(0, 0, 45))
+                for at in (_at(0, 3), _at(1, 3)):
+                    actual = await self._query(reader, recorder, requests, at=at)
+                    expected = await self._query(
+                        ApplianceRuntimeHistoryReader(_make_hass()),
+                        recorder,
+                        requests,
+                        at=at,
+                    )
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(actual["pool"][start.date()], 2.0)
+                    if end == _at(0, 0):
+                        self.assertEqual(actual["pool"][end.date()], 0.0)
+
     def _fixture(self, appliance_count: int):
         states_by_entity = {}
         requests = []
@@ -277,7 +297,7 @@ class QueryCountTests(_ReaderHarness):
         self.assertEqual(
             recorder.spans[0],
             (
-                _FakeDtUtil.as_utc(_at(-3, 0)),
+                (_FakeDtUtil.as_utc(_at(-3, 0)) - timedelta(microseconds=1)),
                 _FakeDtUtil.as_utc(_at(0, 12)),
             ),
         )
@@ -286,7 +306,7 @@ class QueryCountTests(_ReaderHarness):
         self.assertEqual(
             recorder.spans[1],
             (
-                _FakeDtUtil.as_utc(_at(0, 0)),
+                (_FakeDtUtil.as_utc(_at(0, 0)) - timedelta(microseconds=1)),
                 _FakeDtUtil.as_utc(_at(0, 12, 15)),
             ),
         )
@@ -506,11 +526,13 @@ class LookbackTests(_ReaderHarness):
         self.assertEqual(len(recorder.queries), 2)
         spans = {query[2]: (query[0], query[1]) for query in recorder.queries}
         self.assertEqual(
-            spans[("switch.short",)][0], _FakeDtUtil.as_utc(_at(-1, 0))
+            spans[("switch.short",)][0],
+            _FakeDtUtil.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
         )
         self.assertEqual(
             spans[("switch.long",)][0],
-            _FakeDtUtil.as_utc(datetime(2026, 4, 26, 0, 0, tzinfo=TZ)),
+            _FakeDtUtil.as_utc(datetime(2026, 4, 26, 0, 0, tzinfo=TZ))
+            - timedelta(microseconds=1),
         )
         # The short appliance never sees the fortnight of days the long one needs.
         self.assertEqual(
@@ -552,7 +574,10 @@ class LookbackTests(_ReaderHarness):
             at=_at(0, 12, 15),
         )
 
-        self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-6, 0)))
+        self.assertEqual(
+            recorder.spans[1][0],
+            _FakeDtUtil.as_utc(_at(-6, 0)) - timedelta(microseconds=1),
+        )
         self.assertEqual(widened["pool"][date(2026, 5, 5)], 1.0)
 
 
@@ -569,11 +594,17 @@ class InvalidationTests(_ReaderHarness):
         await self._query(reader, recorder, requests, at=_at(0, 0, 20))
         # Ten past midnight: nothing the recorder wrote for yesterday is
         # guaranteed committed yet, so yesterday is still in the window.
-        self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-1, 0)))
+        self.assertEqual(
+            recorder.spans[1][0],
+            _FakeDtUtil.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
+        )
 
         await self._query(reader, recorder, requests, at=_at(0, 0, 40))
         await self._query(reader, recorder, requests, at=_at(0, 0, 45))
-        self.assertEqual(recorder.spans[3][0], _FakeDtUtil.as_utc(_at(0, 0)))
+        self.assertEqual(
+            recorder.spans[3][0],
+            _FakeDtUtil.as_utc(_at(0, 0)) - timedelta(microseconds=1),
+        )
 
     async def test_a_late_write_for_yesterday_still_lands(self) -> None:
         """A row stamped before midnight but committed after it is not lost."""
@@ -597,7 +628,10 @@ class InvalidationTests(_ReaderHarness):
         self.assertNotIn("pool", failed)
 
         retried = await self._query(reader, recorder, requests, at=_at(0, 12, 15))
-        self.assertEqual(recorder.spans[-1][0], _FakeDtUtil.as_utc(_at(-2, 0)))
+        self.assertEqual(
+            recorder.spans[-1][0],
+            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+        )
         self.assertEqual(retried["pool"][date(2026, 5, 9)], 1.0)
         self.assertEqual(retried["pool"][date(2026, 5, 10)], 1.0)
 
@@ -620,7 +654,10 @@ class InvalidationTests(_ReaderHarness):
             at=_at(0, 12, 15),
         )
 
-        self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-2, 0)))
+        self.assertEqual(
+            recorder.spans[1][0],
+            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+        )
 
     async def test_a_changed_entity_discards_the_prefix_and_is_not_kept(self) -> None:
         states = self._pool_states()
@@ -638,7 +675,10 @@ class InvalidationTests(_ReaderHarness):
             at=_at(0, 12, 15),
         )
 
-        self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-2, 0)))
+        self.assertEqual(
+            recorder.spans[1][0],
+            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+        )
         # The abandoned entity's prefix is dropped rather than kept forever.
         self.assertEqual(
             [key[0] for key in reader._settled], ["switch.pool_new"]
@@ -662,7 +702,7 @@ class InvalidationTests(_ReaderHarness):
             recorder.spans[1][0],
             _FakeDtUtil.as_utc(
                 datetime(2026, 5, 8, 0, 0, tzinfo=ZoneInfo("America/New_York"))
-            ),
+            ) - timedelta(microseconds=1),
         )
 
     async def test_a_clock_that_stepped_backwards_discards_the_prefix(self) -> None:
@@ -673,7 +713,10 @@ class InvalidationTests(_ReaderHarness):
         await self._query(reader, recorder, requests, at=_at(0, 12))
         await self._query(reader, recorder, requests, at=_at(-1, 12))
 
-        self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-3, 0)))
+        self.assertEqual(
+            recorder.spans[1][0],
+            _FakeDtUtil.as_utc(_at(-3, 0)) - timedelta(microseconds=1),
+        )
 
     async def test_an_entity_id_configured_with_capitals_still_reads(self) -> None:
         """The recorder stores ids lowered; ``_read_entity_id`` only checks the domain.
