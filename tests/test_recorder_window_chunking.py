@@ -71,8 +71,10 @@ class _Recorder:
                     # The meter was swapped: the counter restarts near zero.
                     total = 0.0
                 self.states.append(_FakeState(round(total, 4), cursor))
-            if 7 <= local.hour <= 18:
-                total += 0.05
+            # The meter keeps creeping overnight, so the row stamped exactly on
+            # a day boundary carries a different reading from the one before it
+            # and a window that took the wrong side of the boundary would show.
+            total += 0.05 if 7 <= local.hour <= 18 else 0.002
             cursor += timedelta(minutes=5)
 
     async def async_add_executor_job(self, func, *args):
@@ -90,7 +92,7 @@ class _Recorder:
             if start_time < state.last_updated < end_time
         ]
         before = [
-            state for state in self.states if state.last_updated <= start_time
+            state for state in self.states if state.last_updated < start_time
         ]
         if before:
             # What ``include_start_time_state`` does: the row before the window,
@@ -168,11 +170,10 @@ class ChunkedWindowReadTests(unittest.IsolatedAsyncioTestCase):
         # rest. The day the counter restarts is inside that span, so a chunked
         # read that let one day's unwrap leak into the next would not match.
         self.assertTrue(all(sum(values.values()) > 0.0 for values in per_day))
-        self.assertEqual(
-            max(len(values) for values in per_day)
-            - min(len(values) for values in per_day),
-            4,
-        )
+        # The clock-change day (index 3) is twenty-five hours long, and the
+        # quiet nights leave real holes rather than zero-filled slots.
+        self.assertEqual(len(per_day[3]), len(per_day[1]) + 4)
+        self.assertLess(len(per_day[2]), len(per_day[1]))
 
     async def test_recorder_calls_scale_with_chunks_rather_than_days(self) -> None:
         windows = _day_windows(self.FIRST_DAY, self.DAYS)

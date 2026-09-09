@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -398,19 +398,21 @@ def _states_within(
     window_start: datetime,
     window_end: datetime,
 ) -> list[Any]:
-    """The rows a read of ``(window_start, window_end]`` alone would have returned.
+    """The rows a read of ``(window_start, window_end)`` alone would have returned.
 
     ``instants`` is ``states`` mapped to UTC, ascending, so the slice is two
-    bisections rather than a scan of the whole chunk per window. The row before
-    the window is prepended restamped, which is what the recorder's own
-    ``include_start_time_state`` does with it.
+    bisections rather than a scan of the whole chunk per window. The recorder
+    keeps rows stamped after the start and strictly before the end, and carries
+    the last row stamped strictly before the start; the carry is prepended
+    restamped, which is what ``include_start_time_state`` does with it.
     """
+    before = bisect_left(instants, window_start)
     first = bisect_right(instants, window_start)
-    last = bisect_right(instants, window_end)
+    last = bisect_left(instants, window_end)
     within = states[first:last]
-    if first == 0:
+    if before == 0:
         return within
-    return [_RestampedState(states[first - 1], window_start), *within]
+    return [_RestampedState(states[before - 1], window_start), *within]
 
 
 @dataclass(frozen=True)
