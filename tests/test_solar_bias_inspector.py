@@ -6,7 +6,7 @@ import importlib
 import pytest
 import sys
 import types
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -339,6 +339,9 @@ forecast_history = importlib.import_module(
 actuals = importlib.import_module(
     "custom_components.helman.solar_bias_correction.actuals"
 )
+recorder_series_mod = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+)
 
 
 def _make_cfg():
@@ -352,6 +355,35 @@ def _make_cfg():
         daily_energy_entity_ids=["sensor.solar_today", "sensor.solar_tomorrow"],
         total_energy_entity_id="sensor.solar_total",
     )
+
+
+SOLAR_METER = "sensor.solar_total"
+
+
+def _seed_solar_actuals(service, fake_actuals):
+    """Make the inspector day draw ``fake_actuals``'s slots as solar actuals.
+
+    The day's actuals are the batched cumulative-meter read's solar column cut
+    off at the current completed slot, not a read of their own, so a test seeds
+    that column. ``fake_actuals`` keeps its ``{"HH:MM": wh}`` shape; the batch
+    carries kWh keyed by the slot's local start.
+    """
+
+    async def _load(entity_ids, target_date, local_tz):
+        by_slot = await fake_actuals()
+        return recorder_series_mod.SlotEnergyBatch(
+            by_entity={
+                SOLAR_METER: {
+                    datetime.combine(
+                        target_date, time.fromisoformat(slot), tzinfo=local_tz
+                    ): wh / 1000.0
+                    for slot, wh in by_slot.items()
+                }
+            },
+            liveness_instants=[],
+        )
+
+    service._load_slot_energy_kwh_for_entities = _load
 
 
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
@@ -414,9 +446,14 @@ def _recorded_points_of(points: list[dict]):
 
 
 def _make_service(canonical_provider=None, recorded=None):
+    async def _executor_job(func, *args):
+        return func(*args)
+
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+        # The fit runs on the executor; run it inline so a test sees its result.
+        async_add_executor_job=_executor_job,
     )
     service_mod.load_archived_forecast_points = _recorded_points_of(recorded or [])
     return service_mod.SolarBiasCorrectionService(
@@ -481,14 +518,12 @@ def test_inspector_day_applies_current_profile_and_totals():
     async def fake_actuals(*args, **kwargs):
         return {"08:00": 90.0}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["status"] == "applied"
@@ -595,14 +630,12 @@ def test_inspector_day_today_preserves_15min_granularity():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["raw"] == [
@@ -652,14 +685,12 @@ def test_inspector_day_impact_factor_is_none_when_raw_is_zero():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     impact = payload["series"]["impact"]
@@ -692,16 +723,14 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
         return {}
 
     old_forecast = service_mod.load_archived_forecast_points
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
         service_mod.load_archived_forecast_points = fake_forecast_points
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
         service_mod.load_archived_forecast_points = old_forecast
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["range"]["minDate"] == "2026-04-10"
@@ -735,14 +764,12 @@ def test_inspector_day_splices_today_at_the_current_slot():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:07:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     # 09:00 and 10:00 have started, so they keep their archived values; 10:15
@@ -778,14 +805,12 @@ def test_inspector_day_leaves_a_hole_where_today_was_never_archived():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:07:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["raw"] == [
@@ -800,14 +825,12 @@ def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["effectiveVariant"] == "raw"
@@ -844,14 +867,12 @@ def test_inspector_day_stale_profile_shows_factors_but_uses_raw_variant():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["status"] == "config_changed_pending_retrain"
@@ -890,14 +911,12 @@ def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["status"] == "training_failed"
@@ -940,16 +959,14 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
     old_forecast = service_mod.load_archived_forecast_points
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
         service_mod.load_archived_forecast_points = fake_forecast_points
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-24"))
     finally:
         service_mod.load_archived_forecast_points = old_forecast
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
@@ -1001,16 +1018,14 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
         return {"07:45": 30.0, "08:00": 40.0}
 
     old_forecast = service_mod.load_archived_forecast_points
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
         service_mod.load_archived_forecast_points = fake_forecast_points
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-24"))
     finally:
         service_mod.load_archived_forecast_points = old_forecast
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
@@ -1052,16 +1067,14 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
     old_forecast = service_mod.load_archived_forecast_points
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
         service_mod.load_archived_forecast_points = fake_forecast_points
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
         service_mod.load_archived_forecast_points = old_forecast
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
@@ -1108,18 +1121,16 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
         return {"08:00": 40.0, "08:15": 50.0, "09:00": 60.0}
 
     old_forecast = service_mod.load_archived_forecast_points
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
         service_mod.load_archived_forecast_points = fake_forecast_points
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
 
         today_payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
         future_payload = asyncio.run(service.async_get_inspector_day("2026-04-26"))
     finally:
         service_mod.load_archived_forecast_points = old_forecast
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert today_payload["series"]["invalidated"] == []
@@ -1183,14 +1194,12 @@ def test_inspector_day_returns_selected_day_impact_and_training_explainability()
     async def fake_actuals(*args, **kwargs):
         return {}
 
-    old_actuals = service_mod.load_actuals_for_day
     old_now = service_mod.dt_util.now
     try:
-        service_mod.load_actuals_for_day = fake_actuals
+        _seed_solar_actuals(service, fake_actuals)
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
     finally:
-        service_mod.load_actuals_for_day = old_actuals
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["impact"] == [

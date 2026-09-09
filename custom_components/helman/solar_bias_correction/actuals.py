@@ -45,6 +45,7 @@ try:
     from ..recorder_hourly_series import (
         get_local_current_slot_start,
         query_cumulative_slot_energy_changes,
+        query_cumulative_slot_energy_changes_for_windows,
     )
 except Exception:  # pragma: no cover - test stub compatibility
     def get_local_current_slot_start(
@@ -70,6 +71,16 @@ except Exception:  # pragma: no cover - test stub compatibility
         del hass, entity_id, local_start, local_end, interval_minutes
         del liveness_instants
         return {}
+
+    async def query_cumulative_slot_energy_changes_for_windows(
+        hass: HomeAssistant,
+        entity_id: str,
+        windows: Sequence[tuple[datetime, datetime]],
+        *,
+        interval_minutes: int,
+    ) -> list[dict[datetime, float]]:
+        del hass, entity_id, interval_minutes
+        return [{} for _ in windows]
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -164,6 +175,7 @@ async def load_actuals_window(
 
     slot_actuals_by_date: dict[str, dict[str, float]] = {}
     hourly_grain_dates: set[str] = set()
+    raw_dates: list[date] = []
     for offset in range(days, 0, -1):
         target_date = local_now.date() - timedelta(days=offset)
         if target_date < tail.splice_date:
@@ -172,12 +184,18 @@ async def load_actuals_window(
                 str(target_date), {}
             )
             continue
-        slot_actuals_by_date[str(target_date)] = await _read_day_slot_actuals(
+        # Placed now and filled below, so the window keeps its chronological
+        # order whichever side of the seam each day came from.
+        slot_actuals_by_date[str(target_date)] = {}
+        raw_dates.append(target_date)
+    slot_actuals_by_date.update(
+        await _read_slot_actuals_for_dates(
             hass,
             entity_id,
-            target_date,
+            raw_dates,
             local_now=local_now,
         )
+    )
 
     invalidated_slots_by_date = await _load_invalidated_slots_for_window(
         hass,
@@ -272,13 +290,7 @@ async def _read_day_slot_actuals(
     local_now: datetime,
     liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[str, float]:
-    local_start = datetime.combine(target_date, time.min, tzinfo=local_now.tzinfo)
-    local_end = local_start + timedelta(days=1)
-    if target_date == local_now.date():
-        local_end = min(
-            local_end,
-            get_local_current_slot_start(local_now, interval_minutes=15),
-        )
+    local_start, local_end = _day_window(target_date, local_now=local_now)
     values_by_slot = await query_cumulative_slot_energy_changes(
         hass,
         entity_id,
@@ -287,6 +299,96 @@ async def _read_day_slot_actuals(
         interval_minutes=15,
         liveness_instants=liveness_instants,
     )
+    return _slot_actuals_from_slot_energy(values_by_slot)
+
+
+async def _read_slot_actuals_for_dates(
+    hass: HomeAssistant,
+    entity_id: str,
+    target_dates: Sequence[date],
+    *,
+    local_now: datetime,
+) -> dict[str, dict[str, float]]:
+    """The same per-day actuals as :func:`_read_day_slot_actuals`, in chunked reads.
+
+    A training window is up to ninety days and each of them used to be its own
+    recorder round-trip (#241). The days are handed over together and come back
+    partitioned by local day, each one still parsed and sampled over its own
+    lookback, so nothing about resets, holes or DST changes -- only how often
+    the recorder is asked.
+    """
+    if not target_dates:
+        return {}
+    windows = [
+        _day_window(target_date, local_now=local_now) for target_date in target_dates
+    ]
+    values_by_window = await query_cumulative_slot_energy_changes_for_windows(
+        hass,
+        entity_id,
+        windows,
+        interval_minutes=15,
+    )
+    return {
+        str(target_date): _slot_actuals_from_slot_energy(values_by_slot)
+        for target_date, values_by_slot in zip(target_dates, values_by_window)
+    }
+
+
+def _day_window(
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> tuple[datetime, datetime]:
+    """The local day, stopping at the current completed slot when it is today."""
+    local_start = datetime.combine(target_date, time.min, tzinfo=local_now.tzinfo)
+    local_end = local_start + timedelta(days=1)
+    if target_date == local_now.date():
+        local_end = min(
+            local_end,
+            get_local_current_slot_start(local_now, interval_minutes=15),
+        )
+    return local_start, local_end
+
+
+def slot_actuals_from_batched_slot_energy(
+    slot_energy_kwh: dict[datetime, float] | None,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> dict[str, float]:
+    """The day's solar actuals out of a batched meter read, not a second one.
+
+    The inspector already reads the solar meter as part of its one cumulative
+    meter batch -- it has to, because the batch's liveness trace is what tells
+    that meter's quiet nights apart from a recorder outage (#208) -- and the
+    batch parses, unwraps and samples it exactly as :func:`load_actuals_for_day`
+    would. All that is left is the day's own cutoff: the batch spans the whole
+    local day for every meter, while the actuals stop at the current *completed*
+    slot on today, so the running slot and the slots after it are dropped here.
+    An elapsed day keeps every slot.
+
+    ``slot_energy_kwh`` is keyed by UTC slot start and carries kWh, the shape
+    :class:`~custom_components.helman.recorder_hourly_series.SlotEnergyBatch`
+    hands back per entity; the result is ``{"HH:MM": wh}`` like every other
+    actuals reader. ``None`` -- no solar meter configured, or a read that
+    failed -- gives an empty day, never a day of zeros.
+    """
+    if not slot_energy_kwh:
+        return {}
+    _, local_end = _day_window(target_date, local_now=local_now)
+    end_utc = dt_util.as_utc(local_end)
+    return _slot_actuals_from_slot_energy(
+        {
+            slot_start: value_kwh
+            for slot_start, value_kwh in slot_energy_kwh.items()
+            if slot_start < end_utc
+        }
+    )
+
+
+def _slot_actuals_from_slot_energy(
+    values_by_slot: dict[datetime, float],
+) -> dict[str, float]:
     return {
         dt_util.as_local(slot_start).strftime("%H:%M"): round(value_kwh * 1000.0, 4)
         for slot_start, value_kwh in sorted(values_by_slot.items())

@@ -427,6 +427,25 @@ for module_name in (
     sys.modules.pop(module_name, None)
 
 
+def _make_executor_hass() -> SimpleNamespace:
+    """A hass stub that runs executor hops inline and records them.
+
+    The forecast rebuild and the automation snapshot are pure CPU and belong on
+    a worker thread; running them inline keeps the assertions readable while
+    ``executor_hops`` still proves the hop happened.
+    """
+    executor_hops: list[object] = []
+
+    async def async_add_executor_job(func, *args):
+        executor_hops.append(func)
+        return func(*args)
+
+    return SimpleNamespace(
+        async_add_executor_job=async_add_executor_job,
+        executor_hops=executor_hops,
+    )
+
+
 def _make_schedule_document(*, execution_enabled: bool = True) -> ScheduleDocument:
     return ScheduleDocument(
         execution_enabled=execution_enabled,
@@ -2023,7 +2042,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = _make_executor_hass()
         coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
         coordinator._build_battery_forecast_sync = Mock(
@@ -2114,10 +2133,16 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             result.grid_forecast["series"][0]["importedFromGridKwh"],
             1.4,
         )
+        # The simulation is pure CPU: it goes to the executor, not the loop.
+        self.assertEqual(len(coordinator._hass.executor_hops), 1)
+        self.assertEqual(
+            coordinator._hass.executor_hops[0].func,
+            coordinator._build_forecast_rebuild_pure,
+        )
 
     async def test_build_automation_snapshot_locked_populates_context_from_bundle(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = _make_executor_hass()
         coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
         # The async wrapper gathers the run-invariant inputs once, then delegates
@@ -2173,6 +2198,12 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             {"boiler": 1.25},
         )
         self.assertEqual(snapshot.context.battery_state.current_soc, 50.0)
+        # One executor hop per snapshot build (two statuses were exercised).
+        self.assertEqual(len(coordinator._hass.executor_hops), 2)
+        self.assertEqual(
+            {hop.func for hop in coordinator._hass.executor_hops},
+            {coordinator._build_automation_snapshot_from_schedule_pure},
+        )
 
 
 class CoordinatorRunAutomationFailureTests(unittest.IsolatedAsyncioTestCase):

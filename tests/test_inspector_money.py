@@ -280,33 +280,30 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
         async def _fake_rails(entity_ids, target_date, local_tz, *, local_end):
             return tuple(rails.get(entity_id, []) for entity_id in entity_ids)
 
-        old_actuals = service_mod.load_actuals_for_day
-        try:
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
-            with patch.object(
-                service_mod,
-                "load_house_forecast_points_for_day",
-                AsyncMock(return_value=[]),
-            ), patch.object(
-                service, "_load_house_actual_for_date", AsyncMock(return_value=[])
-            ), patch.object(
-                service, "_load_battery_soc_actual_for_date", AsyncMock(return_value=[])
-            ), patch.object(
-                service,
-                "_load_grid_actual_for_date",
-                AsyncMock(return_value=grid_sides),
-            ), patch.object(
-                service, "_load_battery_actual_for_date", AsyncMock(return_value=[])
-            ), patch.object(
-                service,
-                "_house_consumer_breakdown_for_date",
-                Mock(return_value=([], [])),
-            ), patch.object(
-                service, "_load_recorded_price_rails", side_effect=_fake_rails
-            ):
-                return await service.async_get_inspector_day(TODAY)
-        finally:
-            service_mod.load_actuals_for_day = old_actuals
+        with patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service, "_load_house_actual_for_date", AsyncMock(return_value=[])
+        ), patch.object(
+            service,
+            "_load_numeric_history_by_slot_for_entities",
+            AsyncMock(return_value={}),
+        ), patch.object(
+            service,
+            "_load_grid_actual_for_date",
+            AsyncMock(return_value=grid_sides),
+        ), patch.object(
+            service, "_load_battery_actual_for_date", AsyncMock(return_value=[])
+        ), patch.object(
+            service,
+            "_house_consumer_breakdown_for_date",
+            Mock(return_value=([], [])),
+        ), patch.object(
+            service, "_load_recorded_price_rails", side_effect=_fake_rails
+        ):
+            return await service.async_get_inspector_day(TODAY)
 
     async def test_the_totals_count_the_running_slot_the_series_stops_before(self):
         # 09:45 has finished; 10:00 is the slot in progress at the stubbed now.

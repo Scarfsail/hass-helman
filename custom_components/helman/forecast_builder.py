@@ -13,7 +13,7 @@ from .const import (
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
 from .grid_price_forecast_builder import GridPriceForecastBuilder
-from .recorder_hourly_series import query_slot_energy_changes
+from .recorder_hourly_series import TodaySlotEnergyReader
 from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,9 +23,15 @@ _SLOTS_PER_NORMAL_DAY = 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
 
 
 class HelmanForecastBuilder:
-    def __init__(self, hass: HomeAssistant, config: dict) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config: dict,
+        slot_history: TodaySlotEnergyReader,
+    ) -> None:
         self._hass = hass
         self._config = config
+        self._slot_history = slot_history
         self._local_tz = ZoneInfo(str(hass.config.time_zone))
 
     async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
@@ -109,8 +115,7 @@ class HelmanForecastBuilder:
             return []
 
         try:
-            values_by_slot = await query_slot_energy_changes(
-                self._hass,
+            values_by_slot = await self._slot_history.async_query_slot_energy_changes(
                 entity_id,
                 reference_time,
                 interval_minutes=interval_minutes,

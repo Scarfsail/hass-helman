@@ -163,16 +163,26 @@ DT_STUB = sys.modules["homeassistant.util.dt"]
 RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
 
 
-#: ``load_actuals_for_day`` as the service imported it, so a test that stubs the
-#: raw solar read can put it back. The stub is how a test says "raw states are
-#: still there": the fake recorder's ``state_changes_during_period`` returns
-#: nothing, so without it every day would read empty.
-_REAL_LOAD_ACTUALS = None
+def _solar_meter_batch(by_slot_wh: dict[str, float]):
+    """A batched meter read whose solar column carries ``{"HH:MM": wh}``.
 
+    How a test says "raw states are still there": the day's solar actuals are
+    the meter batch's solar column rather than a read of their own, and the fake
+    recorder returns nothing, so without seeding the batch every day reads empty.
+    """
 
-def _actuals_returning(by_slot: dict[str, float]):
-    async def _load(hass, cfg, target_date, *, local_now, liveness_instants=None):
-        return dict(by_slot)
+    async def _load(entity_ids, target_date, local_tz):
+        return recorder_series_mod.SlotEnergyBatch(
+            by_entity={
+                SOLAR_METER: {
+                    datetime.fromisoformat(
+                        f"{target_date.isoformat()}T{slot}:00"
+                    ).replace(tzinfo=local_tz): wh / 1000.0
+                    for slot, wh in by_slot_wh.items()
+                }
+            },
+            liveness_instants=[],
+        )
 
     return _load
 
@@ -200,7 +210,9 @@ price_builder = importlib.import_module(
     "custom_components.helman.grid_price_forecast_builder"
 )
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
-_REAL_LOAD_ACTUALS = service_mod.load_actuals_for_day
+recorder_series_mod = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+)
 
 SOLAR_METER = "sensor.solar_total"
 HOUSE_METER = "sensor.house_energy"
@@ -1513,12 +1525,11 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         # means raw states are there and the day is drawn at fifteen minutes.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 5)
-        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
+        service._load_slot_energy_kwh_for_entities = _solar_meter_batch(
+            {"08:00": 500.0}
+        )
 
-        try:
-            day = await service.async_get_inspector_day("2026-05-24")
-        finally:
-            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
+        day = await service.async_get_inspector_day("2026-05-24")
 
         self.assertEqual(day["range"]["minDate"], "2024-03-01")
         self.assertEqual(day["dataGranularityMinutes"], 15)
@@ -1553,13 +1564,12 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         # which is the property that would break if auto_purge were ignored.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
         service = _with_usable_days(_make_service(), 5)
-        service_mod.load_actuals_for_day = _actuals_returning({"08:00": 500.0})
+        service._load_slot_energy_kwh_for_entities = _solar_meter_batch(
+            {"08:00": 500.0}
+        )
 
-        try:
-            with _purging_after(10, auto_purge=False):
-                day = await service.async_get_inspector_day("2026-05-01")
-        finally:
-            service_mod.load_actuals_for_day = _REAL_LOAD_ACTUALS
+        with _purging_after(10, auto_purge=False):
+            day = await service.async_get_inspector_day("2026-05-01")
 
         self.assertEqual(day["range"]["minDate"], "2024-03-01")
         self.assertEqual(day["dataGranularityMinutes"], 15)

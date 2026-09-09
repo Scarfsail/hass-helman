@@ -102,6 +102,26 @@ class _FakeForecastWindow:
         )
 
 
+class _FakeRawDayReads:
+    """Stands in for the one chunked raw-history read `load_actuals_window` does.
+
+    Takes one slot map per raw-state day, oldest first, and hands them back
+    keyed by the dates the loader asked for -- so a test still writes what each
+    day measured while the loader asks for all of them at once.
+    """
+
+    def __init__(self, *days: dict[str, float]) -> None:
+        self._days = days
+        self.date_calls: list[list[str]] = []
+
+    async def __call__(self, hass, entity_id, target_dates, *, local_now):
+        self.date_calls.append([str(day) for day in target_dates])
+        return {
+            str(day): dict(slots)
+            for day, slots in zip(target_dates, self._days)
+        }
+
+
 class _FixedDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
@@ -190,14 +210,15 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
+        raw_day_reads = _FakeRawDayReads({"12:00": 600.0})
         forecast_window = _FakeForecastWindow({"12:00": 900.0})
         with patch.object(
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(return_value={"12:00": 600.0}),
-        ) as read_day_slot_actuals, patch.object(
+            "_read_slot_actuals_for_dates",
+            new=raw_day_reads,
+        ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
             AsyncMock(),
@@ -212,9 +233,69 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             {"2026-04-16": {"12:00": 600.0}},
         )
         self.assertEqual(window.invalidated_slots_by_date, {})
-        self.assertEqual(read_day_slot_actuals.await_count, 1)
+        self.assertEqual(raw_day_reads.date_calls, [["2026-04-16"]])
         load_state_samples.assert_not_awaited()
         compute_invalidated.assert_not_called()
+
+    async def test_raw_days_are_asked_for_in_one_read_rather_than_one_each(self) -> None:
+        """Every raw-state day of the window goes into a single batched read (#241)."""
+        hass = SimpleNamespace(
+            data={"helman": {"coordinator": SimpleNamespace(config={})}},
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=None,
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
+        )
+
+        raw_day_reads = _FakeRawDayReads(*({"12:00": 600.0},) * 6)
+        forecast_window = _FakeForecastWindow({"12:00": 900.0})
+        with patch.object(
+            actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
+        ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_slot_actuals_for_dates",
+            new=raw_day_reads,
+        ), patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(),
+        ), patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+        ):
+            window = await actuals.load_actuals_window(hass, cfg, days=6)
+
+        self.assertEqual(
+            raw_day_reads.date_calls,
+            [
+                [
+                    "2026-04-11",
+                    "2026-04-12",
+                    "2026-04-13",
+                    "2026-04-14",
+                    "2026-04-15",
+                    "2026-04-16",
+                ]
+            ],
+        )
+        # The days come back in order whichever side of the seam they fell on.
+        self.assertEqual(
+            list(window.slot_actuals_by_date),
+            [
+                "2026-04-11",
+                "2026-04-12",
+                "2026-04-13",
+                "2026-04-14",
+                "2026-04-15",
+                "2026-04-16",
+            ],
+        )
 
     async def test_load_actuals_window_feature_on_calls_evaluator_with_utc_slots(self) -> None:
         hass = SimpleNamespace(
@@ -252,8 +333,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -320,8 +401,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(side_effect=[{"12:00": 600.0}, {"23:45": 50.0}]),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0}, {"23:45": 50.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -379,8 +460,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(return_value={"12:00": 600.0}),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -415,8 +496,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(return_value={"12:00": 600.0}),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0}),
         ), self.assertLogs(actuals.__name__, level="WARNING") as captured_logs:
             await actuals.load_actuals_window(hass, cfg, days=1)
 
@@ -458,8 +539,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(return_value={"12:00": 600.0}),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -517,8 +598,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals, "load_spliced_forecast_slots_for_window", new=forecast_window
         ), patch.object(actuals, "datetime", _FixedDateTime), patch.object(
             actuals,
-            "_read_day_slot_actuals",
-            AsyncMock(return_value={"12:00": 600.0}),
+            "_read_slot_actuals_for_dates",
+            new=_FakeRawDayReads({"12:00": 600.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",

@@ -104,7 +104,13 @@ _install_import_stubs()
 
 
 class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
-    def _make_builder(self, *, states: dict[str, object] | None = None):
+    def _make_builder(
+        self,
+        *,
+        states: dict[str, object] | None = None,
+        query_mock: AsyncMock | None = None,
+    ):
+        """A builder over a stand-in for the coordinator's shared slot reader."""
         forecast_builder_module = importlib.reload(
             importlib.import_module("custom_components.helman.forecast_builder")
         )
@@ -112,15 +118,18 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             states=_FakeStateMachine(states),
         )
+        slot_history = SimpleNamespace(
+            async_query_slot_energy_changes=query_mock or AsyncMock(return_value={})
+        )
         return (
             forecast_builder_module,
-            forecast_builder_module.HelmanForecastBuilder(hass, {}),
+            forecast_builder_module.HelmanForecastBuilder(hass, {}, slot_history),
         )
 
     async def test_build_solar_actual_history_defaults_to_hourly_query(self) -> None:
-        forecast_builder_module, builder = self._make_builder()
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
         query_mock = AsyncMock(return_value={_FakeDtUtil.as_utc(slot_start): 1.5})
+        forecast_builder_module, builder = self._make_builder(query_mock=query_mock)
 
         with (
             patch.object(
@@ -130,16 +139,12 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {
-                    "dt_util": _FakeDtUtil,
-                    "query_slot_energy_changes": query_mock,
-                },
+                {"dt_util": _FakeDtUtil},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)
 
         query_mock.assert_awaited_once_with(
-            builder._hass,
             "sensor.solar_actual",
             REFERENCE_TIME,
             interval_minutes=60,
@@ -155,7 +160,6 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_build_solar_actual_history_supports_custom_interval(self) -> None:
-        forecast_builder_module, builder = self._make_builder()
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         query_mock = AsyncMock(
             return_value={
@@ -163,6 +167,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 datetime(2026, 3, 20, 19, 30, tzinfo=UTC): 0.3,
             }
         )
+        forecast_builder_module, builder = self._make_builder(query_mock=query_mock)
 
         with (
             patch.object(
@@ -172,10 +177,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {
-                    "dt_util": _FakeDtUtil,
-                    "query_slot_energy_changes": query_mock,
-                },
+                {"dt_util": _FakeDtUtil},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(
@@ -184,7 +186,6 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             )
 
         query_mock.assert_awaited_once_with(
-            builder._hass,
             "sensor.solar_actual",
             REFERENCE_TIME,
             interval_minutes=15,
@@ -204,8 +205,8 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_build_solar_actual_history_returns_empty_when_entity_missing(self) -> None:
-        forecast_builder_module, builder = self._make_builder()
         query_mock = AsyncMock()
+        forecast_builder_module, builder = self._make_builder(query_mock=query_mock)
 
         with (
             patch.object(
@@ -215,10 +216,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {
-                    "dt_util": _FakeDtUtil,
-                    "query_slot_energy_changes": query_mock,
-                },
+                {"dt_util": _FakeDtUtil},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)

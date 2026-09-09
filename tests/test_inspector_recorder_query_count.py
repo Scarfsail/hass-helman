@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 
-QUERIES: dict[str, list] = {"batched": [], "per_entity": []}
+QUERIES: dict[str, list] = {"batched": [], "per_entity": [], "all": []}
 
 
 def _install_import_stubs() -> None:
@@ -105,29 +106,51 @@ span_mod = importlib.import_module(
 )
 
 
+@contextmanager
 def _counting_queries():
-    """Count the recorder reads the cumulative-meter helpers make, and only those.
+    """Count every recorder read the inspector day makes, and what it asked for.
 
-    ``get_significant_states`` has other callers on the inspector's path — the
-    forecast archive is one — so the counters are installed on the module under
-    test rather than on the shared history module.
+    ``QUERIES["batched"]``/``["per_entity"]`` are the cumulative-meter helpers'
+    own reads, and ``QUERIES["all"]`` is every read on the path in issue order —
+    which is what "the solar meter is read once *in total*" has to be counted
+    against, since a duplicate read need not come from the same module as the
+    batch. Reads reach the recorder under two names from several modules, some
+    binding them at import time (``recorder_hourly_series``) and some at call
+    time (the inspector's own numeric history), so both names are replaced in
+    both places.
     """
 
     def _batched(hass, start, end, entity_ids=None, *args, **kwargs):
         QUERIES["batched"].append(list(entity_ids or []))
+        QUERIES["all"].append(list(entity_ids or []))
+        return {}
+
+    def _shared_batched(hass, start, end, entity_ids=None, *args, **kwargs):
+        QUERIES["all"].append(list(entity_ids or []))
         return {}
 
     def _per_entity(hass, start, end, entity_id, *args, **kwargs):
         QUERIES["per_entity"].append(entity_id)
+        QUERIES["all"].append([entity_id])
         return {}
 
-    QUERIES["batched"].clear()
-    QUERIES["per_entity"].clear()
-    return patch.multiple(
+    for reads in QUERIES.values():
+        reads.clear()
+    with patch.multiple(
         recorder_series_mod,
         get_significant_states=_batched,
         state_changes_during_period=_per_entity,
-    )
+    ), patch.multiple(
+        sys.modules["homeassistant.components.recorder.history"],
+        get_significant_states=_shared_batched,
+        state_changes_during_period=_per_entity,
+    ):
+        yield
+
+
+def _reads_touching(entity_id: str) -> list[list[str]]:
+    """Every counted read whose entity list contains ``entity_id``."""
+    return [read for read in QUERIES["all"] if entity_id in read]
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -139,6 +162,29 @@ GRID_EXPORT_METER = "sensor.grid_export"
 BATTERY_CHARGE_METER = "sensor.batt_charge"
 BATTERY_DISCHARGE_METER = "sensor.batt_discharge"
 CONSUMER_METERS = [f"sensor.consumer_{index}" for index in range(13)]
+SOLAR_METER = "sensor.solar_total"
+SOC_SENSOR = "sensor.battery_soc"
+MIN_SOC_SENSOR = "number.battery_min_soc"
+MAX_SOC_SENSOR = "number.battery_max_soc"
+
+
+#: A recorder that keeps ten years of raw states, so the day under test is
+#: decided as a raw-state day outright rather than by whether the (stubbed,
+#: empty) read came back with anything.
+def _keeping_raw_states():
+    holding_recorder = SimpleNamespace(
+        async_add_executor_job=_run_in_executor_now,
+        keep_days=3650,
+        auto_purge=True,
+    )
+    return patch(
+        "homeassistant.components.recorder.get_instance",
+        lambda hass: holding_recorder,
+    )
+
+
+async def _run_in_executor_now(func, *args):
+    return func(*args)
 
 
 class _DummyStore:
@@ -180,6 +226,11 @@ def _make_service():
             {"energy_entity_id": entity_id, "label": entity_id}
             for entity_id in CONSUMER_METERS
         ],
+        battery_soc_entity_id_provider=lambda: SOC_SENSOR,
+        battery_soc_bounds_entity_id_provider=lambda: (
+            MIN_SOC_SENSOR,
+            MAX_SOC_SENSOR,
+        ),
     )
     service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
     service._metadata = models.SolarBiasMetadata(
@@ -200,25 +251,20 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
     async def test_nineteen_meters_cost_one_recorder_query(self):
         service = _make_service()
 
-        old_actuals = service_mod.load_actuals_for_day
-        try:
-            # Non-empty on purpose: an elapsed day whose raw solar read comes
-            # back with nothing, on an instance that states no purge horizon, is
-            # taken as a purged day and served from hourly statistics instead --
-            # which would leave the batched raw read this test counts unissued.
-            service_mod.load_actuals_for_day = AsyncMock(return_value={"08:00": 500.0})
-            with _counting_queries(), patch.object(
-                service_mod,
-                "load_house_forecast_points_for_day",
-                AsyncMock(return_value=[]),
-            ), patch.object(
-                service,
-                "_load_recorded_price_rails",
-                AsyncMock(return_value=([], [])),
-            ):
-                await service.async_get_inspector_day(TARGET_DATE)
-        finally:
-            service_mod.load_actuals_for_day = old_actuals
+        # A stated horizon on purpose: an elapsed day whose stubbed reads all
+        # come back empty, on an instance that states no purge horizon, is taken
+        # as a purged day and served from hourly statistics instead -- which
+        # would leave the batched raw read this test counts unissued.
+        with _counting_queries(), _keeping_raw_states(), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            await service.async_get_inspector_day(TARGET_DATE)
 
         # One query, covering every meter the day's actual series draw. The
         # solar meter is in it even though its own series is read separately:
@@ -228,7 +274,7 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
             sorted(QUERIES["batched"][0]),
             sorted(
                 [
-                    "sensor.solar_total",
+                    SOLAR_METER,
                     HOUSE_METER,
                     GRID_IMPORT_METER,
                     GRID_EXPORT_METER,
@@ -241,6 +287,83 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
         # And not one per meter behind it: the per-entity read is what this
         # replaced, so reaching it at all is the regression.
         self.assertEqual(QUERIES["per_entity"], [])
+        # The solar meter is read exactly once on the whole path, counting every
+        # module's reads and not just the meter batch's own: its actual series
+        # is that batch's solar column, not a second read of the same meter.
+        self.assertEqual(_reads_touching(SOLAR_METER), [QUERIES["batched"][0]])
+
+    async def test_unrelated_provider_failure_keeps_solar_actuals(self):
+        service = _make_service()
+
+        def _raise_house_provider():
+            raise RuntimeError("house meter unavailable")
+
+        service._house_energy_entity_id_provider = _raise_house_provider
+        requested_entity_ids: list[str] = []
+
+        async def _load_meter_batch(entity_ids, target_date, local_tz):
+            requested_entity_ids.extend(entity_ids)
+            slot_start = datetime.combine(
+                target_date,
+                datetime.min.time(),
+                tzinfo=local_tz,
+            ).replace(hour=8)
+            return recorder_series_mod.SlotEnergyBatch(
+                by_entity={SOLAR_METER: {slot_start: 0.25}},
+                liveness_instants=[slot_start],
+            )
+
+        service._load_slot_energy_kwh_for_entities = _load_meter_batch
+
+        with _counting_queries(), _keeping_raw_states(), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            payload = await service.async_get_inspector_day(TARGET_DATE)
+
+        self.assertIn(SOLAR_METER, requested_entity_ids)
+        self.assertEqual(
+            payload["series"]["actual"],
+            [
+                {
+                    "timestamp": "2026-05-10T08:00:00+02:00",
+                    "valueWh": 250.0,
+                }
+            ],
+        )
+
+    async def test_soc_and_both_bounds_cost_one_numeric_read(self):
+        service = _make_service()
+
+        with _counting_queries(), _keeping_raw_states(), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            await service.async_get_inspector_day(TARGET_DATE)
+
+        # One read for all three numeric sensors rather than one apiece: they
+        # share a day, a grid and a sampling rule, and the recorder answers from
+        # a single DB thread.
+        numeric_reads = [
+            read
+            for read in QUERIES["all"]
+            if {SOC_SENSOR, MIN_SOC_SENSOR, MAX_SOC_SENSOR} & set(read)
+        ]
+        self.assertEqual(len(numeric_reads), 1)
+        self.assertEqual(
+            sorted(numeric_reads[0]),
+            sorted([SOC_SENSOR, MIN_SOC_SENSOR, MAX_SOC_SENSOR]),
+        )
 
 
 class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase):
@@ -270,33 +393,42 @@ class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase
             async_add_executor_job=_executor, keep_days=1, auto_purge=True
         )
 
-        old_actuals = service_mod.load_actuals_for_day
-        try:
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
-            with patch.multiple(
-                span_mod,
-                statistics_during_period=_statistics_during_period,
-                get_instance=lambda hass: purging_recorder,
-            ), patch(
-                "homeassistant.components.recorder.get_instance",
-                lambda hass: purging_recorder,
-            ), patch.object(
-                service_mod,
-                "load_house_forecast_points_for_day",
-                AsyncMock(return_value=[]),
-            ), patch.object(
-                service,
-                "_load_recorded_price_rails",
-                AsyncMock(return_value=([], [])),
-            ):
-                # today - 1 with one day kept: the day the purge cuts through, so
-                # it reads statistics along with everything older.
-                await service.async_get_inspector_day("2026-05-10")
-        finally:
-            service_mod.load_actuals_for_day = old_actuals
+        soc_reads: list[list[str]] = []
+
+        def _count_soc_reads(hass, start, end, entity_ids=None, *args, **kwargs):
+            soc_reads.append(list(entity_ids or []))
+            return {}
+
+        with patch.object(
+            sys.modules["homeassistant.components.recorder.history"],
+            "get_significant_states",
+            _count_soc_reads,
+        ), patch.multiple(
+            span_mod,
+            statistics_during_period=_statistics_during_period,
+            get_instance=lambda hass: purging_recorder,
+        ), patch(
+            "homeassistant.components.recorder.get_instance",
+            lambda hass: purging_recorder,
+        ), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ), patch.object(
+            service,
+            "_load_recorded_price_rails",
+            AsyncMock(return_value=([], [])),
+        ):
+            # today - 1 with one day kept: the day the purge cuts through, so
+            # it reads statistics along with everything older.
+            await service.async_get_inspector_day("2026-05-10")
 
         self.assertEqual(len(hourly_id_lists), 1)
         self.assertIn("sensor.helman_solar_forecast_current", hourly_id_lists[0])
+        # The SoC sensor is in that hourly read, so a raw-state read for it here
+        # would be the duplicate the statistics path exists to avoid. The bounds
+        # are not in it and are still read raw -- once, together.
+        self.assertEqual(soc_reads, [[MIN_SOC_SENSOR, MAX_SOC_SENSOR]])
 
 
 class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):

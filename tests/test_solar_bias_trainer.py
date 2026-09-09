@@ -1194,3 +1194,91 @@ def test_an_hourly_forecast_still_reaches_across_its_four_quarters():
     outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
 
     assert outcome.profile.factors["12:00"] == 1.0
+
+
+def _count_slot_parses(samples, actuals, cfg):
+    """How many ``HH:MM`` keys one training run parses, counted deterministically."""
+    original = trainer._slot_to_minutes
+    calls = 0
+
+    def _counting(slot):
+        nonlocal calls
+        calls += 1
+        return original(slot)
+
+    trainer._slot_to_minutes = _counting
+    try:
+        outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+    finally:
+        trainer._slot_to_minutes = original
+    return calls, outcome
+
+
+def _quarter_hour_window(days: int):
+    samples = []
+    slot_actuals = {}
+    for day in range(days):
+        date = f"2026-06-{day + 1:02d}"
+        forecast = {
+            slot: (200.0 if 6 <= int(slot[:2]) <= 19 else 0.0) for slot in _ALL_SLOTS
+        }
+        samples.append(
+            models.TrainerSample(
+                date=date,
+                forecast_wh=sum(forecast.values()),
+                slot_forecast_wh=forecast,
+            )
+        )
+        slot_actuals[date] = {slot: value * 0.9 for slot, value in forecast.items()}
+    return samples, models.SolarActualsWindow(slot_actuals_by_date=slot_actuals)
+
+
+def test_a_days_actuals_are_parsed_once_and_reused_by_every_pass():
+    """The day gate, the fit and the explainability share one parse of the day.
+
+    Each pass used to re-scan every actual key of every day for every forecast
+    slot, which made the work grow with the square of the day's slots (#241).
+    The count below is one parse per actual key per day, one per forecast key
+    per day for that day's own grid, and one for the union grid -- linear in
+    the window, and independent of how many times the day is consulted.
+    """
+    cfg = make_cfg(min_history_days=1, min_valid_slot_days=1)
+    slots = len(_ALL_SLOTS)
+
+    for days in (4, 8):
+        samples, actuals = _quarter_hour_window(days)
+        calls, outcome = _count_slot_parses(samples, actuals, cfg)
+
+        assert outcome.metadata.usable_days == days
+        assert outcome.explainability is not None
+        assert calls == 2 * days * slots + slots
+        # The scan this replaced parsed every actual of a day once per forecast
+        # slot, three times over -- far more than the window even holds.
+        assert calls < days * slots * slots
+
+
+def test_an_hourly_days_ratios_are_computed_once_for_the_fit_and_its_explanation():
+    """One set of hourly ratios per day, not one for the fit and another to explain it."""
+    cfg = make_cfg(min_history_days=1, min_valid_slot_days=1)
+    samples, actuals = _quarter_hour_window(3)
+    actuals.hourly_grain_dates = {sample.date for sample in samples}
+
+    original = trainer._hour_ratios
+    dates = []
+
+    def _recording(slot_forecast_wh, day, slot_starts):
+        dates.append(id(day))
+        return original(slot_forecast_wh, day, slot_starts)
+
+    trainer._hour_ratios = _recording
+    try:
+        outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+    finally:
+        trainer._hour_ratios = original
+
+    assert len(dates) == len(samples)
+    assert outcome.explainability is not None
+    for slot_explainability in outcome.explainability.slots.values():
+        for row in slot_explainability.rows:
+            if row.status == "included":
+                assert row.reason == "hourly_statistics_grain"

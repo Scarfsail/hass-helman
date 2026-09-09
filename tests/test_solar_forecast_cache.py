@@ -186,12 +186,20 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                     coordinator_module,
                     "HelmanForecastBuilder",
                     return_value=raw_forecast_builder,
-                ),
+                ) as raw_forecast_builder_cls,
             ):
                 await coordinator._async_build_forecast_snapshots(
                     reference_time=REFERENCE_TIME, reason="startup"
                 )
 
+            # The solar half reads today's actual history through the
+            # coordinator's own slot reader, not one built for this refresh --
+            # a builder with its own reader would reread the whole day every
+            # quarter hour (issue #242).
+            self.assertIs(
+                raw_forecast_builder_cls.call_args.args[2],
+                coordinator._slot_history,
+            )
             self.assertEqual(coordinator._cached_forecast, house_snapshot)
             self.assertEqual(coordinator._cached_solar_forecast, solar_snapshot)
             coordinator._storage.async_save_snapshots.assert_awaited_once_with(
@@ -677,6 +685,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator = object.__new__(coordinator_module.HelmanCoordinator)
             coordinator._hass = SimpleNamespace()
             coordinator._active_config = {}
+            coordinator._forecast_cache_revision = 0
             coordinator._cached_forecast = {"status": "available"}
             coordinator._cached_solar_forecast = {
                 "status": "available",

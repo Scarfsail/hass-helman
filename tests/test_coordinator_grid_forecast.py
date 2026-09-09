@@ -178,7 +178,19 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
-    recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
+    class _ApplianceRuntimeHistoryReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_active_hours_by_local_date(self, requests, **kwargs):
+            return {request.key: {} for request in requests}
+
+    recorder_slots_mod.ApplianceRuntimeHistoryReader = _ApplianceRuntimeHistoryReader
+    recorder_slots_mod.ApplianceRuntimeRequest = type(
+        "ApplianceRuntimeRequest",
+        (SimpleNamespace,),
+        {},
+    )
 
     class _TodaySlotEnergyReader:
         def __init__(self, hass):
@@ -188,6 +200,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
             return {}
 
     recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
+
+    class _TodaySlotBoundaryStateReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_boundary_state_values(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotBoundaryStateReader = _TodaySlotBoundaryStateReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")

@@ -3,24 +3,29 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .recorder_hourly_series import (
+    TodaySlotBoundaryStateReader,
     get_today_completed_local_slots,
-    query_slot_boundary_state_values,
 )
 
 
 async def build_battery_actual_history(
-    hass: HomeAssistant,
+    boundary_history: TodaySlotBoundaryStateReader,
     capacity_entity_id: str,
     reference_time: datetime,
     *,
     interval_minutes: int = 60,
 ) -> list[dict[str, Any]]:
-    boundary_samples = await query_slot_boundary_state_values(
-        hass,
+    """Today's per-slot SoC trajectory, read through the shared reader.
+
+    ``boundary_history`` is the coordinator's reader rather than a plain
+    ``hass``: the completed part of today's boundary series is the same for
+    every consumer of it, so warming the forecast and gathering the automation
+    inputs in the same run cost one settled read and two tails.
+    """
+    boundary_samples = await boundary_history.async_query_slot_boundary_state_values(
         capacity_entity_id,
         reference_time,
         interval_minutes=interval_minutes,

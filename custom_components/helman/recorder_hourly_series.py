@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from bisect import bisect_right
+import logging
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import (
@@ -15,6 +16,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .energy_units import normalize_energy_to_kwh
+
+_LOGGER = logging.getLogger(__name__)
 
 #: How long a dipped reading has to climb back before the dip is called a
 #: glitch rather than a counter reset.
@@ -44,6 +47,16 @@ _ENERGY_TOLERANCE_KWH = 1e-6
 #: the meter's own value, which is why the threshold has to be relative to it
 #: rather than an absolute number of kWh.
 _RESET_FRACTION = 0.9
+
+#: How long after a slot has ended its boundary sample can still move.
+#:
+#: A boundary reading is settled once every write that could claim it is in the
+#: past, which is one slot after the boundary itself -- but the recorder commits
+#: a row some time after the instant it stamps it with, so a write made just
+#: before a slot ended can still land in the database after it has. The margin
+#: is what keeps a settled prefix from freezing a sample the recorder had not
+#: finished writing; two extra quarter-hour boundaries is a cheap price for it.
+_BOUNDARY_WRITE_SETTLE_WINDOW = timedelta(minutes=30)
 
 
 def _carry_staleness_limit(interval_minutes: int) -> timedelta:
@@ -259,6 +272,170 @@ async def query_cumulative_slot_energy_changes(
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
 
 
+#: How many windows one raw-history read covers when a caller wants several.
+#:
+#: The recorder answers one query at a time on one thread, so a ninety-day
+#: training window read a day at a time is ninety serial round-trips. A week of
+#: one meter's raw states is a few thousand rows, which is small enough to hold
+#: and large enough to make the trip worth taking -- and bounding the chunk is
+#: what keeps a long window from turning into one unbounded read.
+_MAX_WINDOWS_PER_HISTORY_READ = 7
+
+
+class _RestampedState:
+    """A recorder row moved to a window's start, the way the recorder does it.
+
+    ``include_start_time_state`` hands back the last row before the window
+    stamped at the window start rather than at its own instant. A window carved
+    out of a wider read has to do the same, or its opening carry arrives older
+    than the recorder would have reported it and the first boundaries read as
+    stale for no reason.
+    """
+
+    __slots__ = ("attributes", "last_updated", "state")
+
+    def __init__(self, source: Any, instant: datetime) -> None:
+        self.last_updated = instant
+        self.state = getattr(source, "state", None)
+        self.attributes = getattr(source, "attributes", None)
+
+
+async def query_cumulative_slot_energy_changes_for_windows(
+    hass: HomeAssistant,
+    entity_id: str,
+    windows: Sequence[tuple[datetime, datetime]],
+    *,
+    interval_minutes: int,
+    max_windows_per_read: int = _MAX_WINDOWS_PER_HISTORY_READ,
+) -> list[dict[datetime, float]]:
+    """One meter's per-slot deltas for several windows, a few windows per read.
+
+    Window for window, the same result
+    :func:`query_cumulative_slot_energy_changes` returns for each of them on its
+    own. Each window is still parsed, unwrapped and sampled by itself, over its
+    own staleness lookback and with its own opening carry, so counter resets and
+    boundary sampling see exactly the rows the single-window read would have
+    seen. The only thing that changes is how many times the recorder is asked.
+
+    Returns one dict per window, in the order the windows were given. A window
+    with no slots in it comes back empty, matching the singular function.
+    """
+    results: list[dict[datetime, float]] = [{} for _ in windows]
+    if not entity_id or not windows:
+        return results
+
+    staleness_limit = _carry_staleness_limit(interval_minutes)
+    #: ``{window index: (query start, utc boundaries)}`` for windows with slots.
+    prepared: dict[int, tuple[datetime, list[datetime]]] = {}
+    for index, (local_start, local_end) in enumerate(windows):
+        local_slot_starts = _build_local_slot_starts_until(
+            local_start,
+            local_end,
+            interval_minutes=interval_minutes,
+        )
+        if not local_slot_starts:
+            continue
+        utc_boundaries = [
+            dt_util.as_utc(boundary) for boundary in [*local_slot_starts, local_end]
+        ]
+        prepared[index] = (utc_boundaries[0] - staleness_limit, utc_boundaries)
+
+    if not prepared:
+        return results
+
+    default_unit = None
+    current_state = hass.states.get(entity_id)
+    if current_state is not None:
+        default_unit = current_state.attributes.get("unit_of_measurement")
+    # See the singular query for why the attributes join can only be dropped
+    # once the live state has supplied a unit.
+    no_attributes = default_unit is not None
+
+    indices = sorted(prepared)
+    chunks = [
+        indices[offset : offset + max_windows_per_read]
+        for offset in range(0, len(indices), max_windows_per_read)
+    ]
+
+    for chunk in chunks:
+        query_start = min(prepared[index][0] for index in chunk)
+        query_end = max(prepared[index][1][-1] for index in chunk)
+
+        def _query_and_parse(
+            chunk: list[int] = chunk,
+            query_start: datetime = query_start,
+            query_end: datetime = query_end,
+        ) -> dict[int, dict[datetime, float]]:
+            history = state_changes_during_period(
+                hass,
+                query_start,
+                query_end,
+                entity_id,
+                no_attributes,
+                False,
+                None,
+                True,
+            )
+            states = [
+                state
+                for state in _states_for_entity(history, entity_id)
+                if getattr(state, "last_updated", None) is not None
+            ]
+            instants = [dt_util.as_utc(state.last_updated) for state in states]
+            return {
+                index: _slot_energy_changes_from_states(
+                    _states_within(
+                        states,
+                        instants,
+                        prepared[index][0],
+                        prepared[index][1][-1],
+                        query_start=query_start,
+                    ),
+                    default_unit=default_unit,
+                    utc_boundaries=prepared[index][1],
+                    staleness_limit=staleness_limit,
+                )
+                for index in chunk
+            }
+
+        for index, values in (
+            await get_instance(hass).async_add_executor_job(_query_and_parse)
+        ).items():
+            results[index] = values
+
+    return results
+
+
+def _states_within(
+    states: list[Any],
+    instants: list[datetime],
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    query_start: datetime,
+) -> list[Any]:
+    """The rows a read of ``(window_start, window_end)`` alone would have returned.
+
+    ``instants`` is ``states`` mapped to UTC, ascending, so the slice is two
+    bisections rather than a scan of the whole chunk per window. The recorder
+    keeps rows stamped after the start and strictly before the end, and carries
+    the last row stamped strictly before the start; the carry is prepended
+    restamped, which is what ``include_start_time_state`` does with it.
+    """
+    # At the outer query's start, a row stamped exactly there is its opening
+    # replay, not a real boundary write. Keep it for every window sharing that
+    # start; interior windows still exclude real writes at their start.
+    if window_start == query_start:
+        return states[: bisect_left(instants, window_end)]
+    before = bisect_left(instants, window_start)
+    first = bisect_right(instants, window_start)
+    last = bisect_left(instants, window_end)
+    within = states[first:last]
+    if before == 0:
+        return within
+    return [_RestampedState(states[before - 1], window_start), *within]
+
+
 @dataclass(frozen=True)
 class SlotEnergyBatch:
     """A batched meter read: the per-entity deltas, and what the read saw of the recorder.
@@ -267,9 +444,10 @@ class SlotEnergyBatch:
     across every entity in it, sorted. It is the batch's own evidence that the
     recorder was recording at those moments, which is what tells a quiet meter
     apart from an outage (see :func:`_is_carry_stale`). It travels with the
-    deltas because a caller reading one more meter on its own -- the
-    inspector's solar series does exactly that -- has no way to gather one and
-    would otherwise fall back on age alone, which is issue #208.
+    deltas so that a caller reading one more meter on its own can pass the
+    trace to that read rather than fall back on age alone, which is issue #208:
+    the inspector's solar series took it that way until it began reading the
+    solar column out of the batch itself.
     """
 
     by_entity: dict[str, dict[datetime, float]]
@@ -435,12 +613,60 @@ async def query_cumulative_hourly_energy_changes(
 
 
 @dataclass(frozen=True)
-class _FrozenSlotBoundaries:
-    """A day's settled boundary samples, and where to resume reading them."""
+class _FrozenDayPrefix:
+    """What a kept prefix of today has to agree on before it can be resumed.
+
+    The three fields are the whole of the reuse key. ``local_date`` restarts
+    the series at local midnight -- which is also what a timezone change moves
+    -- ``interval_minutes`` because a prefix sampled on one grid says nothing
+    about another, and ``frozen_through`` because a prefix reaching past the
+    window that is being asked for is a clock that stepped backwards. The
+    entity is the key the prefix is stored under, so a reconfigured entity id
+    simply finds nothing.
+    """
 
     local_date: date
     interval_minutes: int
     frozen_through: datetime
+
+
+_FrozenPrefixT = TypeVar("_FrozenPrefixT", bound=_FrozenDayPrefix)
+
+
+def _take_resumable_prefix(
+    frozen_by_entity: dict[str, _FrozenPrefixT],
+    entity_id: str,
+    *,
+    local_date: date,
+    interval_minutes: int,
+    utc_end: datetime,
+) -> _FrozenPrefixT | None:
+    """The kept prefix this read may resume from, dropping it if it may not.
+
+    A new local day restarts the series, a different interval samples a
+    different grid, and a clock that stepped backwards leaves the prefix ahead
+    of the window. Any of them and the prefix cannot be resumed, so it is
+    discarded and the day is read in full once.
+    """
+    frozen = frozen_by_entity.get(entity_id)
+    if frozen is None:
+        return None
+
+    if (
+        frozen.local_date != local_date
+        or frozen.interval_minutes != interval_minutes
+        or frozen.frozen_through > utc_end
+    ):
+        del frozen_by_entity[entity_id]
+        return None
+
+    return frozen
+
+
+@dataclass(frozen=True)
+class _FrozenSlotBoundaries(_FrozenDayPrefix):
+    """A day's settled boundary samples, and where to resume reading them."""
+
     samples: dict[datetime, _BoundarySample]
     unwrap_state: _UnwrapState
 
@@ -493,7 +719,8 @@ class TodaySlotEnergyReader:
             dt_util.as_utc(boundary) for boundary in [*local_slot_starts, local_end]
         ]
         utc_end = utc_boundaries[-1]
-        frozen = self._take_resumable_prefix(
+        frozen = _take_resumable_prefix(
+            self._frozen_by_entity,
             entity_id,
             local_date=local_day_start.date(),
             interval_minutes=interval_minutes,
@@ -599,31 +826,6 @@ class TodaySlotEnergyReader:
         ]
         return settled[-1] if settled else None
 
-    def _take_resumable_prefix(
-        self,
-        entity_id: str,
-        *,
-        local_date: date,
-        interval_minutes: int,
-        utc_end: datetime,
-    ) -> _FrozenSlotBoundaries | None:
-        frozen = self._frozen_by_entity.get(entity_id)
-        if frozen is None:
-            return None
-
-        if (
-            frozen.local_date != local_date
-            or frozen.interval_minutes != interval_minutes
-            or frozen.frozen_through > utc_end
-        ):
-            # A new local day restarts the series, and a clock that stepped
-            # backwards leaves the prefix ahead of the window. Either way the
-            # prefix cannot be resumed and the day is read in full once.
-            del self._frozen_by_entity[entity_id]
-            return None
-
-        return frozen
-
     def _freeze(
         self,
         entity_id: str,
@@ -654,37 +856,181 @@ class TodaySlotEnergyReader:
         )
 
 
-async def query_slot_boundary_state_values(
-    hass: HomeAssistant,
-    entity_id: str,
-    reference_time: datetime,
-    *,
-    interval_minutes: int,
-) -> dict[datetime, float]:
-    local_boundaries = get_today_completed_local_slot_boundaries(
-        reference_time,
-        interval_minutes=interval_minutes,
-    )
-    if not local_boundaries:
-        return {}
+@dataclass(frozen=True)
+class _FrozenBoundaryValues(_FrozenDayPrefix):
+    """A day's settled boundary readings of one numeric entity.
 
-    boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
-    history = await get_instance(hass).async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            boundaries[0],
-            None,
-            entity_id,
-            True,
-            False,
-            None,
-            True,
+    ``carried_value`` is the reading in force at ``frozen_through``. A boundary
+    with no write inside its own slot lives off the last one before it, which
+    can be hours old and can be hidden from the resumed window by an
+    ``unavailable`` row the recorder replays in its place -- so the value is
+    kept rather than re-derived.
+    """
+
+    values: dict[datetime, float]
+    carried_value: float | None
+
+
+class TodaySlotBoundaryStateReader:
+    """Today's numeric state at every slot boundary, re-reading only what is new.
+
+    The counterpart of :class:`TodaySlotEnergyReader` for an entity whose state
+    *is* the value -- battery state of charge is the one this exists for. It
+    keeps the numeric-state semantics of
+    :func:`_sample_rate_values_at_boundaries` exactly: a boundary takes the
+    first write made inside its own slot and falls back to the last reading
+    before it, and nothing here unwraps a counter or looks for a reset, because
+    a percentage that falls has simply fallen.
+
+    That sampling rule is also what settles a boundary: once its own slot has
+    ended, no future write can claim it, so everything but the newest couple of
+    boundaries is kept and only the tail is queried again. Instances have to
+    outlive a single refresh to be worth anything; the coordinator owns one and
+    hands it to every consumer of the same series.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._frozen_by_entity: dict[str, _FrozenBoundaryValues] = {}
+
+    async def async_query_slot_boundary_state_values(
+        self,
+        entity_id: str,
+        reference_time: datetime,
+        *,
+        interval_minutes: int,
+    ) -> dict[datetime, float]:
+        local_boundaries = get_today_completed_local_slot_boundaries(
+            reference_time,
+            interval_minutes=interval_minutes,
         )
-    )
-    states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    return _sample_rate_values_at_boundaries(
-        states, boundaries, interval_minutes=interval_minutes
-    )
+        if not local_boundaries:
+            return {}
+
+        boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+        slot_duration = timedelta(minutes=interval_minutes)
+        # The newest boundary prefers a write made inside its own slot, so the
+        # window has to reach one slot past it -- and no further. The read this
+        # replaces left the end open, which asks the recorder for every row to
+        # the end of the table when the last one that can matter is this.
+        utc_end = boundaries[-1] + slot_duration
+        local_date = _get_local_day_start(reference_time).date()
+        frozen = _take_resumable_prefix(
+            self._frozen_by_entity,
+            entity_id,
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            utc_end=utc_end,
+        )
+        # Resume at the frozen boundary and retain its cached carry. The
+        # recorder's opening replay precedes that boundary, so it may be older
+        # than a real write exactly on the boundary that we already sampled.
+        query_start = frozen.frozen_through if frozen else boundaries[0]
+        pending_boundaries = [
+            boundary
+            for boundary in boundaries
+            if frozen is None or boundary > frozen.frozen_through
+        ]
+        freeze_at = self._find_freeze_boundary(
+            boundaries,
+            slot_duration=slot_duration,
+        )
+
+        carried_value = frozen.carried_value if frozen else None
+
+        def _query_and_parse() -> tuple[dict[datetime, float], float | None]:
+            history = state_changes_during_period(
+                self._hass,
+                query_start,
+                utc_end,
+                entity_id,
+                True,
+                False,
+                None,
+                True,
+            )
+            parsed = _parse_state_values(_states_for_entity(history, entity_id))
+            if frozen is not None:
+                parsed = [item for item in parsed if item[0] > query_start]
+            return (
+                _sample_rate_values_from_parsed(
+                    parsed,
+                    pending_boundaries,
+                    interval_minutes=interval_minutes,
+                    carried_value=carried_value,
+                ),
+                None
+                if freeze_at is None
+                else _value_in_force_at(parsed, freeze_at, fallback=carried_value),
+            )
+
+        pending_values, carry_at_freeze = await get_instance(
+            self._hass
+        ).async_add_executor_job(_query_and_parse)
+        values = {**(frozen.values if frozen else {}), **pending_values}
+        self._freeze(
+            entity_id,
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            freeze_at=freeze_at,
+            previously_frozen_through=frozen.frozen_through if frozen else None,
+            values=values,
+            carried_value=carry_at_freeze,
+        )
+        return values
+
+    @staticmethod
+    def _find_freeze_boundary(
+        boundaries: list[datetime],
+        *,
+        slot_duration: timedelta,
+    ) -> datetime | None:
+        """The newest boundary whose reading can never change again.
+
+        The margin is measured from the read, which is inside the last
+        boundary's own slot -- not from ``utc_end``, which is that slot's end
+        and so up to a whole slot in the future. Measuring against the end
+        would spend the write margin on time that has not passed yet, leaving
+        nothing of it at an interval of thirty minutes or more, and a reading
+        the recorder commits late would be frozen stale -- see
+        ``_BOUNDARY_WRITE_SETTLE_WINDOW``.
+        """
+        read_at = boundaries[-1]
+        settled = [
+            boundary
+            for boundary in boundaries
+            if boundary + slot_duration + _BOUNDARY_WRITE_SETTLE_WINDOW <= read_at
+        ]
+        return settled[-1] if settled else None
+
+    def _freeze(
+        self,
+        entity_id: str,
+        *,
+        local_date: date,
+        interval_minutes: int,
+        freeze_at: datetime | None,
+        previously_frozen_through: datetime | None,
+        values: dict[datetime, float],
+        carried_value: float | None,
+    ) -> None:
+        if freeze_at is None or (
+            previously_frozen_through is not None
+            and freeze_at <= previously_frozen_through
+        ):
+            return
+
+        self._frozen_by_entity[entity_id] = _FrozenBoundaryValues(
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            frozen_through=freeze_at,
+            values={
+                boundary: value
+                for boundary, value in values.items()
+                if boundary <= freeze_at
+            },
+            carried_value=carried_value,
+        )
 
 
 async def query_slot_boundary_state_values_for_entities(
@@ -700,7 +1046,7 @@ async def query_slot_boundary_state_values_for_entities(
     The caller names the window the way :func:`query_cumulative_slot_energy_changes`
     does, so a day that ended a week ago can be sampled as readily as the one in
     progress -- the difference from the today-scoped
-    :func:`query_slot_boundary_state_values`.
+    :class:`TodaySlotBoundaryStateReader`.
 
     Boundaries are the slot *starts* in ``[local_start, local_end)``. Each takes
     the first state written *inside* its own slot, and only falls back to the
@@ -797,50 +1143,394 @@ async def estimate_average_hourly_energy_when_climate_active(
     )
 
 
-async def query_active_hours_by_local_date(
-    hass: HomeAssistant,
-    *,
-    entity_id: str,
-    active_states: tuple[str, ...],
-    local_start: datetime,
-    local_end: datetime,
-) -> dict[date, float]:
-    """Return active-state hours bucketed by local calendar date.
+@dataclass(frozen=True)
+class ApplianceRuntimeRequest:
+    """One appliance's runtime-history question.
 
-    Reads the entity's recorded state changes over ``[local_start, local_end]``
-    and sums, per local calendar day, the hours the entity spent in any of
-    ``active_states``. Intervals spanning midnight are split at the local day
-    boundary so each day gets only its own share.
+    ``key`` is what the answer comes back under -- the appliance id. It is not
+    part of the reuse key, because two appliances watching the same entity for
+    the same states are asking the same question of the recorder and must share
+    one read; ``entity_id`` and ``active_states`` are, because two appliances
+    watching the same entity for *different* states are not.
+
+    ``lookback_days`` is this appliance's own requirement: the answer covers
+    ``lookback_days`` days back from today, and nothing earlier, even when a
+    neighbour on the same entity asked for more.
     """
-    if local_end <= local_start:
-        return {}
 
-    utc_start = dt_util.as_utc(local_start)
-    utc_end = dt_util.as_utc(local_end)
+    key: str
+    entity_id: str
+    active_states: tuple[str, ...]
+    lookback_days: int
 
-    recorder = get_instance(hass)
-    entity_history = await recorder.async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            utc_start,
-            utc_end,
-            entity_id,
-            True,
-            False,
-            None,
-            True,
+
+@dataclass(frozen=True)
+class _SettledRuntimeDays:
+    """One entity/active-state pair's completed days, and what they cover.
+
+    ``hours_by_date`` holds every date in ``[covered_from, settled_through]``
+    explicitly, zeros included, so a resumed read can tell a day that was read
+    and found idle from a day that was never read. The range is contiguous by
+    construction -- it only ever grows forward from a window that was read in
+    one piece -- which is what lets the next read start at
+    ``settled_through + 1`` and simply concatenate.
+
+    ``tz_key`` is the local timezone the days were carved by. Moving it moves
+    every day boundary, so a change discards the prefix rather than mixing two
+    griddings of the same hours.
+    """
+
+    tz_key: str
+    covered_from: date
+    settled_through: date
+    hours_by_date: dict[date, float]
+
+
+def _local_midnight(day: date, tzinfo: Any) -> datetime:
+    """Local midnight of ``day``, offset resolved for that date."""
+    if tzinfo is None:
+        return datetime.combine(day, time.min)
+    return datetime.combine(day, time.min, tzinfo=tzinfo)
+
+
+class ApplianceRuntimeHistoryReader:
+    """Per-appliance active-state hours per local day, read once and resumed.
+
+    Two costs are being paid here, and each has its own fix.
+
+    A read per appliance is a read per appliance: the recorder serves every
+    query from one DB executor thread, so ten appliances are ten serial
+    round-trips however the awaits are arranged. Appliances whose reads start at
+    the same instant are asked for in one ``get_significant_states`` call, so
+    the query count follows the number of distinct start instants -- one, once
+    the settled prefixes have converged -- rather than the number of
+    appliances. Each appliance's active-state interpretation is still applied to
+    the rows on its own, so a switch one appliance counts as ``on`` and another
+    counts as ``heat`` share the read without sharing the answer.
+
+    And a completed local day's runtime can never change, so re-reading the full
+    lookback on every refresh re-derives days that were settled before the
+    integration started. Settled days are kept per entity/active-state pair and
+    only the unsettled tail -- yesterday, once the recorder has had time to
+    commit its last writes, and today so far -- is queried again. A day is only
+    frozen after the window that produced it was read whole, so the carry into
+    it and the split of an interval across its midnight are already in the
+    number that is kept.
+
+    Instances have to outlive a single refresh to be worth anything; the
+    coordinator owns one.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._settled: dict[tuple[str, tuple[str, ...]], _SettledRuntimeDays] = {}
+
+    async def async_query_active_hours_by_local_date(
+        self,
+        requests: Sequence[ApplianceRuntimeRequest],
+        *,
+        reference_time: datetime,
+    ) -> dict[str, dict[date, float]]:
+        """Answer every request, in as few recorder reads as the windows allow.
+
+        Returns ``{request key: {local date: active hours}}``, carrying every
+        date inside that request's own lookback and no other -- a day the
+        appliance never ran is an explicit zero, because the consecutive-skip
+        guard walks back until it finds a date that is absent. A request whose
+        read failed is absent from the result *as a whole* rather than present
+        as a window of zeros: a failure is not an idle appliance, and the caller
+        has to be able to tell them apart.
+        """
+        local_now = dt_util.as_local(reference_time)
+        tzinfo = local_now.tzinfo
+        tz_key = str(tzinfo)
+        today = local_now.date()
+        settled_through_now = _settled_runtime_day(local_now)
+
+        #: ``{(entity id, states): [request, ...]}``, empty state sets dropped —
+        #: an appliance with nothing to count is idle by definition, and asking
+        #: the recorder about it would buy a query for a guaranteed ``{}``.
+        by_reuse_key: dict[
+            tuple[str, tuple[str, ...]], list[ApplianceRuntimeRequest]
+        ] = {}
+        results: dict[str, dict[date, float]] = {}
+        for request in requests:
+            states = _normalize_active_states(request.active_states)
+            if not request.entity_id or not states:
+                # Idle by definition, which is not the same as unanswered: an
+                # explicit window of zeros, exactly as a read of an entity that
+                # never turned on would return.
+                results[request.key] = {
+                    local_date: 0.0
+                    for local_date in _iter_dates(
+                        today - timedelta(days=request.lookback_days), today
+                    )
+                }
+                continue
+            # Lowered, as the recorder stores it: ``state_changes_during_period``
+            # lowered the id for us, ``get_significant_states`` looks it up in a
+            # dict of states metadata and simply finds nothing. A configured
+            # ``switch.Pool`` would come back as a full window of zeros -- and
+            # freeze that way -- rather than as the runtime it actually had.
+            by_reuse_key.setdefault(
+                (request.entity_id.lower(), states), []
+            ).append(request)
+
+        # Anything no longer asked for is a reconfigured entity or active-state
+        # set, or an appliance that left the automation; its prefix can never be
+        # resumed again and would otherwise be kept for the process's lifetime.
+        for stale_key in [key for key in self._settled if key not in by_reuse_key]:
+            del self._settled[stale_key]
+
+        #: ``{first date to read: {reuse key: resumable prefix or None}}``.
+        by_read_start: dict[
+            date, dict[tuple[str, tuple[str, ...]], _SettledRuntimeDays | None]
+        ] = {}
+        for reuse_key, group in by_reuse_key.items():
+            needed_from = today - timedelta(
+                days=max(request.lookback_days for request in group)
+            )
+            resumable = self._take_resumable(
+                reuse_key,
+                tz_key=tz_key,
+                needed_from=needed_from,
+                settled_through_now=settled_through_now,
+            )
+            read_from = (
+                resumable.settled_through + timedelta(days=1)
+                if resumable is not None
+                else needed_from
+            )
+            by_read_start.setdefault(read_from, {})[reuse_key] = resumable
+
+        for read_from, group in sorted(by_read_start.items()):
+            await self._read_group(
+                read_from=read_from,
+                group=group,
+                requests_by_reuse_key=by_reuse_key,
+                results=results,
+                local_now=local_now,
+                tzinfo=tzinfo,
+                tz_key=tz_key,
+                today=today,
+                settled_through_now=settled_through_now,
+            )
+
+        return results
+
+    def _take_resumable(
+        self,
+        reuse_key: tuple[str, tuple[str, ...]],
+        *,
+        tz_key: str,
+        needed_from: date,
+        settled_through_now: date,
+    ) -> _SettledRuntimeDays | None:
+        """The kept prefix this read may resume from, dropping it if it may not.
+
+        A different timezone regrids the days; a prefix reaching past what is
+        settled *now* is a clock that stepped backwards; a prefix that starts
+        after the day being asked for, or ends more than a day before it, leaves
+        a hole no concatenation can fill. Any of them and the entity is read in
+        full once.
+        """
+        frozen = self._settled.get(reuse_key)
+        if frozen is None:
+            return None
+        if (
+            frozen.tz_key != tz_key
+            or frozen.settled_through > settled_through_now
+            or frozen.covered_from > needed_from
+            or frozen.settled_through + timedelta(days=1) < needed_from
+        ):
+            del self._settled[reuse_key]
+            return None
+        return frozen
+
+    async def _read_group(
+        self,
+        *,
+        read_from: date,
+        group: dict[tuple[str, tuple[str, ...]], _SettledRuntimeDays | None],
+        requests_by_reuse_key: dict[
+            tuple[str, tuple[str, ...]], list[ApplianceRuntimeRequest]
+        ],
+        results: dict[str, dict[date, float]],
+        local_now: datetime,
+        tzinfo: Any,
+        tz_key: str,
+        today: date,
+        settled_through_now: date,
+    ) -> None:
+        utc_start = dt_util.as_utc(_local_midnight(read_from, tzinfo))
+        utc_end = dt_util.as_utc(local_now)
+        if utc_end <= utc_start:
+            # Nothing to read: only reachable when the clock sits exactly on a
+            # local midnight the prefix already covers. The kept days still
+            # answer the request.
+            queried: dict[tuple[str, tuple[str, ...]], dict[date, float]] = {
+                reuse_key: {} for reuse_key in group
+            }
+        else:
+            entity_ids = list(dict.fromkeys(entity_id for entity_id, _ in group))
+            reuse_keys = list(group)
+
+            def _query_and_parse() -> dict[
+                tuple[str, tuple[str, ...]], dict[date, float]
+            ]:
+                history = get_significant_states(
+                    self._hass,
+                    # Recorder bounds are exclusive. Include a transition at
+                    # midnight, then clip intervals to the requested day below.
+                    utc_start - timedelta(microseconds=1),
+                    utc_end,
+                    entity_ids=entity_ids,
+                    filters=None,
+                    include_start_time_state=True,
+                    # Switches and climates: the rows a per-entity
+                    # ``state_changes_during_period`` would have returned, plus
+                    # (for the significant domains, climate among them) the
+                    # attribute-only writes it filters out. Those carry the same
+                    # state as the row before them, and an interval is delimited
+                    # by a *change* of state, so they cannot move a boundary.
+                    significant_changes_only=True,
+                    minimal_response=False,
+                    no_attributes=True,
+                    compressed_state_format=False,
+                )
+                # Bucketing runs here rather than after the await: a multi-day
+                # lookback over several entities is thousands of rows, and the
+                # event loop should not be the thread that walks them.
+                return {
+                    (entity_id, states): _bucket_interval_hours_by_local_date(
+                        _build_active_state_intervals(
+                            states=_states_for_entity(history, entity_id),
+                            window_start=utc_start,
+                            window_end=utc_end,
+                            active_states=states,
+                        )
+                    )
+                    for entity_id, states in reuse_keys
+                }
+
+            try:
+                queried = await get_instance(self._hass).async_add_executor_job(
+                    _query_and_parse
+                )
+            except Exception:
+                # The group's appliances stay out of the result, and their kept
+                # prefixes stay exactly as they were, so the next refresh asks
+                # the same question again. A failed read must never settle as a
+                # day of zero runtime.
+                _LOGGER.exception(
+                    "Error reading appliance runtime history for %r",
+                    sorted({entity_id for entity_id, _ in group}),
+                )
+                return
+
+        for reuse_key, resumable in group.items():
+            fresh = queried.get(reuse_key, {})
+            combined = {**(resumable.hours_by_date if resumable else {}), **fresh}
+            covered_from = resumable.covered_from if resumable else read_from
+            # Only back as far as the widest lookback still asks for. The kept
+            # prefix would otherwise hold every day it has ever seen, growing by
+            # one a day for the life of the process while a one-day lookback
+            # reads two of them.
+            needed_from = today - timedelta(
+                days=max(
+                    request.lookback_days
+                    for request in requests_by_reuse_key[reuse_key]
+                )
+            )
+            covered_from = max(covered_from, min(needed_from, settled_through_now))
+            self._freeze(
+                reuse_key,
+                tz_key=tz_key,
+                covered_from=covered_from,
+                settled_through=settled_through_now,
+                combined=combined,
+                previous=resumable,
+            )
+            for request in requests_by_reuse_key[reuse_key]:
+                request_from = today - timedelta(days=request.lookback_days)
+                # Every date in the window explicitly, zeros included: the
+                # consecutive-skip guard walks back day by day and stops at the
+                # first date it cannot find, so a fully idle day has to be
+                # present as a zero rather than missing.
+                results[request.key] = {
+                    **{
+                        local_date: 0.0
+                        for local_date in _iter_dates(request_from, today)
+                    },
+                    **{
+                        local_date: hours
+                        for local_date, hours in combined.items()
+                        if local_date >= request_from
+                    },
+                }
+
+    def _freeze(
+        self,
+        reuse_key: tuple[str, tuple[str, ...]],
+        *,
+        tz_key: str,
+        covered_from: date,
+        settled_through: date,
+        combined: dict[date, float],
+        previous: _SettledRuntimeDays | None,
+    ) -> None:
+        if settled_through < covered_from:
+            # Nothing has settled inside the window that was read. Whatever was
+            # already kept (and was resumable, or this read would have started
+            # earlier) still stands.
+            if previous is not None:
+                self._settled[reuse_key] = previous
+            return
+
+        self._settled[reuse_key] = _SettledRuntimeDays(
+            tz_key=tz_key,
+            covered_from=covered_from,
+            settled_through=settled_through,
+            hours_by_date={
+                local_date: combined.get(local_date, 0.0)
+                for local_date in _iter_dates(covered_from, settled_through)
+            },
         )
+
+
+def _settled_runtime_day(local_now: datetime) -> date:
+    """The newest local day whose runtime total can never change again.
+
+    Yesterday, once today has run long enough for the recorder to have
+    committed the writes it stamped before midnight -- the same margin a
+    boundary sample waits out, for the same reason. Before that the day just
+    ended is still in flight and is read again.
+    """
+    day_start = _get_local_day_start(local_now)
+    if local_now - day_start >= _BOUNDARY_WRITE_SETTLE_WINDOW:
+        return day_start.date() - timedelta(days=1)
+    return day_start.date() - timedelta(days=2)
+
+
+def _normalize_active_states(active_states: Sequence[str]) -> tuple[str, ...]:
+    """The active states as a reuse key: trimmed, lowered, deduplicated, ordered.
+
+    ``_build_active_state_intervals`` compares against exactly this set, so two
+    spellings of the same set have to land on one key or they would buy two
+    reads of one question.
+    """
+    return tuple(
+        sorted({state.strip().lower() for state in active_states if state.strip()})
     )
-    entity_states = (
-        entity_history.get(entity_id) or entity_history.get(entity_id.lower()) or []
-    )
-    active_intervals = _build_active_state_intervals(
-        states=entity_states,
-        window_start=utc_start,
-        window_end=utc_end,
-        active_states=active_states,
-    )
-    return _bucket_interval_hours_by_local_date(active_intervals)
+
+
+def _iter_dates(start: date, end: date) -> list[date]:
+    dates: list[date] = []
+    cursor = start
+    while cursor <= end:
+        dates.append(cursor)
+        cursor += timedelta(days=1)
+    return dates
 
 
 def _bucket_interval_hours_by_local_date(
@@ -963,11 +1653,45 @@ def _build_slot_energy_changes_from_boundaries(
     return values_by_slot
 
 
+def _parse_state_values(states: list[Any]) -> list[tuple[datetime, float]]:
+    """A recorder's rows as ``(instant, value)``, oldest first.
+
+    Rows without a timestamp and rows whose state is not a number --
+    ``unavailable`` and ``unknown``, which every sensor emits sooner or later --
+    are dropped rather than read as a value.
+    """
+    parsed: list[tuple[datetime, float]] = []
+    for state in states:
+        last_updated = getattr(state, "last_updated", None)
+        if last_updated is None:
+            continue
+        value = _read_float(getattr(state, "state", None))
+        if value is None:
+            continue
+        parsed.append((dt_util.as_utc(last_updated), value))
+    parsed.sort(key=lambda item: item[0])
+    return parsed
+
+
+def _value_in_force_at(
+    parsed: list[tuple[datetime, float]],
+    instant: datetime,
+    *,
+    fallback: float | None,
+) -> float | None:
+    """The last reading written at or before ``instant``, else ``fallback``."""
+    for parsed_instant, value in reversed(parsed):
+        if parsed_instant <= instant:
+            return value
+    return fallback
+
+
 def _sample_rate_values_at_boundaries(
     states: list[Any],
     boundaries: list[datetime],
     *,
     interval_minutes: int,
+    carried_value: float | None = None,
 ) -> dict[datetime, float]:
     """Sample a rate entity per slot, preferring the write made inside the slot.
 
@@ -987,26 +1711,36 @@ def _sample_rate_values_at_boundaries(
     single value can do better, and the alternative errs by a whole slot instead
     of part of one.
     """
-    if not states or not boundaries:
-        return {}
+    return _sample_rate_values_from_parsed(
+        _parse_state_values(states),
+        boundaries,
+        interval_minutes=interval_minutes,
+        carried_value=carried_value,
+    )
 
-    parsed: list[tuple[datetime, float]] = []
-    for state in states:
-        last_updated = getattr(state, "last_updated", None)
-        if last_updated is None:
-            continue
-        value = _read_float(getattr(state, "state", None))
-        if value is None:
-            continue
-        parsed.append((dt_util.as_utc(last_updated), value))
-    if not parsed:
+
+def _sample_rate_values_from_parsed(
+    parsed: list[tuple[datetime, float]],
+    boundaries: list[datetime],
+    *,
+    interval_minutes: int,
+    carried_value: float | None = None,
+) -> dict[datetime, float]:
+    """:func:`_sample_rate_values_at_boundaries` over rows already parsed.
+
+    ``carried_value`` is the reading in force before the window opened, which a
+    resumed read holds from its settled prefix. It cannot be recovered from the
+    window's own rows: the recorder replays whatever was last written, and a
+    sensor that went ``unavailable`` before the window replays as nothing at
+    all, which would drop every boundary that had been living off the carry.
+    """
+    if not boundaries:
         return {}
-    parsed.sort(key=lambda item: item[0])
 
     span = timedelta(minutes=interval_minutes)
     samples: dict[datetime, float] = {}
     index = 0
-    carried: float | None = None
+    carried = carried_value
     for boundary in boundaries:
         # Everything written before this slot began is only a fallback for it.
         while index < len(parsed) and parsed[index][0] < boundary:

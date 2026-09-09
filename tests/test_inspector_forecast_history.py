@@ -221,6 +221,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             _DummyStore(),
             _make_cfg(),
             battery_forecast_provider=_battery_forecast_provider,
+            battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
@@ -251,12 +252,19 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
     ):
         current_slot, next_slot = _pinned_slot_helpers()
         old_now = service_mod.dt_util.now
-        old_actuals = service_mod.load_actuals_for_day
+        # The day's solar actuals are the meter batch's solar column, so a test
+        # that wants actuals seeds them there rather than stubbing a read of
+        # their own. Slot keys are local ``HH:MM`` on the day under test; the
+        # batch carries kWh keyed by slot start.
+        meter_batch = {
+            "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0},
+            "sensor.solar_total": {
+                datetime.fromisoformat(f"{target_date}T{slot}:00+02:00"): wh / 1000.0
+                for slot, wh in (actuals_by_slot or {}).items()
+            },
+        }
         try:
             service_mod.dt_util.now = lambda: datetime.fromisoformat(NOW)
-            service_mod.load_actuals_for_day = AsyncMock(
-                return_value=actuals_by_slot or {}
-            )
             with current_slot, next_slot, patch.object(
                 service,
                 "_load_slot_energy_kwh_for_entities",
@@ -265,9 +273,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 # these tests are about the raw-state readers.
                 AsyncMock(
                     return_value=SlotEnergyBatch(
-                        by_entity={
-                            "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0}
-                        },
+                        by_entity=meter_batch,
                         liveness_instants=[],
                     )
                 ),
@@ -285,8 +291,15 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value=house_actual or []),
             ), patch.object(
                 service,
-                "_load_battery_soc_actual_for_date",
-                AsyncMock(return_value=battery_soc_actual or []),
+                "_load_numeric_history_by_slot_for_entities",
+                AsyncMock(
+                    return_value={
+                        "sensor.battery_soc": {
+                            point["slot"]: point["pct"]
+                            for point in battery_soc_actual or []
+                        }
+                    }
+                ),
             ), patch.object(
                 service,
                 "_load_grid_actual_for_date",
@@ -299,7 +312,6 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 return await service.async_get_inspector_day(target_date)
         finally:
             service_mod.dt_util.now = old_now
-            service_mod.load_actuals_for_day = old_actuals
 
     async def test_past_day_serves_the_whole_recorded_day(self):
         archived = _archived_points(
@@ -446,7 +458,11 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p["slot"] for p in series["batterySocActual"]], ["09:45"])
 
         totals = payload["totals"]
-        self.assertEqual(totals["actualWh"], 140.0)
+        # Solar stops one slot earlier than the other meters and always has: its
+        # day window ends at the current *completed* slot, so the running slot
+        # never enters its actuals at all rather than being dropped on the way
+        # to the chart.
+        self.assertEqual(totals["actualWh"], 100.0)
         self.assertEqual(totals["houseActualWh"], 280.0)
         self.assertEqual(totals["gridActualWh"], -390.0)
         self.assertEqual(totals["batteryActualWh"], 510.0)

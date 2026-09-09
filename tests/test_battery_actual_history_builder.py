@@ -5,6 +5,7 @@ import types
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
@@ -109,20 +110,23 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls) -> None:
         cls._dt_patcher.stop()
 
+    @staticmethod
+    def _reader(query_mock: AsyncMock) -> SimpleNamespace:
+        """A stand-in for the coordinator's shared boundary reader."""
+        return SimpleNamespace(
+            async_query_slot_boundary_state_values=query_mock
+        )
+
     async def test_default_interval_keeps_hourly_behavior(self) -> None:
-        hass = object()
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
         boundary_samples = {
             _FakeDtUtil.as_utc(slot_start): 30.0,
             _FakeDtUtil.as_utc(slot_start.replace(hour=21)): 35.0,
         }
 
+        query_mock = AsyncMock(return_value=boundary_samples)
+
         with (
-            patch.object(
-                battery_actual_history_builder,
-                "query_slot_boundary_state_values",
-                AsyncMock(return_value=boundary_samples),
-            ) as query_mock,
             patch.object(
                 battery_actual_history_builder,
                 "get_today_completed_local_slots",
@@ -130,13 +134,12 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
             ) as slots_mock,
         ):
             actual_history = await battery_actual_history_builder.build_battery_actual_history(
-                hass,
+                self._reader(query_mock),
                 "sensor.battery_soc",
                 REFERENCE_TIME,
             )
 
         query_mock.assert_awaited_once_with(
-            hass,
             "sensor.battery_soc",
             REFERENCE_TIME,
             interval_minutes=60,
@@ -154,19 +157,15 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_interval_minutes_15_emits_quarter_hour_entry(self) -> None:
-        hass = object()
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         boundary_samples = {
             _FakeDtUtil.as_utc(slot_start): 40.0,
             datetime(2026, 3, 20, 19, 30, tzinfo=UTC): 41.25,
         }
 
+        query_mock = AsyncMock(return_value=boundary_samples)
+
         with (
-            patch.object(
-                battery_actual_history_builder,
-                "query_slot_boundary_state_values",
-                AsyncMock(return_value=boundary_samples),
-            ) as query_mock,
             patch.object(
                 battery_actual_history_builder,
                 "get_today_completed_local_slots",
@@ -174,14 +173,13 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             actual_history = await battery_actual_history_builder.build_battery_actual_history(
-                hass,
+                self._reader(query_mock),
                 "sensor.battery_soc",
                 REFERENCE_TIME,
                 interval_minutes=15,
             )
 
         query_mock.assert_awaited_once_with(
-            hass,
             "sensor.battery_soc",
             REFERENCE_TIME,
             interval_minutes=15,
@@ -198,18 +196,14 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_invalid_or_missing_soc_boundaries_are_skipped(self) -> None:
-        hass = object()
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         boundary_samples = {
             _FakeDtUtil.as_utc(slot_start): 120.0,
         }
 
+        query_mock = AsyncMock(return_value=boundary_samples)
+
         with (
-            patch.object(
-                battery_actual_history_builder,
-                "query_slot_boundary_state_values",
-                AsyncMock(return_value=boundary_samples),
-            ),
             patch.object(
                 battery_actual_history_builder,
                 "get_today_completed_local_slots",
@@ -217,7 +211,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             actual_history = await battery_actual_history_builder.build_battery_actual_history(
-                hass,
+                self._reader(query_mock),
                 "sensor.battery_soc",
                 REFERENCE_TIME,
                 interval_minutes=15,
