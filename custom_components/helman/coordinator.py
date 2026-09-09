@@ -123,10 +123,11 @@ from .point_forecast_response import build_solar_forecast_response
 from .power_polarity import is_power_inverted
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
+    ApplianceRuntimeHistoryReader,
+    ApplianceRuntimeRequest,
     TodaySlotBoundaryStateReader,
     TodaySlotEnergyReader,
     get_local_current_slot_start,
-    query_active_hours_by_local_date,
 )
 from .scheduling.schedule import (
     ScheduleControlConfig,
@@ -415,16 +416,6 @@ def _build_house_profile_health(snapshot: dict[str, Any]) -> tuple[str, str] | N
             "Assistant log.",
         )
     return None
-
-
-def _iter_local_dates(start: date, end: date) -> list[date]:
-    """Inclusive list of local calendar dates from ``start`` to ``end``."""
-    dates: list[date] = []
-    cursor = start
-    while cursor <= end:
-        dates.append(cursor)
-        cursor += timedelta(days=1)
-    return dates
 
 
 def _merge_grid_forecast_responses(
@@ -763,6 +754,10 @@ class HelmanCoordinator:
         # integration is what lets the forecast warm-up and the automation run
         # that follows it share the day they have both already read.
         self._battery_boundary_history = TodaySlotBoundaryStateReader(hass)
+        # And the same again for appliance runtime: a completed day's hours are
+        # settled, so the automation's lookback is read once and only its tail
+        # is asked for again.
+        self._appliance_runtime_history = ApplianceRuntimeHistoryReader(hass)
         # The rebuild currently in flight, if any, so a second trigger joins it
         # instead of starting its own 56-day recorder scan.
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
@@ -4637,64 +4632,70 @@ class HelmanCoordinator:
 
         Only resolved for appliances referenced by an enabled ``appliance_runtime``
         optimizer; every other appliance (and the recorder) is left untouched.
-        The lookback window covers the largest configured
-        ``max_consecutive_skips`` (plus one day) so the consecutive-skip guard
-        can be evaluated, plus today-so-far for the current-day budget.
+        Each appliance gets its own lookback -- its largest configured
+        ``max_consecutive_skips`` plus one day, so the consecutive-skip guard can
+        be evaluated -- plus today-so-far for the current-day budget. One
+        appliance configured to tolerate a fortnight of skips no longer widens
+        every other appliance's window to match.
 
-        Every local date in the lookback window is seeded to ``0.0`` before the
-        recorder data is merged in, so a day the appliance never ran is present
-        as an explicit zero rather than absent — the consecutive-skip guard
-        walks back day by day and must be able to see fully-idle days.
+        The reader batches the reads and keeps the days that have settled, so
+        the queries follow the number of distinct windows rather than the number
+        of appliances; see :class:`ApplianceRuntimeHistoryReader`.
+
+        The reader fills every local date in the appliance's own window,
+        explicit zeros included, so a day the appliance never ran is present
+        rather than absent — the consecutive-skip guard walks back day by day
+        and must be able to see fully-idle days. An appliance whose read failed
+        comes back empty instead, exactly as it did when each appliance was read
+        on its own, so a failure never masquerades as a run of idle days.
         """
-        requirements = self._resolve_runtime_history_requirements()
-        if requirements is None:
+        lookback_days_by_appliance_id = self._resolve_runtime_history_requirements()
+        if lookback_days_by_appliance_id is None:
             return {}
-        lookback_days, referenced_appliance_ids = requirements
 
-        local_now = dt_util.as_local(reference_time)
-        local_today_start = local_now.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        local_start = local_today_start - timedelta(days=lookback_days)
-        window_dates = _iter_local_dates(local_start.date(), local_now.date())
-
-        runtime_by_appliance: dict[str, dict[date, float]] = {}
+        requests: list[ApplianceRuntimeRequest] = []
         for appliance in self._iter_automation_candidate_appliances():
-            if appliance.id not in referenced_appliance_ids:
+            lookback_days = lookback_days_by_appliance_id.get(appliance.id)
+            if lookback_days is None:
                 continue
             entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
             if entity_id is None:
                 continue
-            try:
-                queried = await query_active_hours_by_local_date(
-                    self._hass,
+            requests.append(
+                ApplianceRuntimeRequest(
+                    key=appliance.id,
                     entity_id=entity_id,
                     active_states=active_states,
-                    local_start=local_start,
-                    local_end=local_now,
+                    lookback_days=lookback_days,
                 )
-            except Exception:
-                _LOGGER.exception(
-                    "Error resolving automation runtime history for appliance %r",
-                    appliance.id,
-                )
-                runtime_by_appliance[appliance.id] = {}
-                continue
-            runtime_by_appliance[appliance.id] = {
-                **{local_date: 0.0 for local_date in window_dates},
-                **queried,
-            }
-        return runtime_by_appliance
+            )
+        if not requests:
+            return {}
+
+        reader = self._appliance_runtime_history
+        try:
+            queried = await reader.async_query_active_hours_by_local_date(
+                requests,
+                reference_time=reference_time,
+            )
+        except Exception:
+            _LOGGER.exception("Error resolving automation runtime history")
+            return {request.key: {} for request in requests}
+
+        return {request.key: queried.get(request.key) or {} for request in requests}
 
     def _resolve_runtime_history_requirements(
         self,
-    ) -> tuple[int, set[str]] | None:
-        """Return ``(lookback_days, appliance_ids)`` for appliance_runtime rules.
+    ) -> dict[str, int] | None:
+        """Return ``{appliance id: lookback days}`` for appliance_runtime rules.
 
-        ``appliance_ids`` are the appliances referenced by an enabled
-        ``appliance_runtime`` optimizer — the only appliances whose recorder history
-        needs resolving. Returns ``None`` when no such optimizer references a
-        valid appliance.
+        The keys are the appliances referenced by an enabled
+        ``appliance_runtime`` optimizer — the only appliances whose recorder
+        history needs resolving. The value is that appliance's own requirement:
+        the largest ``max_consecutive_skips`` among the optimizers targeting it,
+        plus one day, which is what ``_prior_consecutive_skips`` can walk back
+        over before the answer stops mattering. Returns ``None`` when no such
+        optimizer references a valid appliance.
 
         **The appliance lives on ``target``, not on ``params``.** It is identity,
         which a condition group may never override, and every other reader takes
@@ -4708,22 +4709,32 @@ class HelmanCoordinator:
         automation_config = read_automation_config(self._active_config)
         if automation_config is None or not automation_config.enabled:
             return None
-        max_consecutive_skips = 0
-        appliance_ids: set[str] = set()
+        lookback_days_by_appliance_id: dict[str, int] = {}
         for optimizer in automation_config.execution_optimizers:
             if optimizer.kind != "appliance_runtime":
                 continue
             appliance_id = optimizer.controllable_id
-            if appliance_id:
-                appliance_ids.add(appliance_id)
-            skip = optimizer.params.get("skip")
-            if isinstance(skip, Mapping):
-                raw = skip.get("max_consecutive_skips")
+            if not appliance_id:
+                continue
+            max_consecutive_skips = 0
+            # ``params.daily_minimum.max_consecutive_skips``, which is where the
+            # consumer reads it (``optimizers/appliance_runtime.py``). The old
+            # ``params.skip`` mapping is in ``RELOCATED_OPTIMIZER_KEYS`` and the
+            # loader migrates it away, so reading it found nothing and every
+            # appliance silently fell back to a one-day lookback -- the same
+            # class of miss as ``appliance_id`` below.
+            daily_minimum = optimizer.params.get("daily_minimum")
+            if isinstance(daily_minimum, Mapping):
+                raw = daily_minimum.get("max_consecutive_skips")
                 if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
-                    max_consecutive_skips = max(max_consecutive_skips, raw)
-        if not appliance_ids:
+                    max_consecutive_skips = raw
+            lookback_days_by_appliance_id[appliance_id] = max(
+                lookback_days_by_appliance_id.get(appliance_id, 0),
+                max_consecutive_skips + 1,
+            )
+        if not lookback_days_by_appliance_id:
             return None
-        return max_consecutive_skips + 1, appliance_ids
+        return lookback_days_by_appliance_id
 
     def _iter_automation_candidate_appliances(
         self,

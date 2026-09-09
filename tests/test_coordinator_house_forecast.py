@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from types import SimpleNamespace
 import unittest
 import unittest.mock
 from datetime import datetime, timedelta
@@ -153,7 +154,19 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
-    recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
+    class _ApplianceRuntimeHistoryReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_active_hours_by_local_date(self, requests, **kwargs):
+            return {request.key: {} for request in requests}
+
+    recorder_slots_mod.ApplianceRuntimeHistoryReader = _ApplianceRuntimeHistoryReader
+    recorder_slots_mod.ApplianceRuntimeRequest = type(
+        "ApplianceRuntimeRequest",
+        (SimpleNamespace,),
+        {},
+    )
 
     class _TodaySlotEnergyReader:
         def __init__(self, hass):
