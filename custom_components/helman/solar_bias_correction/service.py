@@ -241,15 +241,25 @@ class SolarBiasCorrectionService:
         previous_is_stale = self._is_stale
         self._training_in_progress = True
         await self._training_lock.acquire()
+        # Captured once, before the first await: a configuration change landing
+        # mid-run must not have the profile fitted to one configuration and
+        # stamped with another's fingerprint. Whether the captured one is still
+        # current is settled below, where the result is adopted.
+        cfg = self._cfg
         try:
             now = dt_util.now()
-            samples = await load_trainer_samples(self._hass, self._cfg, now)
+            samples = await load_trainer_samples(self._hass, cfg, now)
             actuals = await load_actuals_window(
                 self._hass,
-                self._cfg,
-                days=self._cfg.max_training_window_days,
+                cfg,
+                days=cfg.max_training_window_days,
             )
-            outcome = train(samples, actuals, self._cfg, now=now)
+            # The fit is pure arithmetic over a window that can run to ninety
+            # days of slots, and holding the event loop for it stalls every
+            # other thing Home Assistant is doing. Nothing in it touches hass.
+            outcome = await self._hass.async_add_executor_job(
+                train, samples, actuals, cfg, now
+            )
             payload = {
                 "version": 2,
                 "profile": asdict(outcome.profile),
@@ -260,7 +270,12 @@ class SolarBiasCorrectionService:
             self._profile = outcome.profile
             self._metadata = outcome.metadata
             self._explainability = outcome.explainability
-            self._is_stale = False
+            # Fresh against the configuration it was fitted to; stale if that
+            # configuration was replaced while the fit was running.
+            self._is_stale = (
+                outcome.metadata.training_config_fingerprint
+                != self._current_fingerprint
+            )
         except Exception as err:
             preserve_profile = self._should_preserve_profile(
                 previous_profile,

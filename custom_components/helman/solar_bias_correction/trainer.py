@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import datetime
 import hashlib
 import logging
@@ -92,7 +93,63 @@ def _slot_to_minutes(slot: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def _forecast_slot_ends(forecast_slot_keys: list[str]) -> Dict[str, int]:
+class _DayActuals:
+    """One day's measured slots, parsed once and indexed for range sums.
+
+    The trainer asks the same day for the energy inside a forecast slot, then
+    for the energy inside an hour, and then asks both again while explaining
+    itself. Re-parsing every ``HH:MM`` key on every one of those asks is what
+    made a fifty-six day window a million-odd string conversions (#241): the
+    keys are parsed once here and every later ask is a bisection into the
+    sorted minutes.
+
+    A range is still summed left to right over the slots inside it -- the same
+    terms in the same order the scan added -- rather than differenced out of a
+    prefix table, so no value moves by a float ulp and the fitted numbers are
+    the ones the scan produced.
+    """
+
+    __slots__ = ("_minutes", "_values")
+
+    def __init__(self, day_actuals: dict[str, float]) -> None:
+        parsed: list[tuple[int, float]] = []
+        for slot_key, value in day_actuals.items():
+            try:
+                parsed.append((_slot_to_minutes(slot_key), value))
+            except (ValueError, AttributeError):
+                continue
+        parsed.sort(key=lambda item: item[0])
+        self._minutes = [minutes for minutes, _ in parsed]
+        self._values = [value for _, value in parsed]
+
+    def range_wh(self, start_minute: int, end_minute: int) -> float:
+        """Sum every actual whose slot start falls in ``[start, end)``."""
+        low = bisect_left(self._minutes, start_minute)
+        high = bisect_left(self._minutes, end_minute)
+        return sum(self._values[low:high])
+
+    def hour_wh(self, hour: int) -> float:
+        """Everything the day's actuals put inside one hour.
+
+        Serves both grains without being told which it has: a fifteen-minute
+        day contributes the hour's four slots and an hour-grain day its single
+        ``HH:00`` entry, and both come to the hour's whole energy.
+        """
+        return self.range_wh(hour * 60, (hour + 1) * 60)
+
+    def total_wh(self) -> float:
+        return sum(self._values)
+
+
+_EMPTY_DAY_ACTUALS = _DayActuals({})
+
+
+def _forecast_slot_starts(forecast_slot_keys: list[str]) -> Dict[str, int]:
+    """Where each forecast slot begins, in minutes into the day, parsed once."""
+    return {slot: _slot_to_minutes(slot) for slot in forecast_slot_keys}
+
+
+def _forecast_slot_ends(slot_starts: Dict[str, int]) -> Dict[str, int]:
     """Where each forecast slot stops, in minutes into the day.
 
     A forecast slot reaches to the next one -- an hourly forecast has to be
@@ -108,7 +165,7 @@ def _forecast_slot_ends(forecast_slot_keys: list[str]) -> Dict[str, int]:
     built once here rather than re-derived per slot from a list whose sortedness
     each caller would have to keep promising.
     """
-    minutes = [_slot_to_minutes(slot) for slot in sorted(forecast_slot_keys, key=_slot_to_minutes)]
+    minutes = sorted(slot_starts.values())
     gaps = [b - a for a, b in zip(minutes, minutes[1:]) if b > a]
     step = min(gaps) if gaps else FORECAST_CANONICAL_GRANULARITY_MINUTES
     ends: Dict[str, int] = {}
@@ -119,50 +176,22 @@ def _forecast_slot_ends(forecast_slot_keys: list[str]) -> Dict[str, int]:
 
 
 def _aggregate_actuals_into_forecast_slot(
-    day_actuals: dict[str, float],
+    day: _DayActuals,
     *,
     forecast_slot: str,
+    slot_starts: Dict[str, int],
     slot_ends: Dict[str, int],
 ) -> float:
     """Sum every actual whose slot start falls inside this forecast slot."""
-    start = _slot_to_minutes(forecast_slot)
+    start = slot_starts[forecast_slot]
     end = slot_ends.get(forecast_slot, start + FORECAST_CANONICAL_GRANULARITY_MINUTES)
-    total = 0.0
-    for actual_slot, value in day_actuals.items():
-        try:
-            minutes = _slot_to_minutes(actual_slot)
-        except (ValueError, AttributeError):
-            continue
-        if start <= minutes < end:
-            total += value
-    return total
-
-
-def _hour_of(slot: str) -> int:
-    return _slot_to_minutes(slot) // 60
-
-
-def _hour_actual_wh(day_actuals: dict[str, float], hour: int) -> float:
-    """Everything the day's actuals put inside one hour.
-
-    Serves both grains without being told which it has: a fifteen-minute day
-    contributes the hour's four slots and an hour-grain day its single ``HH:00``
-    entry, and both come to the hour's whole energy.
-    """
-    total = 0.0
-    for slot_key, value in day_actuals.items():
-        try:
-            minutes = _slot_to_minutes(slot_key)
-        except (ValueError, AttributeError):
-            continue
-        if hour * 60 <= minutes < (hour + 1) * 60:
-            total += value
-    return total
+    return day.range_wh(start, end)
 
 
 def _hour_ratios(
     slot_forecast_wh: dict[str, float],
-    day_actuals: dict[str, float],
+    day: _DayActuals,
+    slot_starts: Dict[str, int],
 ) -> Dict[int, float]:
     """One actual-over-forecast ratio per hour, for a day trained at hour grain.
 
@@ -186,14 +215,11 @@ def _hour_ratios(
     """
     forecast_by_hour: Dict[int, float] = {}
     for slot, value in slot_forecast_wh.items():
-        try:
-            hour = _hour_of(slot)
-        except (ValueError, AttributeError):
-            continue
+        hour = slot_starts[slot] // 60
         forecast_by_hour[hour] = forecast_by_hour.get(hour, 0.0) + value
 
     return {
-        hour: _hour_actual_wh(day_actuals, hour) / hour_forecast
+        hour: day.hour_wh(hour) / hour_forecast
         for hour, hour_forecast in forecast_by_hour.items()
         if hour_forecast > 0.0
     }
@@ -203,7 +229,8 @@ def _day_slot_actual_wh(
     slot: str,
     *,
     day_forecast: float,
-    day_actuals: dict[str, float],
+    day: _DayActuals,
+    slot_starts: Dict[str, int],
     slot_ends: Dict[str, int],
     hour_ratios: Dict[int, float] | None,
 ) -> float:
@@ -220,11 +247,12 @@ def _day_slot_actual_wh(
     """
     if hour_ratios is None:
         return _aggregate_actuals_into_forecast_slot(
-            day_actuals,
+            day,
             forecast_slot=slot,
+            slot_starts=slot_starts,
             slot_ends=slot_ends,
         )
-    return day_forecast * hour_ratios.get(_hour_of(slot), 0.0)
+    return day_forecast * hour_ratios.get(slot_starts[slot] // 60, 0.0)
 
 
 def _hourly_grain_dates(
@@ -257,23 +285,25 @@ def _serialize_invalidated_slots_by_date(
 
 def _training_day_totals(
     sample: TrainerSample,
-    day_actuals: dict[str, float],
+    day: _DayActuals,
     invalidated_slots: set[str],
 ) -> tuple[float, float]:
-    forecast_slot_keys = sorted(sample.slot_forecast_wh, key=_slot_to_minutes)
-    if not forecast_slot_keys:
-        return sample.forecast_wh, sum(day_actuals.values())
+    """The day's forecast and measured energy, over the day's own forecast grid."""
+    slot_starts = _forecast_slot_starts(list(sample.slot_forecast_wh))
+    if not slot_starts:
+        return sample.forecast_wh, day.total_wh()
 
-    slot_ends = _forecast_slot_ends(forecast_slot_keys)
+    slot_ends = _forecast_slot_ends(slot_starts)
     forecast_total = 0.0
     actual_total = 0.0
-    for slot in forecast_slot_keys:
+    for slot in sorted(slot_starts, key=slot_starts.__getitem__):
         if slot in invalidated_slots:
             continue
         forecast_total += sample.slot_forecast_wh.get(slot, 0.0)
         actual_total += _aggregate_actuals_into_forecast_slot(
-            day_actuals,
+            day,
             forecast_slot=slot,
+            slot_starts=slot_starts,
             slot_ends=slot_ends,
         )
     return forecast_total, actual_total
@@ -365,26 +395,27 @@ def _build_training_explainability(
     cfg: BiasConfig,
     trained_at: str,
     forecast_slot_keys: list[str],
+    slot_starts: dict[str, int],
+    slot_ends: dict[str, int],
+    day_actuals_by_date: dict[str, _DayActuals],
+    hour_ratios_by_date: dict[str, Dict[int, float]],
     factors: dict[str, float],
     omitted_slots: list[str],
     omitted_slot_reasons: dict[str, str],
     slot_forecast_sums: dict[str, float],
     slot_actual_sums: dict[str, float],
     slot_raw_ratios: dict[str, float | None],
-    hourly_dates: set[str],
     interpolated_anchors: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> SolarBiasTrainingExplainability:
+    """Restate the fit row by row, off the aggregates the fit itself was given.
+
+    The parsed days, the slot grid and the hourly ratios all arrive from
+    :func:`train` rather than being rebuilt here, so the number the inspector
+    shows is arrived at by the code that fitted it -- and a fifty-six day
+    window is not scanned a third time to say so.
+    """
     slots: dict[str, SolarBiasSlotExplainability] = {}
     omitted_slot_set = set(omitted_slots)
-    slot_ends = _forecast_slot_ends(forecast_slot_keys)
-    hour_ratios_by_date = {
-        sample.date: _hour_ratios(
-            sample.slot_forecast_wh,
-            actuals.slot_actuals_by_date.get(sample.date, {}),
-        )
-        for sample in usable_samples
-        if sample.date in hourly_dates
-    }
 
     for slot in forecast_slot_keys:
         rows: list[SolarBiasContributionRow] = []
@@ -419,7 +450,8 @@ def _build_training_explainability(
             day_actual = _day_slot_actual_wh(
                 slot,
                 day_forecast=day_forecast,
-                day_actuals=actuals.slot_actuals_by_date.get(sample.date, {}),
+                day=day_actuals_by_date.get(sample.date, _EMPTY_DAY_ACTUALS),
+                slot_starts=slot_starts,
                 slot_ends=slot_ends,
                 hour_ratios=hour_ratios,
             )
@@ -554,15 +586,21 @@ def train(
     )
 
     hourly_dates = _hourly_grain_dates(samples, actuals)
+    # Parsed once for the whole run: the day gate, the fit and the
+    # explainability all ask the same days the same questions.
+    day_actuals_by_date = {
+        date: _DayActuals(day_actuals)
+        for date, day_actuals in actuals.slot_actuals_by_date.items()
+    }
     usable_samples: List[TrainerSample] = []
     dropped_days: List[Dict[str, str]] = []
 
     for s in samples:
-        day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
+        day = day_actuals_by_date.get(s.date, _EMPTY_DAY_ACTUALS)
         invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
         day_forecast, sum_actual = _training_day_totals(
             s,
-            day_actuals,
+            day,
             invalidated_slots,
         )
 
@@ -622,20 +660,27 @@ def train(
             slot: [] for slot in forecast_slot_keys
         }
 
-    sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
-    slot_ends = _forecast_slot_ends(sorted_forecast_slots)
-    for s in usable_samples:
-        day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
-        invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
-        # An hour-grain day has one ratio per hour and every slot of that hour
-        # is trained on it; ``slot_valid_day_counts`` still counts the day once
-        # per slot, so ``min_valid_slot_days`` keeps meaning "days that
-        # contributed".
-        hour_ratios = (
-            _hour_ratios(s.slot_forecast_wh, day_actuals)
-            if s.date in hourly_dates
-            else None
+    slot_starts = _forecast_slot_starts(list(forecast_slot_keys))
+    sorted_forecast_slots = sorted(slot_starts, key=slot_starts.__getitem__)
+    slot_ends = _forecast_slot_ends(slot_starts)
+    # An hour-grain day has one ratio per hour and every slot of that hour is
+    # trained on it; ``slot_valid_day_counts`` still counts the day once per
+    # slot, so ``min_valid_slot_days`` keeps meaning "days that contributed".
+    # Computed here rather than in each pass, because the explainability has to
+    # restate exactly the ratios the fit used.
+    hour_ratios_by_date: Dict[str, Dict[int, float]] = {
+        s.date: _hour_ratios(
+            s.slot_forecast_wh,
+            day_actuals_by_date.get(s.date, _EMPTY_DAY_ACTUALS),
+            slot_starts,
         )
+        for s in usable_samples
+        if s.date in hourly_dates
+    }
+    for s in usable_samples:
+        day = day_actuals_by_date.get(s.date, _EMPTY_DAY_ACTUALS)
+        invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
+        hour_ratios = hour_ratios_by_date.get(s.date)
         for slot in sorted_forecast_slots:
             if slot in invalidated_slots:
                 continue
@@ -647,7 +692,8 @@ def train(
             day_actual = _day_slot_actual_wh(
                 slot,
                 day_forecast=day_forecast,
-                day_actuals=day_actuals,
+                day=day,
+                slot_starts=slot_starts,
                 slot_ends=slot_ends,
                 hour_ratios=hour_ratios,
             )
@@ -725,13 +771,16 @@ def train(
         cfg=cfg,
         trained_at=trained_at,
         forecast_slot_keys=sorted_forecast_slots,
+        slot_starts=slot_starts,
+        slot_ends=slot_ends,
+        day_actuals_by_date=day_actuals_by_date,
+        hour_ratios_by_date=hour_ratios_by_date,
         factors=factors,
         omitted_slots=omitted_slots,
         omitted_slot_reasons=omitted_slot_reasons,
         slot_forecast_sums=slot_forecast_sums,
         slot_actual_sums=slot_actual_sums,
         slot_raw_ratios=slot_raw_ratios,
-        hourly_dates=hourly_dates,
         interpolated_anchors=interpolated_anchors,
     )
 

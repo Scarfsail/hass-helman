@@ -97,9 +97,21 @@ def _make_cfg(
     )
 
 
+def _make_hass():
+    """A hass whose executor runs inline, so a test sees the fit's real result."""
+
+    async def _executor_job(func, *args):
+        return func(*args)
+
+    return SimpleNamespace(
+        bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+        async_add_executor_job=_executor_job,
+    )
+
+
 def test_training_failed_with_preserved_profile_keeps_adjusted_variant():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -130,7 +142,7 @@ def test_training_failed_with_preserved_profile_keeps_adjusted_variant():
 
 def test_training_failed_without_profile_falls_back_to_raw():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -159,7 +171,7 @@ def test_training_failed_without_profile_falls_back_to_raw():
 
 def test_get_profile_payload_returns_none_without_real_profile():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -181,7 +193,7 @@ def test_get_profile_payload_returns_none_without_real_profile():
 
 def test_get_profile_payload_returns_none_for_insufficient_history_placeholder():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -207,7 +219,7 @@ def test_get_profile_payload_returns_none_for_insufficient_history_placeholder()
 
 def test_get_profile_payload_returns_runtime_profile():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -237,7 +249,7 @@ def test_get_profile_payload_returns_runtime_profile():
 
 def test_get_status_payload_includes_invalidated_slot_count():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(),
     )
@@ -269,7 +281,7 @@ def test_get_status_payload_includes_invalidated_slot_count():
 
 def test_get_status_payload_reports_slot_invalidation_enabled():
     service = service_mod.SolarBiasCorrectionService(
-        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _make_hass(),
         _DummyStore(),
         _make_cfg(
             slot_invalidation_max_battery_soc_percent=97.0,
@@ -314,7 +326,7 @@ def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():
         }
 
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -339,7 +351,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
     async def _inner():
         store = _SavingStore()
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -369,7 +381,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
             service_mod.load_actuals_window = old_actuals
 
         reloaded = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -404,7 +416,7 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
     async def _inner():
         store = _SavingStore()
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -451,7 +463,7 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
             service_mod.load_actuals_window = old_actuals
 
         reloaded = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -488,7 +500,7 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
     async def _inner():
         store = _SavingStore()
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -557,7 +569,7 @@ def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
         store = _SavingStore()
         base_cfg = _make_cfg()
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             base_cfg,
         )
@@ -614,7 +626,7 @@ def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
             service_mod.load_actuals_window = old_actuals
 
         reloaded = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             changed_cfg,
         )
@@ -649,7 +661,7 @@ def test_async_train_uses_configured_max_training_window_days_for_actuals():
         cfg = _make_cfg()
         cfg.max_training_window_days = 12
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             _SavingStore(),
             cfg,
         )
@@ -721,7 +733,7 @@ def test_async_train_save_failure_keeps_previous_profile_active():
     async def _inner():
         store = _FailingThenSavingStore()
         service = service_mod.SolarBiasCorrectionService(
-            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _make_hass(),
             store,
             _make_cfg(),
         )
@@ -801,5 +813,112 @@ def test_async_train_save_failure_keeps_previous_profile_active():
         assert result.adjusted_points[0]["value"] == 20.0
         assert store.calls == 2
         assert store.saved_payloads[-1]["profile"]["factors"] == {"12:00": 2.0}
+
+    asyncio.run(_inner())
+
+
+def test_async_train_runs_the_fit_on_the_executor():
+    """The fit is pure arithmetic and must not hold the event loop (#241)."""
+
+    class _Store:
+        profile = None
+
+        async def async_save(self, payload):
+            self.profile = payload
+
+    async def _inner():
+        executor_jobs = []
+
+        async def _executor_job(func, *args):
+            executor_jobs.append(func)
+            return func(*args)
+
+        hass = SimpleNamespace(
+            bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+            async_add_executor_job=_executor_job,
+        )
+        service = service_mod.SolarBiasCorrectionService(hass, _Store(), _make_cfg())
+
+        old_now = service_mod.dt_util.now
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        try:
+            from datetime import datetime
+
+            now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
+            service_mod.dt_util.now = lambda: now
+
+            async def _samples(*args, **kwargs):
+                return []
+
+            async def _actuals(*args, **kwargs):
+                return models.SolarActualsWindow(slot_actuals_by_date={})
+
+            service_mod.load_trainer_samples = _samples
+            service_mod.load_actuals_window = _actuals
+
+            payload = await service.async_train()
+        finally:
+            service_mod.dt_util.now = old_now
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+
+        assert executor_jobs == [service_mod.train]
+        assert payload["lastOutcome"] == "insufficient_history"
+        assert payload["errorReason"] is None
+
+    asyncio.run(_inner())
+
+
+def test_async_train_marks_a_configuration_change_landing_mid_run_as_stale():
+    """The fit is stamped with the configuration it was given, not the one that replaced it."""
+
+    class _Store:
+        profile = None
+
+        async def async_save(self, payload):
+            self.profile = payload
+
+    async def _inner():
+        service = service_mod.SolarBiasCorrectionService(
+            _make_hass(),
+            _Store(),
+            _make_cfg(),
+        )
+
+        old_now = service_mod.dt_util.now
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        try:
+            from datetime import datetime
+
+            now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
+            service_mod.dt_util.now = lambda: now
+
+            async def _samples(*args, **kwargs):
+                return []
+
+            async def _actuals(*args, **kwargs):
+                # Whoever is reconfiguring gets in between the inputs being
+                # captured and the result being adopted.
+                changed = _make_cfg()
+                changed.clamp_max = 3.5
+                service.update_config(changed)
+                return models.SolarActualsWindow(slot_actuals_by_date={})
+
+            service_mod.load_trainer_samples = _samples
+            service_mod.load_actuals_window = _actuals
+
+            payload = await service.async_train()
+        finally:
+            service_mod.dt_util.now = old_now
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+
+        assert payload["isStale"] is True
+        assert (
+            service._metadata.training_config_fingerprint
+            != service._current_fingerprint
+        )
 
     asyncio.run(_inner())

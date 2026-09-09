@@ -414,9 +414,14 @@ def _recorded_points_of(points: list[dict]):
 
 
 def _make_service(canonical_provider=None, recorded=None):
+    async def _executor_job(func, *args):
+        return func(*args)
+
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+        # The fit runs on the executor; run it inline so a test sees its result.
+        async_add_executor_job=_executor_job,
     )
     service_mod.load_archived_forecast_points = _recorded_points_of(recorded or [])
     return service_mod.SolarBiasCorrectionService(
