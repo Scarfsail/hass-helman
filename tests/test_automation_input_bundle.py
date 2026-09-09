@@ -894,7 +894,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
                     id="pool",
                     kind="appliance_runtime",
                     target={"controllable_id": "pool-filtration"},
-                    params={"skip": {"max_consecutive_skips": 2}},
+                    params={"daily_minimum": {"max_consecutive_skips": 2}},
                 ),
             ],
         )
@@ -923,13 +923,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
                     id="pool",
                     kind="appliance_runtime",
                     target={"controllable_id": "pool-filtration"},
-                    params={"skip": {"max_consecutive_skips": 13}},
+                    params={"daily_minimum": {"max_consecutive_skips": 13}},
                 ),
                 OptimizerInstanceConfig(
                     id="dishwasher",
                     kind="appliance_runtime",
                     target={"controllable_id": "dishwasher"},
-                    params={"skip": {"max_consecutive_skips": 1}},
+                    params={"daily_minimum": {"max_consecutive_skips": 1}},
                 ),
                 # A second rule on the same appliance: the widest of the two
                 # wins, because either may be the one that runs.
@@ -937,7 +937,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
                     id="dishwasher-evening",
                     kind="appliance_runtime",
                     target={"controllable_id": "dishwasher"},
-                    params={"skip": {"max_consecutive_skips": 3}},
+                    params={"daily_minimum": {"max_consecutive_skips": 3}},
                 ),
                 # No skip block at all: today plus yesterday is the floor.
                 OptimizerInstanceConfig(
@@ -1039,13 +1039,13 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                     id="pool",
                     kind="appliance_runtime",
                     target={"controllable_id": "pool-filtration"},
-                    params={"skip": {"max_consecutive_skips": 4}},
+                    params={"daily_minimum": {"max_consecutive_skips": 4}},
                 ),
                 OptimizerInstanceConfig(
                     id="dishwasher",
                     kind="appliance_runtime",
                     target={"controllable_id": "dishwasher"},
-                    params={"skip": {"max_consecutive_skips": 0}},
+                    params={"daily_minimum": {"max_consecutive_skips": 0}},
                 ),
             ],
         )
@@ -1087,6 +1087,64 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                 "pool-filtration": {"answered": 5},
                 "dishwasher": {"answered": 1},
             },
+        )
+
+    async def test_the_lookback_reads_where_the_real_config_keeps_the_skips(
+        self,
+    ) -> None:
+        """Through the real loader, not a hand-built params dict.
+
+        ``max_consecutive_skips`` has already moved once -- ``params.skip`` is
+        in ``RELOCATED_OPTIMIZER_KEYS`` and the loader migrates it away -- and
+        reading the retired key resolved a one-day lookback for every
+        appliance, silently, because a hand-built ``params`` proves only that
+        the reader agrees with the test. This builds the optimizer the way the
+        integration does and pins the lookback to the same place the consumer
+        reads (``params.daily_minimum.max_consecutive_skips``).
+        """
+        seen = []
+
+        class _Reader:
+            async def async_query_active_hours_by_local_date(
+                self, requests, *, reference_time
+            ):
+                seen.append(list(requests))
+                return {request.key: {} for request in requests}
+
+        automation_config = automation_config_module.read_automation_config(
+            {
+                "automation": {
+                    "enabled": True,
+                    "optimizers": [
+                        {
+                            "id": "pool",
+                            "kind": "appliance_runtime",
+                            "target": {"controllable_id": "pool-filtration"},
+                            "conditions": [{}],
+                            "params": {
+                                "daily_minimum": {
+                                    "min_hours_per_day": 2.0,
+                                    "max_consecutive_skips": 3,
+                                }
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+        coordinator = self._coordinator(_Reader())
+        with patch.object(
+            coordinator_module,
+            "read_automation_config",
+            return_value=automation_config,
+        ):
+            await coordinator._async_resolve_runtime_hours_by_appliance_id_by_local_date(
+                reference_time=datetime(2026, 5, 10, 12, 0)
+            )
+
+        self.assertEqual(
+            [(request.key, request.lookback_days) for request in seen[0]],
+            [("pool-filtration", 4)],
         )
 
     async def test_an_appliance_the_reader_could_not_answer_comes_back_empty(

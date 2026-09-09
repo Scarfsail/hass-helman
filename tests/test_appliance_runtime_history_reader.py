@@ -675,6 +675,50 @@ class InvalidationTests(_ReaderHarness):
 
         self.assertEqual(recorder.spans[1][0], _FakeDtUtil.as_utc(_at(-3, 0)))
 
+    async def test_an_entity_id_configured_with_capitals_still_reads(self) -> None:
+        """The recorder stores ids lowered; ``_read_entity_id`` only checks the domain.
+
+        ``state_changes_during_period`` lowered the id itself. The batched read
+        looks the id up in the recorder's states metadata instead, which is an
+        exact-match dict: a configured ``switch.Pool`` resolved nothing, came
+        back as a full window of zeros without raising, and froze that way --
+        an appliance that "never ran", forcing runs it did not need.
+        """
+        recorder = _Recorder(self._pool_states())
+        reader = ApplianceRuntimeHistoryReader(_make_hass())
+
+        result = await self._query(
+            reader,
+            recorder,
+            [_request("pool", "switch.Pool", lookback_days=1)],
+            at=_at(0, 12),
+        )
+
+        self.assertEqual(recorder.queries[0][2], ("switch.pool",))
+        self.assertEqual(
+            self._rounded(result["pool"]),
+            {date(2026, 5, 9): 1.0, date(2026, 5, 10): 1.0},
+        )
+
+    async def test_the_kept_prefix_does_not_grow_past_the_lookback(self) -> None:
+        """Kept days follow the lookback, not the uptime.
+
+        ``covered_from`` used to be carried forward from the first read for
+        ever, so a one-day lookback accumulated a day of dead history per day
+        and re-materialised the whole dict on every refresh.
+        """
+        recorder = _Recorder(self._pool_states())
+        reader = ApplianceRuntimeHistoryReader(_make_hass())
+        requests = [_request("pool", "switch.pool", lookback_days=1)]
+
+        for day in range(40):
+            await self._query(reader, recorder, requests, at=_at(day, 12))
+
+        kept = next(iter(reader._settled.values()))
+        # Yesterday and the day before it: the lookback plus the day still
+        # settling. Not the forty days the reader has been running.
+        self.assertLessEqual(len(kept.hours_by_date), 2)
+
     async def test_a_request_with_no_active_states_asks_nothing(self) -> None:
         recorder = _Recorder(self._pool_states())
         reader = ApplianceRuntimeHistoryReader(_make_hass())
@@ -686,8 +730,22 @@ class InvalidationTests(_ReaderHarness):
             at=_at(0, 12),
         )
 
+        # No query -- and an explicit window of zeros rather than nothing at
+        # all: "idle by definition" and "the read failed" must not look the
+        # same to the consecutive-skip guard, which stops at the first absent
+        # date instead of counting a zero.
         self.assertEqual(recorder.queries, [])
-        self.assertEqual(result, {"pool": {}})
+        self.assertEqual(
+            result,
+            {
+                "pool": {
+                    date(2026, 5, 7): 0.0,
+                    date(2026, 5, 8): 0.0,
+                    date(2026, 5, 9): 0.0,
+                    date(2026, 5, 10): 0.0,
+                }
+            },
+        )
 
 
 if __name__ == "__main__":

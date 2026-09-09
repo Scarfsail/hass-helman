@@ -4717,9 +4717,15 @@ class HelmanCoordinator:
             if not appliance_id:
                 continue
             max_consecutive_skips = 0
-            skip = optimizer.params.get("skip")
-            if isinstance(skip, Mapping):
-                raw = skip.get("max_consecutive_skips")
+            # ``params.daily_minimum.max_consecutive_skips``, which is where the
+            # consumer reads it (``optimizers/appliance_runtime.py``). The old
+            # ``params.skip`` mapping is in ``RELOCATED_OPTIMIZER_KEYS`` and the
+            # loader migrates it away, so reading it found nothing and every
+            # appliance silently fell back to a one-day lookback -- the same
+            # class of miss as ``appliance_id`` below.
+            daily_minimum = optimizer.params.get("daily_minimum")
+            if isinstance(daily_minimum, Mapping):
+                raw = daily_minimum.get("max_consecutive_skips")
                 if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
                     max_consecutive_skips = raw
             lookback_days_by_appliance_id[appliance_id] = max(

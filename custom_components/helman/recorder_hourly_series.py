@@ -1247,9 +1247,24 @@ class ApplianceRuntimeHistoryReader:
         for request in requests:
             states = _normalize_active_states(request.active_states)
             if not request.entity_id or not states:
-                results[request.key] = {}
+                # Idle by definition, which is not the same as unanswered: an
+                # explicit window of zeros, exactly as a read of an entity that
+                # never turned on would return.
+                results[request.key] = {
+                    local_date: 0.0
+                    for local_date in _iter_dates(
+                        today - timedelta(days=request.lookback_days), today
+                    )
+                }
                 continue
-            by_reuse_key.setdefault((request.entity_id, states), []).append(request)
+            # Lowered, as the recorder stores it: ``state_changes_during_period``
+            # lowered the id for us, ``get_significant_states`` looks it up in a
+            # dict of states metadata and simply finds nothing. A configured
+            # ``switch.Pool`` would come back as a full window of zeros -- and
+            # freeze that way -- rather than as the runtime it actually had.
+            by_reuse_key.setdefault(
+                (request.entity_id.lower(), states), []
+            ).append(request)
 
         # Anything no longer asked for is a reconfigured entity or active-state
         # set, or an appliance that left the automation; its prefix can never be
@@ -1405,6 +1420,17 @@ class ApplianceRuntimeHistoryReader:
             fresh = queried.get(reuse_key, {})
             combined = {**(resumable.hours_by_date if resumable else {}), **fresh}
             covered_from = resumable.covered_from if resumable else read_from
+            # Only back as far as the widest lookback still asks for. The kept
+            # prefix would otherwise hold every day it has ever seen, growing by
+            # one a day for the life of the process while a one-day lookback
+            # reads two of them.
+            needed_from = today - timedelta(
+                days=max(
+                    request.lookback_days
+                    for request in requests_by_reuse_key[reuse_key]
+                )
+            )
+            covered_from = max(covered_from, min(needed_from, settled_through_now))
             self._freeze(
                 reuse_key,
                 tz_key=tz_key,
