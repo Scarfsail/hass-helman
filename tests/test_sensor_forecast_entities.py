@@ -17,6 +17,17 @@ from test_solar_bias_response import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _load_coordinator_module():
+    """Import the coordinator against the shared stub set, then unregister it."""
+    previous_modules = _install_coordinator_import_stubs()
+    try:
+        sys.modules.pop("custom_components.helman.coordinator", None)
+        return importlib.import_module("custom_components.helman.coordinator")
+    finally:
+        _restore_modules(previous_modules)
+        sys.modules.pop("custom_components.helman.coordinator", None)
+
+
 def _load_sensor_module():
     for module_name in [
         "custom_components.helman.sensor",
@@ -382,15 +393,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(none_entity.available)
 
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
         coordinator._cached_solar_forecast = {
@@ -405,15 +408,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.get_solar_forecast_day_total(1), 2.0)
 
     async def test_today_remaining_excludes_elapsed_points(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
         coordinator._cached_solar_forecast = {
@@ -452,15 +447,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(entity.native_value)
 
     async def test_sparse_day_offsets_and_today_remaining_use_shared_snapshot(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
         coordinator._cached_solar_forecast = {
@@ -521,15 +508,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(entity.native_unit_of_measurement)
 
     async def test_coordinator_absorbs_the_import_price_from_the_snapshot(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
 
@@ -551,12 +530,16 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         class FakeCoordinator:
             price = 1.85
             unit = "CZK/kWh"
+            schedule: dict = {"2026-09-09T10:00:00+02:00": 1.85}
 
             def get_grid_export_price_current(self):
                 return self.price
 
             def get_grid_export_price_unit(self):
                 return self.unit
+
+            def get_grid_export_price_schedule(self):
+                return dict(self.schedule)
 
         coordinator = FakeCoordinator()
         entity = sensor_module.HelmanGridExportPriceSensor(coordinator, _FakeEntry())
@@ -573,20 +556,64 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator.price = None
         coordinator.unit = None
-        self.assertFalse(entity.available)
         self.assertIsNone(entity.native_value)
         self.assertIsNone(entity.native_unit_of_measurement)
+        # Still available: Home Assistant merges `extra_state_attributes` into
+        # a state only while the entity is available, so gating on the price
+        # alone would drop tomorrow's published prices exactly when today's
+        # price went missing.
+        self.assertTrue(entity.available)
+
+        coordinator.schedule = {}
+        self.assertFalse(entity.available)
+
+    async def test_grid_export_price_entity_publishes_the_owned_schedule(self) -> None:
+        sensor_module = _load_sensor_module()
+
+        class FakeCoordinator:
+            schedule: dict = {
+                "2026-09-09T10:00:00+02:00": 1.85,
+                "2026-09-09T11:00:00+02:00": 0.0,
+                "2026-09-10T02:00:00+02:00": -0.4,
+            }
+
+            def get_grid_export_price_current(self):
+                return 1.85
+
+            def get_grid_export_price_unit(self):
+                return "CZK/kWh"
+
+            def get_grid_export_price_schedule(self):
+                return dict(self.schedule)
+
+        coordinator = FakeCoordinator()
+        entity = sensor_module.HelmanGridExportPriceSensor(coordinator, _FakeEntry())
+
+        # The source's own key text, verbatim, and its own numbers -- zero and
+        # negative included.
+        self.assertEqual(
+            entity.extra_state_attributes,
+            {
+                "2026-09-09T10:00:00+02:00": 1.85,
+                "2026-09-09T11:00:00+02:00": 0.0,
+                "2026-09-10T02:00:00+02:00": -0.4,
+            },
+        )
+
+        # The whole map is republished on every read, so a timestamp the source
+        # dropped -- or a provider the configuration replaced -- leaves nothing
+        # of itself behind beside the new schedule.
+        coordinator.schedule = {"2026-09-10T02:00:00+02:00": 2.2}
+        self.assertEqual(
+            entity.extra_state_attributes,
+            {"2026-09-10T02:00:00+02:00": 2.2},
+        )
+
+        coordinator.schedule = {}
+        self.assertEqual(entity.extra_state_attributes, {})
 
     async def test_coordinator_absorbs_the_export_price_from_the_snapshot(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
 
@@ -611,16 +638,150 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertIsNone(coordinator.get_grid_export_price_unit())
 
+        # The unit is the source's, not the reading's. A source that went
+        # `unknown` while its attribute map still holds tomorrow's prices keeps
+        # the mirror available, and an available mirror publishing a schedule
+        # without a unit would say something the source never did.
+        coordinator._absorb_grid_export_price(
+            {
+                "export": {
+                    "status": "partial",
+                    "unit": "CZK/kWh",
+                    "schedule": {"2026-09-10T01:00:00+02:00": 3.1},
+                }
+            }
+        )
+        self.assertIsNone(coordinator.get_grid_export_price_current())
+        self.assertEqual(coordinator.get_grid_export_price_unit(), "CZK/kWh")
+
+    async def test_coordinator_owns_the_export_schedule_from_one_ingestion(self) -> None:
+        coordinator_module = _load_coordinator_module()
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+
+        coordinator._absorb_grid_export_price(
+            {
+                "export": {
+                    "status": "available",
+                    "unit": "CZK/kWh",
+                    "currentPrice": 1.85,
+                    "schedule": {
+                        "2026-09-09T10:00:00+02:00": 1.85,
+                        "2026-09-09T11:00:00+02:00": 0.0,
+                    },
+                }
+            }
+        )
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {
+                "2026-09-09T10:00:00+02:00": 1.85,
+                "2026-09-09T11:00:00+02:00": 0.0,
+            },
+        )
+
+        # An attribute-only update: the price has not moved, the schedule has,
+        # and the owned channel must move with it or the sensor would keep
+        # publishing yesterday's attributes.
+        coordinator._absorb_grid_export_price(
+            {
+                "export": {
+                    "status": "available",
+                    "unit": "CZK/kWh",
+                    "currentPrice": 1.85,
+                    "schedule": {
+                        "2026-09-09T10:00:00+02:00": 2.4,
+                        "2026-09-10T02:00:00+02:00": -0.4,
+                    },
+                }
+            }
+        )
+        self.assertEqual(coordinator.get_grid_export_price_current(), 1.85)
+        # Replaced whole: the 11:00 entry the source dropped is gone, not kept.
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {
+                "2026-09-09T10:00:00+02:00": 2.4,
+                "2026-09-10T02:00:00+02:00": -0.4,
+            },
+        )
+
+        # The current price can go missing while the schedule stands -- a spot
+        # provider that stops publishing a state keeps publishing tomorrow --
+        # and neither answer is allowed to stand in for the other.
+        coordinator._absorb_grid_export_price(
+            {
+                "export": {
+                    "status": "partial",
+                    "unit": "CZK/kWh",
+                    "schedule": {"2026-09-10T02:00:00+02:00": -0.4},
+                }
+            }
+        )
+        self.assertIsNone(coordinator.get_grid_export_price_current())
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {"2026-09-10T02:00:00+02:00": -0.4},
+        )
+
+        # A source or configuration change: nothing of the old provider's
+        # schedule survives into the new one's.
+        coordinator._absorb_grid_export_price({"export": {"status": "not_configured"}})
+        self.assertIsNone(coordinator.get_grid_export_price_current())
+        self.assertEqual(coordinator.get_grid_export_price_schedule(), {})
+
+        # The accessor hands out a copy: a consumer cannot edit the owned map.
+        coordinator._absorb_grid_export_price(
+            {"export": {"schedule": {"2026-09-10T02:00:00+02:00": 1.0}}}
+        )
+        coordinator.get_grid_export_price_schedule().clear()
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {"2026-09-10T02:00:00+02:00": 1.0},
+        )
+
+    async def test_only_ingestion_reads_the_configured_sell_price_entity(self) -> None:
+        coordinator_module = _load_coordinator_module()
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._hass = SimpleNamespace()
+        coordinator._active_config = {}
+        coordinator._grid_export_price_channel = None
+
+        channel = {
+            "status": "available",
+            "unit": "CZK/kWh",
+            "currentPrice": 1.85,
+            "points": [],
+            "schedule": {"2026-09-09T10:00:00+02:00": 1.85},
+        }
+        source_reads = Mock(return_value=channel)
+
+        with patch.object(
+            coordinator_module,
+            "GridPriceForecastBuilder",
+            return_value=SimpleNamespace(
+                build_export_price_snapshot=source_reads
+            ),
+        ):
+            # The cold read is an ingestion, and it is the last one: every
+            # consumer afterwards is served from the owned channel.
+            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
+            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
+            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
+            self.assertEqual(source_reads.call_count, 1)
+
+            # Ingestion, and only ingestion, goes back to the source.
+            coordinator._ingest_grid_export_price()
+            self.assertEqual(source_reads.call_count, 2)
+
+        self.assertEqual(coordinator.get_grid_export_price_current(), 1.85)
+        self.assertEqual(coordinator.get_grid_export_price_unit(), "CZK/kWh")
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {"2026-09-09T10:00:00+02:00": 1.85},
+        )
+
     async def test_current_slot_solar_forecast_is_published_as_power(self) -> None:
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         coordinator = object.__new__(coordinator_module.HelmanCoordinator)
         coordinator._hass = SimpleNamespace(
@@ -683,15 +844,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # and that nothing here would ever correct. Price and unit are read
         # independently off the snapshot, so a source publishing a bare number
         # has one without the other.
-        previous_modules = _install_coordinator_import_stubs()
-        try:
-            sys.modules.pop("custom_components.helman.coordinator", None)
-            coordinator_module = importlib.import_module(
-                "custom_components.helman.coordinator"
-            )
-        finally:
-            _restore_modules(previous_modules)
-            sys.modules.pop("custom_components.helman.coordinator", None)
+        coordinator_module = _load_coordinator_module()
 
         # The starter lazily imports the back-fill module; stand in for it so
         # the import does not drag the whole integration into this stubbed

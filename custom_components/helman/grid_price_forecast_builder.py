@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -37,13 +38,36 @@ class GridPriceForecastBuilder:
         self._config = config
         self._local_tz = ZoneInfo(str(hass.config.time_zone))
 
-    def build(self, *, reference_time: datetime) -> dict[str, Any]:
+    def build(
+        self,
+        *,
+        reference_time: datetime,
+        export_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Both price channels, the export one supplied rather than read.
+
+        The export channel is the coordinator's owned ingestion result, handed
+        in: this builder reads the configured sell-price entity in exactly one
+        place, :meth:`build_export_price_snapshot`, and nothing that merely
+        wants to *see* the export prices goes near the source again. The import
+        channel has no source entity behind it -- it is a table of the clock --
+        so it is derived here, per request, at the caller's reference time.
+        """
         return {
-            "export": self._build_export_price_snapshot(),
+            "export": export_snapshot,
             "import": self._build_import_price_snapshot(reference_time),
         }
 
-    def _build_export_price_snapshot(self) -> dict[str, Any]:
+    def build_export_price_snapshot(self) -> dict[str, Any]:
+        """Read the configured sell-price entity. The one external boundary.
+
+        Emits both shapes of the same reading: ``points``, normalized onto
+        ``isoformat()`` timestamps for the forecast pipeline, and ``schedule``,
+        the source's own attribute keys kept verbatim so Helman's published
+        sensor can be compared key for key against the entity it ingests.
+        Elapsed entries are kept alongside future ones -- the schedule is what
+        the source said, not a forward horizon.
+        """
         power_devices = self._read_dict(self._config.get("power_devices"))
         grid_config = self._read_dict(power_devices.get("grid"))
         grid_forecast = self._read_dict(grid_config.get("forecast"))
@@ -55,10 +79,16 @@ class GridPriceForecastBuilder:
             return self._make_price_snapshot(status="not_configured")
 
         state = self._get_state(sell_price_entity_id)
+        # Filtered the same way the schedule values below are: a source that
+        # publishes ``nan`` must not reach the mirror's state, where the
+        # recorder would compile it into the long-term series the aggregate
+        # money views price off, poisoning that bucket for good.
         current_price = self._read_float(state.state) if state is not None else None
+        if current_price is not None and not isfinite(current_price):
+            current_price = None
         unit = self._read_unit_from_state(state) if state is not None else None
 
-        points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
+        entries: list[tuple[datetime, str, float]] = []
         if state is not None:
             for key, raw_value in state.attributes.items():
                 parsed_timestamp = self._parse_attribute_timestamp(key)
@@ -66,21 +96,17 @@ class GridPriceForecastBuilder:
                     continue
 
                 value = self._read_float(raw_value)
-                if value is None:
+                if value is None or not isfinite(value):
                     continue
 
-                points_with_sort_keys.append(
-                    (
-                        parsed_timestamp,
-                        {
-                            "timestamp": parsed_timestamp.isoformat(),
-                            "value": value,
-                        },
-                    )
-                )
+                entries.append((parsed_timestamp, key, value))
 
-        points_with_sort_keys.sort(key=lambda item: dt_util.as_utc(item[0]))
-        points = [point for _, point in points_with_sort_keys]
+        entries.sort(key=lambda item: dt_util.as_utc(item[0]))
+        points = [
+            {"timestamp": parsed_timestamp.isoformat(), "value": value}
+            for parsed_timestamp, _key, value in entries
+        ]
+        schedule = {key: value for _parsed_timestamp, key, value in entries}
 
         if current_price is not None and points:
             status = "available"
@@ -104,6 +130,7 @@ class GridPriceForecastBuilder:
             unit=unit,
             current_price=current_price,
             points=points,
+            schedule=schedule,
         )
 
     def _build_import_price_snapshot(self, reference_time: datetime) -> dict[str, Any]:
@@ -225,12 +252,14 @@ class GridPriceForecastBuilder:
         unit: str | None = None,
         current_price: float | None = None,
         points: list[dict[str, Any]] | None = None,
+        schedule: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         return {
             "status": status,
             "unit": unit,
             "currentPrice": current_price,
             "points": points or [],
+            "schedule": dict(schedule or {}),
         }
 
     def _get_state(self, entity_id: str | None):

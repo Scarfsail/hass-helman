@@ -123,7 +123,12 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
         return (
             forecast_builder_module,
-            forecast_builder_module.HelmanForecastBuilder(hass, {}, slot_history),
+            forecast_builder_module.HelmanForecastBuilder(
+                hass,
+                {},
+                slot_history,
+                export_price_snapshot={"status": "not_configured"},
+            ),
         )
 
     async def test_build_solar_actual_history_defaults_to_hourly_query(self) -> None:
