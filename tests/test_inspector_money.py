@@ -260,7 +260,6 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_export_price_entity_id_provider=lambda: "sensor.spot_sell_price",
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
@@ -318,7 +317,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
                 {"slot": "09:45", "value": 5.0},
                 {"slot": "10:00", "value": 5.0},
             ],
-            "sensor.spot_sell_price": [
+            "sensor.helman_grid_export_price": [
                 {"slot": "09:45", "value": 2.0},
                 {"slot": "10:00", "value": 2.0},
             ],

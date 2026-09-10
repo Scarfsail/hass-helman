@@ -269,7 +269,6 @@ def _make_service(*, import_price_config=None):
         battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
         battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
         battery_soc_entity_id_provider=lambda: BATTERY_SOC,
-        grid_export_price_entity_id_provider=lambda: EXPORT_PRICE,
         grid_import_price_config_provider=lambda: import_price_config,
     )
 
@@ -439,7 +438,6 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                 BATTERY_SOC,
                 IMPORT_PRICE,
                 HELMAN_EXPORT_PRICE,
-                EXPORT_PRICE,
             },
         )
         # One hour of padding before local midnight, so the window's first hour
@@ -912,7 +910,7 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
                 IMPORT_PRICE: [
                     _row(_hour("2026-04-23T09:00:00+02:00"), mean=7.0),
                 ],
-                EXPORT_PRICE: [
+                HELMAN_EXPORT_PRICE: [
                     _row(_hour("2026-04-23T12:00:00+02:00"), mean=1.5),
                 ],
             }
@@ -931,14 +929,14 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         # Exported nothing rather than earned nothing.
         self.assertIsNone(second["moneyGain"])
 
-    async def test_the_export_rate_prefers_helmans_mirror_hour_by_hour(self):
-        """The mirror wins where it has the hour; the configured entity fills the rest.
+    async def test_the_export_rate_reads_helmans_entity_alone(self):
+        """The configured sell-price entity is ingestion, and no longer history.
 
-        The reason the mirror exists at all is that a sell-price entity usually
-        declares no ``state_class`` and therefore has no statistics -- but some
-        setups' do, and the mirror only reaches back as far as its back-fill got.
-        A per-series choice would either blank the hours only one of them covers
-        or throw away Helman's own record; a per-hour one keeps both.
+        It used to be a second rate source merged hour by hour under Helman's
+        own. Adding statistics to it now changes nothing: the hours Helman
+        recorded are priced from Helman's record, and an hour only the third
+        party covers is unpriced rather than valued off an entity Helman does
+        not own (#133).
         """
         _set_rows(
             {
@@ -967,16 +965,17 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
 
         payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
 
-        # 1 kWh at the mirror's 2.0, 2 kWh at the configured entity's 3.0, and
-        # 4 kWh at the mirror's 5.0.
-        self.assertEqual(payload["days"][0]["moneyGain"], 28.0)
+        # 1 kWh at Helman's 2.0 and 4 kWh at its 5.0. The 2 kWh of the 11:00
+        # hour, which only the configured entity has a rate for, are exported
+        # rather than earned -- 28.0 is what merging the two sources produced.
+        self.assertEqual(payload["days"][0]["moneyGain"], 22.0)
 
-    async def test_a_mirror_row_without_a_rate_yields_to_one_that_has_one(self):
+    async def test_a_row_without_a_rate_prices_nothing(self):
         # A row is not a reading. The span read folds five-minute tail rows onto
         # their containing hour and emits a row whether or not any of them
         # carried a mean, so the hour in progress can arrive present-but-empty --
-        # a mirror that has just come back from `unavailable`, say. Preferring it
-        # on presence alone would blank an hour the configured entity priced.
+        # a sensor that has just come back from `unavailable`, say. An hour like
+        # that is unpriced, and the third party's own rate does not stand in.
         _set_rows(
             {
                 GRID_EXPORT_METER: [
@@ -995,10 +994,11 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
 
         payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
 
-        # 2 kWh at the only rate anything actually recorded.
-        self.assertEqual(payload["days"][0]["moneyGain"], 8.0)
+        # Exported 2 kWh at a rate nothing Helman owns recorded: unpriced, not
+        # valued off the ingestion source's 4.0.
+        self.assertIsNone(payload["days"][0]["moneyGain"])
 
-    async def test_the_export_rate_falls_back_when_the_mirror_has_no_rows(self):
+    async def test_the_export_rate_has_no_fallback_when_helman_has_no_rows(self):
         _set_rows(
             {
                 GRID_EXPORT_METER: [
@@ -1012,7 +1012,7 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
 
         payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
 
-        self.assertEqual(payload["days"][0]["moneyGain"], 3.0)
+        self.assertIsNone(payload["days"][0]["moneyGain"])
 
     async def test_a_window_boundary_inside_an_hour_is_averaged_across_it(self):
         # The night rate ends at 08:30, so the 08:00 hour is half at 2.0 and

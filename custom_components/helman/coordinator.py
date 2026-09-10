@@ -986,7 +986,6 @@ class HelmanCoordinator:
             battery_discharge_energy_entity_id_provider=lambda: self._get_battery_entity_id(
                 "today_discharge_energy"
             ),
-            grid_export_price_entity_id_provider=self._get_grid_sell_price_entity_id,
             grid_import_price_config_provider=self._get_grid_import_price_config,
             grid_price_snapshot_provider=self._build_grid_price_snapshot,
         )

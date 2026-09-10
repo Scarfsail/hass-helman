@@ -135,7 +135,6 @@ class SolarBiasCorrectionService:
         grid_export_energy_entity_id_provider=None,
         battery_charge_energy_entity_id_provider=None,
         battery_discharge_energy_entity_id_provider=None,
-        grid_export_price_entity_id_provider=None,
         grid_import_price_config_provider=None,
         grid_price_snapshot_provider=None,
     ) -> None:
@@ -164,7 +163,6 @@ class SolarBiasCorrectionService:
         self._battery_discharge_energy_entity_id_provider = (
             battery_discharge_energy_entity_id_provider
         )
-        self._grid_export_price_entity_id_provider = grid_export_price_entity_id_provider
         self._grid_import_price_config_provider = grid_import_price_config_provider
         self._grid_price_snapshot_provider = grid_price_snapshot_provider
         self._profile: SolarBiasProfile | None = None
@@ -487,12 +485,6 @@ class SolarBiasCorrectionService:
             discharge_entity,
         ) = self._energy_meter_entity_ids()
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
-        # Two export rate sources, asked for together and resolved per hour
-        # below: the mirror Helman publishes, whose statistics are the only ones
-        # that exist on a setup whose sell-price entity declares no
-        # ``state_class``, and the configured entity itself, which has its own
-        # statistics only where the user's setup happens to produce them.
-        export_price_entity = self._grid_export_price_entity_id()
         # The same roster the day view splits its house actual by, so a day
         # column and that day's slots itemise the same appliances under the same
         # labels. Resolved before the read because its meters join the one query
@@ -519,8 +511,8 @@ class SolarBiasCorrectionService:
 
         from ..recorder_statistics_span import (
             SpanStatistics,
-            prefer_rows,
             query_hourly_statistics,
+            query_price_history,
         )
 
         try:
@@ -536,7 +528,6 @@ class SolarBiasCorrectionService:
                     soc_entity,
                     GRID_IMPORT_PRICE_ENTITY_ID,
                     GRID_EXPORT_PRICE_ENTITY_ID,
-                    export_price_entity,
                     *consumer_entities,
                 ],
                 local_start=local_start,
@@ -565,14 +556,24 @@ class SolarBiasCorrectionService:
         }
 
         import_price_config = self._grid_import_price_config()
+        # Both rates through the one price reader every historical price goes
+        # through, so a month's money and the day it is made of are priced from
+        # the same tiers. The hourly rows this read already fetched are handed
+        # over rather than re-queried; what the reader adds is the raw-state
+        # tier under them, which covers the hours the statistics compiler has
+        # holes in.
+        price_history = await query_price_history(
+            self._hass,
+            [GRID_IMPORT_PRICE_ENTITY_ID, GRID_EXPORT_PRICE_ENTITY_ID],
+            local_start=local_start,
+            local_end=local_end,
+            statistics_rows=span.rows,
+        )
         money_by_bucket = _money_by_bucket(
             span.energy_for(import_entity),
             span.energy_for(export_entity),
-            span.rows_for(GRID_IMPORT_PRICE_ENTITY_ID),
-            prefer_rows(
-                span.rows_for(GRID_EXPORT_PRICE_ENTITY_ID),
-                span.rows_for(export_price_entity),
-            ),
+            price_history[GRID_IMPORT_PRICE_ENTITY_ID].hourly_means(),
+            price_history[GRID_EXPORT_PRICE_ENTITY_ID].hourly_means(),
             bucket=bucket,
             local_tz=local_tz,
             import_price_windows=(
@@ -608,18 +609,18 @@ class SolarBiasCorrectionService:
 
         return {
             "bucket": bucket,
-            "currency": self._resolve_span_currency(import_price_config),
+            "currency": await self._resolve_span_currency(import_price_config),
             "days": days,
             "range": navigation_range,
         }
 
-    def _resolve_span_currency(self, import_price_config) -> str | None:
+    async def _resolve_span_currency(self, import_price_config) -> str | None:
         """The unit both money columns are in, resolved as the day view resolves it.
 
         Same order as the inspector day (the import windows first, then the live
-        export channel, then the sell-price entity's own unit), because a span
-        showing a different currency than the day it is made of would be a bug
-        no reader could explain.
+        export channel, then Helman's own export rate), because a span showing a
+        different currency than the day it is made of would be a bug no reader
+        could explain.
         """
         if import_price_config is not None and import_price_config.unit:
             return import_price_config.unit
@@ -628,7 +629,7 @@ class SolarBiasCorrectionService:
             unit = export_channel.get("unit")
             if isinstance(unit, str) and unit:
                 return unit
-        return self._grid_export_price_entity_unit()
+        return await self._grid_export_price_unit()
 
     def _energy_meter_entity_ids(
         self,
@@ -895,11 +896,6 @@ class SolarBiasCorrectionService:
             grid_net_forecast_entity_id=GRID_NET_FORECAST_CURRENT_ENTITY,
             grid_import_forecast_entity_id=GRID_IMPORT_FORECAST_CURRENT_ENTITY,
             grid_export_forecast_entity_id=GRID_EXPORT_FORECAST_CURRENT_ENTITY,
-            import_price_entity_id=GRID_IMPORT_PRICE_ENTITY_ID,
-            export_price_entity_id=GRID_EXPORT_PRICE_ENTITY_ID,
-            export_price_fallback_entity_id=_entity_id(
-                self._grid_export_price_entity_id_provider
-            ),
         )
 
     async def _async_navigation_range(self, local_now: datetime) -> tuple[date, date]:
@@ -1211,18 +1207,18 @@ class SolarBiasCorrectionService:
                     self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
                     "battery actual",
                 ),
-                self._already(
-                    (
-                        statistics_day.import_price_points,
-                        statistics_day.export_price_points,
-                    )
-                )
-                if reads_statistics
-                else self._guarded_point_sets(
+                # Both rails, on every day, from Helman's own two price
+                # entities. Not behind ``reads_statistics``: that fork is the
+                # cumulative meters' -- one store for the whole day, because a
+                # meter's day cannot be stitched from two grains -- and a rate
+                # has no such constraint. A price rail picks its tier from its
+                # own entity's coverage, slot by slot, so a day whose meters are
+                # purged can still carry the quarter-hour rates that applied.
+                self._guarded_point_sets(
                     self._load_recorded_price_rails(
                         [
                             GRID_IMPORT_PRICE_ENTITY_ID,
-                            self._grid_export_price_entity_id(),
+                            GRID_EXPORT_PRICE_ENTITY_ID,
                         ],
                         target_date,
                         timezone,
@@ -1408,8 +1404,8 @@ class SolarBiasCorrectionService:
 
         # --- Price rails ---
         # One rail per direction, spanning the whole day. Elapsed slots come
-        # from the recorder — the import sensor Helman publishes, and the
-        # configured sell-price entity, which has always recorded itself — and
+        # from the recorder — the two price sensors Helman publishes, resolved
+        # raw first and hourly means for whatever raw does not cover — and
         # slots the clock has not reached come from the live feed. The import
         # side then fills whatever is still empty from the window config, which
         # is derivable for any minute of any date; that is what makes the rail
@@ -1454,9 +1450,9 @@ class SolarBiasCorrectionService:
         if price_unit is None:
             # An elapsed day has no live snapshot to read the unit off, so with
             # no import windows configured the export rail would draw bare
-            # numbers. The sell-price entity states its own unit, and it is the
+            # numbers. Helman's own export sensor states its unit, and it is the
             # same entity the recorded rail came from.
-            price_unit = self._grid_export_price_entity_unit()
+            price_unit = await self._grid_export_price_unit()
 
         # Money, priced off the two grid directions and the rails just built.
         # The actual side is computed once from the *undropped* points and then
@@ -2085,44 +2081,46 @@ class SolarBiasCorrectionService:
         *,
         local_end: datetime,
     ) -> tuple[list[dict], ...]:
-        """The price entities' recorder history sampled onto the day's slots.
+        """The day's two rails, resolved from the best tier each slot has.
 
-        A price is a rate that only writes a new state when it changes, so a
-        slot takes the last state at or before its start and the sampler carries
-        it forward across the slots in between. Slots the entity has no reading
-        for at all — before it existed, or past recorder retention — are simply
-        absent; the caller decides whether it has anything better to put there.
+        The shaping half of :func:`~..recorder_statistics_span.query_price_history`:
+        that reader decides where each slot's rate comes from — raw states where
+        the recorder still holds them, the containing hour's statistical mean
+        where it does not — and this labels the result by local slot. Slots no
+        tier covered are simply absent; the caller decides whether it has
+        anything better to put there.
 
-        Both rails share this window and this sampler, so they share one recorder
-        read: the recorder serves its queries from one DB executor thread, and a
-        read per rail is a serial round-trip per rail no matter how the awaits
-        are arranged. Returns one series per requested entity id, in order; an
+        Both rails share this window, so they share the reader's reads: the
+        recorder serves its queries from one DB executor thread, and a read per
+        rail is a serial round-trip per rail no matter how the awaits are
+        arranged. Returns one series per requested entity id, in order; an
         unconfigured entity yields an empty series.
         """
-        from ..recorder_hourly_series import (
-            query_slot_boundary_state_values_for_entities,
-        )
+        from ..recorder_statistics_span import query_price_history
 
         requested = list(entity_ids)
         if not any(requested):
             return tuple([] for _ in requested)
 
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
-        by_entity = await query_slot_boundary_state_values_for_entities(
+        by_entity = await query_price_history(
             self._hass,
             [entity_id for entity_id in requested if entity_id],
             local_start=local_start,
             local_end=local_end,
-            interval_minutes=15,
         )
         return tuple(
             [
                 {
-                    "slot": dt_util.as_local(boundary).strftime("%H:%M"),
+                    "slot": dt_util.as_local(slot).strftime("%H:%M"),
                     "value": float(value),
                 }
-                for boundary, value in sorted(
-                    (by_entity.get(entity_id) or {}).items()
+                for slot, value in sorted(
+                    (
+                        by_entity[entity_id].by_slot
+                        if entity_id in by_entity
+                        else {}
+                    ).items()
                 )
             ]
             if entity_id
@@ -2130,36 +2128,23 @@ class SolarBiasCorrectionService:
             for entity_id in requested
         )
 
-    def _grid_export_price_entity_unit(self) -> str | None:
-        """The sell-price entity's own unit, for days with no live snapshot."""
-        entity_id = self._grid_export_price_entity_id()
-        if not entity_id:
-            return None
-        state = self._hass.states.get(entity_id)
-        if state is None:
-            return None
-        unit = state.attributes.get("unit_of_measurement")
-        return unit if isinstance(unit, str) and unit else None
+    async def _grid_export_price_unit(self) -> str | None:
+        """Helman's own export rate unit, for days with no live snapshot.
 
-    def _grid_export_price_entity_id(self) -> str | None:
-        """The configured sell-price entity, read for its recorder history.
-
-        Still read directly, even though Helman now mirrors it into
-        ``sensor.helman_grid_export_price``: the mirror's *raw states* only go
-        back to the day it started publishing, while this entity's reach back as
-        far as the recorder keeps them. The day view prices elapsed slots from
-        raw states, so it would lose every day older than the mirror. The
-        aggregate views, which read hourly statistics rather than states, prefer
-        the mirror -- see ``prefer_rows``. Collapsing the two readers onto one
-        source is #133.
+        The sensor states it while it is publishing; its statistics metadata
+        states it when the sensor is not, which is what an elapsed day opened
+        after a restart needs. The configured sell-price entity is not asked:
+        it is an ingestion source, and its unit reaches here through the sensor
+        that mirrors it.
         """
-        if self._grid_export_price_entity_id_provider is None:
-            return None
-        try:
-            return self._grid_export_price_entity_id_provider()
-        except Exception:
-            _LOGGER.exception("Failed to read the grid export price entity id")
-            return None
+        from ..recorder_statistics_span import query_statistics_unit
+
+        states = getattr(self._hass, "states", None)
+        state = states.get(GRID_EXPORT_PRICE_ENTITY_ID) if states is not None else None
+        unit = state.attributes.get("unit_of_measurement") if state is not None else None
+        if isinstance(unit, str) and unit:
+            return unit
+        return await query_statistics_unit(self._hass, GRID_EXPORT_PRICE_ENTITY_ID)
 
     def _grid_import_price_config(self):
         """The validated import-price window table, or None when unconfigured.
@@ -3273,8 +3258,8 @@ def _money_by_bucket(
     a spot export price is not derivable from config. Its rows come from the
     mirror Helman publishes for exactly this reason (the configured sell-price
     entity typically declares no ``state_class`` and so has no statistics at
-    all), merged with the configured entity's own rows where it has any. An hour
-    neither covers is unpriced and its ``gain`` is None -- the honest answer,
+    all), and from that mirror alone: an hour Helman recorded nothing for is
+    unpriced and its ``gain`` is None -- the honest answer,
     since "earned nothing" is a claim the data does not support. The day view
     lets the *live* export feed override the recorder; history has no live feed,
     so that does not carry over.

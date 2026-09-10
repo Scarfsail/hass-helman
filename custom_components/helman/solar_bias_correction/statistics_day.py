@@ -107,9 +107,6 @@ class StatisticsDay:
     grid_import_forecast_points: list[dict] = field(default_factory=list)
     grid_export_forecast_points: list[dict] = field(default_factory=list)
     battery_net_forecast_points: list[dict] = field(default_factory=list)
-    #: ``[{"slot": "HH:MM", "value": float}]`` per rail.
-    import_price_points: list[dict] = field(default_factory=list)
-    export_price_points: list[dict] = field(default_factory=list)
 
 
 async def load_statistics_day(
@@ -126,9 +123,6 @@ async def load_statistics_day(
     grid_import_forecast_entity_id: str,
     grid_export_forecast_entity_id: str,
     battery_net_forecast_entity_id: str,
-    import_price_entity_id: str | None,
-    export_price_entity_id: str | None,
-    export_price_fallback_entity_id: str | None,
 ) -> StatisticsDay:
     """Every measured series the day view draws, from one statistics read.
 
@@ -137,20 +131,17 @@ async def load_statistics_day(
     the recorder had anything for it, so the caller's ``.get(entity_id) or {}``
     lookups behave as they always did.
 
-    The export rate comes from two entities rather than one -- Helman's own
-    mirror and the configured sell-price entity, resolved hour by hour because
-    the seam between them falls mid-history. The import rail needs no fallback:
-    the config fill the caller applies afterwards covers every hour it missed.
+    The two price rails are deliberately not here. A rate resolves from its own
+    entity's coverage rather than from the fork that sent this day to
+    statistics, so both rails go through
+    :func:`~..recorder_statistics_span.query_price_history` on every day the
+    inspector draws, purged or not.
 
     No ``tail_start``: a day old enough to be read from statistics is by
     definition fully compiled, so there is no hour in progress to top up from the
     short-term table.
     """
-    from ..recorder_statistics_span import (
-        SpanStatistics,
-        prefer_rows,
-        query_hourly_statistics,
-    )
+    from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
     from .forecast_slot_history import (
         SOLAR_FORECAST_CURRENT_ENTITY,
         forecast_slots_from_hourly_statistics,
@@ -172,9 +163,6 @@ async def load_statistics_day(
                 grid_import_forecast_entity_id,
                 grid_export_forecast_entity_id,
                 battery_net_forecast_entity_id,
-                import_price_entity_id,
-                export_price_entity_id,
-                export_price_fallback_entity_id,
             ],
             local_start=local_start,
             local_end=local_end,
@@ -219,19 +207,6 @@ async def load_statistics_day(
         ),
         battery_net_forecast_points=_forecast_wh_points(
             span.rows_for(battery_net_forecast_entity_id), target_date
-        ),
-        import_price_points=_rail_points(
-            span.rows_for(import_price_entity_id), target_date
-        ),
-        export_price_points=_rail_points(
-            # The same hour-by-hour resolution the span aggregates apply to
-            # the export rate, from the same helper: the seam between Helman's
-            # mirror and the configured sell-price entity falls mid-history.
-            prefer_rows(
-                span.rows_for(export_price_entity_id),
-                span.rows_for(export_price_fallback_entity_id),
-            ),
-            target_date,
         ),
     )
 
@@ -356,31 +331,4 @@ def _forecast_wh_points(
                 "wh": mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR,
             }
         )
-    return points
-
-
-def _rail_points(
-    rows_by_utc_hour: dict[datetime, Any], target_date: date
-) -> list[dict]:
-    """A price rail's hourly mean, held across the four slots of its hour.
-
-    Held forward rather than emitted at ``HH:00`` alone, because the caller fills
-    whatever the rail leaves empty from the configured import windows: a rail
-    with holes at ``:15``, ``:30`` and ``:45`` would come back showing the
-    recorded rate on the hour and the configured tariff between the hours, three
-    quarters of a rail that never existed. A rate applies across its hour, so
-    stating it across its hour is what the data actually says.
-    """
-    points: list[dict] = []
-    for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
-        mean = _mean_of(row)
-        if mean is None:
-            continue
-        for offset in range(0, HOUR_MINUTES, 15):
-            points.append(
-                {
-                    "slot": (local_hour + timedelta(minutes=offset)).strftime("%H:%M"),
-                    "value": mean,
-                }
-            )
     return points
