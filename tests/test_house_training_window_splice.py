@@ -172,9 +172,12 @@ def _make_hass():
     async def _executor_job(func, *args):
         return func(*args)
 
+    # ``data`` is where the oldest-state probe's cache lives, and a fresh one
+    # per call is what keeps every splice here probing for itself.
     return SimpleNamespace(
         states=SimpleNamespace(get=lambda entity_id: None),
         async_add_executor_job=_executor_job,
+        data={},
     )
 
 
@@ -390,6 +393,7 @@ class HouseTrainingOnASplicedWindowTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
             async_add_executor_job=recorder.async_add_executor_job,
+            data={},
         )
         request = house_module.HouseTrainingRequest(
             total_energy_entity_id=HOUSE_METER,

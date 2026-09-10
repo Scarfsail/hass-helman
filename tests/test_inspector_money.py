@@ -250,7 +250,7 @@ class TestPricingOneVintage(unittest.TestCase):
 class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
     """The disagreement this file exists to prevent, at the payload level."""
 
-    def _make_service(self):
+    def _make_service(self, *, price_snapshot=None):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -260,7 +260,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_export_price_entity_id_provider=lambda: "sensor.spot_sell_price",
+            grid_price_snapshot_provider=lambda: price_snapshot or {},
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
@@ -318,7 +318,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
                 {"slot": "09:45", "value": 5.0},
                 {"slot": "10:00", "value": 5.0},
             ],
-            "sensor.spot_sell_price": [
+            "sensor.helman_grid_export_price": [
                 {"slot": "09:45", "value": 2.0},
                 {"slot": "10:00", "value": 2.0},
             ],
@@ -346,6 +346,36 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
         # The claim that failed live: the money totals and the energy total now
         # describe the same slots.
         self.assertAlmostEqual(payload["totals"]["gridActualWh"], 260.0, places=6)
+
+    async def test_the_schedule_prices_the_running_slot_and_not_an_elapsed_gap(self):
+        # The elapsed 09:45 has export energy but no recorded rate at any tier;
+        # the day-ahead schedule covers it, and must not be allowed to price it,
+        # or today's gain would shrink at midnight. The running slot 10:00 is
+        # the schedule's to price.
+        exported = [_wh("09:45", 400.0), _wh("10:00", 200.0)]
+        schedule = {
+            "export": {
+                "status": "available",
+                "unit": "CZK/kWh",
+                "points": [
+                    {"timestamp": f"{TODAY}T09:45:00+02:00", "value": 2.0},
+                    {"timestamp": f"{TODAY}T10:00:00+02:00", "value": 2.0},
+                ],
+            }
+        }
+
+        payload = await self._payload(
+            self._make_service(price_snapshot=schedule),
+            grid_sides=([_wh("09:45", -400.0), _wh("10:00", -200.0)], [], exported),
+            rails={},
+        )
+
+        export_rail = {
+            point["slot"]: point["value"] for point in payload["series"]["exportPrice"]
+        }
+        self.assertNotIn("09:45", export_rail)
+        self.assertEqual(export_rail["10:00"], 2.0)
+        self.assertAlmostEqual(payload["totals"]["moneyActual"]["gain"], 0.2 * 2.0, places=6)
 
     async def test_a_day_with_no_rail_prices_nothing(self):
         payload = await self._payload(

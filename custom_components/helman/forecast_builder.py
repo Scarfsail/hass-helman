@@ -28,18 +28,25 @@ class HelmanForecastBuilder:
         hass: HomeAssistant,
         config: dict,
         slot_history: TodaySlotEnergyReader,
+        *,
+        export_price_snapshot: dict[str, Any],
     ) -> None:
         self._hass = hass
         self._config = config
         self._slot_history = slot_history
         self._local_tz = ZoneInfo(str(hass.config.time_zone))
+        # Handed in, never read here: the coordinator owns the one ingestion of
+        # the configured sell-price entity and every consumer -- this refresh
+        # included -- is served from that single result.
+        self._export_price_snapshot = export_price_snapshot
 
     async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
         effective_reference_time = reference_time or datetime.now(self._local_tz)
         return {
             "solar": await self._build_solar_forecast(effective_reference_time),
             "grid": GridPriceForecastBuilder(self._hass, self._config).build(
-                reference_time=effective_reference_time
+                reference_time=effective_reference_time,
+                export_snapshot=self._export_price_snapshot,
             ),
         }
 

@@ -615,6 +615,15 @@ class HelmanCoordinator:
         # statistics series to price history from.
         self._grid_export_price_current: float | None = None
         self._grid_export_price_unit: str | None = None
+        #: The owned export channel: the one ingestion of the configured
+        #: sell-price entity, and the only thing current price, unit,
+        #: availability, the published schedule and every backend consumer are
+        #: served from. None until the first ingestion.
+        self._grid_export_price_channel: dict[str, Any] | None = None
+        #: The source's own timestamp-keyed prices, kept verbatim so the
+        #: published sensor's attributes can be compared key for key with the
+        #: entity they were ingested from.
+        self._grid_export_price_schedule: dict[str, float] = {}
         #: The one-shot statistics back-fill for the export price mirror.
         self._grid_export_price_backfill_task: Any | None = None
         self._grid_export_price_backfill_started = False
@@ -977,7 +986,6 @@ class HelmanCoordinator:
             battery_discharge_energy_entity_id_provider=lambda: self._get_battery_entity_id(
                 "today_discharge_energy"
             ),
-            grid_export_price_entity_id_provider=self._get_grid_sell_price_entity_id,
             grid_import_price_config_provider=self._get_grid_import_price_config,
             grid_price_snapshot_provider=self._build_grid_price_snapshot,
         )
@@ -1334,11 +1342,10 @@ class HelmanCoordinator:
 
         Held for the rest of the slot it was built in, though. The inspector
         calls this once per day opened, and a full build materializes the whole
-        forecast horizon at canonical granularity and re-runs the export channel
-        — including its "unavailable"/"partial" warnings, which would otherwise
-        repeat on every day-pill click while a sell-price entity is down. Within
-        one slot the answer cannot change, so the freshness the docstring above
-        demands is exactly what the cache key preserves.
+        forecast horizon at canonical granularity — work that would otherwise
+        repeat on every day-pill click. Within one slot the answer cannot
+        change, so the freshness the docstring above demands is exactly what
+        the cache key preserves.
         """
         from .recorder_hourly_series import get_local_current_slot_start
 
@@ -1353,7 +1360,10 @@ class HelmanCoordinator:
         snapshot = GridPriceForecastBuilder(
             self._hass,
             self._active_config,
-        ).build(reference_time=reference_time)
+        ).build(
+            reference_time=reference_time,
+            export_snapshot=self._get_grid_export_price_channel(),
+        )
         self._grid_price_snapshot_cache = (slot_start, snapshot)
         return snapshot
 
@@ -1730,15 +1740,21 @@ class HelmanCoordinator:
         result = {
             "solar": solar_response,
         }
-        # Built per request, not read off the refresh: the price points and the
-        # "price now" they carry are derived at the reference time, and a card
-        # asking mid-quarter-hour must not be told the last refresh's price.
-        # Only the grid half: HelmanForecastBuilder would also run the solar
-        # half's same-day recorder scan, and a read has no use for it.
+        # The import half is built per request, not read off the refresh: its
+        # points and the "price now" they carry are derived at the reference
+        # time, and a card asking mid-quarter-hour must not be told the last
+        # refresh's slot. The export half is the owned ingestion result rather
+        # than a second read of the source -- it carries the source's own
+        # timestamps, which no reference time reshapes. Only the grid half:
+        # HelmanForecastBuilder would also run the solar half's same-day
+        # recorder scan, and a read has no use for it.
         raw_grid_price_forecast = GridPriceForecastBuilder(
             self._hass,
             self._active_config,
-        ).build(reference_time=request_now)
+        ).build(
+            reference_time=request_now,
+            export_snapshot=self._get_grid_export_price_channel(),
+        )
         canonical_house_forecast = await self._async_get_canonical_house_forecast(
             reference_time=request_now
         )
@@ -1806,30 +1822,93 @@ class HelmanCoordinator:
         self._grid_import_price_unit = unit if isinstance(unit, str) and unit else None
 
     def _absorb_grid_export_price(self, grid_price_snapshot: Any) -> None:
-        """Take the current export rate off a freshly built price snapshot.
-
-        The channel's ``status`` is deliberately not gated on. It grades the
-        *forecast* -- "partial" means the sell-price entity published a price
-        but no forward points, which is a complete answer to the only question
-        this mirror asks. A numeric ``currentPrice`` is therefore taken whatever
-        the status says, and anything else clears the value: a rate that stopped
-        being published is not a rate that has not moved, and the recorder must
-        not archive a stale one as though it still applied.
-        """
+        """Adopt the export half of a freshly built price snapshot."""
         channel = (
             grid_price_snapshot.get("export")
             if isinstance(grid_price_snapshot, dict)
             else None
         )
-        raw_price = channel.get("currentPrice") if isinstance(channel, dict) else None
+        self._absorb_grid_export_price_channel(channel)
+
+    def _absorb_grid_export_price_channel(self, channel: Any) -> None:
+        """Adopt one ingestion result as the owned export channel, whole.
+
+        Current price, unit and schedule are replaced together, from the same
+        reading: a schedule kept from a previous provider or a price left
+        behind by a source that has gone quiet would be a mixed-source answer.
+
+        The channel's ``status`` is deliberately not gated on. It grades the
+        *forecast* -- "partial" means the sell-price entity published a price
+        but no forward points, or forward points but no price. Each half is
+        therefore taken on its own: a numeric ``currentPrice`` whatever the
+        status says, and anything else clears the price without clearing the
+        schedule, because a rate that stopped being published is not a rate
+        that has not moved and the recorder must not archive a stale one as
+        though it still applied.
+        """
+        channel = channel if isinstance(channel, dict) else {}
+        self._grid_export_price_channel = channel
+
+        raw_schedule = channel.get("schedule")
+        self._grid_export_price_schedule = (
+            {
+                key: float(value)
+                for key, value in raw_schedule.items()
+                if isinstance(key, str)
+                and not isinstance(value, bool)
+                and isinstance(value, (int, float))
+            }
+            if isinstance(raw_schedule, dict)
+            else {}
+        )
+
+        # The unit is a property of the source, not of the current reading, so
+        # it survives a reading that carries no price: the mirror stays
+        # available while it holds a schedule, and publishing that schedule
+        # without a unit would be the one thing the source never said.
+        unit = channel.get("unit")
+        self._grid_export_price_unit = unit if isinstance(unit, str) and unit else None
+
+        raw_price = channel.get("currentPrice")
         if isinstance(raw_price, bool) or not isinstance(raw_price, (int, float)):
             self._grid_export_price_current = None
-            self._grid_export_price_unit = None
             return
 
-        unit = channel.get("unit")
         self._grid_export_price_current = float(raw_price)
-        self._grid_export_price_unit = unit if isinstance(unit, str) and unit else None
+
+    def _ingest_grid_export_price(self) -> dict[str, Any]:
+        """Read the configured sell-price entity and own what comes back.
+
+        The single external boundary for the export channel. Every other path
+        -- the per-request forecast, the inspector's price rail, the automation
+        bundle the optimizers run on, the published sensor -- is served from
+        the result this stores, so a consumer can never disagree with the
+        sensor or pick up a source the configuration has since changed.
+        """
+        channel = GridPriceForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build_export_price_snapshot()
+        self._absorb_grid_export_price_channel(channel)
+        # The held snapshot embeds the channel this replaces. Its key is the
+        # slot, which cannot see an ingestion inside the slot it was built in,
+        # so a source publishing tomorrow's prices mid-slot would otherwise not
+        # reach the inspector until the next one.
+        self._grid_price_snapshot_cache = None
+        return channel
+
+    def _get_grid_export_price_channel(self) -> dict[str, Any]:
+        """The owned export channel, ingesting once if nothing has yet.
+
+        Refreshed on the forecast beat; read here between beats. The lazy first
+        ingestion is for the cold window before the startup refresh has run,
+        where the alternative is telling a card the export price is unknown
+        when the source is sitting right there with it.
+        """
+        channel = getattr(self, "_grid_export_price_channel", None)
+        if channel is None:
+            return self._ingest_grid_export_price()
+        return channel
 
     def _maybe_start_solar_forecast_backfill(self) -> None:
         """Start the one-shot walk that recovers the forecast's past publications.
@@ -2629,6 +2708,14 @@ class HelmanCoordinator:
         """The mirrored sell-price entity's own currency-per-energy unit."""
         return self._grid_export_price_unit
 
+    def get_grid_export_price_schedule(self) -> dict[str, float]:
+        """The ingested timestamp-keyed export prices, under the source's keys.
+
+        A copy, and the whole map: the sensor republishes it wholesale on every
+        ingestion so a timestamp the source dropped disappears with it.
+        """
+        return dict(getattr(self, "_grid_export_price_schedule", {}) or {})
+
     def get_house_consumption_forecast_current_w(self) -> float | None:
         # Report the same house demand the battery and grid forecasts are built
         # from: the adjusted forecast, whose nonDeferrable already folds in the
@@ -3130,6 +3217,10 @@ class HelmanCoordinator:
                 self._hass,
                 self._active_config,
                 self._slot_history,
+                # The refresh beat is the export channel's ingestion beat: read
+                # the source once here, then serve the same result to the
+                # snapshot, the automation bundle and the published sensor.
+                export_price_snapshot=self._ingest_grid_export_price(),
             ).build(reference_time=request_now)
             solar_snapshot = self._build_canonical_solar_forecast(
                 raw_forecast["solar"],

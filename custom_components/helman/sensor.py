@@ -806,6 +806,13 @@ class HelmanGridExportPriceSensor(_HelmanDeviceEntity):
     rename, or a change of ``state_class``, cannot silently empty the series
     Helman prices from.
 
+    It also carries the source's forward prices: the ingested timestamp-keyed
+    schedule is republished here as `extra_state_attributes`, under the
+    source's own key text, so a consumer that wants tomorrow's prices reads
+    Helman rather than going back to the configured entity itself. Only the
+    price data is copied -- the unique ID, translation key, friendly name and
+    `state_class` stay Helman's own.
+
     No device class, and the unit is taken from the mirrored entity rather than
     fixed -- both for the reasons spelled out on the import sensor.
     """
@@ -822,7 +829,17 @@ class HelmanGridExportPriceSensor(_HelmanDeviceEntity):
 
     @property
     def available(self) -> bool:
-        return self._coordinator.get_grid_export_price_current() is not None
+        # "A price or a schedule", not "a price": Home Assistant merges
+        # `extra_state_attributes` into a state only while the entity is
+        # available, so gating on the price alone would drop tomorrow's
+        # published prices exactly when today's price went missing. Unavailable
+        # here therefore means the source told us nothing at all; with a
+        # schedule but no price the state reads `unknown`, which long-term
+        # statistics skip the same way.
+        return (
+            self._coordinator.get_grid_export_price_current() is not None
+            or bool(self._coordinator.get_grid_export_price_schedule())
+        )
 
     @property
     def native_value(self) -> float | None:
@@ -831,3 +848,16 @@ class HelmanGridExportPriceSensor(_HelmanDeviceEntity):
     @property
     def native_unit_of_measurement(self) -> str | None:
         return self._coordinator.get_grid_export_price_unit()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float]:
+        """The ingested export prices, under the source's own attribute keys.
+
+        Read straight off the coordinator's owned channel -- never rebuilt from
+        the configured entity here -- so this map and the forecast points the
+        backend prices from are two renderings of one reading. Returned whole
+        on every write, which is what makes a timestamp the source dropped, or
+        a whole schedule left by a provider the configuration has replaced,
+        disappear rather than linger beside the new one.
+        """
+        return self._coordinator.get_grid_export_price_schedule()

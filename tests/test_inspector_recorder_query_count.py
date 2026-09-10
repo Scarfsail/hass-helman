@@ -166,6 +166,8 @@ SOLAR_METER = "sensor.solar_total"
 SOC_SENSOR = "sensor.battery_soc"
 MIN_SOC_SENSOR = "number.battery_min_soc"
 MAX_SOC_SENSOR = "number.battery_max_soc"
+IMPORT_PRICE_ENTITY = "sensor.helman_grid_import_price"
+EXPORT_PRICE_ENTITY = "sensor.helman_grid_export_price"
 
 
 #: A recorder that keeps ten years of raw states, so the day under test is
@@ -212,6 +214,9 @@ def _make_service():
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         states=SimpleNamespace(get=lambda entity_id: None),
+        # Where the oldest-state probe caches its answers. One per service, so
+        # each test starts cold and counts the probes a first open really costs.
+        data={},
     )
     service = service_mod.SolarBiasCorrectionService(
         hass,
@@ -431,6 +436,116 @@ class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase
         self.assertEqual(soc_reads, [[MIN_SOC_SENSOR, MAX_SOC_SENSOR]])
 
 
+class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
+    """The two rails resolve in bounded reads, and never one per slot.
+
+    A day has 96 slots per rail. The tiers are batched per tier -- one coverage
+    probe per price entity, one raw read for both of them together, and a
+    statistics read only for slots the raw tier left empty -- so the counts here
+    are the ones the design intends rather than a ceiling that would forbid the
+    hourly fill.
+    """
+
+    async def _counted_day(self, *, raw_from: datetime | None, dates=(TARGET_DATE,)):
+        """Inspector days with the price rails live, counting their reads.
+
+        More than one date runs them against a single service -- and so a single
+        ``hass.data`` -- which is what makes the coverage probe's cache visible
+        in the counts.
+        """
+        service = _make_service()
+        probes: list[str] = []
+        raw_reads: list[list[str]] = []
+        statistics_reads: list[list[str]] = []
+
+        def _probe(hass, start, end, entity_id, *args, **kwargs):
+            probes.append(entity_id)
+            if raw_from is None:
+                return {}
+            return {entity_id: [SimpleNamespace(last_updated=raw_from, state="2.0")]}
+
+        def _raw(hass, start, end, entity_ids=None, *args, **kwargs):
+            raw_reads.append(list(entity_ids or []))
+            return {}
+
+        def _statistics(hass, start, end, statistic_ids, period, *args, **kwargs):
+            if period == "hour":
+                statistics_reads.append(sorted(statistic_ids or []))
+            return {}
+
+        with _keeping_raw_states(), patch.multiple(
+            sys.modules["homeassistant.components.recorder.history"],
+            state_changes_during_period=_probe,
+            get_significant_states=_raw,
+        ), patch.multiple(
+            recorder_series_mod,
+            state_changes_during_period=_probe,
+            get_significant_states=_raw,
+        ), patch.object(
+            span_mod, "statistics_during_period", _statistics
+        ), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ):
+            for target_date in dates:
+                await service.async_get_inspector_day(target_date)
+        return probes, raw_reads, statistics_reads
+
+    async def test_rails_with_raw_history_cost_two_probes_and_one_batched_read(self):
+        probes, raw_reads, statistics_reads = await self._counted_day(
+            raw_from=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE)
+        )
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        # One coverage probe per price entity, not one per slot.
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
+        price_raw_reads = [
+            read for read in raw_reads if set(read) & set(price_entities)
+        ]
+        self.assertEqual(price_raw_reads, [price_entities])
+        # The stubbed raw read comes back empty, so the tier below it answers --
+        # once, for both entities together.
+        self.assertEqual(statistics_reads, [sorted(price_entities)])
+
+    async def test_rails_with_no_raw_history_skip_the_raw_read_entirely(self):
+        probes, raw_reads, statistics_reads = await self._counted_day(raw_from=None)
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
+        self.assertEqual(
+            [read for read in raw_reads if set(read) & set(price_entities)], []
+        )
+        self.assertEqual(statistics_reads, [sorted(price_entities)])
+
+
+    async def test_a_second_day_open_reuses_the_cached_coverage_probe(self):
+        """Where an entity's raw states begin is asked once, not once per open.
+
+        The probe is one indexed row, but the recorder answers from a single DB
+        thread, so re-issuing it on every day open is a serial round trip in
+        front of the reads the day actually came for. Two opens, two probes --
+        one per entity -- is what the cache in ``query_oldest_state_date`` buys,
+        and counting it here is what keeps it bought.
+        """
+        probes, _, _ = await self._counted_day(
+            raw_from=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+            dates=(TARGET_DATE, "2026-05-09"),
+        )
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
+
+
 class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
     """The helper itself, apart from the inspector."""
 
@@ -516,7 +631,7 @@ class TestHistoryDepthProbeIssuesNoMoreQueriesThanBefore(unittest.IsolatedAsynci
             _state_changes_during_period,
         ):
             await span_mod.query_history_depths(
-                SimpleNamespace(),
+                SimpleNamespace(data={}),
                 "sensor.forecast_only",
                 today_local=date(2026, 5, 11),
                 local_tz=ZoneInfo("Europe/Prague"),

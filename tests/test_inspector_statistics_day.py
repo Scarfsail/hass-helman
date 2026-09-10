@@ -263,7 +263,6 @@ def _make_service(*, with_consumers: bool = False):
         battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
         battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
         battery_soc_entity_id_provider=lambda: BATTERY_SOC,
-        grid_export_price_entity_id_provider=lambda: EXPORT_PRICE,
     )
     if with_consumers:
         async def _device_consumers():
@@ -284,12 +283,21 @@ class TestSourceChoice(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_day_inside_the_horizon_stays_on_raw_states(self):
         _set_rows({})
-        # today - 3 with ten days kept: comfortably inside, so nothing about it
-        # changes and no statistics read is issued on its behalf.
+        # today - 3 with ten days kept: comfortably inside, so the measured
+        # series stay at fifteen minutes and no statistics read is issued on
+        # their behalf. The one hourly read here is the price rails', which
+        # resolve from their own entities' coverage on every day -- these
+        # entities have no raw states at all in this rig, so the tier under
+        # them answers.
         payload = await _purged_day(day="2026-05-22")
 
         self.assertEqual(payload["dataGranularityMinutes"], 15)
-        self.assertEqual([call["period"] for call in STATISTICS_CALLS], ["month"])
+        self.assertEqual(
+            [call["period"] for call in STATISTICS_CALLS], ["month", "hour"]
+        )
+        self.assertEqual(
+            STATISTICS_CALLS[-1]["statistic_ids"], {IMPORT_PRICE, HELMAN_EXPORT_PRICE}
+        )
 
     async def test_a_day_past_the_horizon_reads_hourly_statistics(self):
         _set_rows({SOLAR_METER: _meter_series(_hour(f"{PURGED_DAY}T07:00:00+02:00"), [10.0, 11.5])})
@@ -519,10 +527,10 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([p["value"] for p in payload["series"]["exportPrice"]], [1.25] * 4)
 
-    async def test_the_export_rail_prefers_helmans_mirror_hour_by_hour(self):
-        # The seam falls mid-history: the mirror covers hours since it started
-        # publishing, the configured sell-price entity covers whatever its own
-        # statistics happen to hold.
+    async def test_the_export_rail_reads_helmans_entity_alone(self):
+        # The configured sell-price entity is an ingestion source, not a history
+        # source. Statistics on it change nothing the rail draws, and an hour
+        # only it covers stays empty (#133).
         _set_rows(
             {
                 HELMAN_EXPORT_PRICE: [_row(_hour(f"{PURGED_DAY}T09:00:00+02:00"), mean=2.0)],
@@ -536,7 +544,7 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         payload = await _purged_day()
         by_slot = {p["slot"]: p["value"] for p in payload["series"]["exportPrice"]}
 
-        self.assertEqual(by_slot["08:00"], 1.0)
+        self.assertNotIn("08:00", by_slot)
         self.assertEqual(by_slot["09:00"], 2.0)
 
     async def test_money_is_priced_per_hour_from_the_two_rails(self):
@@ -575,7 +583,7 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         appliances = {a["label"]: a["wh"] for a in breakdown[0]["appliances"]}
         self.assertEqual(appliances["Washer"], 500.0)
 
-    async def test_the_day_reads_the_statistics_table_exactly_once(self):
+    async def test_the_day_reads_the_measured_series_in_one_statistics_query(self):
         # One read however many series the day draws: the recorder serves from a
         # single executor thread, so a query per series is a serial round-trip
         # per series however the awaits are arranged.
@@ -584,9 +592,14 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         await _purged_day(_make_service(with_consumers=True))
 
         hourly = [call for call in STATISTICS_CALLS if call["period"] == "hour"]
-        self.assertEqual(len(hourly), 1)
+        # Two: the measured series, and the price rails' own tier read. The
+        # rails no longer ride on this query because they no longer follow this
+        # day's fork -- they resolve from their own entities' coverage, on every
+        # day the inspector draws.
+        self.assertEqual(len(hourly), 2)
+        measured, prices = hourly
         self.assertEqual(
-            hourly[0]["statistic_ids"],
+            measured["statistic_ids"],
             {
                 SOLAR_METER,
                 SOLAR_FORECAST,
@@ -603,11 +616,10 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
                 GRID_IMPORT_FORECAST,
                 GRID_EXPORT_FORECAST,
                 BATTERY_NET_FORECAST,
-                IMPORT_PRICE,
-                HELMAN_EXPORT_PRICE,
-                EXPORT_PRICE,
             },
         )
+        # Helman's two price entities, and not the configured sell-price one.
+        self.assertEqual(prices["statistic_ids"], {IMPORT_PRICE, HELMAN_EXPORT_PRICE})
         # A day entirely in the past is fully compiled, so no short-term tail.
         self.assertEqual([call["period"] for call in STATISTICS_CALLS].count("5minute"), 0)
 

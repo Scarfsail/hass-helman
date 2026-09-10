@@ -1,13 +1,13 @@
 """The inspector's two price rails: where each slot's rate comes from.
 
 A rail spans the whole day, but no single source can cover it. Elapsed slots are
-recorder history — the import sensor Helman publishes, and the configured
-sell-price entity, which has always recorded itself. Slots the clock has not
-reached are the live price feed's. And the import side has a third source under
-both of them: the window config, which prices any minute of any date and is what
-fills the days that predate the sensor. These tests pin the joins between the
-three, because a wrong join shows up as a gap in the strip or as a slot drawn
-twice, neither of which any single source can be blamed for.
+recorder history, resolved per slot from Helman's own two price entities by
+``query_price_history``. Slots the clock has not reached are the live price
+feed's. And the import side has a third source under both of them: the window
+config, which prices any minute of any date and is what fills the days that
+predate the sensor. These tests pin the joins between the three, because a wrong
+join shows up as a gap in the strip or as a slot drawn twice, neither of which
+any single source can be blamed for.
 """
 
 from __future__ import annotations
@@ -108,8 +108,9 @@ PRAGUE = ZoneInfo("Europe/Prague")
 #: "Now" for every test here: 10:00 local on 2026-05-11.
 TODAY = "2026-05-11"
 PAST_DAY = "2026-05-10"
+FUTURE_DAY = "2026-05-12"
 IMPORT_ENTITY = "sensor.helman_grid_import_price"
-EXPORT_ENTITY = "sensor.spot_sell_price"
+EXPORT_ENTITY = "sensor.helman_grid_export_price"
 
 
 class _DummyStore:
@@ -465,6 +466,13 @@ class TestBatchedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
 
 class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
+    """The shaping half: what the shared reader resolved, labelled by local slot."""
+
+    def setUp(self):
+        self.span = importlib.import_module(
+            "custom_components.helman.recorder_statistics_span"
+        )
+
     def _make_service(self):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
@@ -472,32 +480,33 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
         )
         return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg())
 
-    async def test_labels_boundary_samples_by_local_slot(self):
+    def _history(self, by_slot):
+        return self.span.PriceHistory(by_slot=by_slot)
+
+    async def test_labels_resolved_slots_by_local_slot(self):
         service = self._make_service()
-        by_entity = {
-            IMPORT_ENTITY: {
-                datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 1.0,
-            },
-            EXPORT_ENTITY: {
-                datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 2.0,
-                datetime(2026, 5, 10, 6, 15, tzinfo=PRAGUE): 4.0,
-            },
+        resolved = {
+            IMPORT_ENTITY: self._history(
+                {datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 1.0}
+            ),
+            EXPORT_ENTITY: self._history(
+                {
+                    datetime(2026, 5, 10, 6, 0, tzinfo=PRAGUE): 2.0,
+                    datetime(2026, 5, 10, 6, 15, tzinfo=PRAGUE): 4.0,
+                }
+            ),
         }
-        batched = AsyncMock(return_value=by_entity)
-        with patch.object(
-            importlib.import_module("custom_components.helman.recorder_hourly_series"),
-            "query_slot_boundary_state_values_for_entities",
-            batched,
-        ):
+        reader = AsyncMock(return_value=resolved)
+        with patch.object(self.span, "query_price_history", reader):
             imported, exported = await service._load_recorded_price_rails(
                 [IMPORT_ENTITY, EXPORT_ENTITY],
                 date(2026, 5, 10),
                 PRAGUE,
                 local_end=datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE),
             )
-        # Both rails came out of a single read, in the order they were asked for.
-        self.assertEqual(batched.await_count, 1)
-        self.assertEqual(batched.await_args.args[1], [IMPORT_ENTITY, EXPORT_ENTITY])
+        # Both rails came out of a single resolution, in the order asked for.
+        self.assertEqual(reader.await_count, 1)
+        self.assertEqual(reader.await_args.args[1], [IMPORT_ENTITY, EXPORT_ENTITY])
         self.assertEqual(imported, [{"slot": "06:00", "value": 1.0}])
         self.assertEqual(
             exported,
@@ -506,12 +515,8 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_unconfigured_entity_reads_nothing(self):
         service = self._make_service()
-        batched = AsyncMock(return_value={IMPORT_ENTITY: {}})
-        with patch.object(
-            importlib.import_module("custom_components.helman.recorder_hourly_series"),
-            "query_slot_boundary_state_values_for_entities",
-            batched,
-        ):
+        reader = AsyncMock(return_value={IMPORT_ENTITY: self._history({})})
+        with patch.object(self.span, "query_price_history", reader):
             imported, exported = await service._load_recorded_price_rails(
                 [IMPORT_ENTITY, None],
                 date(2026, 5, 10),
@@ -520,18 +525,14 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
             )
         # The unconfigured rail keeps its slot in the result and never reaches
         # the recorder.
-        self.assertEqual(batched.await_args.args[1], [IMPORT_ENTITY])
+        self.assertEqual(reader.await_args.args[1], [IMPORT_ENTITY])
         self.assertEqual(imported, [])
         self.assertEqual(exported, [])
 
     async def test_two_unconfigured_entities_skip_the_recorder_entirely(self):
         service = self._make_service()
-        batched = AsyncMock(return_value={})
-        with patch.object(
-            importlib.import_module("custom_components.helman.recorder_hourly_series"),
-            "query_slot_boundary_state_values_for_entities",
-            batched,
-        ):
+        reader = AsyncMock(return_value={})
+        with patch.object(self.span, "query_price_history", reader):
             self.assertEqual(
                 await service._load_recorded_price_rails(
                     [None, None],
@@ -541,7 +542,7 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
                 ),
                 ([], []),
             )
-        batched.assert_not_awaited()
+        reader.assert_not_awaited()
 
 
 class _PayloadCase(unittest.IsolatedAsyncioTestCase):
@@ -551,14 +552,13 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
         self,
         *,
         import_config=None,
-        export_entity: str | None = EXPORT_ENTITY,
         price_snapshot=None,
-        export_entity_unit: str | None = None,
+        export_price_unit: str | None = None,
     ):
         states = {}
-        if export_entity and export_entity_unit:
-            states[export_entity] = SimpleNamespace(
-                attributes={"unit_of_measurement": export_entity_unit}
+        if export_price_unit:
+            states[EXPORT_ENTITY] = SimpleNamespace(
+                attributes={"unit_of_measurement": export_price_unit}
             )
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
@@ -569,7 +569,6 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_export_price_entity_id_provider=lambda: export_entity,
             grid_import_price_config_provider=lambda: import_config,
             grid_price_snapshot_provider=lambda: price_snapshot or {},
         )
@@ -658,15 +657,16 @@ class TestTodayJoinsRecorderAndLiveFeed(_PayloadCase):
         self.assertTrue(payload["availability"]["hasExportPrice"])
 
 
-class TestTodaysExportFeedBeatsTheRecorder(_PayloadCase):
-    """The bug live validation caught: elapsed hours drawn as one flat value."""
+class TestTodaysExportFeedStopsAtTheClock(_PayloadCase):
+    """Where today's export rail hands over from the recorder to the schedule.
 
-    async def test_the_whole_day_feed_overrides_recorded_export_samples(self):
-        # The sell-price entity's attributes carry the settled day-ahead
-        # schedule for the *whole* day, elapsed hours included, while its
-        # recorded state is only a sample of whichever hour was current when
-        # Home Assistant happened to be running. Deferring to the recorder drew
-        # every elapsed slot at one carried value.
+    The schedule carries the whole day, elapsed hours included, and used to be
+    laid down whole. It no longer is: the recorded rail resolves raw states
+    first and hourly means under them, so an elapsed hour already has the
+    better answer and the schedule would only overwrite it.
+    """
+
+    async def test_an_elapsed_slot_keeps_its_recorded_price(self):
         service = self._make_service(
             import_config=_import_config(),
             price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
@@ -678,8 +678,53 @@ class TestTodaysExportFeedBeatsTheRecorder(_PayloadCase):
         )
 
         export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(export_rail["00:00"], 6.242)
+        self.assertEqual(export_rail["09:45"], 6.242)
+
+    async def test_an_elapsed_slot_with_no_history_stays_empty(self):
+        # Deliberate: the schedule does not fill it. Filling it would complete
+        # today's rail while the day is current and shrink it again at
+        # midnight, once the same day is served from history alone.
+        covered = [_slot_label(index) for index in range(_slot_index("08:00"), 96)]
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
+        )
+        payload = await self._payload(
+            service, TODAY, recorded={EXPORT_ENTITY: _rail(covered, 6.242)}
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertNotIn("00:00", export_rail)
+        self.assertNotIn("07:45", export_rail)
+        self.assertEqual(export_rail["08:00"], 6.242)
+
+    async def test_the_running_slot_and_everything_after_it_take_the_schedule(self):
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
+        )
+        payload = await self._payload(
+            service,
+            TODAY,
+            recorded={EXPORT_ENTITY: _rail(_all_slots(), 6.242)},
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(export_rail["10:00"], 1.5)
+        self.assertEqual(export_rail["10:15"], 1.5)
+        self.assertEqual(export_rail["23:45"], 1.5)
+
+    async def test_a_future_date_is_the_schedule_end_to_end(self):
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(FUTURE_DAY, export_from="00:00"),
+        )
+        payload = await self._payload(service, FUTURE_DAY, recorded={})
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual([p["slot"] for p in payload["series"]["exportPrice"]], _all_slots())
         self.assertEqual(set(export_rail.values()), {1.5})
-        self.assertNotIn(6.242, set(export_rail.values()))
 
     async def test_the_recorder_still_answers_the_slots_the_feed_misses(self):
         # A forward-only feed opened mid-morning: everything before it is the
@@ -747,10 +792,8 @@ class TestPartiallyCoveredDayFallsBackPerSlot(_PayloadCase):
 
 
 class TestUnconfiguredSides(_PayloadCase):
-    async def test_no_sell_price_entity_still_renders_the_import_rail(self):
-        service = self._make_service(
-            import_config=_import_config(), export_entity=None
-        )
+    async def test_no_export_history_still_renders_the_import_rail(self):
+        service = self._make_service(import_config=_import_config())
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(len(payload["series"]["importPrice"]), 96)
@@ -759,20 +802,20 @@ class TestUnconfiguredSides(_PayloadCase):
         self.assertFalse(payload["availability"]["hasExportPrice"])
 
     async def test_no_import_windows_and_no_history_leaves_the_rail_empty(self):
-        service = self._make_service(import_config=None, export_entity=None)
+        service = self._make_service(import_config=None)
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(payload["series"]["importPrice"], [])
         self.assertFalse(payload["availability"]["hasImportPrice"])
         self.assertIsNone(payload["priceUnit"])
 
-    async def test_an_elapsed_day_takes_the_unit_off_the_sell_price_entity(self):
+    async def test_an_elapsed_day_takes_the_unit_off_helmans_export_sensor(self):
         # A past day builds no live snapshot, so with no import windows there is
         # no unit from either source the live path uses -- and the export bars
-        # would be drawn as bare numbers. The entity the recorded rail came from
-        # states its own unit.
+        # would be drawn as bare numbers. Helman's own export sensor, the entity
+        # the recorded rail came from, states its unit.
         service = self._make_service(
-            import_config=None, export_entity_unit="CZK/kWh"
+            import_config=None, export_price_unit="CZK/kWh"
         )
         payload = await self._payload(
             service, PAST_DAY, recorded={EXPORT_ENTITY: _rail(_all_slots(), 1.5)}
