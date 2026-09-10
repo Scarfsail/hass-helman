@@ -1425,14 +1425,23 @@ class SolarBiasCorrectionService:
             price_snapshot.get("import"), target_date, timezone
         ).items():
             import_price_by_slot.setdefault(slot, value)
-        # The export feed overrides the recorder rather than deferring to it.
-        # Its attribute map is the settled day-ahead schedule for the whole day,
-        # while the entity's recorded *state* is only ever a sample of whichever
-        # hour was current when Home Assistant happened to be running — sparse
-        # across any gap in uptime, and flat wherever it is sparse.
+        # The export channel carries the whole day, elapsed hours included, so
+        # unlike the forward-only import channel it has to be cut at the clock.
+        # It used to be laid down whole, on the argument that the day-ahead
+        # schedule beat a recorded state that only ever sampled the hours Home
+        # Assistant was up for; now that the recorded rail resolves raw states
+        # first and fills from hourly means, the recorder holds the better
+        # answer and the schedule would only overwrite it. So the schedule
+        # answers for the slot in progress and everything after it, and an
+        # elapsed slot the recorder has nothing for stays empty rather than
+        # borrowing today's schedule: filling it would complete today's rail
+        # and today's money while the day is current, then shrink both at
+        # midnight once the same day is served from history alone.
         for slot, value in _live_price_rail(
             price_snapshot.get("export"), target_date, timezone
         ).items():
+            if running_slot is not None and slot < running_slot:
+                continue
             export_price_by_slot[slot] = value
 
         import_price_config = self._grid_import_price_config()
@@ -2894,10 +2903,12 @@ def _live_price_rail(
 
     The two channels do not have the same reach, and assuming they do was a
     bug. The import channel is built forward from the slot in progress, so it
-    answers only for what is still ahead. The export channel is the sell-price
-    entity's attribute map, which carries the whole day at its own resolution —
+    answers only for what is still ahead. The export channel is the ingested
+    day-ahead schedule, which carries the whole day at its own resolution —
     *including hours that have already elapsed* — because that is how a
-    day-ahead spot feed publishes.
+    day-ahead spot feed publishes. This helper hands both back whole; cutting
+    the export rail at the slot in progress, so a schedule cannot restate an
+    elapsed hour the recorder already answered, is the caller's job.
 
     Each point is carried forward across the slots that follow it until the next
     one, so an hourly feed fills the quarter-hours between its points rather

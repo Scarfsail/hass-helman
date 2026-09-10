@@ -1890,6 +1890,11 @@ class HelmanCoordinator:
             self._active_config,
         ).build_export_price_snapshot()
         self._absorb_grid_export_price_channel(channel)
+        # The held snapshot embeds the channel this replaces. Its key is the
+        # slot, which cannot see an ingestion inside the slot it was built in,
+        # so a source publishing tomorrow's prices mid-slot would otherwise not
+        # reach the inspector until the next one.
+        self._grid_price_snapshot_cache = None
         return channel
 
     def _get_grid_export_price_channel(self) -> dict[str, Any]:
