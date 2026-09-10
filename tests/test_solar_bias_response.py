@@ -779,7 +779,10 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                     "export": {"status": "available", "currentPrice": 2.5},
                     "import": {"status": "available", "currentPrice": 7.0},
                 }
-            )
+            ),
+            build_export_price_snapshot=Mock(
+                return_value={"status": "available", "currentPrice": 2.5}
+            ),
         )
         solar_response = {"kind": "solar-with-bias"}
         house_response = {"kind": "house"}
@@ -902,7 +905,10 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                     "export": {"status": "available", "currentPrice": 2.5},
                     "import": {"status": "available", "currentPrice": 7.0},
                 }
-            )
+            ),
+            build_export_price_snapshot=Mock(
+                return_value={"status": "available", "currentPrice": 2.5}
+            ),
         )
         solar_response = {"kind": "raw-solar"}
 

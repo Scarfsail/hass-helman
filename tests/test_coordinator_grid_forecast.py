@@ -498,7 +498,10 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                     "export": {"status": "available", "currentPrice": 2.5},
                     "import": {"status": "available", "currentPrice": 7.0},
                 }
-            )
+            ),
+            build_export_price_snapshot=Mock(
+                return_value={"status": "available", "currentPrice": 2.5}
+            ),
         )
         solar_response = {"kind": "solar"}
         house_response = {"kind": "house"}
@@ -602,6 +605,92 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             grid_price_response["importPricePoints"],
         )
         self.assertNotIn("currentPrice", result["grid"])
+
+
+class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
+    def _make_coordinator(self):
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._hass = SimpleNamespace()
+        coordinator._active_config = {}
+        coordinator._grid_price_snapshot_cache = None
+        coordinator._grid_export_price_channel = None
+        coordinator._grid_export_price_schedule = {}
+        return coordinator
+
+    def test_grid_price_snapshot_is_served_from_the_owned_export_channel(self) -> None:
+        coordinator = self._make_coordinator()
+        owned_channel = {
+            "status": "available",
+            "unit": "CZK/kWh",
+            "currentPrice": 2.5,
+            "points": [],
+            "schedule": {"2026-03-20T21:00:00+01:00": 2.5},
+        }
+        coordinator._grid_export_price_channel = owned_channel
+
+        build = Mock(return_value={"export": owned_channel, "import": {}})
+        source_read = Mock()
+        # `_build_grid_price_snapshot` imports the slot helper at call time.
+        previous_modules = _install_import_stubs()
+        try:
+            with patch.object(
+                coordinator_module,
+                "GridPriceForecastBuilder",
+                return_value=SimpleNamespace(
+                    build=build,
+                    build_export_price_snapshot=source_read,
+                ),
+            ):
+                snapshot = coordinator._build_grid_price_snapshot()
+        finally:
+            _restore_modules(previous_modules)
+
+        # The inspector's price rail is a transform of the owned channel, not a
+        # second read of the configured entity.
+        source_read.assert_not_called()
+        self.assertIs(build.call_args.kwargs["export_snapshot"], owned_channel)
+        self.assertIs(snapshot["export"], owned_channel)
+
+    def test_the_refresh_beat_re_ingests_and_owns_what_it_reads(self) -> None:
+        coordinator = self._make_coordinator()
+        first = {
+            "status": "available",
+            "unit": "CZK/kWh",
+            "currentPrice": 2.5,
+            "points": [],
+            "schedule": {"2026-03-20T21:00:00+01:00": 2.5},
+        }
+        # Same price, different schedule: an attribute-only source update still
+        # has to reach the owned channel, or the sensor's published attributes
+        # would never move.
+        second = {
+            "status": "available",
+            "unit": "CZK/kWh",
+            "currentPrice": 2.5,
+            "points": [],
+            "schedule": {"2026-03-21T00:00:00+01:00": -0.4},
+        }
+        source_read = Mock(side_effect=[first, second])
+
+        with patch.object(
+            coordinator_module,
+            "GridPriceForecastBuilder",
+            return_value=SimpleNamespace(build_export_price_snapshot=source_read),
+        ):
+            coordinator._ingest_grid_export_price()
+            self.assertEqual(
+                coordinator.get_grid_export_price_schedule(),
+                {"2026-03-20T21:00:00+01:00": 2.5},
+            )
+
+            coordinator._ingest_grid_export_price()
+
+        self.assertEqual(coordinator.get_grid_export_price_current(), 2.5)
+        self.assertEqual(
+            coordinator.get_grid_export_price_schedule(),
+            {"2026-03-21T00:00:00+01:00": -0.4},
+        )
+        self.assertIs(coordinator._get_grid_export_price_channel(), second)
 
 
 class MergeGridForecastResponsesTests(unittest.TestCase):
