@@ -108,6 +108,7 @@ PRAGUE = ZoneInfo("Europe/Prague")
 #: "Now" for every test here: 10:00 local on 2026-05-11.
 TODAY = "2026-05-11"
 PAST_DAY = "2026-05-10"
+FUTURE_DAY = "2026-05-12"
 IMPORT_ENTITY = "sensor.helman_grid_import_price"
 EXPORT_ENTITY = "sensor.helman_grid_export_price"
 
@@ -656,15 +657,16 @@ class TestTodayJoinsRecorderAndLiveFeed(_PayloadCase):
         self.assertTrue(payload["availability"]["hasExportPrice"])
 
 
-class TestTodaysExportFeedBeatsTheRecorder(_PayloadCase):
-    """The bug live validation caught: elapsed hours drawn as one flat value."""
+class TestTodaysExportFeedStopsAtTheClock(_PayloadCase):
+    """Where today's export rail hands over from the recorder to the schedule.
 
-    async def test_the_whole_day_feed_overrides_recorded_export_samples(self):
-        # The sell-price entity's attributes carry the settled day-ahead
-        # schedule for the *whole* day, elapsed hours included, while its
-        # recorded state is only a sample of whichever hour was current when
-        # Home Assistant happened to be running. Deferring to the recorder drew
-        # every elapsed slot at one carried value.
+    The schedule carries the whole day, elapsed hours included, and used to be
+    laid down whole. It no longer is: the recorded rail resolves raw states
+    first and hourly means under them, so an elapsed hour already has the
+    better answer and the schedule would only overwrite it.
+    """
+
+    async def test_an_elapsed_slot_keeps_its_recorded_price(self):
         service = self._make_service(
             import_config=_import_config(),
             price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
@@ -676,8 +678,53 @@ class TestTodaysExportFeedBeatsTheRecorder(_PayloadCase):
         )
 
         export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(export_rail["00:00"], 6.242)
+        self.assertEqual(export_rail["09:45"], 6.242)
+
+    async def test_an_elapsed_slot_with_no_history_stays_empty(self):
+        # Deliberate: the schedule does not fill it. Filling it would complete
+        # today's rail while the day is current and shrink it again at
+        # midnight, once the same day is served from history alone.
+        covered = [_slot_label(index) for index in range(_slot_index("08:00"), 96)]
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
+        )
+        payload = await self._payload(
+            service, TODAY, recorded={EXPORT_ENTITY: _rail(covered, 6.242)}
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertNotIn("00:00", export_rail)
+        self.assertNotIn("07:45", export_rail)
+        self.assertEqual(export_rail["08:00"], 6.242)
+
+    async def test_the_running_slot_and_everything_after_it_take_the_schedule(self):
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
+        )
+        payload = await self._payload(
+            service,
+            TODAY,
+            recorded={EXPORT_ENTITY: _rail(_all_slots(), 6.242)},
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(export_rail["10:00"], 1.5)
+        self.assertEqual(export_rail["10:15"], 1.5)
+        self.assertEqual(export_rail["23:45"], 1.5)
+
+    async def test_a_future_date_is_the_schedule_end_to_end(self):
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(FUTURE_DAY, export_from="00:00"),
+        )
+        payload = await self._payload(service, FUTURE_DAY, recorded={})
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual([p["slot"] for p in payload["series"]["exportPrice"]], _all_slots())
         self.assertEqual(set(export_rail.values()), {1.5})
-        self.assertNotIn(6.242, set(export_rail.values()))
 
     async def test_the_recorder_still_answers_the_slots_the_feed_misses(self):
         # A forward-only feed opened mid-morning: everything before it is the
