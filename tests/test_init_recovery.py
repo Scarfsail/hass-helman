@@ -188,6 +188,27 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("entry-1", hass.data["helman"])
         self.assertEqual(self.coordinator_mod.HelmanCoordinator.unload_calls, 1)
 
+    async def test_async_unload_entry_drops_the_recorder_probe_cache(self) -> None:
+        """A reload starts asking the recorder again rather than inheriting answers.
+
+        Where each entity's raw history begins is cached for hours, which is
+        what keeps the probe off every request -- and exactly why it must not
+        survive the entry that filled it: a reload is how a changed
+        configuration takes effect, and the entities being asked about may not
+        be the same ones any more.
+        """
+        span_mod = importlib.import_module(
+            "custom_components.helman.recorder_statistics_span"
+        )
+        hass = FakeHass()
+        await self.helman_init.async_setup(hass, {})
+        await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+        hass.data["helman"][span_mod._OLDEST_STATE_CACHE_KEY] = {"sensor.a": object()}
+
+        await self.helman_init.async_unload_entry(hass, FakeConfigEntry())
+
+        self.assertNotIn(span_mod._OLDEST_STATE_CACHE_KEY, hass.data["helman"])
+
 
 if __name__ == "__main__":
     unittest.main()
