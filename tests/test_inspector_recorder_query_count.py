@@ -166,6 +166,8 @@ SOLAR_METER = "sensor.solar_total"
 SOC_SENSOR = "sensor.battery_soc"
 MIN_SOC_SENSOR = "number.battery_min_soc"
 MAX_SOC_SENSOR = "number.battery_max_soc"
+IMPORT_PRICE_ENTITY = "sensor.helman_grid_import_price"
+EXPORT_PRICE_ENTITY = "sensor.helman_grid_export_price"
 
 
 #: A recorder that keeps ten years of raw states, so the day under test is
@@ -429,6 +431,89 @@ class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase
         # would be the duplicate the statistics path exists to avoid. The bounds
         # are not in it and are still read raw -- once, together.
         self.assertEqual(soc_reads, [[MIN_SOC_SENSOR, MAX_SOC_SENSOR]])
+
+
+class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
+    """The two rails resolve in bounded reads, and never one per slot.
+
+    A day has 96 slots per rail. The tiers are batched per tier -- one coverage
+    probe per price entity, one raw read for both of them together, and a
+    statistics read only for slots the raw tier left empty -- so the counts here
+    are the ones the design intends rather than a ceiling that would forbid the
+    hourly fill.
+    """
+
+    async def _counted_day(self, *, raw_from: datetime | None):
+        """One inspector day with the price rails live, counting their reads."""
+        service = _make_service()
+        probes: list[str] = []
+        raw_reads: list[list[str]] = []
+        statistics_reads: list[list[str]] = []
+
+        def _probe(hass, start, end, entity_id, *args, **kwargs):
+            probes.append(entity_id)
+            if raw_from is None:
+                return {}
+            return {entity_id: [SimpleNamespace(last_updated=raw_from, state="2.0")]}
+
+        def _raw(hass, start, end, entity_ids=None, *args, **kwargs):
+            raw_reads.append(list(entity_ids or []))
+            return {}
+
+        def _statistics(hass, start, end, statistic_ids, period, *args, **kwargs):
+            if period == "hour":
+                statistics_reads.append(sorted(statistic_ids or []))
+            return {}
+
+        with _keeping_raw_states(), patch.multiple(
+            sys.modules["homeassistant.components.recorder.history"],
+            state_changes_during_period=_probe,
+            get_significant_states=_raw,
+        ), patch.multiple(
+            recorder_series_mod,
+            state_changes_during_period=_probe,
+            get_significant_states=_raw,
+        ), patch.object(
+            span_mod, "statistics_during_period", _statistics
+        ), patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=[]),
+        ):
+            await service.async_get_inspector_day(TARGET_DATE)
+        return probes, raw_reads, statistics_reads
+
+    async def test_rails_with_raw_history_cost_two_probes_and_one_batched_read(self):
+        probes, raw_reads, statistics_reads = await self._counted_day(
+            raw_from=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE)
+        )
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        # One coverage probe per price entity, not one per slot.
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
+        price_raw_reads = [
+            read for read in raw_reads if set(read) & set(price_entities)
+        ]
+        self.assertEqual(price_raw_reads, [price_entities])
+        # The stubbed raw read comes back empty, so the tier below it answers --
+        # once, for both entities together.
+        self.assertEqual(statistics_reads, [sorted(price_entities)])
+
+    async def test_rails_with_no_raw_history_skip_the_raw_read_entirely(self):
+        probes, raw_reads, statistics_reads = await self._counted_day(raw_from=None)
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
+        self.assertEqual(
+            [read for read in raw_reads if set(read) & set(price_entities)], []
+        )
+        self.assertEqual(statistics_reads, [sorted(price_entities)])
 
 
 class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
