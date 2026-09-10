@@ -146,6 +146,15 @@ def _reset(*, states=None, statistics=None, oldest_state=None) -> None:
     RECORDER["probe_queries"] = []
 
 
+def _hass():
+    """A Home Assistant stub with somewhere for the probe cache to live.
+
+    Fresh per call on purpose: the oldest-state probe caches its answer in
+    ``hass.data``, and every case here is about what a *cold* read resolves.
+    """
+    return SimpleNamespace(data={})
+
+
 async def _resolve(
     entity_ids=(EXPORT_PRICE,),
     *,
@@ -154,7 +163,7 @@ async def _resolve(
     statistics_rows=None,
 ):
     return await span_mod.query_price_history(
-        SimpleNamespace(),
+        _hass(),
         list(entity_ids),
         local_start=local_start,
         local_end=local_end,

@@ -182,4 +182,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_unregister_frontend(hass)
     hass.data[DOMAIN].pop(entry.entry_id, None)
     hass.data[DOMAIN].pop("coordinator", None)
+    from .recorder_statistics_span import clear_oldest_state_probe_cache
+
+    # The recorder's answers about where each entity's raw history begins are
+    # cached for hours, so a reload -- which is how a changed configuration takes
+    # effect -- would otherwise inherit them, along with a set of entity ids that
+    # may no longer be the ones being asked about.
+    clear_oldest_state_probe_cache(hass)
     return unload_ok

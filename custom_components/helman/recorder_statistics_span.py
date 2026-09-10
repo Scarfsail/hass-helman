@@ -67,6 +67,13 @@ the raw states where they survive. It belongs here because the splice is this
 module's read joined to its sibling's, and because the seam is a question about
 statistics keys -- see that function for where the two meet and why.
 
+:func:`query_oldest_state_date` is the small read both of those joins hang on
+-- where an entity's raw states begin -- and it is cached here, per entity, for
+the same six hours the service layer trusts its own history floor. Every caller
+passes through it, which is the point: the recorder answers from one database
+thread, so a probe re-issued per view is a serial round trip in front of the
+read that view came for.
+
 :func:`query_price_history` is the same join made for *rates* rather than
 meters, and it is the single reader every historical price in this integration
 goes through. A rate needs neither differencing nor a whole-day seam, so the two
@@ -76,8 +83,9 @@ containing hour's ``mean`` for every slot they do not.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import logging
 import math
@@ -88,6 +96,7 @@ from homeassistant.components.recorder.statistics import statistics_during_perio
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .const import DOMAIN
 from .recorder_hourly_series import query_cumulative_hourly_energy_changes
 
 _LOGGER = logging.getLogger(__name__)
@@ -150,6 +159,93 @@ _REBOUND_WINDOW = timedelta(hours=1)
 #: performs every time it opens. If it ever proves too much on a small host, the
 #: fix is to probe fewer meters -- not to guess a shallower epoch.
 _HISTORY_PROBE_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+#: How long one entity's raw-coverage answer is trusted before it is asked again.
+#:
+#: The same six hours :data:`~.solar_bias_correction.service._HISTORY_FLOOR_TTL`
+#: gives the same class of question, and for the same reason: where an entity's
+#: raw states begin moves only when a purge trims the far end or a back-fill
+#: extends it, and neither is urgent. What the TTL buys is that the probe stops
+#: being a round trip per request. It is one indexed row, but the recorder serves
+#: every query from a single database thread, so issuing it again on every
+#: inspector day open and every span read queues behind -- and in front of -- the
+#: reads those views actually came for.
+_OLDEST_STATE_TTL = timedelta(hours=6)
+
+#: How long a *failed* probe is left alone before it is tried again.
+#:
+#: A failure is not an answer, so it must not pin one for six hours: a moment's
+#: unavailability would otherwise leave every caller behaving as though the
+#: entity's coverage were whatever the failure made it look like. Nor is it free
+#: to retry immediately -- a recorder failing under load would be asked again by
+#: every request, on the one executor thread the views' own reads queue behind.
+#: Five minutes is the same compromise, and the same number, the history floor
+#: draws in :data:`~.solar_bias_correction.service._HISTORY_FLOOR_RETRY`.
+_OLDEST_STATE_RETRY = timedelta(minutes=5)
+
+#: Where the probe cache lives inside ``hass.data[DOMAIN]``.
+#:
+#: Not a module global: this integration's per-instance state hangs off
+#: ``hass.data`` under its domain key, and a global would outlive the config
+#: entry that populated it -- a reload would inherit a stale set of answers with
+#: nothing left to invalidate them. :func:`clear_oldest_state_probe_cache` is
+#: what unloading calls, next to the coordinator it drops.
+_OLDEST_STATE_CACHE_KEY = "oldest_state_probes"
+
+
+@dataclass
+class _OldestStateProbe:
+    """One entity's cached raw-coverage answer, and how it was arrived at.
+
+    ``instant`` is deliberately the raw ``datetime`` rather than the local date
+    the caller asked for: the date depends on the caller's ``local_tz`` and the
+    instant does not, so caching the instant means two callers in different
+    zones cannot be served each other's rounding.
+
+    ``error`` is the other half of "a failure is not an answer". Without it a
+    failed probe would have to cache *something*, and the only value available
+    is ``None`` -- which already means "this entity has no raw states at all",
+    the most consequential answer here since it is what skips the raw read
+    entirely. Holding the exception instead keeps the two apart and preserves
+    this function's contract: a failure reaches the caller as a raised
+    exception, just without a round trip behind it, until
+    :data:`_OLDEST_STATE_RETRY` has passed -- unless an answer was learned
+    earlier, which outlives the blip and is served in its place.
+    """
+
+    #: The oldest raw state's instant, or ``None`` for "there are none".
+    instant: datetime | None = None
+    #: Whether ``instant`` is an answer at all. ``None`` is a real answer here
+    #: and the field's initial value both, so the two need telling apart before
+    #: a remembered answer can stand in for a later failure.
+    answered: bool = False
+    #: The last probe's failure, re-raised until the retry window elapses and
+    #: only while nothing better has ever been learned.
+    error: BaseException | None = None
+    #: When the last attempt was made; ``None`` for "never asked".
+    probed_at: datetime | None = None
+    #: How long that attempt's outcome is trusted for.
+    lifetime: timedelta = _OLDEST_STATE_TTL
+    #: Held across the probe so concurrent callers await one read rather than
+    #: racing it. A day open asks about several entities at once and the price
+    #: reader asks about two of them together.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def is_stale(self, now: datetime) -> bool:
+        if self.probed_at is None:
+            return True
+        return now - self.probed_at >= self.lifetime
+
+
+def _oldest_state_probes(hass: HomeAssistant) -> dict[str, _OldestStateProbe]:
+    """The probe cache for this Home Assistant instance, created on first use."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault(_OLDEST_STATE_CACHE_KEY, {})
+
+
+def clear_oldest_state_probe_cache(hass: HomeAssistant) -> None:
+    """Forget every cached answer, so a reload starts from the recorder again."""
+    hass.data.get(DOMAIN, {}).pop(_OLDEST_STATE_CACHE_KEY, None)
+
 
 #: The recorder period that serves the short-term statistics table.
 #:
@@ -344,9 +440,9 @@ async def query_spliced_hourly_energy(
     recent part, one map per entity as if a single table had held it all.
 
     **Where the two meet is probed, never assumed.**
-    :func:`query_oldest_state_date` is one indexed ``LIMIT 1`` read per entity
-    and it answers the only question that matters -- where this entity's raw
-    states actually begin. ``recorder.keep_days`` is *not* that date: a recreated
+    :func:`query_oldest_state_date` is one indexed ``LIMIT 1`` read per entity,
+    cached there for hours, and it answers the only question that matters --
+    where this entity's raw states actually begin. ``recorder.keep_days`` is *not* that date: a recreated
     database, a late-added entity or ``auto_purge: false`` each break the
     correspondence, and on the instance this was written for all eight days of
     raw history come from the database's creation date rather than from any
@@ -555,6 +651,7 @@ async def query_price_history(
 
     **Coverage is probed, not assumed.**
     :func:`query_oldest_state_date` is one indexed ``LIMIT 1`` read per entity
+    -- and cached there, so a day open pays it once rather than once per rail --
     and answers where this entity's raw states actually begin, which is what
     bounds the raw read: without it a year-wide request would scan the raw table
     across a year to find the fortnight of it that survives a purge.
@@ -977,20 +1074,116 @@ async def query_oldest_state_date(
 ) -> date | None:
     """The local date of the oldest raw state the recorder still holds.
 
-    Two callers, one question. :func:`query_history_depths` reports it, and
-    :func:`query_spliced_hourly_energy` splices on it -- which is why this is
-    public and why it is a probe rather than an inference from
-    ``recorder.keep_days``: that setting says when rows are deleted, not when
-    this entity's first row was written.
+    One question, several callers. :func:`query_history_depths` reports it,
+    :func:`query_spliced_hourly_energy` and :func:`query_price_history` bound
+    their raw reads with it, and the bias trainer's forecast-slot window and
+    actuals tail splice on it -- which is why this is public and why it is a
+    probe rather than an inference from ``recorder.keep_days``: that setting
+    says when rows are deleted, not when this entity's first row was written.
 
     ``limit=1`` on an ascending scan from the epoch is a single indexed row --
     the query does not grow with how much history there is -- and
     ``include_start_time_state`` is off because there is nothing before the
     epoch to carry in and asking for it costs a second lookup.
 
+    **Cheap is not the same as free, so the answer is cached here rather than by
+    any one caller.** The recorder serves every query from one database executor
+    thread, so each probe is a serial round trip whatever the awaits look like,
+    and a single inspector day open asks this several times over -- both price
+    entities, the meters a spliced window covers, the forecast entity. Caching
+    inside the probe is what lets every one of those callers benefit without
+    knowing it is cached at all; a cache in the price reader would have left the
+    others paying. :data:`_OLDEST_STATE_TTL` is how long an answer stands,
+    :data:`_OLDEST_STATE_RETRY` how long a failure does, and ``None`` -- "this
+    entity has no raw states" -- is held like any other answer, because it is the
+    one that skips a whole raw read.
+
+    The lock is not an optimisation either. Two views mounting together ask about
+    the same entity within the same tick; without it both would queue their own
+    read on the recorder's single thread and the second would learn nothing the
+    first was not already fetching.
+
     The import is deferred like every other reach into the recorder: it need not
-    be set up, and the caller treats a failure as "the recorder cannot say".
+    be set up, and the caller treats a failure as "the recorder cannot say" --
+    which is why a cached failure is re-raised rather than turned into an answer,
+    for as long as there is no earlier answer to serve instead.
     """
+    instant = await _async_oldest_state_instant(hass, entity_id)
+    if instant is None:
+        return None
+    return instant.astimezone(local_tz).date()
+
+
+async def _async_oldest_state_instant(
+    hass: HomeAssistant, entity_id: str
+) -> datetime | None:
+    """The cached instant this entity's raw states begin at, probing if stale.
+
+    Double-checked under the entity's own lock, the pattern
+    :meth:`~.solar_bias_correction.service.SolarBiasCorrectionService._async_history_floor`
+    already uses for the history floor: whoever queued behind a probe wants its
+    answer, not a second read of the same row.
+    """
+    probes = _oldest_state_probes(hass)
+    probe = probes.get(entity_id)
+    if probe is None:
+        probe = probes[entity_id] = _OldestStateProbe()
+
+    if probe.is_stale(dt_util.now()):
+        async with probe.lock:
+            if probe.is_stale(dt_util.now()):
+                await _async_refresh_oldest_state_probe(hass, entity_id, probe)
+
+    if probe.error is not None and not probe.answered:
+        # Cleared rather than raised as it stands: raising an exception that
+        # already carries a traceback appends to it, so one held instance would
+        # grow a frame per request through the retry window and pin every frame
+        # it came from -- the recorder closure and its `hass` among them -- in
+        # `hass.data` for the whole of it.
+        raise probe.error.with_traceback(None)
+    return probe.instant
+
+
+async def _async_refresh_oldest_state_probe(
+    hass: HomeAssistant, entity_id: str, probe: _OldestStateProbe
+) -> None:
+    """Ask the recorder again, and remember how the asking went.
+
+    An answer -- an instant, or ``None`` for an entity the recorder holds no raw
+    state for -- clears any remembered failure and stands for the full TTL. A
+    failure is remembered as a failure and holds the recorder off until
+    :data:`_OLDEST_STATE_RETRY` has passed. It leaves any previous answer alone,
+    and that answer still serves: a coverage date already learned is better than
+    a hard failure for callers that have no guard, and a blip the recorder has
+    already recovered from should not fail every span read for five minutes.
+    Only an entity nothing has ever been learned about raises.
+
+    The stamp is written in both outcomes rather than in a ``finally``, which is
+    what
+    :meth:`~.solar_bias_correction.service.SolarBiasCorrectionService._async_refresh_history_floor`
+    does and for the reason it does: a ``BaseException`` -- a cancelled request
+    is the ordinary one -- skips ``except Exception`` but not ``finally``, and
+    would leave this probe stamped fresh, answerless and unasked for six hours.
+    """
+    try:
+        probe.instant = await _probe_oldest_state_instant(hass, entity_id)
+    except Exception as err:
+        # Held rather than swallowed: a caller with nothing better still gets it
+        # raised, from _async_oldest_state_instant, through the retry window.
+        probe.error = err
+        probe.lifetime = _OLDEST_STATE_RETRY
+        probe.probed_at = dt_util.now()
+        return
+    probe.answered = True
+    probe.error = None
+    probe.lifetime = _OLDEST_STATE_TTL
+    probe.probed_at = dt_util.now()
+
+
+async def _probe_oldest_state_instant(
+    hass: HomeAssistant, entity_id: str
+) -> datetime | None:
+    """The one indexed read, uncached: the oldest raw state's instant."""
     from homeassistant.components.recorder.history import state_changes_during_period
 
     def _query() -> dict[str, list[Any]]:
@@ -1009,12 +1202,9 @@ async def query_oldest_state_date(
     states = (raw or {}).get(entity_id) or (raw or {}).get(entity_id.lower()) or []
     if not states:
         return None
-    when = getattr(states[0], "last_changed", None) or getattr(
+    return getattr(states[0], "last_changed", None) or getattr(
         states[0], "last_updated", None
     )
-    if when is None:
-        return None
-    return when.astimezone(local_tz).date()
 
 
 def _tail_window_start(

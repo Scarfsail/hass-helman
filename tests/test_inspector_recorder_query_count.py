@@ -214,6 +214,9 @@ def _make_service():
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         states=SimpleNamespace(get=lambda entity_id: None),
+        # Where the oldest-state probe caches its answers. One per service, so
+        # each test starts cold and counts the probes a first open really costs.
+        data={},
     )
     service = service_mod.SolarBiasCorrectionService(
         hass,
@@ -443,8 +446,13 @@ class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
     hourly fill.
     """
 
-    async def _counted_day(self, *, raw_from: datetime | None):
-        """One inspector day with the price rails live, counting their reads."""
+    async def _counted_day(self, *, raw_from: datetime | None, dates=(TARGET_DATE,)):
+        """Inspector days with the price rails live, counting their reads.
+
+        More than one date runs them against a single service -- and so a single
+        ``hass.data`` -- which is what makes the coverage probe's cache visible
+        in the counts.
+        """
         service = _make_service()
         probes: list[str] = []
         raw_reads: list[list[str]] = []
@@ -480,7 +488,8 @@ class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
             "load_house_forecast_points_for_day",
             AsyncMock(return_value=[]),
         ):
-            await service.async_get_inspector_day(TARGET_DATE)
+            for target_date in dates:
+                await service.async_get_inspector_day(target_date)
         return probes, raw_reads, statistics_reads
 
     async def test_rails_with_raw_history_cost_two_probes_and_one_batched_read(self):
@@ -514,6 +523,27 @@ class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
             [read for read in raw_reads if set(read) & set(price_entities)], []
         )
         self.assertEqual(statistics_reads, [sorted(price_entities)])
+
+
+    async def test_a_second_day_open_reuses_the_cached_coverage_probe(self):
+        """Where an entity's raw states begin is asked once, not once per open.
+
+        The probe is one indexed row, but the recorder answers from a single DB
+        thread, so re-issuing it on every day open is a serial round trip in
+        front of the reads the day actually came for. Two opens, two probes --
+        one per entity -- is what the cache in ``query_oldest_state_date`` buys,
+        and counting it here is what keeps it bought.
+        """
+        probes, _, _ = await self._counted_day(
+            raw_from=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+            dates=(TARGET_DATE, "2026-05-09"),
+        )
+
+        price_entities = [IMPORT_PRICE_ENTITY, EXPORT_PRICE_ENTITY]
+        self.assertEqual(
+            [entity_id for entity_id in probes if entity_id in price_entities],
+            price_entities,
+        )
 
 
 class TestBatchedMeterRead(unittest.IsolatedAsyncioTestCase):
@@ -601,7 +631,7 @@ class TestHistoryDepthProbeIssuesNoMoreQueriesThanBefore(unittest.IsolatedAsynci
             _state_changes_during_period,
         ):
             await span_mod.query_history_depths(
-                SimpleNamespace(),
+                SimpleNamespace(data={}),
                 "sensor.forecast_only",
                 today_local=date(2026, 5, 11),
                 local_tz=ZoneInfo("Europe/Prague"),
