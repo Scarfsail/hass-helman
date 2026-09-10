@@ -309,12 +309,55 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            {boundary.strftime("%H:%M"): value for boundary, value in samples.items()},
+            {
+                boundary.strftime("%H:%M"): sample.value
+                for boundary, sample in samples.items()
+            },
             {"00:00": 2.0, "00:15": 2.0, "00:30": 4.0, "00:45": 4.0},
+        )
+        # And each sample says which it is: the slot a write landed in is
+        # observed, the ones living off a carry are not. Nothing here judges the
+        # carry -- that is ``query_price_history``'s job -- but the sampler is
+        # the only place that still knows.
+        #
+        # 00:00 is a carry despite having a row of its own, because the read
+        # opens there with ``include_start_time_state`` and Home Assistant stamps
+        # the row it replays with the query start. A row stamped exactly at the
+        # first boundary is that replay, and its real age is unknowable from
+        # here -- so it seeds the carry and vouches for nothing.
+        self.assertEqual(
+            {
+                boundary.strftime("%H:%M"): sample.observed
+                for boundary, sample in samples.items()
+            },
+            {"00:00": False, "00:15": False, "00:30": True, "00:45": False},
         )
         # The read is bounded by the caller's window rather than running to now,
         # which is the whole difference from the today-scoped variant.
         self.assertEqual(captured["end"], datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE))
+
+    async def test_a_real_write_in_the_opening_slot_outranks_the_replay(self):
+        # The replay is not allowed to swallow the first slot's own write. Home
+        # Assistant stamps the replayed row with the query start, so it arrives
+        # looking exactly like a write at 00:00; the row at 00:05 is the real
+        # one, and the slot takes its value and its provenance.
+        states = [
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE), state="2.0"
+            ),
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 0, 5, tzinfo=PRAGUE), state="5.0"
+            ),
+        ]
+        samples, _ = await self._sample(
+            states,
+            local_start=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+            local_end=datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE),
+        )
+
+        opening = samples[datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE)]
+        self.assertEqual(opening.value, 5.0)
+        self.assertTrue(opening.observed)
 
     async def test_a_write_just_after_the_boundary_belongs_to_that_slot(self):
         # The regression this sampler exists for. The import sensor publishes
@@ -337,7 +380,10 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            {boundary.strftime("%H:%M"): value for boundary, value in samples.items()},
+            {
+                boundary.strftime("%H:%M"): sample.value
+                for boundary, sample in samples.items()
+            },
             {"05:45": 2.0, "06:00": 4.0, "06:15": 4.0},
         )
 
@@ -359,7 +405,10 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            {boundary.strftime("%H:%M"): value for boundary, value in samples.items()},
+            {
+                boundary.strftime("%H:%M"): sample.value
+                for boundary, sample in samples.items()
+            },
             {"00:00": 3.0, "00:15": 9.0},
         )
 
@@ -436,7 +485,7 @@ class TestBatchedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]["end"], datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE))
         # The carry-forward runs per entity, exactly as the singular sampler does.
         self.assertEqual(
-            samples[IMPORT_ENTITY],
+            {slot: sample.value for slot, sample in samples[IMPORT_ENTITY].items()},
             {
                 datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE): 2.0,
                 datetime(2026, 5, 10, 0, 15, tzinfo=PRAGUE): 2.0,
@@ -445,13 +494,26 @@ class TestBatchedBoundarySampler(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(
-            samples[EXPORT_ENTITY],
+            {slot: sample.value for slot, sample in samples[EXPORT_ENTITY].items()},
             {
                 datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE): 1.0,
                 datetime(2026, 5, 10, 0, 15, tzinfo=PRAGUE): 1.0,
                 datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE): 3.0,
                 datetime(2026, 5, 10, 0, 45, tzinfo=PRAGUE): 3.0,
             },
+        )
+        # Provenance survives the batching: each entity's samples are flagged
+        # from its own rows, not from whether the read as a whole saw a write.
+        # Both entities open on a row stamped at the query start, which is the
+        # recorder's replay rather than a write into that slot, so only the
+        # export entity's real 00:30 write is observed.
+        self.assertEqual(
+            [sample.observed for sample in samples[IMPORT_ENTITY].values()],
+            [False, False, False, False],
+        )
+        self.assertEqual(
+            [sample.observed for sample in samples[EXPORT_ENTITY].values()],
+            [False, False, True, False],
         )
 
     async def test_an_entity_the_recorder_has_nothing_for_maps_to_empty(self):
@@ -543,6 +605,93 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
                 ([], []),
             )
         reader.assert_not_awaited()
+
+
+class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
+    """The whole rail path, from recorder rows to labelled slots, over an outage.
+
+    The one case the shaping half cannot show on its own: the reader carries the
+    last state before an outage across every slot of it, and the rail would draw
+    that flat while the real rate moved every hour. Driven through the real
+    reader rather than a stubbed one, because the drop happens inside it.
+    """
+
+    def setUp(self):
+        self.span = importlib.import_module(
+            "custom_components.helman.recorder_statistics_span"
+        )
+        self.recorder = importlib.import_module(
+            "custom_components.helman.recorder_hourly_series"
+        )
+
+    async def _rail(self, states, *, recording_start):
+        def _fake_query(hass, start, end, **kwargs):
+            return {EXPORT_ENTITY: states}
+
+        class _Recorder:
+            keep_days = 30
+            auto_purge = True
+            recorder_runs_manager = SimpleNamespace(recording_start=recording_start)
+
+            @staticmethod
+            async def async_add_executor_job(func, *args):
+                return func(*args)
+
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(
+                config=SimpleNamespace(time_zone="Europe/Prague"),
+                bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+            ),
+            _DummyStore(),
+            _make_cfg(),
+        )
+        with patch.object(
+            self.recorder, "get_significant_states", _fake_query
+        ), patch.object(
+            self.recorder, "get_instance", lambda hass: _Recorder()
+        ), patch.object(
+            self.span, "get_instance", lambda hass: _Recorder()
+        ), patch.object(
+            self.span,
+            "query_oldest_state_date",
+            AsyncMock(return_value=date(2026, 5, 9)),
+        ), patch.object(
+            # This file stubs ``as_local`` as an identity, which is enough while
+            # every key stays in one zone. The reader keys its slots by the UTC
+            # instant on purpose, so the labelling step needs the real
+            # conversion or every slot reads two hours early.
+            service_mod.dt_util,
+            "as_local",
+            lambda value: value.astimezone(PRAGUE),
+        ):
+            _imported, exported = await service._load_recorded_price_rails(
+                [None, EXPORT_ENTITY],
+                date(2026, 5, 10),
+                PRAGUE,
+                local_end=datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE),
+            )
+        return exported
+
+    async def test_the_rail_starts_where_the_recorder_came_back(self):
+        exported = await self._rail(
+            [
+                SimpleNamespace(
+                    last_updated=datetime(2026, 5, 9, 23, 50, tzinfo=PRAGUE),
+                    state="3.594",
+                ),
+                SimpleNamespace(
+                    last_updated=datetime(2026, 5, 10, 7, 0, 2, tzinfo=PRAGUE),
+                    state="5.277",
+                ),
+            ],
+            recording_start=datetime(2026, 5, 10, 7, 0, tzinfo=PRAGUE),
+        )
+
+        # Nothing before the recorder came back, and nothing priced at the rate
+        # that was in force when it went down.
+        self.assertEqual(exported[0], {"slot": "07:00", "value": 5.277})
+        self.assertEqual(len(exported), 68)
+        self.assertNotIn(3.594, {point["value"] for point in exported})
 
 
 class _PayloadCase(unittest.IsolatedAsyncioTestCase):

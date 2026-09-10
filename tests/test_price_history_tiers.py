@@ -31,6 +31,11 @@ RECORDER: dict[str, object] = {
     "state_queries": [],
     "statistics_queries": [],
     "probe_queries": [],
+    # What the running recorder says about when it started recording. ``None``
+    # is a recorder that will not say, which is how every case written before
+    # the carry-trust rule existed leaves it: no live-run evidence, and so no
+    # carry condemned.
+    "recording_start": None,
 }
 
 
@@ -56,7 +61,10 @@ def _install_import_stubs() -> None:
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        async_add_executor_job=_run_in_executor
+        async_add_executor_job=_run_in_executor,
+        recorder_runs_manager=SimpleNamespace(
+            recording_start=RECORDER["recording_start"]
+        ),
     )
     sys.modules["homeassistant.components.recorder"] = recorder_mod
 
@@ -72,10 +80,22 @@ def _install_import_stubs() -> None:
         RECORDER["state_queries"].append(
             {"entity_ids": list(entity_ids or []), "start": start, "end": end}
         )
-        return {
-            entity_id: RECORDER["states"].get(entity_id, [])
-            for entity_id in (entity_ids or [])
-        }
+        # Modelled on what ``include_start_time_state`` really returns: the rows
+        # inside the window, preceded by the state standing when it opened --
+        # and that one comes back *restamped to the query start*, its real age
+        # erased. A stub that handed it over at its true timestamp would hide the
+        # very thing these cases are about, since a carry that looks like a write
+        # at the first boundary would vouch for its own hour.
+        replayed = {}
+        for entity_id in entity_ids or []:
+            rows = RECORDER["states"].get(entity_id, [])
+            before = [row for row in rows if row.last_updated < start]
+            within = [row for row in rows if start <= row.last_updated < end]
+            replayed[entity_id] = [
+                *([_state(start, before[-1].state)] if before else []),
+                *within,
+            ]
+        return replayed
 
     history_mod = types.ModuleType("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = _state_changes_during_period
@@ -137,10 +157,13 @@ def _row(hour: datetime, mean):
     return {"start": hour.timestamp(), "mean": mean}
 
 
-def _reset(*, states=None, statistics=None, oldest_state=None) -> None:
+def _reset(
+    *, states=None, statistics=None, oldest_state=None, recording_start=None
+) -> None:
     RECORDER["states"] = states or {}
     RECORDER["statistics"] = statistics or {}
     RECORDER["oldest_state"] = oldest_state or {}
+    RECORDER["recording_start"] = recording_start
     RECORDER["state_queries"] = []
     RECORDER["statistics_queries"] = []
     RECORDER["probe_queries"] = []
@@ -495,6 +518,244 @@ class TestIntervalCoverage(unittest.IsolatedAsyncioTestCase):
             ),
             sorted(["02:00", "02:15", "02:30", "02:45"] * 2),
         )
+
+
+class TestCarriesAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
+    """A carried slot is a reading only where the recorder was demonstrably up.
+
+    The raw tier replays the last state written before the window and carries it
+    across every slot that took no write of its own, which is right for a sensor
+    that publishes on change and wrong across a Home Assistant outage: the same
+    mechanism draws the rate in force before the outage flat over hours nothing
+    observed. These pin the three clauses that tell the two apart, and the one
+    verdict they can reach: the slot is dropped, never guessed at.
+    """
+
+    async def test_an_overnight_outage_leaves_its_hours_absent_not_flat(self):
+        # The failure this rule exists for, from the live instance on
+        # 2026-09-10: down from midnight, up at 07:00, and the mirror's last
+        # state before the outage carried flat across the whole morning while
+        # the real rate moved every hour.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 23, 50, tzinfo=PRAGUE), "3.594"),
+                    _state(datetime(2026, 5, 10, 7, 0, 2, tzinfo=PRAGUE), "5.277"),
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            recording_start=datetime(2026, 5, 10, 7, 0, tzinfo=PRAGUE),
+        )
+
+        history = (await _resolve())[EXPORT_PRICE]
+        slots = _local_slots(history)
+
+        # Nothing observed those hours and no statistics row was compiled for
+        # them, so they stay empty rather than being priced at 3.594.
+        self.assertEqual([slot for slot in slots if slot < "07:00"], [])
+        self.assertEqual(slots["07:00"], 5.277)
+        self.assertEqual(slots["23:45"], 5.277)
+        # And the money path sees the same hole, not an averaged-away one.
+        self.assertNotIn(
+            datetime(2026, 5, 10, 3, 0, tzinfo=PRAGUE), history.hourly_means()
+        )
+
+    async def test_a_flat_rate_whose_hour_has_a_statistics_row_still_resolves(self):
+        # The case an age cap would have broken. Nothing was written all
+        # morning because nothing changed, but the compiler wrote a row for
+        # every hour the entity held a state, which is the recorder saying it
+        # was up. The slots keep the rate that was really in force -- the raw
+        # 3.0, not the row's own mean.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 23, 50, tzinfo=PRAGUE), "3.0")
+                ]
+            },
+            statistics={
+                EXPORT_PRICE: [
+                    _row(datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE), 9.9),
+                    _row(datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE), 9.9),
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            recording_start=datetime(2026, 5, 10, 12, 0, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots((await _resolve())[EXPORT_PRICE])
+
+        self.assertEqual([slots[s] for s in ("00:00", "01:45")], [3.0, 3.0])
+        # 02:00 has no row: the same silence, and this time nothing vouches for
+        # it. It is dropped, and the statistics tier has nothing to refill it
+        # with either -- which is why dropping it leaves no gap it could have
+        # answered.
+        self.assertNotIn("02:00", slots)
+        self.assertNotIn("11:45", slots)
+        # From the run start on, the live process is the evidence.
+        self.assertEqual(slots["12:00"], 3.0)
+
+    async def test_the_uncompiled_hour_in_progress_rides_the_live_run(self):
+        # An hour that has not ended has no statistics row and never will until
+        # it does, so clause 3 alone would empty the rail's newest hours on
+        # every open. The running recorder's own start is the evidence the
+        # compiler cannot yet give -- and it costs no read at all.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 11, 8, 0, 2, tzinfo=PRAGUE), "4.0")
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE)},
+            recording_start=datetime(2026, 5, 11, 8, 0, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots(
+            (
+                await _resolve(
+                    local_start=datetime(2026, 5, 11, 8, 0, tzinfo=PRAGUE),
+                    local_end=datetime(2026, 5, 11, 10, 15, tzinfo=PRAGUE),
+                )
+            )[EXPORT_PRICE]
+        )
+
+        self.assertEqual(len(slots), 9)
+        self.assertEqual(slots["10:00"], 4.0)
+        # Clauses 1 and 2 answered every slot, so no statistics were read.
+        self.assertEqual(RECORDER["statistics_queries"], [])
+
+    async def test_a_restart_part_way_through_an_hour_splits_that_hour(self):
+        # The run start is an instant, not an hour: the two slots before it are
+        # carrying across the outage and the two after it are the live run's.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 22, 0, tzinfo=PRAGUE), "2.0")
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            recording_start=datetime(2026, 5, 10, 9, 20, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots((await _resolve())[EXPORT_PRICE])
+
+        self.assertNotIn("09:00", slots)
+        self.assertNotIn("09:15", slots)
+        # Accepted, and documented: the first slots after the restart hold the
+        # pre-outage carry until the entity republishes. Clause 2 trusts the
+        # live run without asking how old the carried write is.
+        self.assertEqual([slots[s] for s in ("09:30", "09:45")], [2.0, 2.0])
+        self.assertEqual(slots["23:45"], 2.0)
+
+    async def test_an_hours_write_vouches_for_the_slots_after_it(self):
+        # Clause 1, which is free and answers nearly every hour of a normal day:
+        # a write landed at the top of this hour, so the hour was recorded, so
+        # the slots after it are carrying across a silence rather than across an
+        # outage. This is the shape a spot market actually writes -- the rate
+        # moves on the hour -- which is why ordering this clause first keeps a
+        # normal day off the statistics table.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 22, 0, tzinfo=PRAGUE), "1.0"),
+                    _state(datetime(2026, 5, 10, 8, 0, 2, tzinfo=PRAGUE), "4.0"),
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            # Deliberately after the whole window, so clause 2 can rescue
+            # nothing and only clause 1 is left to.
+            recording_start=datetime(2026, 5, 10, 20, 0, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots(
+            (
+                await _resolve(
+                    local_start=datetime(2026, 5, 10, 8, 0, tzinfo=PRAGUE),
+                    local_end=datetime(2026, 5, 10, 9, 0, tzinfo=PRAGUE),
+                )
+            )[EXPORT_PRICE]
+        )
+
+        self.assertEqual(
+            slots, {"08:00": 4.0, "08:15": 4.0, "08:30": 4.0, "08:45": 4.0}
+        )
+        self.assertEqual(RECORDER["statistics_queries"], [])
+
+    async def test_an_hours_write_does_not_vouch_for_the_slots_before_it(self):
+        # The recovery hour of an outage: Home Assistant comes back at 08:40 and
+        # the entity republishes, which says the recorder is running from 08:40
+        # onward and nothing whatever about 08:00 to 08:30. Those three slots are
+        # still carrying the pre-outage 1.0 across hours nothing observed, so the
+        # write in their own hour must not acquit them.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 22, 0, tzinfo=PRAGUE), "1.0"),
+                    _state(datetime(2026, 5, 10, 8, 40, tzinfo=PRAGUE), "4.0"),
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            # The hour is still in progress, so the compiler has written it no
+            # row and clause 3 has nothing to say either.
+            recording_start=datetime(2026, 5, 10, 8, 40, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots(
+            (
+                await _resolve(
+                    local_start=datetime(2026, 5, 10, 8, 0, tzinfo=PRAGUE),
+                    local_end=datetime(2026, 5, 10, 9, 0, tzinfo=PRAGUE),
+                )
+            )[EXPORT_PRICE]
+        )
+
+        self.assertEqual(slots, {"08:30": 4.0, "08:45": 4.0})
+
+    async def test_an_empty_hand_over_is_re_read_rather_than_believed(self):
+        # A caller whose own statistics read failed hands over an empty mapping
+        # (``solar_bias_correction.service`` builds an empty ``SpanStatistics``
+        # on exception and passes its rows). Believing that silence would condemn
+        # every carry on the strength of a query that never ran, so the reader
+        # asks for itself -- and the rows it gets back vouch for the morning.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 23, 50, tzinfo=PRAGUE), "3.0")
+                ]
+            },
+            statistics={
+                EXPORT_PRICE: [
+                    _row(datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE), 9.9),
+                    _row(datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE), 9.9),
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            recording_start=datetime(2026, 5, 10, 12, 0, tzinfo=PRAGUE),
+        )
+
+        slots = _local_slots((await _resolve(statistics_rows={}))[EXPORT_PRICE])
+
+        self.assertEqual(len(RECORDER["statistics_queries"]), 1)
+        self.assertEqual([slots[s] for s in ("00:00", "01:45")], [3.0, 3.0])
+        self.assertNotIn("02:00", slots)
+
+    async def test_a_recorder_that_will_not_say_condemns_nothing(self):
+        # No run start -- no recorder, or an internal attribute that moved -- is
+        # the absence of evidence, not evidence of an outage. The rule disarms
+        # rather than emptying a day.
+        _reset(
+            states={
+                EXPORT_PRICE: [
+                    _state(datetime(2026, 5, 9, 22, 0, tzinfo=PRAGUE), "2.0")
+                ]
+            },
+            oldest_state={EXPORT_PRICE: datetime(2026, 5, 9, 0, 0, tzinfo=PRAGUE)},
+            recording_start=None,
+        )
+
+        slots = _local_slots((await _resolve())[EXPORT_PRICE])
+
+        self.assertEqual(len(slots), 96)
+        self.assertEqual(slots["03:00"], 2.0)
 
 
 class TestBoundedReads(unittest.IsolatedAsyncioTestCase):

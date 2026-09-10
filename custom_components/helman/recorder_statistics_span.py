@@ -580,10 +580,15 @@ class PriceHistory:
     convention the day rail has always used and which this reader keeps: a rate
     is a level, so the last state written before a slot is the rate in force
     during it, however long ago it was written. A sensor that publishes only on
-    change is the normal case and would otherwise resolve almost nothing. The
-    corollary is that a *long* silence reads as an unchanged rate rather than
-    as a hole, so the statistics tier is only consulted for slots no state
-    precedes at all.
+    change is the normal case and would otherwise resolve almost nothing.
+
+    A carry is only that good while the recorder was actually running, though.
+    Across an outage the same mechanism draws the last state before the outage
+    flat over hours nothing observed, which is a fabricated rate wearing a
+    recorded one's clothes -- so a carried slot is kept only where something
+    proves the recorder was up, and dropped where nothing does. The three things
+    that prove it, and the one risk that is accepted, are in
+    :func:`query_price_history`.
     """
 
     #: ``{utc_slot_start: rate}``. Keyed by the slot's **UTC** instant, the same
@@ -638,7 +643,8 @@ async def query_price_history(
       the recorder holds and they are sampled with the rate convention
       :func:`~.recorder_hourly_series.query_slot_boundary_state_values_for_entities`
       already applies to a rail: the first write inside a slot, else the value
-      carried forward into it.
+      carried forward into it -- subject to the trust rule below, which is what
+      keeps a carry from spanning an outage.
     * **Hourly statistics fill the slots raw left empty, and only those.** An
       hour's ``mean`` represents that hour and no other, so it is stated across
       the hour's own slots -- which is what makes a day that begins in one tier
@@ -648,6 +654,58 @@ async def query_price_history(
     There is deliberately no third tier between them. Home Assistant keeps the
     five-minute short-term table for a *shorter* window than it keeps raw
     states, so it can only ever cover intervals the raw tier already did.
+
+    **A carry is trusted only where the recorder can be shown to have been up.**
+    A slot that took a write of its own is *observed* and is always right. A slot
+    living off a carry is right only if the recorder was recording through it,
+    and three things prove that. They are checked in this order because that is
+    cheapest first, and because the first of them answers nearly every hour:
+
+    1. **An earlier slot of the same hour was observed.** The raw pass already
+       knows this, so it costs nothing. Both rates move on the hour on a spot
+       market, so almost every hour of almost every day stops here and the
+       statistics read below stays off the common path. *Earlier*, because a
+       write vouches for the recorder from itself onward and says nothing about
+       what preceded it -- an entity's republish after a restart must not acquit
+       the stale slots ahead of it in the same hour.
+    2. **The slot lies at or after the current recorder run's start.** See
+       :func:`_recorder_recording_start`: the running process's own knowledge of
+       when it began, which is exactly the evidence the statistics compiler
+       cannot yet give for the hour in progress.
+    3. **The slot's own hour has a finite ``mean`` row in hourly statistics.**
+       Home Assistant compiles a row for every hour an entity held a numeric
+       state, rewritten or not, so an hour with no row is an hour nothing
+       observed. Both entities this reader serves declare a ``MEASUREMENT``
+       state class, so a missing row is a missing hour rather than an entity the
+       compiler never had anything to say about. A statistics read that *failed*
+       says nothing either way and condemns nothing, which is why an empty
+       ``statistics_rows`` hand-over is re-read rather than believed.
+
+    A carried slot failing all three is dropped, and stays absent: the condition
+    for dropping it -- no statistics row for its hour -- is the same condition
+    under which the statistics tier has nothing to fill it with either. Nothing
+    is put in its place. The day-ahead schedule is not a history source (#133):
+    an elapsed slot answers from the recorder or not at all.
+
+    Accepted: a slot just after a restart holds the carry from before an outage
+    until the entity republishes, because clause 2 trusts the live run without
+    asking how old the carried write is. Requiring the recorder to have been live
+    continuously between the carried write and the slot would empty slots whose
+    rate is perfectly well known, and buys little against entities that
+    republish on startup.
+
+    Accepted too: the hour an outage *ended* in keeps its carry once that hour
+    has been compiled, because the compiler writes a row for a partial hour just
+    as it does for a whole one, and clause 3 cannot tell the two apart. It is at
+    most one hour, at the edge of the gap rather than across it, and the
+    alternative -- refusing to let a statistics row speak for the hour holding
+    the run start -- would empty three quarters of an hour after every routine
+    restart, which is the far commoner event.
+
+    Age is deliberately not a clause. Both price sensors publish on change, so a
+    genuinely flat rate writes no rows for hours, and any cap on the carry's age
+    would empty slots whose value is not in doubt. Uptime evidence answers the
+    question that is actually being asked; age does not.
 
     **Coverage is probed, not assumed.**
     :func:`query_oldest_state_date` is one indexed ``LIMIT 1`` read per entity
@@ -683,6 +741,9 @@ async def query_price_history(
     resolved: dict[str, dict[datetime, float]] = {
         entity_id: {} for entity_id in unique_ids
     }
+    #: Slots living off a carry that clause 1 could not vouch for, and which the
+    #: clauses below have to acquit or drop.
+    unproven: dict[str, list[datetime]] = {entity_id: [] for entity_id in unique_ids}
     raw_start = await _raw_price_window_start(
         hass, unique_ids, local_start=local_start, local_end=local_end, local_tz=local_tz
     )
@@ -703,19 +764,71 @@ async def query_price_history(
             _LOGGER.debug("Raw price history unavailable", exc_info=True)
             raw_by_entity = {}
         for entity_id in unique_ids:
-            resolved[entity_id] = {
-                _as_utc(slot): value
-                for slot, value in (raw_by_entity.get(entity_id) or {}).items()
-                if _is_finite(value)
+            samples = {
+                _as_utc(slot): sample
+                for slot, sample in (raw_by_entity.get(entity_id) or {}).items()
+                if _is_finite(sample.value)
             }
+            resolved[entity_id] = {
+                slot: sample.value for slot, sample in samples.items()
+            }
+            # Clause 1, and free: an hour that took a write was an hour the
+            # recorder was running, so the slots that follow that write are
+            # carrying a rate across a silence and not across an outage. On a
+            # spot market both rates move on the hour, which is why this answers
+            # almost every hour of almost every day and keeps the statistics
+            # read below off the common path.
+            #
+            # Only the slots that *follow* the write, though. A write vouches
+            # for the recorder from itself onward and says nothing about what
+            # came before it, so an hour whose first write is the entity's
+            # republish after a restart does not thereby acquit the stale slots
+            # ahead of it -- which is exactly the recovery hour of the outage
+            # this rule exists for.
+            first_observed_by_hour: dict[datetime, datetime] = {}
+            for slot, sample in samples.items():
+                if not sample.observed:
+                    continue
+                hour = _floor_to_hour(slot)
+                first = first_observed_by_hour.get(hour)
+                if first is None or slot < first:
+                    first_observed_by_hour[hour] = slot
+            for slot, sample in samples.items():
+                if sample.observed:
+                    continue
+                first = first_observed_by_hour.get(_floor_to_hour(slot))
+                if first is None or slot < first:
+                    unproven[entity_id].append(slot)
+
+    if any(unproven.values()):
+        # Clause 2, one attribute read: the running recorder's own account of
+        # when it started. ``None`` is not evidence of an outage, it is the
+        # absence of evidence either way, and it disarms the rule rather than
+        # emptying a day because the attribute moved.
+        recording_start = _recorder_recording_start(hass)
+        unproven = (
+            {}
+            if recording_start is None
+            else {
+                entity_id: [slot for slot in slots if slot < recording_start]
+                for entity_id, slots in unproven.items()
+            }
+        )
 
     unfilled = {
         entity_id: [slot for slot in slot_starts if slot not in resolved[entity_id]]
         for entity_id in unique_ids
     }
-    if any(unfilled.values()):
+    rows: dict[str, dict[datetime, dict[str, Any]]] | None = None
+    if any(unfilled.values()) or any(unproven.values()):
         rows = statistics_rows
-        if rows is None:
+        # An empty hand-over is not an answer. A caller that already ate a failed
+        # statistics read passes ``{}`` on (``solar_bias_correction.service``
+        # builds an empty :class:`SpanStatistics` on exception and hands over its
+        # rows), and taking that silence for "the compiler recorded nothing"
+        # would condemn carries on the strength of a query that never ran. Read
+        # for ourselves instead: that tells a failure from a real emptiness.
+        if not rows:
             try:
                 rows = (
                     await query_hourly_statistics(
@@ -724,7 +837,9 @@ async def query_price_history(
                 ).rows
             except Exception:
                 _LOGGER.debug("Hourly price statistics unavailable", exc_info=True)
-                rows = {}
+                rows = None
+
+    if rows:
         for entity_id, slots in unfilled.items():
             entity_rows = rows.get(entity_id) or {}
             if not entity_rows:
@@ -733,6 +848,17 @@ async def query_price_history(
                 mean = _finite_mean(entity_rows.get(_floor_to_hour(slot)))
                 if mean is not None:
                     resolved[entity_id][slot] = mean
+        for entity_id, slots in unproven.items():
+            # Clause 3, and the verdict. An entity with no rows at all is not
+            # skipped the way the fill above skips it: no row for the hour is
+            # exactly the evidence that condemns the carry. Both entities this
+            # reader serves declare ``SensorStateClass.MEASUREMENT``, so the
+            # compiler writes them a row for every hour they held a state and a
+            # missing one really does mean a missing hour.
+            entity_rows = rows.get(entity_id) or {}
+            for slot in slots:
+                if _finite_mean(entity_rows.get(_floor_to_hour(slot))) is None:
+                    resolved[entity_id].pop(slot, None)
 
     return {
         entity_id: PriceHistory(by_slot=resolved[entity_id]) for entity_id in unique_ids
@@ -788,6 +914,37 @@ async def _raw_price_window_start(
     if not starts:
         return None
     return min(max(min(starts), local_start), local_end)
+
+
+def _recorder_recording_start(hass: HomeAssistant) -> datetime | None:
+    """When the running recorder began recording, as a UTC instant.
+
+    The evidence the statistics compiler cannot give: an hour still in progress
+    has no statistics row and never will until it ends, so a rate carried across
+    it would be condemned by clause 3 alone. The recorder's own run start says
+    the process has been writing since before that slot, which is the whole of
+    what clause 2 needs to know.
+
+    Read off ``recorder_runs_manager`` -- the live object's account of itself --
+    rather than the ``recorder_runs`` *table*, which cannot answer this
+    truthfully. ``end_incomplete_runs`` back-fills an unfinished run's ``end``
+    with the next startup time, so a crash or a power cut reads back out of that
+    table as continuous recording, which is the case that matters most here.
+
+    ``None`` on every failure -- no recorder, an attribute that moved, a value
+    that is not an instant -- and ``None`` means no live-run evidence and no
+    condemnation, leaving the carry the benefit of the doubt it had before this
+    rule existed. Emptying a day because an internal attribute was renamed is
+    the worse failure of the two.
+    """
+    try:
+        recording_start = get_instance(hass).recorder_runs_manager.recording_start
+    except Exception:
+        _LOGGER.debug("Recorder run start unavailable", exc_info=True)
+        return None
+    if not isinstance(recording_start, datetime):
+        return None
+    return dt_util.as_utc(recording_start)
 
 
 def _floor_to_hour(instant: datetime) -> datetime:

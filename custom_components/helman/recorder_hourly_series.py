@@ -952,13 +952,19 @@ class TodaySlotBoundaryStateReader:
             parsed = _parse_state_values(_states_for_entity(history, entity_id))
             if frozen is not None:
                 parsed = [item for item in parsed if item[0] > query_start]
+            # This reader serves the live rail, whose slots are all inside the
+            # running process's own day, so a carry here needs no provenance:
+            # the flag is projected away and the cached shape stays floats.
             return (
-                _sample_rate_values_from_parsed(
-                    parsed,
-                    pending_boundaries,
-                    interval_minutes=interval_minutes,
-                    carried_value=carried_value,
-                ),
+                {
+                    boundary: sample.value
+                    for boundary, sample in _sample_rate_values_from_parsed(
+                        parsed,
+                        pending_boundaries,
+                        interval_minutes=interval_minutes,
+                        carried_value=carried_value,
+                    ).items()
+                },
                 None
                 if freeze_at is None
                 else _value_in_force_at(parsed, freeze_at, fallback=carried_value),
@@ -1040,7 +1046,7 @@ async def query_slot_boundary_state_values_for_entities(
     local_start: datetime,
     local_end: datetime,
     interval_minutes: int,
-) -> dict[str, dict[datetime, float]]:
+) -> dict[str, dict[datetime, RateSample]]:
     """Sample several entities' recorded states at every slot boundary, in ONE read.
 
     The caller names the window the way :func:`query_cumulative_slot_energy_changes`
@@ -1060,6 +1066,13 @@ async def query_slot_boundary_state_values_for_entities(
     ``get_significant_states`` takes a list of entity ids, which turns them into
     one.
 
+    Every sample says whether its slot was written to or lives off a carry --
+    see :class:`RateSample`. The one production caller,
+    :func:`~.recorder_statistics_span.query_price_history`, reads history from
+    windows that may predate the running process, where a carry across an
+    outage is indistinguishable from a quiet sensor unless the sample says
+    which it was.
+
     Returns a map keyed by entity id. An entity the recorder has nothing for maps
     to ``{}``.
     """
@@ -1078,7 +1091,7 @@ async def query_slot_boundary_state_values_for_entities(
     boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
     utc_end = dt_util.as_utc(local_end)
 
-    def _query_and_parse() -> dict[str, dict[datetime, float]]:
+    def _query_and_parse() -> dict[str, dict[datetime, RateSample]]:
         history = get_significant_states(
             hass,
             boundaries[0],
@@ -1099,6 +1112,10 @@ async def query_slot_boundary_state_values_for_entities(
             entity_id: _sample_rate_values_at_boundaries(
                 _states_for_entity(history, entity_id),
                 boundaries,
+                # The read opens at the first boundary with
+                # ``include_start_time_state``, so a row stamped exactly there is
+                # its opening replay and not a write into that slot.
+                replay_instant=boundaries[0],
                 interval_minutes=interval_minutes,
             )
             for entity_id in unique_entity_ids
@@ -1686,13 +1703,35 @@ def _value_in_force_at(
     return fallback
 
 
+@dataclass(frozen=True)
+class RateSample:
+    """One slot's sampled rate, and whether the slot itself was written to.
+
+    ``observed`` is true exactly when the write that set ``value`` landed inside
+    this slot, and false when the value was carried into it from an earlier
+    write. Both are legitimate readings -- a rate is a level, so the last state
+    written before a slot is the rate in force during it -- but they are not
+    equally *evidenced*: a carried slot says only that nobody wrote anything,
+    which is what a quiet sensor and a stopped recorder both look like from here.
+
+    The distinction is the raw pass's own knowledge and costs nothing to keep,
+    so it travels with the value rather than being reconstructed by whoever
+    needs to judge a carry later. The judge is
+    :func:`~.recorder_statistics_span.query_price_history`.
+    """
+
+    value: float
+    observed: bool
+
+
 def _sample_rate_values_at_boundaries(
     states: list[Any],
     boundaries: list[datetime],
     *,
     interval_minutes: int,
     carried_value: float | None = None,
-) -> dict[datetime, float]:
+    replay_instant: datetime | None = None,
+) -> dict[datetime, RateSample]:
     """Sample a rate entity per slot, preferring the write made inside the slot.
 
     A meter is sampled with a plain carry-forward — its value at the boundary is
@@ -1710,12 +1749,16 @@ def _sample_rate_values_at_boundaries(
     genuinely made part-way through a slot is credited to the whole of it; no
     single value can do better, and the alternative errs by a whole slot instead
     of part of one.
+
+    ``replay_instant`` marks the read's opening replay so that it is not mistaken
+    for such a write -- see :func:`_sample_rate_values_from_parsed`.
     """
     return _sample_rate_values_from_parsed(
         _parse_state_values(states),
         boundaries,
         interval_minutes=interval_minutes,
         carried_value=carried_value,
+        replay_instant=replay_instant,
     )
 
 
@@ -1725,7 +1768,8 @@ def _sample_rate_values_from_parsed(
     *,
     interval_minutes: int,
     carried_value: float | None = None,
-) -> dict[datetime, float]:
+    replay_instant: datetime | None = None,
+) -> dict[datetime, RateSample]:
     """:func:`_sample_rate_values_at_boundaries` over rows already parsed.
 
     ``carried_value`` is the reading in force before the window opened, which a
@@ -1733,23 +1777,43 @@ def _sample_rate_values_from_parsed(
     window's own rows: the recorder replays whatever was last written, and a
     sensor that went ``unavailable`` before the window replays as nothing at
     all, which would drop every boundary that had been living off the carry.
+
+    Every sample carries whether it was written inside its own slot or carried
+    into it -- see :class:`RateSample`. A carry seeded by ``carried_value`` is
+    no different from one seeded by a row in this window: neither slot was
+    written to.
+
+    ``replay_instant`` is the query start of a read made with
+    ``include_start_time_state``, where a row stamped exactly there is the
+    recorder's opening replay rather than a write. The recorder selects that row
+    with a literal zero timestamp and Home Assistant stamps it with the query
+    start, which erases the real age of whatever it replays -- so without this
+    the first slot of every window would look written to, and an outage that
+    began before the window would be vouched for by its own stale reading. The
+    replayed value still seeds the carry, because it really is the reading in
+    force; it just is not evidence of anything. A caller that has already
+    stripped the replay itself passes ``carried_value`` instead, and the two are
+    never both needed.
     """
     if not boundaries:
         return {}
 
     span = timedelta(minutes=interval_minutes)
-    samples: dict[datetime, float] = {}
+    samples: dict[datetime, RateSample] = {}
     index = 0
     carried = carried_value
+    if replay_instant is not None and parsed and parsed[0][0] == replay_instant:
+        carried = parsed[0][1]
+        index = 1
     for boundary in boundaries:
         # Everything written before this slot began is only a fallback for it.
         while index < len(parsed) and parsed[index][0] < boundary:
             carried = parsed[index][1]
             index += 1
         if index < len(parsed) and parsed[index][0] < boundary + span:
-            samples[boundary] = parsed[index][1]
+            samples[boundary] = RateSample(value=parsed[index][1], observed=True)
         elif carried is not None:
-            samples[boundary] = carried
+            samples[boundary] = RateSample(value=carried, observed=False)
     return samples
 
 
