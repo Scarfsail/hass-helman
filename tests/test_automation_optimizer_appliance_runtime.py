@@ -91,6 +91,7 @@ from custom_components.helman.automation.conditions.types import (  # noqa: E402
 from custom_components.helman.automation.day_context import DayContext  # noqa: E402
 from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.automation.optimizers.appliance_runtime import (  # noqa: E402
+    _DayPlan,
     _SelfSustainabilityGate,
     build_appliance_runtime_optimizer,
 )
@@ -1756,6 +1757,456 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         self.assertEqual(len(placed), 1)
 
 
+class FloorEmptiedDayOverrideTests(unittest.TestCase):
+    """The overdue override against a day the battery floor emptied.
+
+    ``ensure_self_sustainability`` can refuse *every* candidate a matched day
+    offers. Such a day matched a group and was offered enough slots, so nothing
+    in the planning says it came up short — yet it delivers nothing, and would
+    go on delivering nothing forever, because the chain the override counts is
+    exactly what the floor keeps silencing. Once the chain is overdue the day is
+    re-planned as a forced run, which bypasses the floor as it bypasses every
+    other threshold.
+
+    The horizon's only trough sits past both planned days and 0.5 pp above the
+    floor (``min_soc`` 10 % + a 5 pp margin = 15 %), so a single 0.2 kWh slot
+    placed anywhere before it pushes the trough through — which is what makes
+    "the floor rejects every candidate" a whole-day property rather than a
+    ranking accident.
+    """
+
+    #: 15.5 % against a 15 % floor: one slot of runtime is 2 pp and does not fit.
+    TROUGH_KWH = 1.55
+
+    def _snapshot(self, appliance, **kwargs):
+        kwargs.setdefault(
+            "battery_series", _trailing_drain_series(trough_kwh=self.TROUGH_KWH)
+        )
+        return _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            **kwargs,
+        )
+
+    def _config(
+        self,
+        appliance,
+        *,
+        max_consecutive_skips=2,
+        min_hours_per_day=1,
+        window=None,
+        groups=None,
+    ):
+        return make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"controllable_id": appliance.id},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": min_hours_per_day,
+                    "max_consecutive_skips": max_consecutive_skips,
+                },
+                # Wholly before the trough, so every slot it offers is one the
+                # floor refuses.
+                "window": window or {"start": "06:00", "end": "09:00"},
+            },
+            conditions=groups
+            or [
+                {
+                    "run_when": ["tight"],
+                    "ensure_self_sustainability": 100,
+                    "self_sustainability_margin_pct": 5,
+                }
+            ],
+        )
+
+    def _optimize(self, cfg, snapshot, appliance, *, extra_appliances=()):
+        return build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances(
+                (appliance, *extra_appliances)
+            ),
+        ).optimize(snapshot, cfg)
+
+    def test_an_overdue_day_the_floor_emptied_runs_anyway(self) -> None:
+        appliance = _generic()
+        cfg = self._config(appliance)
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            # Two short days behind it, against a limit of two: skipping today
+            # too would make three.
+            runtime_by_date={
+                appliance.id: {
+                    DAY - timedelta(days=1): 0.0,
+                    DAY - timedelta(days=2): 0.0,
+                }
+            },
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # The full hour, on the cheapest slots of the window — the floor having
+        # no say at all on a forced run.
+        self.assertEqual(set(placed), _hour_slots(8))
+
+    def test_the_forced_day_names_the_floor_as_its_trigger(self) -> None:
+        appliance = _generic()
+        cfg = self._config(appliance)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            runtime_by_date={
+                appliance.id: {
+                    DAY - timedelta(days=1): 0.0,
+                    DAY - timedelta(days=2): 0.0,
+                }
+            },
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        placed = _slots_by_id(trace)[_slot_id(8, 0)]
+        override = _gate(placed, "consecutive_skip_override")
+        self.assertEqual(override.state, "true")
+        self.assertEqual(override.params["consecutiveSkips"], 3)
+        self.assertEqual(override.params["trigger"], "self_sustainability")
+        # A forced run matched no group, so the floor it crossed is not resolved
+        # against one either — and the retry must not leave the first pass's
+        # rejection behind on a slot it went on to apply.
+        self.assertEqual(placed.verdict, "execute")
+        rejected = {
+            slot_id
+            for decision in trace.to_dict()["steps"][0]["decisions"]
+            if decision["outcome"] == "rejected"
+            for slot_id in decision["slotIds"]
+        }
+        self.assertNotIn(_slot_id(8, 0), rejected)
+
+    def test_a_floor_emptied_day_counts_as_short_for_the_next_one(self) -> None:
+        """The chain reads what the horizon planned, not only what history has.
+
+        Today is one short day inside the limit, so it places nothing and stays
+        placing nothing. Tomorrow is the day that must notice: history stops at
+        today, so without today's outcome written back the walk would terminate
+        at an absent date and tomorrow would never come up overdue either.
+        """
+        appliance = _generic()
+        tomorrow = DAY + timedelta(days=1)
+        cfg = self._config(appliance)
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            runtime_by_date={appliance.id: {DAY - timedelta(days=1): 0.0}},
+            day_contexts={
+                DAY: _day_context_on(DAY),
+                tomorrow: _day_context_on(tomorrow),
+            },
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # Today: one prior short day against a limit of two — not yet overdue,
+        # and the floor still refuses everything.
+        self.assertEqual(
+            [slot_id for slot_id in placed if slot_id.startswith(DAY.isoformat())],
+            [],
+        )
+        # Tomorrow: today counts as the second short day, so the chain is past
+        # the limit and the forced run takes the window's earliest slots.
+        self.assertEqual(
+            set(placed),
+            {
+                slot_id.replace(DAY.isoformat(), tomorrow.isoformat())
+                for slot_id in _hour_slots(6)
+            },
+        )
+
+    def test_the_retry_is_still_narrowed_to_the_structural_slots(self) -> None:
+        """Overdue outranks the battery floor; it does not outrank "cannot".
+
+        The provider covers the 08:00 hour and nothing else, so those are the
+        only slots the forced retry may take — even though the window holds four
+        others the floor refuses just as readily.
+        """
+        appliance = _generic("pool-heatpump")
+        provider = _generic("pool-filtration")
+        cfg = self._config(
+            appliance,
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "requires_appliance": provider.id,
+                    "ensure_self_sustainability": 100,
+                    "self_sustainability_margin_pct": 5,
+                }
+            ],
+        )
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            runtime_by_date={
+                appliance.id: {
+                    DAY - timedelta(days=1): 0.0,
+                    DAY - timedelta(days=2): 0.0,
+                }
+            },
+            schedule_document=ScheduleDocument(
+                slots={
+                    slot_id: {provider.id: {"on": True, "setBy": "automation"}}
+                    for slot_id in _hour_slots(8)
+                }
+            ),
+            extra_appliances=(provider,),
+        )
+
+        placed = _placed_slots(
+            self._optimize(cfg, snapshot, appliance, extra_appliances=(provider,)),
+            appliance.id,
+        )
+
+        self.assertEqual(set(placed), _hour_slots(8))
+
+    def test_the_retry_places_nothing_when_no_structural_slot_remains(self) -> None:
+        """The forced window is the *master* one, and a group may narrow it.
+
+        Here the group runs 06:00-09:00 and the provider covers exactly that,
+        while master params place the forced window at 10:00-12:00 — where the
+        heat pump structurally cannot run. So the day is overdue, the floor has
+        emptied it, and there is still nothing the override may legally take.
+        """
+        appliance = _generic("pool-heatpump")
+        provider = _generic("pool-filtration")
+        cfg = self._config(
+            appliance,
+            window={"start": "10:00", "end": "12:00"},
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "requires_appliance": provider.id,
+                    "ensure_self_sustainability": 100,
+                    "self_sustainability_margin_pct": 5,
+                    "params": {"window": {"start": "06:00", "end": "09:00"}},
+                }
+            ],
+        )
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            runtime_by_date={
+                appliance.id: {
+                    DAY - timedelta(days=1): 0.0,
+                    DAY - timedelta(days=2): 0.0,
+                }
+            },
+            schedule_document=ScheduleDocument(
+                slots={
+                    slot_id: {provider.id: {"on": True, "setBy": "automation"}}
+                    for slot_id in _hour_slots(6, 7, 8)
+                }
+            ),
+            extra_appliances=(provider,),
+        )
+
+        placed = _placed_slots(
+            self._optimize(cfg, snapshot, appliance, extra_appliances=(provider,)),
+            appliance.id,
+        )
+
+        self.assertEqual(placed, {})
+
+    def test_a_pass_that_accepts_nothing_leaves_the_gate_untouched(self) -> None:
+        """What makes re-placing a day safe, asserted rather than trusted.
+
+        ``_accept`` records a candidate's demand only when it accepts it, so a
+        pass the floor emptied cannot have moved the gate's accumulated set —
+        and the forced retry that follows it starts from the same trajectory the
+        first pass did.
+        """
+        appliance = _generic()
+        snapshot = self._snapshot(
+            appliance, export_points=_export_points({_slot_id(8, 0)})
+        )
+        gate = _SelfSustainabilityGate(
+            snapshot=snapshot,
+            appliance_id=appliance.id,
+            demand_hourly_energy=SLOT_DRAW_KWH / ONE_SLOT_HOURS,
+        )
+        plan = _DayPlan(
+            params={},
+            window_slots=[_slot_id(8, 0), _slot_id(8, 30)],
+            placeable_slots=[_slot_id(8, 0), _slot_id(8, 30)],
+            group_label="tight",
+            forced_after_skips=None,
+            group_index=0,
+            self_sustainability=100.0,
+            margin_pct=5.0,
+        )
+
+        chosen, floor_rejected, _not_reached = gate.take(
+            [(1.0, _slot_id(8, 0)), (5.0, _slot_id(8, 30))],
+            slots_needed=2,
+            plan=plan,
+        )
+
+        self.assertEqual(chosen, [])
+        self.assertEqual(len(floor_rejected), 2)
+        self.assertEqual(gate._accepted_demand, {})
+
+    def test_a_forced_pass_records_what_it_spent(self) -> None:
+        """Bypassing the floor is not the same as vanishing from the trajectory.
+
+        A forced plan carries no budget, so nothing in ``take`` can refuse its
+        slots — but the energy they draw is real, and the gate's accepted set is
+        the only channel by which one day's placement reaches the next day's
+        floor check. A forced run that recorded nothing would let the day after
+        it accept a slot against a battery that is no longer there.
+        """
+        appliance = _generic()
+        snapshot = self._snapshot(
+            appliance, export_points=_export_points({_slot_id(8, 0)})
+        )
+        gate = _SelfSustainabilityGate(
+            snapshot=snapshot,
+            appliance_id=appliance.id,
+            demand_hourly_energy=SLOT_DRAW_KWH / ONE_SLOT_HOURS,
+        )
+        forced = _DayPlan(
+            params={},
+            window_slots=[_slot_id(8, 0), _slot_id(8, 30)],
+            placeable_slots=[_slot_id(8, 0), _slot_id(8, 30)],
+            group_label=None,
+            forced_after_skips=3,
+            trigger="self_sustainability",
+        )
+
+        chosen, floor_rejected, _not_reached = gate.take(
+            [(1.0, _slot_id(8, 0)), (5.0, _slot_id(8, 30))],
+            slots_needed=1,
+            plan=forced,
+        )
+
+        self.assertEqual([slot_id for _cost, slot_id in chosen], [_slot_id(8, 0)])
+        self.assertEqual(floor_rejected, [])
+        self.assertTrue(gate._accepted_demand)
+
+    def test_a_retry_with_nothing_to_place_leaves_the_first_attempt_traced(self) -> None:
+        """A group may ask for more hours than the master minimum does.
+
+        Here it asks for three against the master's one, and history has already
+        delivered an hour and a half — so the day owes its group another hour and
+        a half while owing the chain nothing at all. The floor empties it, the
+        chain is overdue, and the forced retry that follows has no deficit left
+        to size a placement against. The matched attempt therefore keeps the last
+        word: adopting an empty retry would trade the floor's refusals for an
+        already-satisfied day, and the record of *why* the day delivered nothing
+        would be gone.
+        """
+        appliance = _generic()
+        cfg = self._config(
+            appliance,
+            min_hours_per_day=1,
+            max_consecutive_skips=1,
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "ensure_self_sustainability": 100,
+                    "self_sustainability_margin_pct": 5,
+                    "params": {"daily_minimum": {"min_hours_per_day": 3}},
+                }
+            ],
+        )
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = self._snapshot(
+            appliance,
+            export_points=_export_points({_slot_id(8, 0)}),
+            runtime_by_date={
+                appliance.id: {
+                    DAY: 1.5,
+                    DAY - timedelta(days=1): 0.0,
+                    DAY - timedelta(days=2): 0.0,
+                }
+            },
+        )
+
+        result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        self.assertEqual(_placed_slots(result, appliance.id), {})
+        slots = _slots_by_id(trace)
+        refused = _node(slots[_slot_id(8, 0)], "ensure_self_sustainability")
+        self.assertEqual(refused.state, "false")
+        self.assertIsNone(_gate(slots[_slot_id(8, 0)], "consecutive_skip_override"))
+        # The day's own minimum, not the master one it no longer owes.
+        minimum = _gate(slots[_slot_id(8, 0)], "daily_minimum_remaining")
+        self.assertEqual(minimum.state, "true")
+        self.assertEqual(minimum.params["minHours"], 3)
+
+
+class HorizonSkipChainTests(unittest.TestCase):
+    """What a day credits to the chain the days after it walk.
+
+    History used to be all `_prior_consecutive_skips` could see, so the walk
+    terminated at the first date the horizon had not lived through yet. Each day
+    now writes its own outcome back — and what it writes is whether it was
+    *satisfied*, not its literal hours, because a group may lower
+    ``min_hours_per_day`` below the master minimum the chain is judged against.
+    """
+
+    def test_a_day_that_met_its_groups_minimum_is_not_a_skip_for_tomorrow(self) -> None:
+        appliance = _generic()
+        tomorrow = DAY + timedelta(days=1)
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=2,
+            max_consecutive_skips=1,
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "params": {"daily_minimum": {"min_hours_per_day": 1}},
+                }
+            ],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points(_hour_slots(9)),
+            day_contexts={
+                DAY: _day_context_on(DAY),
+                tomorrow: _day_context_on(tomorrow, "surplus"),
+            },
+        )
+
+        placed = _placed_slots(
+            build_appliance_runtime_optimizer(
+                cfg,
+                appliance_registry=AppliancesRuntimeRegistry.from_appliances(
+                    (appliance,)
+                ),
+            ).optimize(snapshot, cfg),
+            appliance.id,
+        )
+
+        # Today ran the hour its group asked for, so it is not a short day.
+        # Tomorrow matches no group and is the chain's *first* skip, which a
+        # limit of one tolerates — judged the other way it would be the second,
+        # and tomorrow would be forced into a full two hours it is not owed.
+        self.assertEqual(set(placed), _hour_slots(9))
+
+
 class StrictSelfSustainabilityTests(unittest.TestCase):
     """A budget of ``0`` — did the day the slot belongs to pay for itself?
 
@@ -2212,6 +2663,9 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         self.assertEqual(override.state, "true")
         self.assertEqual(override.params["consecutiveSkips"], 2)
         self.assertEqual(override.params["maxConsecutiveSkips"], 1)
+        # An ordinary forced day: it came up short, rather than having been
+        # emptied by the battery floor.
+        self.assertEqual(override.params["trigger"], "day_short")
         self.assertEqual(placed.verdict, "execute")
 
     def test_a_user_owned_slot_never_reaches_the_ranking(self) -> None:
