@@ -65,7 +65,6 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.day_context import (  # noqa: E402
-    FrozenDayContext,
     build_day_contexts,
 )
 
@@ -95,13 +94,14 @@ def _battery_series(
     house_per_slot: float,
     baseline_soc_pct: float,
     slot_count: int = 48,
+    soc_field: str = "baselineSocPct",
 ) -> list[dict[str, object]]:
     return [
         {
             "timestamp": (day_start + timedelta(minutes=30 * index)).isoformat(),
             "solarKwh": solar_per_slot,
             "baselineHouseKwh": house_per_slot,
-            "baselineSocPct": baseline_soc_pct,
+            soc_field: baseline_soc_pct,
         }
         for index in range(slot_count)
     ]
@@ -201,7 +201,136 @@ class BuildDayContextsTests(unittest.TestCase):
         self.assertIn(TODAY, contexts)
         self.assertNotIn(tomorrow_start.date(), contexts)
 
-    def test_frozen_override_pins_classification(self) -> None:
+    def test_soc_fallback_demotes_on_an_unadjusted_series(self) -> None:
+        """`socPct` is the baseline trajectory when nothing adjusted the series.
+
+        The forecast builder attaches `baselineSocPct` only when the schedule
+        carries a non-normal *inverter* action, so on a run whose schedule holds
+        appliance placements alone the demotion used to be silently inert (#264).
+        """
+        contexts = build_day_contexts(
+            battery_series=_battery_series(
+                day_start=DAY_START,
+                solar_per_slot=1.0,
+                house_per_slot=0.5,
+                baseline_soc_pct=60.0,
+                soc_field="socPct",
+            ),
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+        )
+        self.assertEqual(contexts[TODAY].classification, "tight")
+
+    def test_baseline_soc_wins_over_soc_on_an_adjusted_series(self) -> None:
+        series = _battery_series(
+            day_start=DAY_START,
+            solar_per_slot=1.0,
+            house_per_slot=0.5,
+            baseline_soc_pct=60.0,
+        )
+        for point in series:
+            # The adjusted trajectory reaches full; the baseline one does not,
+            # and the baseline one is what the demotion asks about.
+            point["socPct"] = 100.0
+        contexts = build_day_contexts(
+            battery_series=series,
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+        )
+        self.assertEqual(contexts[TODAY].classification, "tight")
+
+
+class WholeDayAggregationTests(unittest.TestCase):
+    """Today's figures are whole-day figures, elapsed part included (#264)."""
+
+    def _contexts(self, *, elapsed_slots: int, **kwargs):
+        # The forecast series covers only what is left of the day; the actual
+        # histories cover the completed slots. Both halves use the same per-slot
+        # figures, so the whole-day total must not move as the day advances.
+        remaining_start = DAY_START + timedelta(minutes=30 * elapsed_slots)
+        return build_day_contexts(
+            battery_series=_battery_series(
+                day_start=remaining_start,
+                solar_per_slot=1.0,
+                house_per_slot=0.5,
+                baseline_soc_pct=100.0,
+                slot_count=48 - elapsed_slots,
+            ),
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+            solar_actual_history=[
+                {
+                    "timestamp": (
+                        DAY_START + timedelta(minutes=30 * index)
+                    ).isoformat(),
+                    # Wh per slot, against a series carrying kWh.
+                    "value": 1000.0,
+                }
+                for index in range(elapsed_slots)
+            ],
+            house_actual_history=[
+                {
+                    "timestamp": (
+                        DAY_START + timedelta(minutes=30 * index)
+                    ).isoformat(),
+                    "nonDeferrable": {"value": 0.3},
+                    "deferrableConsumers": [
+                        {"entityId": "sensor.pool", "value": 0.2},
+                    ],
+                }
+                for index in range(elapsed_slots)
+            ],
+            **kwargs,
+        )
+
+    def test_whole_day_total_does_not_decay_through_the_day(self) -> None:
+        morning = self._contexts(elapsed_slots=16)[TODAY]
+        afternoon = self._contexts(elapsed_slots=32)[TODAY]
+        self.assertAlmostEqual(morning.predicted_solar_kwh, 48.0)
+        self.assertAlmostEqual(morning.predicted_consumption_kwh, 24.0)
+        self.assertAlmostEqual(
+            afternoon.predicted_solar_kwh, morning.predicted_solar_kwh
+        )
+        self.assertAlmostEqual(
+            afternoon.predicted_consumption_kwh,
+            morning.predicted_consumption_kwh,
+        )
+        self.assertAlmostEqual(afternoon.ratio, 2.0)
+
+    def test_without_actuals_the_remaining_day_is_all_there_is(self) -> None:
+        """The regression the elapsed half exists to close.
+
+        With no actuals the same unchanged forecast reads smaller every hour,
+        which is what dragged every day toward deficit by evening.
+        """
+        contexts = build_day_contexts(
+            battery_series=_battery_series(
+                day_start=DAY_START + timedelta(hours=16),
+                solar_per_slot=1.0,
+                house_per_slot=0.5,
+                baseline_soc_pct=100.0,
+                slot_count=16,
+            ),
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+        )
+        self.assertAlmostEqual(contexts[TODAY].predicted_solar_kwh, 16.0)
+
+    def test_actuals_for_an_uncovered_date_are_ignored(self) -> None:
+        contexts = self._contexts(elapsed_slots=0)
+        self.assertAlmostEqual(contexts[TODAY].predicted_solar_kwh, 48.0)
         contexts = build_day_contexts(
             battery_series=_battery_series(
                 day_start=DAY_START,
@@ -214,14 +343,91 @@ class BuildDayContextsTests(unittest.TestCase):
             battery_max_soc=100.0,
             deficit_below_ratio=0.7,
             surplus_above_ratio=1.3,
-            frozen_overrides={
-                TODAY: FrozenDayContext(classification="deficit")
-            },
+            solar_actual_history=[
+                {
+                    "timestamp": (DAY_START - timedelta(days=1)).isoformat(),
+                    "value": 99000.0,
+                }
+            ],
         )
-        ctx = contexts[TODAY]
-        self.assertEqual(ctx.classification, "deficit")
-        # volatile stats still recomputed live
-        self.assertAlmostEqual(ctx.predicted_solar_kwh, 48.0)
+        self.assertAlmostEqual(contexts[TODAY].predicted_solar_kwh, 48.0)
+
+
+class ClassificationDeadbandTests(unittest.TestCase):
+    """Leaving a band costs more than staying in it (#264)."""
+
+    def _classify(self, *, ratio: float, previous_band: str | None) -> str:
+        # house 1.0 kWh/slot over 48 slots = 48 kWh, so solar is ratio * 48.
+        contexts = build_day_contexts(
+            battery_series=_battery_series(
+                day_start=DAY_START,
+                solar_per_slot=ratio,
+                house_per_slot=1.0,
+                baseline_soc_pct=100.0,
+            ),
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+            previous_bands=(
+                None if previous_band is None else {TODAY: previous_band}
+            ),
+        )
+        return contexts[TODAY].classification
+
+    def test_no_previous_band_uses_the_plain_thresholds(self) -> None:
+        # Just either side of each threshold rather than exactly on it: the
+        # ratio is a sum-over-sum, so an exact boundary is a coin toss on the
+        # last bit and says nothing about the rule.
+        self.assertEqual(self._classify(ratio=0.69, previous_band=None), "deficit")
+        self.assertEqual(self._classify(ratio=0.71, previous_band=None), "tight")
+        self.assertEqual(self._classify(ratio=1.31, previous_band=None), "surplus")
+        self.assertEqual(self._classify(ratio=1.29, previous_band=None), "tight")
+
+    def test_tight_holds_just_inside_the_deficit_threshold(self) -> None:
+        self.assertEqual(self._classify(ratio=0.68, previous_band="tight"), "tight")
+        self.assertEqual(self._classify(ratio=0.60, previous_band="tight"), "deficit")
+
+    def test_deficit_holds_just_above_the_deficit_threshold(self) -> None:
+        self.assertEqual(
+            self._classify(ratio=0.73, previous_band="deficit"), "deficit"
+        )
+        self.assertEqual(self._classify(ratio=0.80, previous_band="deficit"), "tight")
+
+    def test_tight_holds_just_inside_the_surplus_threshold(self) -> None:
+        self.assertEqual(self._classify(ratio=1.32, previous_band="tight"), "tight")
+        self.assertEqual(
+            self._classify(ratio=1.40, previous_band="tight"), "surplus"
+        )
+
+    def test_surplus_holds_just_below_the_surplus_threshold(self) -> None:
+        self.assertEqual(
+            self._classify(ratio=1.27, previous_band="surplus"), "surplus"
+        )
+        self.assertEqual(
+            self._classify(ratio=1.20, previous_band="surplus"), "tight"
+        )
+
+    def test_band_carries_the_denominator_it_was_measured_for(self) -> None:
+        contexts = build_day_contexts(
+            battery_series=_battery_series(
+                day_start=DAY_START,
+                solar_per_slot=1.0,
+                house_per_slot=0.5,
+                baseline_soc_pct=100.0,
+            ),
+            export_price_points=_slot_points(day_start=DAY_START, values=[2.0] * 48),
+            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 48),
+            battery_max_soc=100.0,
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+            denominator_optimizer_id="pool-filtration",
+        )
+        self.assertEqual(
+            contexts[TODAY].denominator_optimizer_id, "pool-filtration"
+        )
+        self.assertAlmostEqual(contexts[TODAY].ratio, 2.0)
 
 
 if __name__ == "__main__":

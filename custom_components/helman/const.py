@@ -8,7 +8,10 @@ FORECAST_SNAPSHOT_STORAGE_VERSION = 1
 SCHEDULE_STORAGE_KEY = f"{DOMAIN}.schedule"
 SCHEDULE_STORAGE_VERSION = 1
 DAY_CONTEXT_STORAGE_KEY = f"{DOMAIN}.day_context"
-DAY_CONTEXT_STORAGE_VERSION = 1
+# v2 (#264): the freeze store became a hysteresis store, keyed by local date
+# *and* optimizer instance id. v1 records carry no optimizer key and are dropped
+# on load rather than migrated.
+DAY_CONTEXT_STORAGE_VERSION = 2
 DAY_CLASSIFICATION_SURPLUS = "surplus"
 DAY_CLASSIFICATION_TIGHT = "tight"
 DAY_CLASSIFICATION_DEFICIT = "deficit"

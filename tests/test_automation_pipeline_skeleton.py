@@ -629,6 +629,10 @@ class _FakeCoordinator:
         self.saved_documents: list[ScheduleDocument] = []
         self.post_write_calls: list[tuple[str, datetime, bool]] = []
         self.recorded_explanations: list[object] = []
+        #: The hysteresis store, faked: what the previous run left behind, and
+        #: what this run asked to write back (#264).
+        self.day_context_bands: dict = {}
+        self.persisted_day_context_bands: list = []
 
     def record_run_explanation(self, explanation) -> None:
         self.recorded_explanations.append(explanation)
@@ -650,13 +654,19 @@ class _FakeCoordinator:
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         return None if self._bundle is None else deepcopy(self._bundle)
 
-    async def async_resolve_day_contexts(
+    async def async_load_day_context_bands(self) -> dict:
+        return dict(self.day_context_bands)
+
+    async def async_persist_day_context_bands(
         self,
         *,
-        snapshot: OptimizationSnapshot,
+        emitted,
         reference_time: datetime,
-    ) -> dict:
-        return {}
+        optimizer_ids,
+    ) -> None:
+        self.persisted_day_context_bands.append(
+            (dict(emitted), reference_time, set(optimizer_ids))
+        )
 
     async def _async_gather_compute_inputs(
         self, *, started_at: datetime, live_state=None, include_condition_flags=False

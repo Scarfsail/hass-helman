@@ -4,14 +4,15 @@ from collections.abc import Mapping
 from copy import deepcopy
 import functools
 import logging
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
+from .day_context import DayContext, build_day_contexts
 from .input_bundle import AutomationInputBundle
 from .conditions.types import ConditionRailsUnavailable
 from .explain import RunExplanation
@@ -203,9 +204,11 @@ def _summarize_day_contexts(
 ) -> list[dict[str, Any]]:
     """Concise per-day summary (the day's classification) for the UI.
 
-    Surfaces the frozen classification beside the run result so the frontend can
-    show "today: surplus day" and why the schedule is shaped as it is, without
-    digging into the full serialized snapshot.
+    Surfaces the run's canonical classification — the one computed from the
+    initial snapshot's whole-house view, not the per-optimizer ones (#264) —
+    beside the run result, so the frontend can show "today: surplus day" and why
+    the schedule is shaped as it is without digging into the full serialized
+    snapshot.
     """
     if snapshot is None:
         return []
@@ -213,9 +216,96 @@ def _summarize_day_contexts(
         {
             "localDate": local_date.isoformat(),
             "classification": day_context.classification,
+            "ratio": None if day_context.ratio == float("inf") else day_context.ratio,
         }
         for local_date, day_context in sorted(snapshot.context.day_contexts.items())
     ]
+
+
+def _read_actual_history(forecast: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """The completed-slot actuals a forecast payload carries, or nothing.
+
+    Present on every forecast the input bundle holds, so no extra recorder read
+    is needed to give today a whole-day figure (#264).
+    """
+    if not isinstance(forecast, Mapping):
+        return []
+    actual_history = forecast.get("actualHistory")
+    if not isinstance(actual_history, list):
+        return []
+    return [entry for entry in actual_history if isinstance(entry, dict)]
+
+
+@dataclass(frozen=True)
+class DayContextResolver:
+    """Classifies the calendar days of one snapshot, for one optimizer.
+
+    The classification used to be computed once per run, from a snapshot in
+    which every automation-owned appliance lane was restored, and then frozen.
+    Both halves were wrong (#264): an appliance found its own carried-over lane
+    in the denominator that decides whether it may run, and the freeze pinned
+    the answer to a forecast taken the previous afternoon.
+
+    So it is recomputed here, per optimizer, over the house view that optimizer
+    actually plans against — the same view ``_build_pending_aware_snapshot``
+    already assembles for house demand (#116): the fresh decisions of every
+    optimizer before it, its own lane excluded because it is re-planning it, and
+    every later appliance lane restored from the baseline. Two optimizers
+    therefore legitimately see different bands for the same calendar day in the
+    same run.
+
+    Pure, and called from inside the executor: the previous bands are read from
+    the store on the event loop before the loop starts, and the bands recorded
+    in ``emitted_bands`` are persisted on the event loop after it returns.
+    """
+
+    deficit_below_ratio: float
+    surplus_above_ratio: float
+    solar_actual_history: list[dict[str, Any]]
+    house_actual_history: list[dict[str, Any]]
+    previous_bands: Mapping[tuple[date, str], str]
+
+    def __call__(
+        self,
+        snapshot: OptimizationSnapshot,
+        *,
+        optimizer_id: str | None,
+    ) -> dict[date, DayContext]:
+        battery_series = snapshot.battery_forecast.get("series")
+        if not isinstance(battery_series, list):
+            battery_series = []
+        battery_state = snapshot.context.battery_state
+        day_contexts = build_day_contexts(
+            battery_series=battery_series,
+            export_price_points=snapshot.context.export_price_forecast.get("points")
+            or [],
+            import_price_points=snapshot.context.import_price_forecast.get("points")
+            or [],
+            battery_max_soc=(
+                None if battery_state is None else battery_state.max_soc
+            ),
+            deficit_below_ratio=self.deficit_below_ratio,
+            surplus_above_ratio=self.surplus_above_ratio,
+            solar_actual_history=self.solar_actual_history,
+            house_actual_history=self.house_actual_history,
+            # The canonical (``optimizer_id is None``) computation exists only to
+            # report the day to the UI. It damps nothing and records nothing:
+            # hysteresis belongs to the decisions, and a band stored under no
+            # optimizer could never be read back.
+            previous_bands=(
+                None
+                if optimizer_id is None
+                else {
+                    local_date: band
+                    for (local_date, band_optimizer_id), band in (
+                        self.previous_bands.items()
+                    )
+                    if band_optimizer_id == optimizer_id
+                }
+            ),
+            denominator_optimizer_id=optimizer_id,
+        )
+        return day_contexts
 
 
 @dataclass(frozen=True)
@@ -228,6 +318,11 @@ class _PipelineExecutionResult:
     #: path — a failed loop raises before this point, so the coordinator's
     #: accumulated record is never clobbered by a partial one.
     explanation: RunExplanation | None = None
+    #: The day band each optimizer resolved this run, keyed by (local date,
+    #: optimizer instance id). The loop is pure and runs in an executor, so it
+    #: cannot persist them itself — it hands them back and the caller writes
+    #: them to the hysteresis store on the event loop (#264).
+    emitted_day_bands: dict[tuple[date, str], str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -354,9 +449,33 @@ class AutomationRunner:
                         )
                     )
                     current_stage = "day_context"
-                    day_contexts = await self._coordinator.async_resolve_day_contexts(
-                        snapshot=initial_snapshot,
-                        reference_time=active_reference_time,
+                    # I/O stays here, on the event loop: the classification is
+                    # recomputed per optimizer *inside* the pure loop, so the
+                    # bands the previous run emitted have to be in hand before
+                    # it starts, and the bands it emits are written after it
+                    # returns (#264).
+                    resolve_day_contexts = DayContextResolver(
+                        deficit_below_ratio=(
+                            self._automation_config.day_context.deficit_below_ratio
+                        ),
+                        surplus_above_ratio=(
+                            self._automation_config.day_context.surplus_above_ratio
+                        ),
+                        solar_actual_history=_read_actual_history(
+                            input_bundle.solar_forecast
+                        ),
+                        house_actual_history=_read_actual_history(
+                            input_bundle.original_house_forecast
+                        ),
+                        previous_bands=(
+                            await self._coordinator.async_load_day_context_bands()
+                        ),
+                    )
+                    # The canonical, run-wide reading of each day: the whole
+                    # house, no optimizer's lane excluded. It is what the run
+                    # result reports; the per-optimizer bands are what decides.
+                    day_contexts = resolve_day_contexts(
+                        initial_snapshot, optimizer_id=None
                     )
                     initial_snapshot = attach_day_contexts(
                         initial_snapshot, day_contexts
@@ -371,6 +490,7 @@ class AutomationRunner:
                             reference_time=active_reference_time,
                             initial_snapshot=initial_snapshot,
                             day_contexts=day_contexts,
+                            resolve_day_contexts=resolve_day_contexts,
                             compute_inputs=compute_inputs,
                         )
                     except _OptimizerExecutionError as err:
@@ -387,6 +507,19 @@ class AutomationRunner:
                         latest_snapshot = execution_result.snapshot
                         latest_optimizers = execution_result.optimizers
                         latest_trace = execution_result.trace
+                        current_stage = "day_context_persist"
+                        # Back on the event loop, so the store write is legal
+                        # here and nowhere inside the loop (#264).
+                        await self._coordinator.async_persist_day_context_bands(
+                            emitted=execution_result.emitted_day_bands,
+                            reference_time=active_reference_time,
+                            optimizer_ids={
+                                optimizer.id
+                                for optimizer in (
+                                    self._automation_config.execution_optimizers
+                                )
+                            },
+                        )
                         # Success path only: a failed loop takes the `except`
                         # branch above and leaves the previous good record
                         # standing rather than clobbering it with a partial one.
@@ -457,6 +590,7 @@ class AutomationRunner:
         reference_time: datetime,
         initial_snapshot: OptimizationSnapshot,
         day_contexts: dict,
+        resolve_day_contexts: "Callable[..., dict]",
         compute_inputs: ComputeInputs | None = None,
     ) -> _PipelineExecutionResult:
         """Run the optimizer loop off the event loop.
@@ -500,6 +634,7 @@ class AutomationRunner:
                 control_config=control_config,
                 appliance_registry=self._coordinator._appliances_registry,
                 build_snapshot=build_snapshot,
+                resolve_day_contexts=resolve_day_contexts,
             )
         )
 
@@ -637,6 +772,7 @@ def run_optimizer_loop_pure(
     control_config: Any,
     appliance_registry: Any,
     build_snapshot: "Callable[..., OptimizationSnapshot]",
+    resolve_day_contexts: "Callable[..., dict] | None" = None,
 ) -> _PipelineExecutionResult:
     """Pure, synchronous optimizer loop — safe to run in an executor.
 
@@ -654,8 +790,23 @@ def run_optimizer_loop_pure(
     trace.set_static_rails(
         _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
     )
+    emitted_day_bands: dict[tuple[date, str], str] = {}
     for index, optimizer_config in enumerate(execution_optimizers):
         optimizer_started_at = time.perf_counter()
+        # Which band a day holds depends on whose house view it is read over, so
+        # every optimizer is handed the classification derived from the snapshot
+        # it actually receives rather than one fixed reading of the run (#264).
+        # The snapshot itself is unchanged: this only replaces the day contexts
+        # hanging off its context.
+        if resolve_day_contexts is not None:
+            step_day_contexts = resolve_day_contexts(
+                snapshot, optimizer_id=optimizer_config.id
+            )
+            snapshot = attach_day_contexts(snapshot, step_day_contexts)
+            for local_date, day_context in step_day_contexts.items():
+                emitted_day_bands[(local_date, optimizer_config.id)] = (
+                    day_context.classification
+                )
         trace.begin_step(
             optimizer_config.id,
             optimizer_config.kind,
@@ -802,6 +953,7 @@ def run_optimizer_loop_pure(
             slot_ids=trace.slot_ids,
             optimizers=trace.optimizer_explanations(),
         ),
+        emitted_day_bands=emitted_day_bands,
     )
 
 
