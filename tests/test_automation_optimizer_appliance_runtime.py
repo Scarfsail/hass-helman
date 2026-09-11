@@ -381,6 +381,12 @@ def _trailing_drain_series(*, trough_kwh: float) -> list[dict[str, object]]:
     )
 
 
+#: The instance whose house view the fixture contexts are classified over.
+#: Since #264 a day context carries that, because the same calendar day can hold
+#: a different band for a different optimizer in the same run.
+DENOMINATOR_OPTIMIZER_ID = "appliance-runtime"
+
+
 def _day_context_on(local_date: date, classification: str = "tight") -> DayContext:
     return DayContext(
         local_date=local_date,
@@ -390,19 +396,13 @@ def _day_context_on(local_date: date, classification: str = "tight") -> DayConte
         export_price_min=1.0,
         export_price_max=5.0,
         import_bands=(),
+        ratio=1.0,
+        denominator_optimizer_id=DENOMINATOR_OPTIMIZER_ID,
     )
 
 
 def _day_context(classification: str = "tight") -> DayContext:
-    return DayContext(
-        local_date=DAY,
-        classification=classification,
-        predicted_solar_kwh=5.0,
-        predicted_consumption_kwh=5.0,
-        export_price_min=1.0,
-        export_price_max=5.0,
-        import_bands=(),
-    )
+    return _day_context_on(DAY, classification)
 
 
 def _make_snapshot(
@@ -1028,6 +1028,9 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             matched.params,
             {
                 "classification": "deficit",
+                # The reading behind the band, not just its name (#264).
+                "solarToConsumptionRatio": 1.0,
+                "denominatorOptimizerId": DENOMINATOR_OPTIMIZER_ID,
                 "failingCondition": "run_when",
                 "conditionValue": ["surplus"],
             },

@@ -692,6 +692,15 @@ export interface AutomationOptimizerSummaryDTO {
 export interface AutomationDayContextSummaryDTO {
     localDate: string;
     classification: string;
+    /**
+     * Whole-day solar over whole-day house consumption, as the classification
+     * read it. `null` on a day with no forecast consumption at all.
+     *
+     * This is the canonical, run-wide reading. Each optimizer resolves the band
+     * again over its own house view, so a trace can legitimately show a
+     * different one; see the `denominatorOptimizerId` gate param.
+     */
+    ratio: number | null;
 }
 
 export interface AutomationRunPayload {

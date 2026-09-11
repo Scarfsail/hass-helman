@@ -358,7 +358,10 @@ class ApplianceRuntimeOptimizer:
                     slot_ids=window_slots,
                     key=GATE_DAY_GROUP_MATCHED,
                     state=STATE_FALSE if plan.group_label is None else STATE_TRUE,
-                    params={"matchedGroup": plan.group_label},
+                    params={
+                        "matchedGroup": plan.group_label,
+                        **_day_ratio_params(day_context),
+                    },
                 )
                 if plan.forced_after_skips is not None:
                     trace.gate(
@@ -1182,6 +1185,23 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _day_ratio_params(day_context: "DayContext") -> dict[str, Any]:
+    """The reading behind a day's band, for the trace (#264).
+
+    ``classification`` on its own no longer says where the band came from: it is
+    resolved per optimizer, over that optimizer's own house view, so the same
+    calendar day can legitimately be tight here and deficit next door. The ratio
+    and the instance whose consumption sits in the denominator are what makes an
+    explanation reproducible.
+    """
+    return {
+        "solarToConsumptionRatio": (
+            None if day_context.ratio == float("inf") else round(day_context.ratio, 3)
+        ),
+        "denominatorOptimizerId": day_context.denominator_optimizer_id,
+    }
+
+
 def _trace_unmatched_day(
     *,
     trace: "OptimizerTrace",
@@ -1209,6 +1229,11 @@ def _trace_unmatched_day(
         state=STATE_FALSE,
         params={
             "classification": day_context.classification,
+            # Which denominator produced that band. Since #264 the classification
+            # is recomputed per optimizer over that optimizer's own house view,
+            # so "surplus" alone no longer identifies the reading — the ratio and
+            # the instance it was measured for do.
+            **_day_ratio_params(day_context),
             "failingCondition": None if rejection is None else rejection[0],
             "conditionValue": (
                 None if rejection is None else _jsonable(rejection[1])

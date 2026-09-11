@@ -378,6 +378,7 @@ from custom_components.helman.automation.pipeline import (
     AutomationRunFailure,
     AutomationRunResult,
     AutomationRunner,
+    DayContextResolver,
     OptimizerRunSummary,
     _PipelineExecutionResult,
     run_optimizer_loop_pure,
@@ -629,6 +630,10 @@ class _FakeCoordinator:
         self.saved_documents: list[ScheduleDocument] = []
         self.post_write_calls: list[tuple[str, datetime, bool]] = []
         self.recorded_explanations: list[object] = []
+        #: The hysteresis store, faked: what the previous run left behind, and
+        #: what this run asked to write back (#264).
+        self.day_context_bands: dict = {}
+        self.persisted_day_context_bands: list = []
 
     def record_run_explanation(self, explanation) -> None:
         self.recorded_explanations.append(explanation)
@@ -650,13 +655,19 @@ class _FakeCoordinator:
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         return None if self._bundle is None else deepcopy(self._bundle)
 
-    async def async_resolve_day_contexts(
+    async def async_load_day_context_bands(self) -> dict:
+        return dict(self.day_context_bands)
+
+    async def async_persist_day_context_bands(
         self,
         *,
-        snapshot: OptimizationSnapshot,
+        emitted,
         reference_time: datetime,
-    ) -> dict:
-        return {}
+        optimizer_ids,
+    ) -> None:
+        self.persisted_day_context_bands.append(
+            (dict(emitted), reference_time, set(optimizer_ids))
+        )
 
     async def _async_gather_compute_inputs(
         self, *, started_at: datetime, live_state=None, include_condition_flags=False
@@ -2513,6 +2524,194 @@ def _run_pure_loop(build_snapshot) -> _PipelineExecutionResult:
             control_config=None,
             appliance_registry=AppliancesRuntimeRegistry(),
             build_snapshot=build_snapshot,
+        )
+
+
+#: A midday timestamp, so the local date is the same whatever timezone
+#: ``dt_util`` is configured with when this module runs alone.
+_DAY_CONTEXT_DATE = REFERENCE_TIME.date()
+_DAY_CONTEXT_NOON = datetime.fromisoformat("2026-03-20T12:00:00+01:00")
+
+
+def _day_context_snapshot(*, house_kwh_per_slot: float) -> OptimizationSnapshot:
+    """A snapshot the day-context builder can actually classify.
+
+    Solar is fixed; the house figure is what the two optimizers disagree about,
+    because one of them is re-planning the lane the other one reads as demand.
+    """
+    base = _make_snapshot()
+    points = [
+        {
+            "timestamp": (_DAY_CONTEXT_NOON + timedelta(minutes=15 * index)).isoformat(),
+            "value": 2.0,
+        }
+        for index in range(4)
+    ]
+    return replace(
+        base,
+        battery_forecast={
+            **base.battery_forecast,
+            "series": [
+                {
+                    "timestamp": (
+                        _DAY_CONTEXT_NOON + timedelta(minutes=15 * index)
+                    ).isoformat(),
+                    "solarKwh": 2.5,
+                    "baselineHouseKwh": house_kwh_per_slot,
+                }
+                for index in range(4)
+            ],
+        },
+        context=replace(
+            base.context,
+            export_price_forecast={
+                **base.context.export_price_forecast,
+                "points": points,
+            },
+            import_price_forecast={
+                **base.context.import_price_forecast,
+                "points": points,
+            },
+        ),
+    )
+
+
+class PerOptimizerDayContextTests(unittest.TestCase):
+    """Two optimizers, one calendar day, two bands — by design (#264).
+
+    `charge_hold` runs first and reads a house that still carries every
+    appliance lane this run is about to re-plan; the appliance that runs after
+    it reads a house with its own lane taken out, because it is the one
+    planning it. The classification follows each of those views rather than
+    being computed once up front.
+    """
+
+    def test_each_optimizer_sees_the_band_of_its_own_house_view(self) -> None:
+        optimizers = [
+            _make_optimizer_instance(optimizer_id="charge-hold", kind="charge_hold"),
+            _make_optimizer_instance(
+                optimizer_id="pool-filtration",
+                kind="appliance_runtime",
+                target={"controllable_id": "pool"},
+            ),
+        ]
+        seen_by_optimizer: dict[str, _RecordingOptimizer] = {}
+
+        def _build_optimizer(config, **kwargs):
+            optimizer = _RecordingOptimizer(_make_schedule_document())
+            seen_by_optimizer[config.id] = optimizer
+            return optimizer
+
+        resolver = DayContextResolver(
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+            solar_actual_history=[],
+            house_actual_history=[],
+            previous_bands={},
+        )
+        with patch.object(
+            pipeline_module, "build_optimizer", side_effect=_build_optimizer
+        ):
+            result = run_optimizer_loop_pure(
+                execution_optimizers=optimizers,
+                baseline_schedule_document=_make_schedule_document(),
+                schedule_document=_make_schedule_document(),
+                # What charge-hold gets: the pool lane still in the house.
+                initial_snapshot=_day_context_snapshot(house_kwh_per_slot=5.0),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                # What filtration gets: nothing is pending behind it, so the
+                # rebuild is the plain plan without its own lane restored.
+                build_snapshot=lambda document, **kwargs: _day_context_snapshot(
+                    house_kwh_per_slot=3.0
+                ),
+                resolve_day_contexts=resolver,
+            )
+
+        charge_hold_context = seen_by_optimizer["charge-hold"].seen_snapshots[0]
+        filtration_context = seen_by_optimizer["pool-filtration"].seen_snapshots[0]
+        # 10 kWh of solar against 20 kWh of house, then against 12 kWh: the
+        # same shape as the day in #264, where the appliance's own 6 kWh sat in
+        # the denominator deciding whether it could run.
+        self.assertEqual(
+            charge_hold_context.context.day_contexts[
+                _DAY_CONTEXT_DATE
+            ].classification,
+            "deficit",
+        )
+        self.assertEqual(
+            filtration_context.context.day_contexts[
+                _DAY_CONTEXT_DATE
+            ].classification,
+            "tight",
+        )
+        # Each band is stamped with the denominator it was measured over, and
+        # both are handed back for the hysteresis store — the loop is pure and
+        # cannot write them itself.
+        self.assertEqual(
+            filtration_context.context.day_contexts[
+                _DAY_CONTEXT_DATE
+            ].denominator_optimizer_id,
+            "pool-filtration",
+        )
+        self.assertEqual(
+            result.emitted_day_bands,
+            {
+                (_DAY_CONTEXT_DATE, "charge-hold"): "deficit",
+                (_DAY_CONTEXT_DATE, "pool-filtration"): "tight",
+            },
+        )
+
+    def test_the_previous_band_of_the_same_optimizer_damps_the_new_one(self) -> None:
+        """Hysteresis is keyed by optimizer, not only by day.
+
+        A ratio of 0.667 is below the deficit threshold outright, so only the
+        band this same optimizer emitted last run can hold it at tight.
+        """
+        optimizers = [
+            _make_optimizer_instance(optimizer_id="charge-hold", kind="charge_hold")
+        ]
+        resolver = DayContextResolver(
+            deficit_below_ratio=0.7,
+            surplus_above_ratio=1.3,
+            solar_actual_history=[],
+            house_actual_history=[],
+            previous_bands={(_DAY_CONTEXT_DATE, "charge-hold"): "tight"},
+        )
+        seen: list[_RecordingOptimizer] = []
+
+        def _build_optimizer(config, **kwargs):
+            optimizer = _RecordingOptimizer(_make_schedule_document())
+            seen.append(optimizer)
+            return optimizer
+
+        with patch.object(
+            pipeline_module, "build_optimizer", side_effect=_build_optimizer
+        ):
+            result = run_optimizer_loop_pure(
+                execution_optimizers=optimizers,
+                baseline_schedule_document=_make_schedule_document(),
+                schedule_document=_make_schedule_document(),
+                initial_snapshot=_day_context_snapshot(house_kwh_per_slot=3.75),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=lambda document, **kwargs: _day_context_snapshot(
+                    house_kwh_per_slot=3.75
+                ),
+                resolve_day_contexts=resolver,
+            )
+
+        self.assertEqual(
+            seen[0].seen_snapshots[0].context.day_contexts[
+                _DAY_CONTEXT_DATE
+            ].classification,
+            "tight",
+        )
+        self.assertEqual(
+            result.emitted_day_bands,
+            {(_DAY_CONTEXT_DATE, "charge-hold"): "tight"},
         )
 
 

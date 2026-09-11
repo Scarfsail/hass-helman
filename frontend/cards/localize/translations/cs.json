@@ -455,6 +455,8 @@
         "boundBy": "omezeno čím",
         "matchedGroup": "odpovídající skupina",
         "classification": "typ dne",
+        "solarToConsumptionRatio": "poměr výroby ke spotřebě",
+        "denominatorOptimizerId": "typ dne spočten pro",
         "conditionValue": "nastavená hodnota",
         "failingCondition": "nesplněná podmínka",
         "floor": "podlaha SoC (%)",

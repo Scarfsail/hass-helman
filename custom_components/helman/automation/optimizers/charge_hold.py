@@ -81,6 +81,7 @@ from ..trace import NULL_TRACE
 if TYPE_CHECKING:
     from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
+    from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
@@ -222,7 +223,10 @@ class ChargeHoldOptimizer:
         no_room_by_day: dict[date, list[str]] = {}
         no_day_context: list[str] = []
         outside_window_by_day: dict[date, list[str]] = {}
-        day_not_matched: dict[str, list[str]] = {}
+        # Keyed by date, not by classification: since #264 the band is resolved
+        # per optimizer over a live ratio, so two days sharing a band no longer
+        # share a reading and cannot share one gate row.
+        day_not_matched: dict[date, list[str]] = {}
         # Every slot the hold covers, whether or not the writer got to keep it:
         # a user-owned slot passed every gate and still was not written.
         held_by_day: dict[date, list[str]] = {}
@@ -236,9 +240,7 @@ class ChargeHoldOptimizer:
                 if day_context is None:
                     no_day_context.append(slot_id)
                 else:
-                    day_not_matched.setdefault(day_context.classification, []).append(
-                        slot_id
-                    )
+                    day_not_matched.setdefault(local_date, []).append(slot_id)
                 continue
             if not (resolved.window_start <= slot_start < resolved.window_end):
                 outside_window_by_day.setdefault(local_date, []).append(slot_id)
@@ -264,6 +266,7 @@ class ChargeHoldOptimizer:
             outside_window_by_day=outside_window_by_day,
             day_not_matched=day_not_matched,
             held_by_day=held_by_day,
+            day_contexts=snapshot.context.day_contexts,
         )
         _emit_charge_hold_decisions(
             trace,
@@ -490,7 +493,7 @@ def _emit_charge_hold_decisions(
     released_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     outside_window: list[str],
-    day_not_matched: dict[str, list[str]],
+    day_not_matched: dict[date, list[str]],
 ) -> None:
     """The v1 outcome layer: which slots ended in which bucket, and nothing else.
 
@@ -511,6 +514,23 @@ def _emit_charge_hold_decisions(
         trace.decision(slot_ids=slot_ids, outcome="out_of_scope")
 
 
+def _day_ratio_params(day_context: "DayContext") -> dict[str, Any]:
+    """The reading behind a day's band, for the trace (#264).
+
+    ``classification`` on its own no longer says where the band came from: it is
+    resolved per optimizer, over that optimizer's own house view, so the same
+    calendar day can legitimately be deficit here and tight for the appliance
+    that runs after. The ratio and the instance whose consumption sits in the
+    denominator are what makes an explanation reproducible.
+    """
+    return {
+        "solarToConsumptionRatio": (
+            None if day_context.ratio == float("inf") else round(day_context.ratio, 3)
+        ),
+        "denominatorOptimizerId": day_context.denominator_optimizer_id,
+    }
+
+
 def _emit_charge_hold_gates(
     trace,
     *,
@@ -521,8 +541,9 @@ def _emit_charge_hold_gates(
     no_room_by_day: dict[date, list[str]],
     no_day_context: list[str],
     outside_window_by_day: dict[date, list[str]],
-    day_not_matched: dict[str, list[str]],
+    day_not_matched: dict[date, list[str]],
     held_by_day: dict[date, list[str]],
+    day_contexts: dict[date, "DayContext"],
 ) -> None:
     """Record the gates in the order a slot meets them, and its verdict.
 
@@ -537,7 +558,7 @@ def _emit_charge_hold_gates(
             key=GATE_DAY_CONTEXT,
             state=STATE_FALSE,
         )
-    for classification, slot_ids in day_not_matched.items():
+    for local_date, slot_ids in day_not_matched.items():
         # `rejection` names which condition of the first group excluded the day
         # — the failing column, rather than "no group matched". The fallback is
         # `run_when` because a day landing here was classified and rejected on
@@ -551,13 +572,18 @@ def _emit_charge_hold_gates(
         # param is keyed `conditionValue` to match `appliance_runtime`, which is
         # also what the explanation UI has labels for.
         key, value = eligibility.rejection(slot_ids[0]) or ("run_when", ())
+        day_context = day_contexts[local_date]
         trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
         trace.gate(
             slot_ids=slot_ids,
             key=GATE_DAY_GROUP_MATCHED,
             state=STATE_FALSE,
             params={
-                "classification": classification,
+                "classification": day_context.classification,
+                # Which denominator produced that band (#264): the band is
+                # recomputed per optimizer over that optimizer's own house view,
+                # so the name of the band is no longer the whole answer.
+                **_day_ratio_params(day_context),
                 "failingCondition": key,
                 "conditionValue": list(value),
             },
@@ -566,11 +592,19 @@ def _emit_charge_hold_gates(
     def _day_gates(local_date: date, slot_ids: list[str]) -> _DayHoldResolution:
         resolved = resolutions[local_date]
         trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
+        day_context = day_contexts.get(local_date)
         trace.gate(
             slot_ids=slot_ids,
             key=GATE_DAY_GROUP_MATCHED,
             state=STATE_TRUE,
-            params={"matchedGroup": resolved.group_label},
+            params={
+                "matchedGroup": resolved.group_label,
+                **(
+                    {}
+                    if day_context is None
+                    else _day_ratio_params(day_context)
+                ),
+            },
         )
         return resolved
 

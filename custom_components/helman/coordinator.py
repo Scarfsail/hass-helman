@@ -5,7 +5,7 @@ import asyncio
 import functools
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
@@ -55,11 +55,7 @@ from .automation.config import (
     ConditionGroup,
     read_automation_config,
 )
-from .automation.day_context import (
-    DayContext,
-    FrozenDayContext,
-    build_day_contexts,
-)
+from .automation.day_context import DayContext
 from .automation.day_context_store import DayContextStore
 from .automation.explain import ExplanationBook, RunExplanation
 from .automation.input_bundle import AutomationInputBundle
@@ -3980,50 +3976,28 @@ class HelmanCoordinator:
             schedule_overlay=schedule_overlay,
         )
 
-    async def async_resolve_day_contexts(
+    async def async_load_day_context_bands(self) -> dict[tuple[date, str], str]:
+        """The band each (day, optimizer) pair emitted on the previous run.
+
+        Loaded on the event loop before the optimizer loop starts, because the
+        loop itself is pure and runs in a single executor hop; the bands it
+        emits come back out of the loop and are persisted by the call below
+        (#264).
+        """
+        return await self._day_context_store.async_load()
+
+    async def async_persist_day_context_bands(
         self,
         *,
-        snapshot: OptimizationSnapshot,
+        emitted: Mapping[tuple[date, str], str],
         reference_time: datetime,
-    ) -> dict[date, DayContext]:
-        """Build, freeze, and return the per-calendar-day contexts (A3/A4).
-
-        Computed once per automation run from the initial (baseline) snapshot.
-        Volatile fields are recomputed live; classification and the day-min
-        window are pinned via the freeze store so a rule cannot flip mid-day.
-        """
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            day_context_config = AutomationConfig().day_context
-        else:
-            day_context_config = automation_config.day_context
-
-        battery_series = snapshot.battery_forecast.get("series")
-        if not isinstance(battery_series, list):
-            battery_series = []
-        battery_state = snapshot.context.battery_state
-        battery_max_soc = battery_state.max_soc if battery_state is not None else None
-
-        frozen_overrides = await self._day_context_store.async_load()
-        day_contexts = build_day_contexts(
-            battery_series=battery_series,
-            export_price_points=snapshot.context.export_price_forecast.get("points", []),
-            import_price_points=snapshot.context.import_price_forecast.get("points", []),
-            battery_max_soc=battery_max_soc,
-            deficit_below_ratio=day_context_config.deficit_below_ratio,
-            surplus_above_ratio=day_context_config.surplus_above_ratio,
-            frozen_overrides=frozen_overrides,
-        )
-        await self._day_context_store.async_freeze_and_prune(
-            computed={
-                local_date: FrozenDayContext(
-                    classification=day_context.classification,
-                )
-                for local_date, day_context in day_contexts.items()
-            },
+        optimizer_ids: Collection[str],
+    ) -> None:
+        await self._day_context_store.async_save_and_prune(
+            emitted=emitted,
             today=dt_util.as_local(reference_time).date(),
+            optimizer_ids=optimizer_ids,
         )
-        return day_contexts
 
     async def _build_automation_snapshot_from_schedule_locked(
         self,
