@@ -34,6 +34,15 @@ full window, carrying its own ``consecutive_skip_override`` gate so a forced run
 never reads as an unexplained one. It is ``overridable=False`` — it describes
 the chain, not any one day in it, so no single group can own it.
 
+A day the self-sustainability gate empties is a short day like any other. It
+matched a group and was offered slots, but the battery floor refused every one
+of them, so it delivers nothing — and it would go on delivering nothing forever,
+since the chain's own bookkeeping is what the floor keeps silencing. Such a day
+is re-planned as a forced run once the chain is overdue, and the forced run
+bypasses the floor exactly as it bypasses every other threshold: a forced plan
+carries no ``ensure_self_sustainability`` budget at all. The override gate's
+``trigger`` says which of the two shapes asked for it.
+
 What it does not defeat is a ``structural`` condition — one that says the
 appliance *cannot* work in a slot rather than that it would rather not. Being
 overdue outranks a bad price; it does not make a pool heat pump heat anything
@@ -52,7 +61,7 @@ tested.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from math import ceil
 from typing import TYPE_CHECKING, Any
@@ -163,6 +172,12 @@ class _DayPlan:
     placeable_slots: list[str]
     group_label: str | None
     forced_after_skips: int | None
+    #: What asked for the forced run — ``"day_short"`` for a day that matched no
+    #: group or ran short of its minimum, ``"self_sustainability"`` for one whose
+    #: every candidate the battery floor refused. ``None`` on an ordinary day.
+    #: Explanation-only, carried in the override gate's params so the two forced
+    #: days read apart.
+    trigger: str | None = None
     #: The matched group's config index, or ``None`` on a forced run (which
     #: matched no group). Explanation-only: it is what lets the optimizer
     #: resolve this day's ``ensure_self_sustainability`` node in the *right*
@@ -182,6 +197,31 @@ class _DayPlan:
     #: ``self_sustainability`` is set, which a forced run never does — so the
     #: fallback here is inert rather than a second copy of the field's default.
     margin_pct: float = 0.0
+
+
+@dataclass(frozen=True)
+class _DayAttempt:
+    """One day sized and placed under one plan, before anything is traced.
+
+    A day can be attempted twice — once under the group that matched it, and
+    again under a forced plan when the battery floor refused every candidate —
+    and the two attempts can disagree about the window and the daily minimum as
+    well as about the placement. Keeping them together is what lets the day loop
+    trace exactly one of them.
+
+    The placement fields are empty on an attempt that never placed: no plan, or
+    a minimum history already covered.
+    """
+
+    params: dict[str, Any]
+    min_hours_per_day: float
+    window_slots: list[str]
+    remaining_hours: float
+    slots_needed: int
+    ranked: list[tuple[float, str]] = field(default_factory=list)
+    chosen: list[tuple[float, str]] = field(default_factory=list)
+    floor_rejected: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    not_reached: list[tuple[float, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -250,7 +290,11 @@ class ApplianceRuntimeOptimizer:
                 action=action,
             )
 
-        runtime_by_date = (
+        # A *copy*: the day loop writes each day's placement back into it, so the
+        # skip chain can be walked across the horizon and not only across
+        # history. History supplies past days plus today-so-far, which is why
+        # the walk would otherwise terminate at the first future date.
+        runtime_by_date = dict(
             snapshot.context.runtime_hours_by_appliance_id_by_local_date.get(
                 appliance_id, {}
             )
@@ -275,6 +319,10 @@ class ApplianceRuntimeOptimizer:
         )
 
         horizon_slots_by_date = _horizon_slots_by_date(eligibility.horizon_slot_ids)
+        # The minimum the consecutive-skip chain is walked against, which is the
+        # master one: `_prior_consecutive_skips` reads history, and history
+        # carries no record of which group a past day ran under.
+        master_min_hours_per_day = config.params["daily_minimum"]["min_hours_per_day"]
 
         # The day loop must run chronologically, and does: `build_day_contexts`
         # inserts in sorted date order and every hop preserves it. That used to
@@ -292,19 +340,86 @@ class ApplianceRuntimeOptimizer:
                 horizon_end=horizon_end,
                 tzinfo=tzinfo,
             )
-            params = config.params if plan is None else plan.params
-            min_hours_per_day = params["daily_minimum"]["min_hours_per_day"]
-            window_slots = (
-                self._window_slots(
-                    params=params,
+            attempt = self._attempt_day(
+                plan=plan,
+                local_date=local_date,
+                config=config,
+                delivered_hours=delivered_hours,
+                snapshot=snapshot,
+                writer=writer,
+                gate=gate,
+                appliance_id=appliance_id,
+                available_surplus_by_bucket=available_surplus_by_bucket,
+                demand_hourly_energy=demand_hourly_energy,
+                export_price_by_bucket=export_price_by_bucket,
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+                tzinfo=tzinfo,
+            )
+            if (
+                plan is not None
+                and plan.forced_after_skips is None
+                and not attempt.chosen
+                and attempt.floor_rejected
+            ):
+                # Every candidate lost to the battery floor, so the day delivers
+                # nothing and the override `max_consecutive_skips` promises would
+                # never fire for it. Re-plan it as a forced run, which bypasses
+                # the floor exactly as it bypasses every other threshold.
+                forced = self._forced_plan_for_day(
                     local_date=local_date,
+                    config=config,
+                    eligibility=eligibility,
+                    runtime_by_date=runtime_by_date,
                     horizon_start=horizon_start,
                     horizon_end=horizon_end,
                     tzinfo=tzinfo,
+                    trigger="self_sustainability",
                 )
-                if plan is None
-                else plan.window_slots
-            )
+                if forced is not None:
+                    retry = self._attempt_day(
+                        plan=forced,
+                        local_date=local_date,
+                        config=config,
+                        delivered_hours=delivered_hours,
+                        snapshot=snapshot,
+                        writer=writer,
+                        gate=gate,
+                        appliance_id=appliance_id,
+                        available_surplus_by_bucket=available_surplus_by_bucket,
+                        demand_hourly_energy=demand_hourly_energy,
+                        export_price_by_bucket=export_price_by_bucket,
+                        horizon_start=horizon_start,
+                        horizon_end=horizon_end,
+                        tzinfo=tzinfo,
+                    )
+                    # Only a retry that actually places anything gets the last
+                    # word. One that places nothing — the master window holds no
+                    # structural slot, or the master minimum is already met —
+                    # has nothing to say the matched attempt did not, and
+                    # adopting it would trade that attempt's floor rejections for
+                    # a silent window the day never ran in.
+                    if retry.chosen:
+                        plan, attempt = forced, retry
+            params = attempt.params
+            min_hours_per_day = attempt.min_hours_per_day
+            window_slots = attempt.window_slots
+            remaining_hours = attempt.remaining_hours
+            slots_needed = attempt.slots_needed
+            ranked = attempt.ranked
+            chosen = attempt.chosen
+            floor_rejected = attempt.floor_rejected
+            not_reached = attempt.not_reached
+            # What this day credits to the consecutive-skip chain, written
+            # before any of the early exits below so every day writes exactly
+            # once. A day that met the minimum it actually *ran under* is not a
+            # short day, so it is credited the master minimum the chain is
+            # walked against — otherwise a group that lowers `min_hours_per_day`
+            # would read as a skip on every one of its own satisfied days.
+            credited_hours = delivered_hours + len(chosen) * _SLOT_HOURS
+            if credited_hours >= min_hours_per_day:
+                credited_hours = max(credited_hours, master_min_hours_per_day)
+            runtime_by_date[local_date] = credited_hours
 
             _trace_run_window(
                 trace=trace,
@@ -313,8 +428,6 @@ class ApplianceRuntimeOptimizer:
                 day_slots=horizon_slots_by_date.get(local_date) or [],
             )
 
-            remaining_hours = min_hours_per_day - delivered_hours
-            slots_needed = ceil(remaining_hours / _SLOT_HOURS)
             # The daily-minimum bookkeeping, as a gate rather than as prose: what
             # the day owes after what history already delivered. `false` is the
             # already-satisfied day, on which nothing is placed however cheap the
@@ -373,6 +486,10 @@ class ApplianceRuntimeOptimizer:
                             "maxConsecutiveSkips": config.params["daily_minimum"][
                                 "max_consecutive_skips"
                             ],
+                            # What made the day short enough to force: it ran
+                            # short of its minimum, or the battery floor refused
+                            # every one of its candidates.
+                            "trigger": plan.trigger,
                         },
                     )
                 trace.gate(
@@ -397,27 +514,6 @@ class ApplianceRuntimeOptimizer:
                 placeable=set(plan.placeable_slots),
             )
 
-            ranked = _rank_slots(
-                document=writer.document,
-                appliance_id=appliance_id,
-                window_slots=plan.placeable_slots,
-                available_surplus_by_bucket=available_surplus_by_bucket,
-                demand_hourly_energy=demand_hourly_energy,
-                export_price_by_bucket=export_price_by_bucket,
-                reference_time=snapshot.context.now,
-                # A forced run bypasses self-sustainability as it bypasses every
-                # other condition, but it need not be gratuitous about it:
-                # ranking by coverage first takes the slots that move the SoC
-                # least. The coverage flag is already computed.
-                prefer_covered=plan.forced_after_skips is not None,
-            )
-            ranked = _promote_in_flight_slot(
-                ranked,
-                active=snapshot.context.appliance_active_by_id.get(
-                    appliance_id, False
-                ),
-                active_slot_id=format_slot_id(horizon_start),
-            )
             # Placeable slots the user owns never enter the ranking, so the
             # writer never sees them and its own veto cannot speak for them.
             rankable = {slot_id for _cost, slot_id in ranked}
@@ -439,11 +535,6 @@ class ApplianceRuntimeOptimizer:
                     state=STATE_TRUE,
                 )
 
-            chosen, floor_rejected, not_reached = gate.take(
-                ranked,
-                slots_needed=slots_needed,
-                plan=plan,
-            )
             _trace_ranking(
                 trace=trace,
                 ranked=ranked,
@@ -491,6 +582,104 @@ class ApplianceRuntimeOptimizer:
                 )
 
         return writer.flush(action=action)
+
+    def _attempt_day(
+        self,
+        *,
+        plan: _DayPlan | None,
+        local_date: date,
+        config: "OptimizerInstanceConfig",
+        delivered_hours: float,
+        snapshot: "OptimizationSnapshot",
+        writer: ScheduleWriter,
+        gate: "_SelfSustainabilityGate | _NullGate",
+        appliance_id: str,
+        available_surplus_by_bucket: dict[datetime, float] | None,
+        demand_hourly_energy: float | None,
+        export_price_by_bucket: dict[datetime, float],
+        horizon_start: datetime,
+        horizon_end: datetime,
+        tzinfo: Any,
+    ) -> _DayAttempt:
+        """Size one day under one plan, and place it — with nothing traced.
+
+        Sizing belongs here rather than in the day loop because a day can be
+        attempted twice, under two different plans: a matched day whose every
+        candidate the battery floor refused is re-planned as a forced run and
+        attempted again. The forced run carries *master* params, so the window
+        and the daily minimum can both differ from the group's, and an attempt
+        that reported the other plan's sizing would describe a day that never
+        happened.
+
+        Deliberately **untraced** for the same reason. ``trace.gate``
+        overwrites, so a second attempt would simply restate a gate — but
+        ``trace.decision`` *appends*, so a traced first attempt would leave a
+        stale ``rejected`` decision behind for the very slots the retry then
+        applies. The whole trace therefore happens once, in the day loop, over
+        whichever attempt had the last word.
+
+        Re-attempting is safe against the gate's accumulated state for the same
+        reason it is worth doing: ``_accept`` records demand only when it
+        accepts, so an attempt that accepted nothing left the gate untouched.
+        """
+        params = config.params if plan is None else plan.params
+        min_hours_per_day = params["daily_minimum"]["min_hours_per_day"]
+        window_slots = (
+            self._window_slots(
+                params=params,
+                local_date=local_date,
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+                tzinfo=tzinfo,
+            )
+            if plan is None
+            else plan.window_slots
+        )
+        remaining_hours = min_hours_per_day - delivered_hours
+        slots_needed = ceil(remaining_hours / _SLOT_HOURS)
+        sizing = _DayAttempt(
+            params=params,
+            min_hours_per_day=min_hours_per_day,
+            window_slots=window_slots,
+            remaining_hours=remaining_hours,
+            slots_needed=slots_needed,
+        )
+        if plan is None or remaining_hours <= 0:
+            # Nothing to place: no group matched the day, or history already
+            # covered its minimum. The sizing is still what the day's trace
+            # reports, so it is returned rather than skipped.
+            return sizing
+        ranked = _rank_slots(
+            document=writer.document,
+            appliance_id=appliance_id,
+            window_slots=plan.placeable_slots,
+            available_surplus_by_bucket=available_surplus_by_bucket,
+            demand_hourly_energy=demand_hourly_energy,
+            export_price_by_bucket=export_price_by_bucket,
+            reference_time=snapshot.context.now,
+            # A forced run bypasses self-sustainability as it bypasses every
+            # other condition, but it need not be gratuitous about it: ranking
+            # by coverage first takes the slots that move the SoC least. The
+            # coverage flag is already computed.
+            prefer_covered=plan.forced_after_skips is not None,
+        )
+        ranked = _promote_in_flight_slot(
+            ranked,
+            active=snapshot.context.appliance_active_by_id.get(appliance_id, False),
+            active_slot_id=format_slot_id(horizon_start),
+        )
+        chosen, floor_rejected, not_reached = gate.take(
+            ranked,
+            slots_needed=slots_needed,
+            plan=plan,
+        )
+        return replace(
+            sizing,
+            ranked=ranked,
+            chosen=chosen,
+            floor_rejected=floor_rejected,
+            not_reached=not_reached,
+        )
 
     def _optimize_uncapped(
         self,
@@ -638,6 +827,43 @@ class ApplianceRuntimeOptimizer:
                 return plan
             short_plan = plan
 
+        forced = self._forced_plan_for_day(
+            local_date=local_date,
+            config=config,
+            eligibility=eligibility,
+            runtime_by_date=runtime_by_date,
+            horizon_start=horizon_start,
+            horizon_end=horizon_end,
+            tzinfo=tzinfo,
+            trigger="day_short",
+        )
+        # Not yet due a forced run, or nothing a forced run may legally take:
+        # place what the group does allow, so a partially-eligible day still
+        # delivers what it can. That is `None` when no group matched, which is
+        # the honest answer — the day cannot run, and forcing it would place a
+        # run that does nothing.
+        return short_plan if forced is None else forced
+
+    def _forced_plan_for_day(
+        self,
+        *,
+        local_date: date,
+        config: "OptimizerInstanceConfig",
+        eligibility: "Eligibility",
+        runtime_by_date: dict[date, float],
+        horizon_start: datetime,
+        horizon_end: datetime,
+        tzinfo: Any,
+        trigger: str,
+    ) -> _DayPlan | None:
+        """The day's forced run, or ``None`` when it is not owed or not possible.
+
+        ``None`` on two counts: the chain is not yet past
+        ``max_consecutive_skips``, or ``structural_slot_ids()`` leaves the forced
+        window empty. ``trigger`` names what asked — a day that came up short of
+        its minimum, or one the battery floor emptied — and rides along in the
+        override gate so the two read apart.
+        """
         # Skipping (or under-running) today extends the run by one; once that
         # would pass max_consecutive_skips the optimizer runs anyway — past
         # every group, including their `custom` conditions and their price
@@ -657,9 +883,7 @@ class ApplianceRuntimeOptimizer:
             + 1
         )
         if consecutive_skips <= master_daily_minimum["max_consecutive_skips"]:
-            # Not yet due a forced run: place what the group does allow, so a
-            # partially-eligible day still delivers what it can.
-            return short_plan
+            return None
         window_slots = self._window_slots(
             params=config.params,
             local_date=local_date,
@@ -670,17 +894,15 @@ class ApplianceRuntimeOptimizer:
         structural = eligibility.structural_slot_ids()
         forced_slots = [slot for slot in window_slots if slot in structural]
         if not forced_slots:
-            # Nothing the forced run may legally take. Fall back to what the
-            # matched group allowed — which is `None` when no group matched, and
-            # is the honest answer: the day cannot run, and forcing it would
-            # place a run that does nothing.
-            return short_plan
+            # Nothing the forced run may legally take.
+            return None
         return _DayPlan(
             params=config.params,
             window_slots=window_slots,
             placeable_slots=forced_slots,
             group_label=None,
             forced_after_skips=consecutive_skips,
+            trigger=trigger,
         )
 
     @staticmethod
@@ -817,7 +1039,17 @@ class _SelfSustainabilityGate:
     ]:
         """``(chosen, floor_rejected, not_reached)`` for one day's ranking."""
         if plan.self_sustainability is None:
-            return ranked[:slots_needed], [], ranked[slots_needed:]
+            chosen = ranked[:slots_needed]
+            # The day bypasses the floor, but the energy it spends is real and
+            # the days after it are simulated against this set. Recording the
+            # placements without testing them is the whole of what "bypass"
+            # means here: nothing can refuse them, and nothing may pretend they
+            # did not happen either.
+            for _cost, slot_id in chosen:
+                self._accepted_demand = _merge_demand(
+                    self._accepted_demand, self._slot_demand(slot_id)
+                )
+            return chosen, [], ranked[slots_needed:]
 
         floor = self._floor_pct(plan.margin_pct)
         chosen: list[tuple[float, str]] = []
