@@ -53,7 +53,12 @@ from custom_components.helman.automation.pipeline import (  # noqa: E402
 )
 
 
-def _day_context(local_date: date, classification: str) -> DayContext:
+def _day_context(
+    local_date: date,
+    classification: str,
+    *,
+    ratio: float = 1.0,
+) -> DayContext:
     return DayContext(
         local_date=local_date,
         classification=classification,
@@ -62,6 +67,7 @@ def _day_context(local_date: date, classification: str) -> DayContext:
         export_price_min=1.0,
         export_price_max=5.0,
         import_bands=(),
+        ratio=ratio,
     )
 
 
@@ -87,6 +93,28 @@ class SummarizeDayContextsTests(unittest.TestCase):
         )
         self.assertEqual(summaries[0]["classification"], "surplus")
         self.assertEqual(summaries[1]["classification"], "deficit")
+
+    def test_summary_carries_the_ratio_behind_the_band(self) -> None:
+        """The band is a live reading now, so the reading travels with it (#264)."""
+        today = date(2026, 7, 10)
+        snapshot = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                day_contexts={today: _day_context(today, "deficit", ratio=0.61)}
+            )
+        )
+        self.assertEqual(_summarize_day_contexts(snapshot)[0]["ratio"], 0.61)
+
+    def test_an_infinite_ratio_serializes_as_null(self) -> None:
+        """A day with no forecast consumption at all is not a JSON number."""
+        today = date(2026, 7, 10)
+        snapshot = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                day_contexts={
+                    today: _day_context(today, "surplus", ratio=float("inf"))
+                }
+            )
+        )
+        self.assertIsNone(_summarize_day_contexts(snapshot)[0]["ratio"])
 
 
 if __name__ == "__main__":

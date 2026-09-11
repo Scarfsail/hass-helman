@@ -166,6 +166,13 @@ def _export_price_points(
     ]
 
 
+#: The instance whose house view the fixture context is classified over. Since
+#: #264 a day context names it, because `charge_hold` runs first — with every
+#: appliance lane restored as demand — and so can hold a different band for the
+#: same calendar day than the appliance that runs after it.
+DENOMINATOR_OPTIMIZER_ID = "charge-hold"
+
+
 def _day_context(
     *,
     classification: str = "surplus",
@@ -178,6 +185,8 @@ def _day_context(
         export_price_min=1.0,
         export_price_max=9.0,
         import_bands=(),
+        ratio=2.0,
+        denominator_optimizer_id=DENOMINATOR_OPTIMIZER_ID,
     )
 
 
@@ -552,7 +561,12 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         held = slots[_slot_id(10, 0)]
         self.assertEqual(held.verdict, "execute")
         self.assertEqual(_gate(held, "day_context").state, "true")
-        self.assertEqual(_gate(held, "day_group_matched").state, "true")
+        matched = _gate(held, "day_group_matched")
+        self.assertEqual(matched.state, "true")
+        self.assertEqual(matched.params["solarToConsumptionRatio"], 2.0)
+        self.assertEqual(
+            matched.params["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
+        )
         self.assertEqual(_gate(held, "hold_window").state, "true")
         self.assertEqual(_gate(held, "hold_room").state, "true")
         rank = _gate(held, "cheapest_rank")
@@ -631,6 +645,12 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         matched = _gate(slot, "day_group_matched")
         self.assertEqual(matched.state, "false")
         self.assertEqual(matched.params["classification"], "deficit")
+        # The reading behind the band, not just its name: the band is resolved
+        # per optimizer now, so the trace has to name the denominator (#264).
+        self.assertEqual(matched.params["solarToConsumptionRatio"], 2.0)
+        self.assertEqual(
+            matched.params["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
+        )
         self.assertEqual(matched.params["failingCondition"], "run_when")
         # Keyed `conditionValue`, like appliance_runtime's equivalent gate, and
         # carrying the classifications the group does allow.
