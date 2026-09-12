@@ -740,10 +740,6 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedTrainingDate: string | null = null;
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
-  @state() private _socStripExpanded = true;
-  @state() private _priceStripExpanded = true;
-  @state() private _moneyStripExpanded = true;
-  @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
   /**
@@ -1454,6 +1450,25 @@ export class HelmanSolarInspector extends LitElement {
       width: 100%;
     }
 
+    .compact-strip-section {
+      position: relative;
+      width: 100%;
+    }
+
+    .compact-strip-label {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 22px;
+      align-self: stretch;
+      color: var(--secondary-text-color);
+      font-size: 0.85em;
+      line-height: 1;
+      pointer-events: none;
+      text-align: center;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+    }
+
     .strip-header-row {
       display: flex;
       flex-wrap: wrap;
@@ -1470,32 +1485,6 @@ export class HelmanSolarInspector extends LitElement {
       font-size: 0.85em;
       white-space: nowrap;
       cursor: pointer;
-    }
-
-    .strip-collapse-toggle {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--secondary-text-color);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 0;
-      font: inherit;
-      font-size: 0.85em;
-      text-align: left;
-    }
-
-    .strip-collapse-icon {
-      display: inline-block;
-      font-style: normal;
-      transition: transform 0.2s;
-      font-size: 0.7em;
-      opacity: 0.7;
-    }
-
-    .strip-collapse-icon.expanded {
-      transform: rotate(90deg);
     }
 
     .soc-strip-wrap {
@@ -3483,25 +3472,14 @@ export class HelmanSolarInspector extends LitElement {
     return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
-  /**
-   * The schedule row under the charts: one track per entity, behind a collapse
-   * toggle that starts expanded.
-   */
+  /** The schedule row under the charts: one track per entity. */
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
     const executionLabel = this._t("scheduling.execution.toggle");
     const snapshot = this._scheduleSnapshot;
     return html`
       <div class="strip-section">
         <div class="strip-header-row">
-          <button
-            class="strip-collapse-toggle"
-            type="button"
-            aria-expanded=${this._scheduleBandExpanded ? "true" : "false"}
-            @click=${() => { this._scheduleBandExpanded = !this._scheduleBandExpanded; }}
-          >
-            <span class="strip-collapse-icon ${this._scheduleBandExpanded ? "expanded" : ""}">▶</span>
-            ${this._t("bias_correction.inspector.scheduled_actions")}
-          </button>
+          <span>${this._t("bias_correction.inspector.scheduled_actions")}</span>
           <label class="execution-toggle">
             <span>${executionLabel}</span>
             <ha-switch
@@ -3512,7 +3490,7 @@ export class HelmanSolarInspector extends LitElement {
             ></ha-switch>
           </label>
         </div>
-        ${this._scheduleBandExpanded ? this._renderScheduleBand(payload, layout) : ""}
+        ${this._renderScheduleBand(payload, layout)}
       </div>
     `;
   }
@@ -3989,76 +3967,53 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** The two-rail price strip, behind a collapse toggle that starts expanded. */
+  /** The two-rail price and money strips. */
   private _renderPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
-      <div class="strip-section">
-        <button
-          class="strip-collapse-toggle"
-          type="button"
-          aria-expanded=${this._priceStripExpanded ? "true" : "false"}
-          @click=${() => { this._priceStripExpanded = !this._priceStripExpanded; }}
-        >
-          <span class="strip-collapse-icon ${this._priceStripExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.price_strip")}
-        </button>
-        ${this._priceStripExpanded
-          ? html`
-              <helman-solar-price-strip
-                .hass=${this.hass}
-                .importPrice=${payload.series.importPrice ?? EMPTY_PRICE_RAIL}
-                .exportPrice=${payload.series.exportPrice ?? EMPTY_PRICE_RAIL}
-                .unit=${payload.priceUnit ?? ""}
-                .date=${payload.date}
-                .timeZone=${this._haTimeZone() ?? "UTC"}
-                .selectedMinutes=${this._selectedMinutesModel}
-                .geometry=${this._stripGeometry}
-                .hoverMinutes=${this._hoveredMinutes}
-                .slotMinutes=${this._slotMinutes}
-                .nowMs=${this._nowMs}
-                @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
-                  this._handleStripSlotPick(event, payload)}
-                @slot-hover=${this._handleStripHover}
-                @slot-tooltip=${this._handleStripTooltip}
-                @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
-                  this._importPriceColumns = event.detail.importColumns;
-                  this._exportPriceColumns = event.detail.exportColumns;
-                  this._priceUnit = event.detail.unit;
-                }}
-              ></helman-solar-price-strip>
-            `
-          : ""}
+      <div class="compact-strip-section">
+        <span class="compact-strip-label">${this._t("bias_correction.inspector.price_strip_compact")}</span>
+        <helman-solar-price-strip
+          .hass=${this.hass}
+          .importPrice=${payload.series.importPrice ?? EMPTY_PRICE_RAIL}
+          .exportPrice=${payload.series.exportPrice ?? EMPTY_PRICE_RAIL}
+          .unit=${payload.priceUnit ?? ""}
+          .date=${payload.date}
+          .timeZone=${this._haTimeZone() ?? "UTC"}
+          .selectedMinutes=${this._selectedMinutesModel}
+          .geometry=${this._stripGeometry}
+          .hoverMinutes=${this._hoveredMinutes}
+          .slotMinutes=${this._slotMinutes}
+          .nowMs=${this._nowMs}
+          @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
+            this._handleStripSlotPick(event, payload)}
+          @slot-hover=${this._handleStripHover}
+          @slot-tooltip=${this._handleStripTooltip}
+          @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
+            this._importPriceColumns = event.detail.importColumns;
+            this._exportPriceColumns = event.detail.exportColumns;
+            this._priceUnit = event.detail.unit;
+          }}
+        ></helman-solar-price-strip>
       </div>
-      <div class="strip-block">
-        <button
-          class="strip-collapse-toggle"
-          aria-expanded=${this._moneyStripExpanded ? "true" : "false"}
-          @click=${() => { this._moneyStripExpanded = !this._moneyStripExpanded; }}
-        >
-          <span class="strip-collapse-icon ${this._moneyStripExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.money_strip")}
-        </button>
-        ${this._moneyStripExpanded
-          ? html`
-              <helman-solar-money-strip
-                .hass=${this.hass}
-                .moneyActual=${payload.series.moneyActual}
-                .moneyForecast=${payload.series.moneyForecast}
-                .currency=${currencyFromPriceUnit(payload.priceUnit)}
-                .date=${payload.date}
-                .timeZone=${this._haTimeZone() ?? "UTC"}
-                .selectedMinutes=${this._selectedMinutesModel}
-                .geometry=${this._stripGeometry}
-                .hoverMinutes=${this._hoveredMinutes}
-                .slotMinutes=${this._slotMinutes}
-                .nowMs=${this._nowMs}
-                @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
-                  this._handleStripSlotPick(event, payload)}
-                @slot-hover=${this._handleStripHover}
-                @slot-tooltip=${this._handleStripTooltip}
-              ></helman-solar-money-strip>
-            `
-          : ""}
+      <div class="compact-strip-section">
+        <span class="compact-strip-label">${this._t("bias_correction.inspector.money_strip_compact")}</span>
+        <helman-solar-money-strip
+          .hass=${this.hass}
+          .moneyActual=${payload.series.moneyActual}
+          .moneyForecast=${payload.series.moneyForecast}
+          .currency=${currencyFromPriceUnit(payload.priceUnit)}
+          .date=${payload.date}
+          .timeZone=${this._haTimeZone() ?? "UTC"}
+          .selectedMinutes=${this._selectedMinutesModel}
+          .geometry=${this._stripGeometry}
+          .hoverMinutes=${this._hoveredMinutes}
+          .slotMinutes=${this._slotMinutes}
+          .nowMs=${this._nowMs}
+          @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
+            this._handleStripSlotPick(event, payload)}
+          @slot-hover=${this._handleStripHover}
+          @slot-tooltip=${this._handleStripTooltip}
+        ></helman-solar-money-strip>
       </div>
     `;
   }
@@ -4080,22 +4035,12 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
-  /** The battery SoC strip, behind a collapse toggle that starts expanded. */
+  /** The battery SoC strip. */
   private _renderSocSection(payload: InspectorPayload, layout: ChartLayout) {
     return html`
-      <div class="strip-section">
-        <button
-          class="strip-collapse-toggle"
-          type="button"
-          aria-expanded=${this._socStripExpanded ? "true" : "false"}
-          @click=${() => { this._socStripExpanded = !this._socStripExpanded; }}
-        >
-          <span class="strip-collapse-icon ${this._socStripExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.battery_soc_strip")}
-        </button>
-        ${this._socStripExpanded
-          ? html`<div class="soc-strip-wrap">${this._renderSocStrip(payload, layout)}</div>`
-          : ""}
+      <div class="compact-strip-section">
+        <span class="compact-strip-label">${this._t("bias_correction.inspector.battery_soc_strip_compact")}</span>
+        <div class="soc-strip-wrap">${this._renderSocStrip(payload, layout)}</div>
       </div>
     `;
   }

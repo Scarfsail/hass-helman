@@ -39,11 +39,13 @@
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",
+      "battery_soc_strip_compact": "Battery",
       "soc_from": "SoC start",
       "soc_range": "SoC range",
       "soc_to": "SoC end",
       "soc_direction_label": "Direction",
       "price_strip": "Grid prices",
+      "price_strip_compact": "Prices",
       "import_price": "Import price",
       "export_price": "Export price",
       "column_actual": "Actual",
@@ -107,6 +109,7 @@
         "export_price": "Export price"
       },
       "money_strip": "Grid cost and gain",
+      "money_strip_compact": "Money",
       "import_cost": "Import cost",
       "export_gain": "Export gain",
       "net_cost": "Net cost"

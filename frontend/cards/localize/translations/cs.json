@@ -588,11 +588,13 @@
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
+      "battery_soc_strip_compact": "Baterie",
       "soc_from": "SoC začátek",
       "soc_range": "Rozsah SoC",
       "soc_to": "SoC konec",
       "soc_direction_label": "Směr",
       "price_strip": "Ceny elektřiny",
+      "price_strip_compact": "Ceny",
       "import_price": "Nákupní cena",
       "export_price": "Výkupní cena",
       "column_actual": "Skutečnost",
@@ -651,6 +653,7 @@
         "export_price": "Výkupní cena"
       },
       "money_strip": "Náklady a výnosy ze sítě",
+      "money_strip_compact": "Peníze",
       "import_cost": "Náklady na nákup",
       "export_gain": "Výnos z prodeje",
       "net_cost": "Čisté náklady"
