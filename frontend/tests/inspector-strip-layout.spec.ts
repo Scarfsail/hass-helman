@@ -6,12 +6,12 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-card.js",
 );
 
-async function mountInspector(page: Page): Promise<void> {
+async function mountInspector(page: Page, { money = true }: { money?: boolean } = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
 
-    await page.evaluate(() => {
+    await page.evaluate(({ money }) => {
         const date = "2026-07-18";
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const impact: Array<Record<string, unknown>> = [];
@@ -28,7 +28,7 @@ async function mountInspector(page: Page): Promise<void> {
             batterySocForecast.push({ slot, pct: 50 });
             importPrice.push({ slot, value: 4 });
             exportPrice.push({ slot, value: 1 });
-            moneyForecast.push({ slot, cost: 0.4, gain: 0.1 });
+            if (money) moneyForecast.push({ slot, cost: 0.4, gain: 0.1 });
         }
         const payload = {
             date,
@@ -68,7 +68,7 @@ async function mountInspector(page: Page): Promise<void> {
             callWS: async (message: { date: string }) => ({ ...payload, date: message.date }),
         };
         document.body.appendChild(inspector);
-    });
+    }, { money });
 
     await page.waitForFunction(() => {
         const root = (document.querySelector("helman-solar-inspector") as any)?.shadowRoot;
@@ -160,5 +160,21 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.widths.prices).toBe(layout.widths.chart);
         expect(layout.widths.money).toBe(layout.widths.chart);
         expect(layout.heights).toEqual({ soc: 65, prices: 65, money: 65 });
+    });
+
+    test("hides empty money and scheduled-action sections with their headers", async ({ page }) => {
+        await mountInspector(page, { money: false });
+        const visibility = await page.evaluate(() => {
+            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+            const money = root.querySelector("helman-solar-money-strip") as HTMLElement;
+            const schedule = root.querySelector("helman-solar-schedule-band-strip") as HTMLElement;
+            return {
+                moneyHidden: money.parentElement?.hidden,
+                scheduleHidden: schedule.parentElement?.hidden,
+            };
+        });
+
+        expect(visibility.moneyHidden).toBe(true);
+        expect(visibility.scheduleHidden).toBe(true);
     });
 });

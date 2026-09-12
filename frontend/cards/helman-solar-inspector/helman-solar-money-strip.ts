@@ -137,9 +137,21 @@ export class HelmanSolarMoneyStrip extends LitElement {
         slot: number;
         seam: number;
     } | null = null;
+    private _reportedVisibility: boolean | null = null;
 
     protected willUpdate(): void {
         this._rebuildCellsIfNeeded();
+    }
+
+    protected updated(): void {
+        const visible = this.hass !== undefined && this.geometry !== null && this._cells.length > 0;
+        if (visible === this._reportedVisibility) return;
+        this._reportedVisibility = visible;
+        this.dispatchEvent(new CustomEvent<{ visible: boolean }>("strip-visibility", {
+            detail: { visible },
+            bubbles: true,
+            composed: true,
+        }));
     }
 
     private _rebuildCellsIfNeeded(): void {
