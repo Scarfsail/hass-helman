@@ -90,6 +90,11 @@ test.describe("solar inspector strip layout", () => {
                 transform: getComputedStyle(label).transform,
             }));
             const scheduleHeader = root.querySelector(".strip-header-row") as HTMLElement;
+            const scheduleHours = [...scheduleHeader.querySelectorAll(".schedule-header-hour")]
+                .map((hour: Element) => hour.textContent?.trim());
+            const chartHours = [...root.querySelectorAll(".chart-wrap svg text")]
+                .map((text: Element) => text.textContent?.trim())
+                .filter((text): text is string => /^\d{2}$/.test(text ?? ""));
             return {
                 bodies: {
                     soc: !!root.querySelector(".soc-strip-wrap svg"),
@@ -101,9 +106,13 @@ test.describe("solar inspector strip layout", () => {
                     ".strip-collapse-toggle, .strip-section [aria-expanded], .compact-strip-section [aria-expanded]",
                 ).length,
                 labels,
-                scheduleTitle: scheduleHeader.firstElementChild?.textContent?.trim(),
-                scheduleTitleTag: scheduleHeader.firstElementChild?.tagName,
+                scheduleTitle: scheduleHeader.querySelector(".schedule-header-title")?.textContent?.trim(),
+                scheduleTitleTag: scheduleHeader.querySelector(".schedule-header-title")?.tagName,
                 executionSwitch: !!scheduleHeader.querySelector("ha-switch"),
+                scheduleHours,
+                chartHours,
+                scheduleHourFontSizes: [...scheduleHeader.querySelectorAll(".schedule-header-hour")]
+                    .map((hour: Element) => getComputedStyle(hour).fontSize),
                 mainChartOutline: getComputedStyle(root.querySelector(".main-chart-wrap") as HTMLElement).outlineStyle,
                 separators: [...root.querySelectorAll(".chart-separator")]
                     .map((separator: Element) => getComputedStyle(separator).borderTopWidth),
@@ -135,6 +144,10 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.scheduleTitle).toBe("Scheduled actions");
         expect(layout.scheduleTitleTag).toBe("SPAN");
         expect(layout.executionSwitch).toBe(true);
+        expect(layout.scheduleHours).toEqual(layout.chartHours);
+        expect(layout.scheduleHourFontSizes).toEqual(
+            Array(layout.scheduleHours.length).fill("11px"),
+        );
         expect(layout.mainChartOutline).toBe("none");
         expect(layout.separators).toEqual(["1px", "1px", "1px", "1px"]);
         expect(layout.separatorWidths).toEqual([

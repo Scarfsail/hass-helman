@@ -1488,6 +1488,25 @@ export class HelmanSolarInspector extends LitElement {
       align-items: center;
       justify-content: space-between;
       gap: 4px 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .schedule-header-hour {
+      position: absolute;
+      top: 50%;
+      z-index: 0;
+      color: var(--secondary-text-color);
+      font-size: 11px;
+      line-height: 1;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+    }
+
+    .schedule-header-title,
+    .execution-toggle {
+      position: relative;
+      z-index: 1;
     }
 
     .execution-toggle {
@@ -3495,7 +3514,8 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="strip-section chart-separator">
         <div class="strip-header-row">
-          <span>${this._t("bias_correction.inspector.scheduled_actions")}</span>
+          ${this._renderScheduleHeaderHours(layout)}
+          <span class="schedule-header-title">${this._t("bias_correction.inspector.scheduled_actions")}</span>
           <label class="execution-toggle">
             <span>${executionLabel}</span>
             <ha-switch
@@ -3509,6 +3529,19 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderScheduleBand(payload, layout)}
       </div>
     `;
+  }
+
+  /** The schedule header repeats the chart axis's labelled ticks behind its controls. */
+  private _renderScheduleHeaderHours(layout: ChartLayout) {
+    return this._slotGridTicks(layout).map((tick) => {
+      if (tick.hour === null) return "";
+      const left = (layout.xForMinutes(tick.minutes) / layout.width) * 100;
+      return html`
+        <span class="schedule-header-hour" aria-hidden="true" style=${`left: ${left}%`}>
+          ${String(tick.hour).padStart(2, "0")}
+        </span>
+      `;
+    });
   }
 
   /**
