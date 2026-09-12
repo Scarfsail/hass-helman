@@ -110,6 +110,11 @@ test.describe("solar inspector strip layout", () => {
                     prices: (root.querySelector("helman-solar-price-strip") as HTMLElement).getBoundingClientRect().width,
                     money: (root.querySelector("helman-solar-money-strip") as HTMLElement).getBoundingClientRect().width,
                 },
+                heights: {
+                    soc: (root.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().height,
+                    prices: (root.querySelector("helman-solar-price-strip") as HTMLElement).getBoundingClientRect().height,
+                    money: (root.querySelector("helman-solar-money-strip") as HTMLElement).getBoundingClientRect().height,
+                },
             };
         });
 
@@ -127,5 +132,6 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.widths.soc).toBe(layout.widths.chart);
         expect(layout.widths.prices).toBe(layout.widths.chart);
         expect(layout.widths.money).toBe(layout.widths.chart);
+        expect(layout.heights).toEqual({ soc: 65, prices: 65, money: 65 });
     });
 });

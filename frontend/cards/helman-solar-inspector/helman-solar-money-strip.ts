@@ -35,7 +35,7 @@ function amountOrNull(value: number | null): number | null {
  * padding is what the value labels stand in: each is written past the end of
  * its bar, so the deepest bar on either side needs a line's room beyond it.
  */
-const MONEY_STRIP = { height: 88, padTop: 14, padBottom: 18 } as const;
+const MONEY_STRIP = { height: 65, padTop: 14, padBottom: 18 } as const;
 
 /**
  * One cell's money on the inspector's current slot grid.
