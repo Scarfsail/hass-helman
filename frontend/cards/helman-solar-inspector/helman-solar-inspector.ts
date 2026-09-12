@@ -1461,7 +1461,11 @@ export class HelmanSolarInspector extends LitElement {
     }
 
     .chart-separator {
-      border-top: 1px solid var(--divider-color, #8a8a8a);
+      border-top: 1px solid color-mix(
+        in srgb,
+        var(--divider-color, #8a8a8a) 55%,
+        var(--primary-text-color, #000) 45%
+      );
     }
 
     .compact-strip-label {
