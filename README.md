@@ -193,6 +193,12 @@ type: custom:helman-solar-inspector-card
 transparent_background: false
 ```
 
+## How planning works
+
+Helman re-plans continuously — once per 15-minute slot in normal operation — over a rolling 48-hour horizon. Each run wipes its own previous decisions and re-plans from scratch, but reads the wiped plan back as a forecast of house demand, so that an optimizer sizing the battery can see the appliance runs that are scheduled after it in the list.
+
+See [docs/automation.md](docs/automation.md) for how a run is built, why the previous run's plan is an input to the next one, and worked examples on sunny days, deficit days and negative export prices.
+
 ## Appliance self-sustainability
 
 When Helman schedules an appliance (`appliance_runtime`), it can ask what running it *does* to the battery rather than only what the house looks like without it. Two numbers on each condition group control that, and they answer different questions.
