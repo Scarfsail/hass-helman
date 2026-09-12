@@ -6,12 +6,15 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-card.js",
 );
 
-async function mountInspector(page: Page, { money = true }: { money?: boolean } = {}): Promise<void> {
+async function mountInspector(
+    page: Page,
+    { money = true, zeroMoney = false }: { money?: boolean; zeroMoney?: boolean } = {},
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
 
-    await page.evaluate(({ money }) => {
+    await page.evaluate(({ money, zeroMoney }) => {
         const date = "2026-07-18";
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const impact: Array<Record<string, unknown>> = [];
@@ -28,7 +31,7 @@ async function mountInspector(page: Page, { money = true }: { money?: boolean } 
             batterySocForecast.push({ slot, pct: 50 });
             importPrice.push({ slot, value: 4 });
             exportPrice.push({ slot, value: 1 });
-            if (money) moneyForecast.push({ slot, cost: 0.4, gain: 0.1 });
+            if (money) moneyForecast.push({ slot, cost: zeroMoney ? 0 : 0.4, gain: 0 });
         }
         const payload = {
             date,
@@ -68,7 +71,7 @@ async function mountInspector(page: Page, { money = true }: { money?: boolean } 
             callWS: async (message: { date: string }) => ({ ...payload, date: message.date }),
         };
         document.body.appendChild(inspector);
-    }, { money });
+    }, { money, zeroMoney });
 
     await page.waitForFunction(() => {
         const root = (document.querySelector("helman-solar-inspector") as any)?.shadowRoot;
@@ -176,5 +179,16 @@ test.describe("solar inspector strip layout", () => {
 
         expect(visibility.moneyHidden).toBe(true);
         expect(visibility.scheduleHidden).toBe(true);
+    });
+
+    test("hides a zero-valued money strip", async ({ page }) => {
+        await mountInspector(page, { zeroMoney: true });
+        const moneyHidden = await page.evaluate(() => {
+            const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+            const money = root.querySelector("helman-solar-money-strip") as HTMLElement;
+            return money.parentElement?.hidden;
+        });
+
+        expect(moneyHidden).toBe(true);
     });
 });
