@@ -137,26 +137,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
         slot: number;
         seam: number;
     } | null = null;
-    private _reportedVisibility: boolean | null = null;
 
     protected willUpdate(): void {
         this._rebuildCellsIfNeeded();
-    }
-
-    protected updated(): void {
-        // A zero-valued rail comes from an unavailable price forecast as often
-        // as from a real transaction. It gives the reader no bar to inspect,
-        // so it must not reserve the strip's label and separator.
-        const visible = this.hass !== undefined
-            && this.geometry !== null
-            && this._cells.some((cell) => cell.cost !== 0 || cell.gain !== 0);
-        if (visible === this._reportedVisibility) return;
-        this._reportedVisibility = visible;
-        this.dispatchEvent(new CustomEvent<{ visible: boolean }>("strip-visibility", {
-            detail: { visible },
-            bubbles: true,
-            composed: true,
-        }));
     }
 
     private _rebuildCellsIfNeeded(): void {

@@ -136,7 +136,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         plotWidth: number;
     } | null = null;
     private _observedHost: SchedulingDayEditorHost | null = null;
-    private _reportedVisibility: boolean | null = null;
 
     protected willUpdate(changed: PropertyValues<this>): void {
         if (changed.has("hass") && this.hass) {
@@ -147,20 +146,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
         this._rebuildBandLanesIfNeeded();
         this._rebuildGridTicksIfNeeded();
-    }
-
-    protected updated(): void {
-        const visible = this.hass !== undefined
-            && this.geometry !== null
-            && this._selectedDay() !== null
-            && this._bandLanes.length > 0;
-        if (visible === this._reportedVisibility) return;
-        this._reportedVisibility = visible;
-        this.dispatchEvent(new CustomEvent<{ visible: boolean }>("strip-visibility", {
-            detail: { visible },
-            bubbles: true,
-            composed: true,
-        }));
     }
 
     /**

@@ -814,8 +814,6 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _importPriceColumns: PriceColumn[] = [];
   @state() private _exportPriceColumns: PriceColumn[] = [];
   @state() private _priceUnit = "";
-  @state() private _moneyStripVisible = false;
-  @state() private _scheduleBandVisible = false;
   /**
    * The shared schedule owner's state, for the execution switch in the
    * scheduled-actions header. The band strip below subscribes on its own; this
@@ -3515,7 +3513,7 @@ export class HelmanSolarInspector extends LitElement {
     const executionLabel = this._t("scheduling.execution.toggle");
     const snapshot = this._scheduleSnapshot;
     return html`
-      <div class="strip-section chart-separator" ?hidden=${!this._scheduleBandVisible}>
+      <div class="strip-section chart-separator">
         <div class="strip-header-row">
           ${this._renderScheduleHeaderHours(layout)}
           <span class="schedule-header-title">${this._t("bias_correction.inspector.scheduled_actions")}</span>
@@ -3533,10 +3531,6 @@ export class HelmanSolarInspector extends LitElement {
       </div>
     `;
   }
-
-  private _handleScheduleBandVisibility = (event: CustomEvent<{ visible: boolean }>) => {
-    this._scheduleBandVisible = event.detail.visible;
-  };
 
   /** The schedule header repeats the chart axis's labelled ticks behind its controls. */
   private _renderScheduleHeaderHours(layout: ChartLayout) {
@@ -3645,7 +3639,6 @@ export class HelmanSolarInspector extends LitElement {
         .hoverMinutes=${this._hoveredMinutes}
         @slot-hover=${this._handleStripHover}
         @slot-tooltip=${this._handleScheduleTooltip}
-        @strip-visibility=${this._handleScheduleBandVisibility}
       ></helman-solar-schedule-band-strip>
     `;
   }
@@ -4052,7 +4045,7 @@ export class HelmanSolarInspector extends LitElement {
           }}
         ></helman-solar-price-strip>
       </div>
-      <div class="compact-strip-section chart-separator" ?hidden=${!this._moneyStripVisible}>
+      <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.money_strip_compact")}</span>
         <helman-solar-money-strip
           .hass=${this.hass}
@@ -4070,15 +4063,10 @@ export class HelmanSolarInspector extends LitElement {
             this._handleStripSlotPick(event, payload)}
           @slot-hover=${this._handleStripHover}
           @slot-tooltip=${this._handleStripTooltip}
-          @strip-visibility=${this._handleMoneyStripVisibility}
         ></helman-solar-money-strip>
       </div>
     `;
   }
-
-  private _handleMoneyStripVisibility = (event: CustomEvent<{ visible: boolean }>) => {
-    this._moneyStripVisible = event.detail.visible;
-  };
 
   /** Resolve a strip click to the slot it lands in, or clear the selection. */
   private _handleStripSlotPick(
