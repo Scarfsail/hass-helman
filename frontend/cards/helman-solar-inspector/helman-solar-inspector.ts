@@ -1347,6 +1347,11 @@ export class HelmanSolarInspector extends LitElement {
       height: 260px;
     }
 
+    .main-chart-wrap {
+      outline: none;
+      border-radius: 0;
+    }
+
     /* Holds the card's height across a navigation: the shell keeps rendering
        whatever content it had -- dimmed and inert -- instead of collapsing to
        the loading note, and only supplies its own height (INSPECTOR_CONTENT_
@@ -1453,6 +1458,10 @@ export class HelmanSolarInspector extends LitElement {
     .compact-strip-section {
       position: relative;
       width: 100%;
+    }
+
+    .chart-separator {
+      border-top: 1px solid var(--divider-color, #8a8a8a);
     }
 
     .compact-strip-label {
@@ -2131,7 +2140,10 @@ export class HelmanSolarInspector extends LitElement {
                  three -- the order the day editor stacks the same four things
                  in, so moving between the two is not a re-read. -->
             ${this._renderTooltip()}
-            <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
+            <div class="compact-strip-section main-chart-section">
+              <span class="compact-strip-label">${this._t("bias_correction.inspector.energy_strip_compact")}</span>
+              <div class="chart-wrap main-chart-wrap">${this._renderChart(view, stacks, layout)}</div>
+            </div>
             ${this._impactStripVisible
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, layout)}</div>`
               : ""}
@@ -3477,7 +3489,7 @@ export class HelmanSolarInspector extends LitElement {
     const executionLabel = this._t("scheduling.execution.toggle");
     const snapshot = this._scheduleSnapshot;
     return html`
-      <div class="strip-section">
+      <div class="strip-section chart-separator">
         <div class="strip-header-row">
           <span>${this._t("bias_correction.inspector.scheduled_actions")}</span>
           <label class="execution-toggle">
@@ -3970,7 +3982,7 @@ export class HelmanSolarInspector extends LitElement {
   /** The two-rail price and money strips. */
   private _renderPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
-      <div class="compact-strip-section">
+      <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.price_strip_compact")}</span>
         <helman-solar-price-strip
           .hass=${this.hass}
@@ -3995,7 +4007,7 @@ export class HelmanSolarInspector extends LitElement {
           }}
         ></helman-solar-price-strip>
       </div>
-      <div class="compact-strip-section">
+      <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.money_strip_compact")}</span>
         <helman-solar-money-strip
           .hass=${this.hass}
@@ -4038,7 +4050,7 @@ export class HelmanSolarInspector extends LitElement {
   /** The battery SoC strip. */
   private _renderSocSection(payload: InspectorPayload, layout: ChartLayout) {
     return html`
-      <div class="compact-strip-section">
+      <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.battery_soc_strip_compact")}</span>
         <div class="soc-strip-wrap">${this._renderSocStrip(payload, layout)}</div>
       </div>

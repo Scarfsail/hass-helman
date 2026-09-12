@@ -533,6 +533,7 @@
   "bias_correction": {
     "inspector": {
       "title": "Vizuální inspektor",
+      "energy_strip_compact": "Energie",
       "loading": "Načítám data inspektoru...",
       "load_failed": "Nepodařilo se načíst data inspektoru.",
       "more_days": "Zobrazit roky, měsíce a dny celého měsíce",

@@ -104,6 +104,11 @@ test.describe("solar inspector strip layout", () => {
                 scheduleTitle: scheduleHeader.firstElementChild?.textContent?.trim(),
                 scheduleTitleTag: scheduleHeader.firstElementChild?.tagName,
                 executionSwitch: !!scheduleHeader.querySelector("ha-switch"),
+                mainChartOutline: getComputedStyle(root.querySelector(".main-chart-wrap") as HTMLElement).outlineStyle,
+                separators: [...root.querySelectorAll(".chart-separator")]
+                    .map((separator: Element) => getComputedStyle(separator).borderTopWidth),
+                separatorWidths: [...root.querySelectorAll(".chart-separator")]
+                    .map((separator: Element) => (separator as HTMLElement).getBoundingClientRect().width),
                 widths: {
                     chart: (root.querySelector(".chart-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
                     soc: (root.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
@@ -121,6 +126,7 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.bodies).toEqual({ soc: true, prices: true, money: true, schedule: true });
         expect(layout.collapseControls).toBe(0);
         expect(layout.labels).toEqual([
+            expect.objectContaining({ text: "Energy", writingMode: "vertical-rl" }),
             expect.objectContaining({ text: "Battery", writingMode: "vertical-rl" }),
             expect.objectContaining({ text: "Prices", writingMode: "vertical-rl" }),
             expect.objectContaining({ text: "Money", writingMode: "vertical-rl" }),
@@ -129,6 +135,14 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.scheduleTitle).toBe("Scheduled actions");
         expect(layout.scheduleTitleTag).toBe("SPAN");
         expect(layout.executionSwitch).toBe(true);
+        expect(layout.mainChartOutline).toBe("none");
+        expect(layout.separators).toEqual(["1px", "1px", "1px", "1px"]);
+        expect(layout.separatorWidths).toEqual([
+            layout.widths.chart,
+            layout.widths.chart,
+            layout.widths.chart,
+            layout.widths.chart,
+        ]);
         expect(layout.widths.soc).toBe(layout.widths.chart);
         expect(layout.widths.prices).toBe(layout.widths.chart);
         expect(layout.widths.money).toBe(layout.widths.chart);

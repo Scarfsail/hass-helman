@@ -2,6 +2,7 @@
   "bias_correction": {
     "inspector": {
       "title": "Visual inspector",
+      "energy_strip_compact": "Energy",
       "loading": "Loading inspector data...",
       "load_failed": "Failed to load inspector data.",
       "more_days": "Show years, months and the whole month's days",
