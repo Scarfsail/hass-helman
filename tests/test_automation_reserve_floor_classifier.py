@@ -494,10 +494,9 @@ def _make_build_snapshot(
     charge_bump_pp: float = 25.0,
     appliance_drain_pp: float = 30.0,
 ):
-    def build(document: ScheduleDocument, *, demand_schedule_document=None):
-        demand_document = document if demand_schedule_document is None else demand_schedule_document
+    def build(document: ScheduleDocument):
         soc_series = _project_soc(
-            demand_document,
+            document,
             base_soc_by_hour=base_soc_by_hour,
             charge_bump_pp=charge_bump_pp,
             appliance_drain_pp=appliance_drain_pp,
@@ -573,32 +572,59 @@ def _stub_config(*, optimizer_id: str, kind: str, controllable_id: str) -> Optim
     )
 
 
+def _two_phase_mutation(phase1_mutate, phase3_mutate):
+    """A mutation for an appliance test double that behaves differently on its
+    two calls under the phased pipeline (#272, P2 of #270).
+
+    An ``appliance_runtime`` optimizer runs once in phase 1 (before any system
+    optimizer, untraced) and again in phase 3 (after the system bucket has
+    written, re-planning against it). ``phase1_mutate`` models what the first
+    call places; ``phase3_mutate`` models what the re-plan changes it to. Use
+    this (rather than one mutation applied identically twice) whenever a
+    scenario's intent specifically depends on *which* phase introduces a
+    lane's content -- e.g. "the boundary sees the appliance safely elsewhere,
+    the final plan does not" (downstream introduction, exclusive_appliance).
+    """
+    calls = {"count": 0}
+
+    def wrapped(document: ScheduleDocument) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            phase1_mutate(document)
+        else:
+            phase3_mutate(document)
+
+    return wrapped
+
+
 def _run(
     *,
     execution_optimizers,
     mutations_by_id: dict[str, object] | None = None,
     build_snapshot,
     schedule_document: ScheduleDocument | None = None,
-    baseline_schedule_document: ScheduleDocument | None = None,
 ):
+    """Exercise the real three-phase entry point (#272, P2 of #270).
+
+    ``execution_optimizers`` lists every optimizer config for the scenario in
+    the order that mattered under the old flat single-pass pipeline; here it
+    is partitioned into the two phase buckets by kind (only
+    ``appliance_runtime`` is an appliance kind -- see ``spec.py``), and each
+    bucket keeps its own relative order. A "later system optimizer" test
+    double therefore still runs after ``charge_from_grid`` exactly as before
+    (both stay in phase 2, in list order); an appliance test double instead
+    runs once in phase 1 (before any system optimizer) and again in phase 3
+    (after) -- see ``_two_phase_mutation`` for scenarios that care which call
+    is which.
+    """
     document = ScheduleDocument(execution_enabled=True) if schedule_document is None else schedule_document
-    baseline = document if baseline_schedule_document is None else baseline_schedule_document
     mutations_by_id = mutations_by_id or {}
 
-    # Mirror AutomationRunner's real pre-loop snapshot: every still-pending
-    # appliance lane is restored from the previous plan as projection demand,
-    # while the snapshot's own schedule remains the stripped working document.
-    pending_appliance_ids = tuple(
-        config.controllable_id
-        for config in execution_optimizers
-        if config.kind == "appliance_runtime"
+    appliance_optimizers = tuple(
+        config for config in execution_optimizers if config.kind == "appliance_runtime"
     )
-    initial_demand_document = (
-        pipeline_module.restore_automation_owned_appliance_actions(
-            baseline=baseline,
-            current=document,
-            appliance_ids=pending_appliance_ids,
-        )
+    system_optimizers = tuple(
+        config for config in execution_optimizers if config.kind != "appliance_runtime"
     )
 
     def dispatch(config, **kwargs):
@@ -608,13 +634,10 @@ def _run(
 
     with patch.object(pipeline_module, "build_optimizer", side_effect=dispatch):
         return run_optimizer_loop_pure(
-            execution_optimizers=execution_optimizers,
-            baseline_schedule_document=baseline,
+            appliance_optimizers=appliance_optimizers,
+            system_optimizers=system_optimizers,
             schedule_document=document,
-            initial_snapshot=build_snapshot(
-                document,
-                demand_schedule_document=initial_demand_document,
-            ),
+            initial_snapshot=build_snapshot(document),
             reference_time=REFERENCE_TIME,
             control_config=None,
             appliance_registry=AppliancesRuntimeRegistry(),
@@ -642,6 +665,18 @@ class ScenarioSuiteTests(unittest.TestCase):
         )
 
     def test_cold_start_no_prior_plan(self) -> None:
+        """#272 (P2 of #270) deliberately changes this scenario's outcome.
+
+        Under the old flat pipeline this was the cold-start form of the #116
+        look-ahead gap: with no previous plan to restore, ``charge_from_grid``
+        saw a bare house and a later appliance step introduced the breach —
+        ``downstream_introduced``. G1's own cold-start fix is exactly this
+        case: the appliance now runs for real in phase 1, *before*
+        ``charge_from_grid`` (phase 2) ever reads the house, so its bridge is
+        sized against the true demand from the start and the final plan is
+        never breached at all. This is the one scenario the issue's
+        acceptance criteria explicitly expect to reclassify.
+        """
         build_snapshot = _make_build_snapshot()
         result = _run(
             execution_optimizers=[
@@ -657,24 +692,24 @@ class ScenarioSuiteTests(unittest.TestCase):
         )
         self._record("cold_start_no_prior_plan", result.reserve_floor_results)
         outcome = result.reserve_floor_results[0]
-        # With no previous appliance plan to restore, charge_from_grid sees the
-        # bare house.  The later appliance placement introduces the breach —
-        # the cold-start form of the #116 look-ahead gap this baseline must pin.
-        self.assertEqual(outcome.klass, CLASS_DOWNSTREAM_INTRODUCED)
-        self.assertEqual(outcome.lane_summary, LANE_EXCLUSIVE_APPLIANCE)
+        self.assertEqual(outcome.klass, CLASS_NONE)
 
     def test_appliance_moves_into_expensive_window_is_exclusive_appliance(self) -> None:
+        """The parent issue's own scenario D: the boiler is placed safely in
+        phase 1 (before ``charge_from_grid`` sizes its bridge in phase 2), but
+        phase 3 re-plans it into the expensive window -- exactly the
+        "downstream_introduced" hazard #274 classifies and #272 explicitly
+        ships unfixed (see the parent issue's Accepted Risk section)."""
         build_snapshot = _make_build_snapshot()
-        baseline = ScheduleDocument(
-            execution_enabled=True,
-            slots={
-                _slot_id(11): {
-                    "boiler": {"on": True, "setBy": "automation"}
-                }
-            },
-        )
 
-        def add_appliance(document: ScheduleDocument) -> None:
+        def place_safely(document: ScheduleDocument) -> None:
+            document.slots.setdefault(_slot_id(11), {})["boiler"] = {
+                "on": True,
+                "setBy": "automation",
+            }
+
+        def move_into_window(document: ScheduleDocument) -> None:
+            document.slots.get(_slot_id(11), {}).pop("boiler", None)
             document.slots.setdefault(_slot_id(9), {})["boiler"] = {
                 "on": True,
                 "setBy": "automation",
@@ -685,9 +720,10 @@ class ScenarioSuiteTests(unittest.TestCase):
                 _charge_from_grid_config(),
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
             ],
-            mutations_by_id={"boiler": add_appliance},
+            mutations_by_id={
+                "boiler": _two_phase_mutation(place_safely, move_into_window)
+            },
             build_snapshot=build_snapshot,
-            baseline_schedule_document=baseline,
         )
         self._record("appliance_moves_into_expensive_window", result.reserve_floor_results)
         self.assertEqual(len(result.reserve_floor_results), 1)
@@ -947,9 +983,9 @@ class ScenarioSuiteTests(unittest.TestCase):
         captured_calls: list[object] = []
         real_build = build_snapshot
 
-        def counting_build(document, **kwargs):
+        def counting_build(document):
             captured_calls.append(document)
-            return real_build(document, **kwargs)
+            return real_build(document)
 
         result = _run(
             execution_optimizers=[
@@ -959,10 +995,13 @@ class ScenarioSuiteTests(unittest.TestCase):
             build_snapshot=counting_build,
         )
         self.assertEqual(result.reserve_floor_results, ())
-        # Exactly the calls the ordinary loop always makes -- the initial
-        # snapshot plus one post-step rebuild. No extra control/boundary
-        # capture calls, because there is no `charge_from_grid` in this run.
-        self.assertEqual(len(captured_calls), 2)
+        # Exactly the calls the phased loop always makes for one appliance
+        # optimizer and no system optimizers: the initial snapshot, the
+        # phase-1 post-step rebuild, the phase-3 setup rebuild (after
+        # stripping its lane), and the phase-3 post-step rebuild. No extra
+        # control/boundary capture calls, because there is no
+        # `charge_from_grid` in this run.
+        self.assertEqual(len(captured_calls), 4)
 
 
 class TransportAndSafetyTests(unittest.TestCase):
@@ -992,54 +1031,54 @@ class TransportAndSafetyTests(unittest.TestCase):
         for optimizer_explanation in trace.optimizer_explanations():
             self.assertNotIn("reserveFloor", json.dumps(optimizer_explanation.to_dict(trace.slot_ids)))
 
-    def test_boundary_uses_next_index_equal_to_index_not_index_plus_one(self) -> None:
-        """A regression to `next_index=index + 1` must be caught here.
+    def test_boundary_demand_basis_is_the_working_document_after_the_step_writes(
+        self,
+    ) -> None:
+        """Regression guard for the phased pipeline's boundary demand basis
+        (#272, P2 of #270).
 
-        Put an appliance step right after `charge_from_grid`. With the
-        correct `next_index=index` the boundary still treats that appliance's
-        lane as pending (restored from baseline) -- exactly the demand basis
-        `charge_from_grid`'s own input used. With the (wrong) `index + 1` the
-        boundary would drop that pending lane, changing what the boundary
-        snapshot's demand document contains.
+        There is no more ``next_index`` arithmetic to get wrong -- phase 2
+        never touches an appliance lane, so the boundary's ``demand_document``
+        is simply the working document right after the emitting step writes
+        (see ``pipeline._safe_build_reserve_floor_boundary``). It must still
+        carry the fixed phase-1 appliance demand -- the same demand basis
+        ``charge_from_grid``'s own input used -- because the appliance
+        (phase 1, before any system optimizer) already wrote it by the time
+        ``charge_from_grid`` (phase 2) runs.
         """
         build_snapshot = _make_build_snapshot()
-        captured_demand_documents: list[ScheduleDocument] = []
-        real_build = build_snapshot
+        captured_boundaries: list[ReserveFloorBoundary] = []
+        real_build_boundary = pipeline_module._safe_build_reserve_floor_boundary
 
-        def spying_build(document, **kwargs):
-            snapshot = real_build(document, **kwargs)
-            demand = kwargs.get("demand_schedule_document")
-            if demand is not None:
-                captured_demand_documents.append(demand)
-            return snapshot
+        def recording_build_boundary(**kwargs):
+            boundary = real_build_boundary(**kwargs)
+            if boundary is not None:
+                captured_boundaries.append(boundary)
+            return boundary
 
-        def add_baseline_appliance(document: ScheduleDocument) -> None:
+        def add_boiler(document: ScheduleDocument) -> None:
             document.slots.setdefault(_slot_id(9), {})["boiler"] = {
                 "on": True,
                 "setBy": "automation",
             }
 
-        baseline = ScheduleDocument(execution_enabled=True)
-        add_baseline_appliance(baseline)
-        result = _run(
-            execution_optimizers=[
-                _charge_from_grid_config(),
-                _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
-            ],
-            mutations_by_id={"boiler": add_baseline_appliance},
-            build_snapshot=spying_build,
-            schedule_document=baseline,
-        )
-        self.assertTrue(result.reserve_floor_results)
-        # At least one demand document built during the run restored the
-        # still-pending "boiler" lane -- proof the boundary rebuild (like
-        # `charge_from_grid`'s own input) used `next_index=index`, which still
-        # counts "boiler" as pending, not `index + 1`, which would not.
-        self.assertTrue(
-            any(
-                "boiler" in document.slots.get(_slot_id(9), {})
-                for document in captured_demand_documents
+        with patch.object(
+            pipeline_module,
+            "_safe_build_reserve_floor_boundary",
+            side_effect=recording_build_boundary,
+        ):
+            result = _run(
+                execution_optimizers=[
+                    _charge_from_grid_config(),
+                    _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
+                ],
+                mutations_by_id={"boiler": add_boiler},
+                build_snapshot=build_snapshot,
             )
+        self.assertTrue(result.reserve_floor_results)
+        self.assertEqual(len(captured_boundaries), 1)
+        self.assertIn(
+            "boiler", captured_boundaries[0].demand_document.slots.get(_slot_id(9), {})
         )
 
     def test_control_snapshot_carries_user_owned_actions_only(self) -> None:
@@ -1051,19 +1090,19 @@ class TransportAndSafetyTests(unittest.TestCase):
         captured: list[ScheduleDocument] = []
         real_build = build_snapshot
 
-        def spying_build(doc, **kwargs):
-            if "demand_schedule_document" not in kwargs:
-                captured.append(doc)
-            return real_build(doc, **kwargs)
+        def spying_build(doc):
+            captured.append(doc)
+            return real_build(doc)
 
         _run(
             execution_optimizers=[_charge_from_grid_config()],
             build_snapshot=spying_build,
             schedule_document=document,
         )
-        # The very first no-override call is the control snapshot: built over
-        # `schedule_document` as-is, i.e. the user-owned action and nothing
-        # automation wrote (nothing has run yet at that point).
+        # The very first call (the initial snapshot, then the #274 control
+        # snapshot) is built over `schedule_document` as-is, i.e. the
+        # user-owned action and nothing automation wrote (nothing has run yet
+        # at that point).
         control_document = captured[0]
         for actions in control_document.slots.values():
             inverter = actions.get("inverter")
@@ -1094,8 +1133,8 @@ class TransportAndSafetyTests(unittest.TestCase):
         optimizers = [_charge_from_grid_config()]
         with patch.object(pipeline_module, "build_optimizer", side_effect=dispatch):
             with_diagnostics = run_optimizer_loop_pure(
-                execution_optimizers=optimizers,
-                baseline_schedule_document=document,
+                appliance_optimizers=(),
+                system_optimizers=optimizers,
                 schedule_document=document,
                 initial_snapshot=build_snapshot(document),
                 reference_time=REFERENCE_TIME,
@@ -1105,8 +1144,8 @@ class TransportAndSafetyTests(unittest.TestCase):
                 capture_reserve_floor_diagnostics=True,
             )
             without_diagnostics = run_optimizer_loop_pure(
-                execution_optimizers=optimizers,
-                baseline_schedule_document=document,
+                appliance_optimizers=(),
+                system_optimizers=optimizers,
                 schedule_document=document,
                 initial_snapshot=build_snapshot(document),
                 reference_time=REFERENCE_TIME,

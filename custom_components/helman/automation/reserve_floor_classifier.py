@@ -73,13 +73,15 @@ LANE_MIXED = "mixed"
 class ReserveFloorBoundary:
     """One emitting ``charge_from_grid`` step's boundary capture.
 
-    ``snapshot`` is built with ``next_index=index`` on the *current*
-    (unrestructured) pipeline — the same demand basis the step's own input
-    used, not the next step's ``next_index=index + 1`` rebuild (which would
-    drop the next optimizer's own pending lane and read artificially high).
-    ``demand_document`` is the effective projection document behind that
-    snapshot, captured separately because restored appliance demand never
-    rides in ``snapshot.schedule`` (see ``coordinator.py``).
+    Under the phased pipeline (#272, P2 of #270), ``charge_from_grid`` is a
+    system-bucket optimizer running in phase 2, and phase 2 never touches an
+    appliance lane — every phase-2 step reads the same fixed phase-1 appliance
+    demand. So ``snapshot`` is simply a plain rebuild over the working
+    document right after the emitting step wrote its bridge, and
+    ``demand_document`` is that same document: there is no more pending-lane
+    restoration to reconcile between "what the snapshot's inverter overlay
+    shows" and "what the house-demand basis was" — see
+    ``pipeline._safe_build_reserve_floor_boundary``.
     """
 
     snapshot: "OptimizationSnapshot"

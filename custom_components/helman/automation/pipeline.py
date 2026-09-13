@@ -20,7 +20,6 @@ from .ownership import (
     count_automation_owned_actions,
     is_user_owned_appliance_action,
     is_user_owned_inverter_action,
-    restore_automation_owned_appliance_actions,
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
@@ -252,10 +251,8 @@ class DayContextResolver:
     the answer to a forecast taken the previous afternoon.
 
     So it is recomputed here, per optimizer, over the house view that optimizer
-    actually plans against — the same view ``_build_pending_aware_snapshot``
-    already assembles for house demand (#116): the fresh decisions of every
-    optimizer before it, its own lane excluded because it is re-planning it, and
-    every later appliance lane restored from the baseline. Two optimizers
+    actually plans against — the fresh decisions of every optimizer before it
+    in its own phase, none after it (#272, P2 of #270). Two optimizers
     therefore legitimately see different bands for the same calendar day in the
     same run.
 
@@ -368,17 +365,6 @@ class AutomationRunner:
     ) -> None:
         self._coordinator = coordinator
         self._automation_config = automation_config
-        # Appliance bucket first, system bucket second: #270's own accepted
-        # risk for this phase states the flattened order is
-        # appliances-then-system once the buckets exist but the single-pass
-        # runner is still in use — every appliance optimizer plans with no
-        # inverter actions written yet, a known regression P2 (#272) fixes by
-        # restructuring the run into phases. Not fixed here; P1 must not ship
-        # to `main` alone.
-        self._execution_optimizers = (
-            automation_config.enabled_appliance_optimizers
-            + automation_config.enabled_system_optimizers
-        )
 
     async def run(
         self,
@@ -421,7 +407,10 @@ class AutomationRunner:
                         cleanup_outcome=cleanup_outcome,
                     )
                     last_result = result
-                elif not self._execution_optimizers:
+                elif not (
+                    self._automation_config.enabled_appliance_optimizers
+                    or self._automation_config.enabled_system_optimizers
+                ):
                     current_stage = "cleanup_persist"
                     cleanup_outcome = await self._async_persist_cleanup_only_locked(
                         baseline_schedule_document=baseline_schedule_document,
@@ -452,31 +441,14 @@ class AutomationRunner:
                             include_condition_flags=True,
                         )
                     )
-                    # Nothing has run yet, so every appliance lane behind the
-                    # first optimizer is still pending: take those back from
-                    # the baseline so the day classification and the static
-                    # rails read the house the run will actually have, not the
-                    # one left by stripping. If the first optimizer is itself
-                    # an appliance one, its own lane is excluded here too — it
-                    # is about to re-plan that lane, so its own initial view
-                    # must not read its previous run's placements as fixed,
-                    # same as `_pending_appliance_ids_by_index` already
-                    # guarantees for every later index.
-                    pending_appliance_ids_by_index = _pending_appliance_ids_by_index(
-                        self._execution_optimizers
-                    )
+                    # A bare house: every automation-owned lane is stripped and
+                    # nothing has been restored. #272 (P2 of #270) removes the
+                    # baseline-restore model entirely — the appliance lanes
+                    # this run will place are decided by phase 1 of the loop
+                    # below, not read back from the previous run's plan.
                     initial_snapshot = (
                         await self._coordinator._build_automation_snapshot_from_schedule_locked(
                             schedule_document=schedule_document,
-                            demand_schedule_document=restore_automation_owned_appliance_actions(
-                                baseline=baseline_schedule_document,
-                                current=schedule_document,
-                                appliance_ids=(
-                                    pending_appliance_ids_by_index[0]
-                                    if pending_appliance_ids_by_index
-                                    else ()
-                                ),
-                            ),
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
                             compute_inputs=compute_inputs,
@@ -505,9 +477,12 @@ class AutomationRunner:
                             await self._coordinator.async_load_day_context_bands()
                         ),
                     )
-                    # The canonical, run-wide reading of each day: the whole
-                    # house, no optimizer's lane excluded. It is what the run
-                    # result reports; the per-optimizer bands are what decides.
+                    # Seeds the resolver for the loop below: every fresh
+                    # snapshot rebuild inside the loop carries this reading
+                    # until a step's own per-optimizer resolution overrides it.
+                    # The *canonical* run-wide reading reported to the caller is
+                    # no longer this one — #272 (P2 of #270) moves it to the
+                    # final plan, computed inside the loop after phase 3.
                     day_contexts = resolve_day_contexts(
                         initial_snapshot, optimizer_id=None
                     )
@@ -518,7 +493,6 @@ class AutomationRunner:
                     try:
                         current_stage = "optimizer_loop"
                         execution_result = await self._async_execute_optimizer_loop_locked(
-                            baseline_schedule_document=baseline_schedule_document,
                             schedule_document=schedule_document,
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
@@ -550,7 +524,8 @@ class AutomationRunner:
                             optimizer_ids={
                                 optimizer.id
                                 for optimizer in (
-                                    self._execution_optimizers
+                                    self._automation_config.enabled_appliance_optimizers
+                                    + self._automation_config.enabled_system_optimizers
                                 )
                             },
                         )
@@ -618,7 +593,6 @@ class AutomationRunner:
     async def _async_execute_optimizer_loop_locked(
         self,
         *,
-        baseline_schedule_document: ScheduleDocument,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
@@ -642,26 +616,25 @@ class AutomationRunner:
             )
         control_config = self._coordinator._read_schedule_control_config()
 
-        def build_snapshot(
-            doc: ScheduleDocument,
-            *,
-            demand_schedule_document: ScheduleDocument | None = None,
-        ) -> OptimizationSnapshot:
+        def build_snapshot(doc: ScheduleDocument) -> OptimizationSnapshot:
             # Pure, hass-free: every live value comes from ``compute_inputs``.
+            # #272 (P2 of #270): rebuilt from ``doc`` alone — no more
+            # ``demand_schedule_document`` fork, since the phased run never
+            # needs to read house demand from a document other than the one
+            # it just wrote.
             return self._coordinator._build_automation_snapshot_from_schedule_pure(
                 schedule_document=doc,
                 input_bundle=input_bundle,
                 reference_time=reference_time,
                 day_contexts=day_contexts,
                 compute_inputs=compute_inputs,
-                demand_schedule_document=demand_schedule_document,
             )
 
         return await self._coordinator._hass.async_add_executor_job(
             functools.partial(
                 run_optimizer_loop_pure,
-                execution_optimizers=self._execution_optimizers,
-                baseline_schedule_document=baseline_schedule_document,
+                appliance_optimizers=self._automation_config.enabled_appliance_optimizers,
+                system_optimizers=self._automation_config.enabled_system_optimizers,
                 schedule_document=schedule_document,
                 initial_snapshot=initial_snapshot,
                 reference_time=reference_time,
@@ -714,96 +687,42 @@ class AutomationRunner:
         return finalized
 
 
-#: Optimizer kind that owns an appliance lane. Only these lanes are taken back
-#: from the baseline: the inverter lane is what the battery-first optimizers are
-#: re-planning, so restoring it would hand them their own previous run's holds.
-_APPLIANCE_OPTIMIZER_KIND = "appliance_runtime"
-
 #: Optimizer kind #274's diagnostic capture is gated on. Several instances of
 #: this kind can exist in one run (config enforces unique ids, not unique
 #: kinds), and each is captured independently, keyed by its own id.
 _CHARGE_FROM_GRID_KIND = "charge_from_grid"
 
 
-def _pending_appliance_ids_by_index(
-    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
-) -> tuple[tuple[str, ...], ...]:
-    """For each optimizer, the appliance lanes the ones *after* it will write.
-
-    Every run strips all automation-owned actions and re-plans from scratch, so
-    an optimizer sees only the lanes of the optimizers before it. That is right
-    for the lane it owns — it is re-planning it — but wrong for the house demand
-    it reads: ``charge_hold`` runs first and would size the day's charge against
-    a house carrying none of the appliance load this same run is about to
-    schedule, inflating every slot's surplus by the appliances' combined power
-    and cutting the day's charge set short (issue #116). Naming the still
-    pending lanes here lets each rebuild take them back from the baseline, so
-    demand is whole wherever in the order an optimizer sits.
-
-    The entry for an optimizer never includes its own lane: it is re-planning
-    that one, and restoring it would have the optimizer read its own previous
-    run's placements as if they were fixed.
-    """
-    lane_by_index = [
-        optimizer.controllable_id
-        if optimizer.kind == _APPLIANCE_OPTIMIZER_KIND
-        else None
-        for optimizer in execution_optimizers
-    ]
-    return tuple(
-        tuple(lane for lane in lane_by_index[index + 1 :] if lane is not None)
-        for index in range(len(lane_by_index))
-    )
-
-
-def _build_pending_aware_snapshot(
-    *,
-    build_snapshot: "Callable[..., OptimizationSnapshot]",
-    baseline_schedule_document: ScheduleDocument,
-    working_schedule_document: ScheduleDocument,
-    pending_appliance_ids_by_index: tuple[tuple[str, ...], ...],
-    next_index: int,
-) -> OptimizationSnapshot:
-    """Rebuild for the optimizer at ``next_index``, appliance demand intact.
-
-    Past the end of the loop nothing is pending and this is a plain rebuild of
-    the finished plan.
-    """
-    pending = (
-        pending_appliance_ids_by_index[next_index]
-        if next_index < len(pending_appliance_ids_by_index)
-        else ()
-    )
-    if not pending:
-        return build_snapshot(working_schedule_document)
-    return build_snapshot(
-        working_schedule_document,
-        demand_schedule_document=restore_automation_owned_appliance_actions(
-            baseline=baseline_schedule_document,
-            current=working_schedule_document,
-            appliance_ids=pending,
-        ),
-    )
-
-
 def run_optimizer_loop_pure(
     *,
-    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
-    baseline_schedule_document: ScheduleDocument,
+    appliance_optimizers: "Sequence[OptimizerInstanceConfig]",
+    system_optimizers: "Sequence[OptimizerInstanceConfig]",
     schedule_document: ScheduleDocument,
     initial_snapshot: OptimizationSnapshot,
     reference_time: datetime,
     control_config: Any,
     appliance_registry: Any,
-    build_snapshot: "Callable[..., OptimizationSnapshot]",
+    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
     resolve_day_contexts: "Callable[..., dict] | None" = None,
     capture_reserve_floor_diagnostics: bool = False,
 ) -> _PipelineExecutionResult:
     """Pure, synchronous optimizer loop — safe to run in an executor.
 
-    Contains no ``hass`` access and no ``await``. ``build_snapshot`` rebuilds the
-    optimization snapshot from a schedule document using the pre-gathered
-    (hass-free) compute inputs, so every per-iteration rebuild stays pure too.
+    Three ordered phases over the buckets P1 (#271) introduced (#272, P2 of
+    #270):
+
+    1. ``appliance_optimizers``, in order — earlier appliances only, no
+       inverter actions, untraced.
+    2. ``system_optimizers``, in order — sees the whole phase-1 appliance
+       demand, traced.
+    3. ``appliance_optimizers`` again, in order, after their lanes are
+       stripped — earlier (phase-3) appliances plus the phase-2 inverter plan,
+       traced.
+
+    Contains no ``hass`` access and no ``await``. ``build_snapshot`` rebuilds
+    the optimization snapshot from a schedule document alone using the
+    pre-gathered (hass-free) compute inputs, so every per-iteration rebuild
+    stays pure too.
 
     ``capture_reserve_floor_diagnostics`` arms the #274 (P0 of #270)
     diagnostic: one extra control-snapshot rebuild per run plus one extra
@@ -815,192 +734,120 @@ def run_optimizer_loop_pure(
     working_schedule_document = schedule_document
     snapshot = initial_snapshot
     optimizer_summaries: list[OptimizerRunSummary] = []
-    pending_appliance_ids_by_index = _pending_appliance_ids_by_index(
-        execution_optimizers
-    )
     trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
     trace.set_static_rails(
         _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
     )
     emitted_day_bands: dict[tuple[date, str], str] = {}
     capture_reserve_floor = capture_reserve_floor_diagnostics and any(
-        optimizer.kind == _CHARGE_FROM_GRID_KIND for optimizer in execution_optimizers
+        optimizer.kind == _CHARGE_FROM_GRID_KIND for optimizer in system_optimizers
     )
     reserve_floor_control_snapshot: OptimizationSnapshot | None = None
     if capture_reserve_floor:
         # The control snapshot: the trajectory before anything was planned.
-        # Built over `schedule_document` with no demand override, so it
-        # carries user-owned actions only — no automation-owned ones.
+        # Built over `schedule_document`, which carries user-owned actions
+        # only — no automation-owned ones.
         reserve_floor_control_snapshot = _safe_build_snapshot(
             build_snapshot, schedule_document
         )
     reserve_floor_boundaries: dict[str, ReserveFloorBoundary] = {}
-    for index, optimizer_config in enumerate(execution_optimizers):
-        optimizer_started_at = time.perf_counter()
-        # Which band a day holds depends on whose house view it is read over, so
-        # every optimizer is handed the classification derived from the snapshot
-        # it actually receives rather than one fixed reading of the run (#264).
-        # The snapshot itself is unchanged: this only replaces the day contexts
-        # hanging off its context.
-        if resolve_day_contexts is not None:
-            step_day_contexts = resolve_day_contexts(
-                snapshot, optimizer_id=optimizer_config.id
-            )
-            snapshot = attach_day_contexts(snapshot, step_day_contexts)
-            for local_date, day_context in step_day_contexts.items():
-                emitted_day_bands[(local_date, optimizer_config.id)] = (
-                    day_context.classification
-                )
-        trace.begin_step(
-            optimizer_config.id,
-            optimizer_config.kind,
-            # The lane this step writes — the controllable's own id, so the
-            # explanation record can be queried by the lane the user clicked
-            # and winner attribution can match writes against the step that
-            # made them.
-            controllable_id=optimizer_config.controllable_id,
-        )
-        # Stamp the step with its execution-condition state so the run
-        # explanation can present this optimizer's placements as candidates
-        # (tentative, won't execute) rather than as planned-for-execution.
-        # One bool per step, folded from the per-group results: it reports
-        # whether *any* group matched fully, which is exactly what decides
-        # whether this step can execute at all.
-        condition_met_by_group = snapshot.context.condition_met_by_optimizer_id.get(
-            optimizer_config.id
-        )
-        trace.set_condition_met(
-            True if condition_met_by_group is None else any(condition_met_by_group)
-        )
-        # railsIn is the rail segment the optimizer received (pre-rebuild).
-        trace.set_rails_in(
-            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-        )
-        try:
-            optimizer = build_optimizer(
-                optimizer_config,
-                control_config=control_config,
-                appliance_registry=appliance_registry,
-            )
-            candidate_schedule_document = optimizer.optimize(
-                snapshot,
-                optimizer_config,
-                trace,
-            )
-        except ConditionRailsUnavailable as err:
-            try:
-                working_schedule_document = restore_automation_owned_appliance_actions(
-                    baseline=baseline_schedule_document,
-                    current=working_schedule_document,
-                    appliance_ids=(err.appliance_id,),
-                )
-                snapshot = _build_pending_aware_snapshot(
-                    build_snapshot=build_snapshot,
-                    baseline_schedule_document=baseline_schedule_document,
-                    working_schedule_document=working_schedule_document,
-                    pending_appliance_ids_by_index=pending_appliance_ids_by_index,
-                    next_index=index + 1,
-                )
-            except Exception as rebuild_err:
-                trace.end_step(status="failed")
-                raise _build_optimizer_error(
-                    config=optimizer_config,
-                    duration_ms=_elapsed_ms(optimizer_started_at),
-                    error=str(rebuild_err),
-                    completed_optimizers=tuple(optimizer_summaries),
-                    snapshot=snapshot,
-                    trace=trace,
-                ) from rebuild_err
-            # Skip discards partial decisions and collapses the column to a
-            # single horizon-wide `skipped` note; the validator exempts it.
-            trace.discard_step_decisions()
-            trace.note_horizon(
-                code="optimizer_skipped",
-                params={"applianceId": err.appliance_id, "reason": str(err)},
-            )
-            trace.end_step(status="skipped")
-            optimizer_summaries.append(
-                _build_optimizer_summary(
-                    optimizer_id=optimizer_config.id,
-                    optimizer_kind=optimizer_config.kind,
-                    status="skipped",
-                    slots_written=0,
-                    duration_ms=_elapsed_ms(optimizer_started_at),
-                    error=str(err),
-                )
-            )
-            continue
-        except Exception as err:
-            trace.end_step(status="failed")
-            raise _build_optimizer_error(
-                config=optimizer_config,
-                duration_ms=_elapsed_ms(optimizer_started_at),
-                error=str(err),
-                completed_optimizers=tuple(optimizer_summaries),
-                snapshot=snapshot,
-                trace=trace,
-            ) from err
 
-        previous_schedule_document = working_schedule_document
-        try:
-            working_schedule_document = _coerce_optimizer_result_schedule_document(
-                candidate_document=candidate_schedule_document,
-                execution_enabled=working_schedule_document.execution_enabled,
-            )
-            # Built for whoever runs next, so the lanes still ahead of them are
-            # present as demand. After the last step nothing is pending and this
-            # is the finished plan, which is what the run result reports.
-            snapshot = _build_pending_aware_snapshot(
-                build_snapshot=build_snapshot,
-                baseline_schedule_document=baseline_schedule_document,
-                working_schedule_document=working_schedule_document,
-                pending_appliance_ids_by_index=pending_appliance_ids_by_index,
-                next_index=index + 1,
-            )
-        except Exception as err:
-            trace.end_step(status="failed")
-            raise _build_optimizer_error(
-                config=optimizer_config,
-                duration_ms=_elapsed_ms(optimizer_started_at),
-                error=str(err),
-                completed_optimizers=tuple(optimizer_summaries),
-                snapshot=snapshot,
-                trace=trace,
-            ) from err
-        write_records = _collect_changed_writable_action_records(
-            before_document=previous_schedule_document,
-            after_document=working_schedule_document,
+    # --- Phase 1: appliance optimizers, earlier appliances only, untraced ---
+    # Provisional and superseded by phase 3: its summaries never join
+    # `optimizer_summaries`, the list that becomes the reported run result —
+    # doing so would report every appliance optimizer twice, once for its
+    # phase-1 estimate and once for its phase-3 (authoritative) placement.
+    for optimizer_config in appliance_optimizers:
+        (
+            working_schedule_document,
+            snapshot,
+            _summary,
+            _emitted,
+            _boundary,
+        ) = _run_optimizer_step(
+            optimizer_config=optimizer_config,
+            working_schedule_document=working_schedule_document,
+            snapshot=snapshot,
+            trace=trace,
+            control_config=control_config,
+            appliance_registry=appliance_registry,
+            build_snapshot=build_snapshot,
+            resolve_day_contexts=resolve_day_contexts,
+            traced=False,
+            optimizer_summaries=(),
+            capture_reserve_floor=False,
         )
-        trace.record_writes(write_records)
-        if capture_reserve_floor and optimizer_config.kind == _CHARGE_FROM_GRID_KIND:
-            step_observations = [
-                observation
-                for observation in trace.reserve_floor_observations
-                if observation.optimizer_id == optimizer_config.id
-            ]
-            if step_observations:
-                boundary = _safe_build_reserve_floor_boundary(
-                    build_snapshot=build_snapshot,
-                    baseline_schedule_document=baseline_schedule_document,
-                    working_schedule_document=working_schedule_document,
-                    pending_appliance_ids_by_index=pending_appliance_ids_by_index,
-                    # The same demand basis this step's own INPUT used, not
-                    # the next step's `next_index=index + 1` rebuild — see
-                    # `ReserveFloorBoundary`.
-                    next_index=index,
-                )
-                if boundary is not None:
-                    reserve_floor_boundaries[optimizer_config.id] = boundary
-        trace.end_step(status="ok")
-        optimizer_summaries.append(
-            _build_optimizer_summary(
-                optimizer_id=optimizer_config.id,
-                optimizer_kind=optimizer_config.kind,
-                status="ok",
-                slots_written=len(write_records),
-                duration_ms=_elapsed_ms(optimizer_started_at),
-            )
+
+    # --- Phase 2: system optimizers, traced, fixed phase-1 appliance demand ---
+    for optimizer_config in system_optimizers:
+        (
+            working_schedule_document,
+            snapshot,
+            summary,
+            emitted,
+            boundary,
+        ) = _run_optimizer_step(
+            optimizer_config=optimizer_config,
+            working_schedule_document=working_schedule_document,
+            snapshot=snapshot,
+            trace=trace,
+            control_config=control_config,
+            appliance_registry=appliance_registry,
+            build_snapshot=build_snapshot,
+            resolve_day_contexts=resolve_day_contexts,
+            traced=True,
+            optimizer_summaries=tuple(optimizer_summaries),
+            capture_reserve_floor=capture_reserve_floor,
         )
+        optimizer_summaries.append(summary)
+        emitted_day_bands.update(emitted)
+        if boundary is not None:
+            reserve_floor_boundaries[optimizer_config.id] = boundary
+
+    # --- Phase 3: appliance optimizers re-plan against the phase-2 inverter
+    # plan. Each sees "my lane is empty, earlier lanes committed" the same
+    # shape it saw in phase 1: strip the appliance lanes once, before the
+    # phase starts, not once per optimizer, so same-lane composition behaves
+    # identically in both appliance phases.
+    if appliance_optimizers:
+        appliance_lane_ids = {
+            optimizer.controllable_id for optimizer in appliance_optimizers
+        }
+        working_schedule_document = strip_automation_owned_actions(
+            working_schedule_document, controllable_ids=appliance_lane_ids
+        )
+        snapshot = build_snapshot(working_schedule_document)
+    for optimizer_config in appliance_optimizers:
+        (
+            working_schedule_document,
+            snapshot,
+            summary,
+            emitted,
+            _boundary,
+        ) = _run_optimizer_step(
+            optimizer_config=optimizer_config,
+            working_schedule_document=working_schedule_document,
+            snapshot=snapshot,
+            trace=trace,
+            control_config=control_config,
+            appliance_registry=appliance_registry,
+            build_snapshot=build_snapshot,
+            resolve_day_contexts=resolve_day_contexts,
+            traced=True,
+            optimizer_summaries=tuple(optimizer_summaries),
+            capture_reserve_floor=False,
+        )
+        optimizer_summaries.append(summary)
+        emitted_day_bands.update(emitted)
+
+    # The canonical, run-wide reading of each day: the whole planned house, no
+    # optimizer's lane excluded — #272 (P2 of #270) moves this from the
+    # initial (bare) snapshot to the final plan, which is what the run result
+    # now reports; the per-optimizer bands above are what decided.
+    if resolve_day_contexts is not None:
+        final_day_contexts = resolve_day_contexts(snapshot, optimizer_id=None)
+        snapshot = attach_day_contexts(snapshot, final_day_contexts)
+
     trace.set_rails_final(
         _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
     )
@@ -1028,6 +875,184 @@ def run_optimizer_loop_pure(
         emitted_day_bands=emitted_day_bands,
         reserve_floor_results=reserve_floor_results,
     )
+
+
+def _run_optimizer_step(
+    *,
+    optimizer_config: "OptimizerInstanceConfig",
+    working_schedule_document: ScheduleDocument,
+    snapshot: OptimizationSnapshot,
+    trace: OptimizerTrace,
+    control_config: Any,
+    appliance_registry: Any,
+    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
+    resolve_day_contexts: "Callable[..., dict] | None",
+    traced: bool,
+    optimizer_summaries: tuple[OptimizerRunSummary, ...],
+    capture_reserve_floor: bool,
+) -> tuple[
+    ScheduleDocument,
+    OptimizationSnapshot,
+    OptimizerRunSummary,
+    dict[tuple[date, str], str],
+    "ReserveFloorBoundary | None",
+]:
+    """Run one optimizer step, shared by every phase.
+
+    ``traced`` gates only what phase 1 must not do: open a trace step (so
+    ``explain.py``'s one-step-per-optimizer model stays intact — see the
+    module's own #272 note) and emit a day band (so hysteresis is driven by
+    the phase-3 reading alone). Every trace mutator the optimizer itself calls
+    already no-ops when no step is open, so nothing else here needs to branch
+    on ``traced`` for the success path.
+
+    A ``ConditionRailsUnavailable`` (an appliance's rails could not be
+    resolved) and any other exception both fail the whole run — see the
+    "rails-unavailable policy" in #272: with no baseline to fall back to,
+    continuing would persist that appliance's lane empty. A step is opened (if
+    one is not already) purely so the failure note is visible on the trace the
+    failed run reports.
+    """
+    optimizer_started_at = time.perf_counter()
+    emitted_bands: dict[tuple[date, str], str] = {}
+    # Which band a day holds depends on whose house view it is read over, so
+    # every optimizer is handed the classification derived from the snapshot
+    # it actually receives rather than one fixed reading of the run (#264).
+    if resolve_day_contexts is not None:
+        step_day_contexts = resolve_day_contexts(
+            snapshot, optimizer_id=optimizer_config.id
+        )
+        snapshot = attach_day_contexts(snapshot, step_day_contexts)
+        if traced:
+            for local_date, day_context in step_day_contexts.items():
+                emitted_bands[(local_date, optimizer_config.id)] = (
+                    day_context.classification
+                )
+    if traced:
+        trace.begin_step(
+            optimizer_config.id,
+            optimizer_config.kind,
+            # The lane this step writes — the controllable's own id, so the
+            # explanation record can be queried by the lane the user clicked
+            # and winner attribution can match writes against the step that
+            # made them.
+            controllable_id=optimizer_config.controllable_id,
+        )
+        # Stamp the step with its execution-condition state so the run
+        # explanation can present this optimizer's placements as candidates
+        # (tentative, won't execute) rather than as planned-for-execution.
+        condition_met_by_group = snapshot.context.condition_met_by_optimizer_id.get(
+            optimizer_config.id
+        )
+        trace.set_condition_met(
+            True if condition_met_by_group is None else any(condition_met_by_group)
+        )
+        # railsIn is the rail segment the optimizer received (pre-rebuild).
+        trace.set_rails_in(
+            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+        )
+    try:
+        optimizer = build_optimizer(
+            optimizer_config,
+            control_config=control_config,
+            appliance_registry=appliance_registry,
+        )
+        candidate_schedule_document = optimizer.optimize(
+            snapshot,
+            optimizer_config,
+            trace,
+        )
+    except ConditionRailsUnavailable as err:
+        if not traced:
+            trace.begin_step(
+                optimizer_config.id,
+                optimizer_config.kind,
+                controllable_id=optimizer_config.controllable_id,
+            )
+        # Discards any partial decisions/notes from a traced (phase-3) attempt
+        # that raised mid-way, and collapses the column to a single
+        # horizon-wide `skipped` note; the coverage validator exempts it.
+        trace.discard_step_decisions()
+        trace.note_horizon(
+            code="optimizer_skipped",
+            params={"applianceId": err.appliance_id, "reason": str(err)},
+        )
+        trace.end_step(status="skipped")
+        raise _build_optimizer_error(
+            config=optimizer_config,
+            duration_ms=_elapsed_ms(optimizer_started_at),
+            error=str(err),
+            completed_optimizers=optimizer_summaries,
+            snapshot=snapshot,
+            trace=trace,
+        ) from err
+    except Exception as err:
+        if not traced:
+            trace.begin_step(
+                optimizer_config.id,
+                optimizer_config.kind,
+                controllable_id=optimizer_config.controllable_id,
+            )
+        trace.end_step(status="failed")
+        raise _build_optimizer_error(
+            config=optimizer_config,
+            duration_ms=_elapsed_ms(optimizer_started_at),
+            error=str(err),
+            completed_optimizers=optimizer_summaries,
+            snapshot=snapshot,
+            trace=trace,
+        ) from err
+
+    previous_schedule_document = working_schedule_document
+    try:
+        working_schedule_document = _coerce_optimizer_result_schedule_document(
+            candidate_document=candidate_schedule_document,
+            execution_enabled=working_schedule_document.execution_enabled,
+        )
+        snapshot = build_snapshot(working_schedule_document)
+    except Exception as err:
+        if not traced:
+            trace.begin_step(
+                optimizer_config.id,
+                optimizer_config.kind,
+                controllable_id=optimizer_config.controllable_id,
+            )
+        trace.end_step(status="failed")
+        raise _build_optimizer_error(
+            config=optimizer_config,
+            duration_ms=_elapsed_ms(optimizer_started_at),
+            error=str(err),
+            completed_optimizers=optimizer_summaries,
+            snapshot=snapshot,
+            trace=trace,
+        ) from err
+
+    write_records = _collect_changed_writable_action_records(
+        before_document=previous_schedule_document,
+        after_document=working_schedule_document,
+    )
+    trace.record_writes(write_records)
+    boundary: ReserveFloorBoundary | None = None
+    if capture_reserve_floor and optimizer_config.kind == _CHARGE_FROM_GRID_KIND:
+        step_observations = [
+            observation
+            for observation in trace.reserve_floor_observations
+            if observation.optimizer_id == optimizer_config.id
+        ]
+        if step_observations:
+            boundary = _safe_build_reserve_floor_boundary(
+                build_snapshot=build_snapshot,
+                working_schedule_document=working_schedule_document,
+            )
+    trace.end_step(status="ok")
+    summary = _build_optimizer_summary(
+        optimizer_id=optimizer_config.id,
+        optimizer_kind=optimizer_config.kind,
+        status="ok",
+        slots_written=len(write_records),
+        duration_ms=_elapsed_ms(optimizer_started_at),
+    )
+    return working_schedule_document, snapshot, summary, emitted_bands, boundary
 
 
 def _coerce_optimizer_result_schedule_document(
@@ -1117,44 +1142,25 @@ def _safe_build_snapshot(
 
 def _safe_build_reserve_floor_boundary(
     *,
-    build_snapshot: "Callable[..., OptimizationSnapshot]",
-    baseline_schedule_document: ScheduleDocument,
+    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
     working_schedule_document: ScheduleDocument,
-    pending_appliance_ids_by_index: tuple[tuple[str, ...], ...],
-    next_index: int,
 ) -> ReserveFloorBoundary | None:
-    """The #274 boundary capture: same rebuild shape as
-    ``_build_pending_aware_snapshot``, but also returns the demand-basis
-    document it built on (needed for accurate lane-change detection — see
-    ``ReserveFloorBoundary``), and never touches
-    ``_build_pending_aware_snapshot`` itself (out of scope for this pure
-    add-on phase; P2/#272 replaces that machinery, not this issue).
+    """The #274 boundary capture, phased pipeline (#272, P2 of #270).
+
+    Phase 2 never touches an appliance lane, so ``working_schedule_document``
+    right after the emitting ``charge_from_grid`` step writes *is* the same
+    demand basis its own input used — the fixed phase-1 appliance demand plus
+    whatever phase 2 has written so far, including this step's own bridge.
+    There is no more pending-lane restoration to reconcile: a plain rebuild
+    over this one document is both the snapshot and the demand basis.
 
     Never fails the run: caught and logged at debug, like every other #274
     capture point.
     """
     try:
-        pending = (
-            pending_appliance_ids_by_index[next_index]
-            if next_index < len(pending_appliance_ids_by_index)
-            else ()
-        )
-        if not pending:
-            return ReserveFloorBoundary(
-                snapshot=build_snapshot(working_schedule_document),
-                demand_document=working_schedule_document,
-            )
-        demand_document = restore_automation_owned_appliance_actions(
-            baseline=baseline_schedule_document,
-            current=working_schedule_document,
-            appliance_ids=pending,
-        )
         return ReserveFloorBoundary(
-            snapshot=build_snapshot(
-                working_schedule_document,
-                demand_schedule_document=demand_document,
-            ),
-            demand_document=demand_document,
+            snapshot=build_snapshot(working_schedule_document),
+            demand_document=working_schedule_document,
         )
     except Exception:  # pragma: no cover - observability must not fail runs
         _LOGGER.debug(
@@ -1195,12 +1201,19 @@ def _capture_static_rails(
     snapshot: OptimizationSnapshot,
     slot_ids: tuple[str, ...],
 ) -> dict[str, list[float | None]]:
-    """Per-run rails identical at every step: prices + solar/baseline house."""
+    """Per-run rails identical at every step: prices and solar only.
+
+    House demand is *not* run-invariant under the phased pipeline (#272, P2 of
+    #270): phase 2 genuinely reads the phase-1 estimate, phase 3 may move it.
+    A "static" house rail would misattribute phase 2's input, so
+    ``houseKwh`` moved to :func:`_capture_step_rails`, captured before every
+    step — each step then shows the house it actually read.
+    """
     battery_series = snapshot.battery_forecast.get("series")
     energy = aggregate_series_to_slots(
         battery_series,
         slot_ids,
-        sum_fields=("solarKwh", "baselineHouseKwh"),
+        sum_fields=("solarKwh",),
     )
     return {
         "importPrice": price_points_to_slots(
@@ -1210,7 +1223,6 @@ def _capture_static_rails(
             snapshot.context.export_price_forecast.get("points"), slot_ids
         ),
         "solarKwh": energy["solarKwh"],
-        "houseKwh": energy["baselineHouseKwh"],
     }
 
 
@@ -1224,7 +1236,9 @@ def _capture_step_rails(
     every decision's effect as a before->after delta (this step's rail vs the
     next step's). Surplus is the redirectable solar; SoC is the projected
     trajectory; import/export energy are the effective grid flows after the
-    battery schedule the step just changed.
+    battery schedule the step just changed; house is the demand this step
+    actually read — moved here from the static rails (#272, P2 of #270)
+    because it is not run-invariant once the run is phased.
     """
     surplus = aggregate_series_to_slots(
         snapshot.grid_forecast.get("series"),
@@ -1234,7 +1248,7 @@ def _capture_step_rails(
     battery = aggregate_series_to_slots(
         snapshot.battery_forecast.get("series"),
         slot_ids,
-        sum_fields=("importedFromGridKwh", "exportedToGridKwh"),
+        sum_fields=("importedFromGridKwh", "exportedToGridKwh", "baselineHouseKwh"),
         last_fields=("socPct",),
     )
     return {
@@ -1242,6 +1256,7 @@ def _capture_step_rails(
         "batterySocPct": battery["socPct"],
         "importedFromGridKwh": battery["importedFromGridKwh"],
         "exportedToGridKwh": battery["exportedToGridKwh"],
+        "houseKwh": battery["baselineHouseKwh"],
     }
 
 
