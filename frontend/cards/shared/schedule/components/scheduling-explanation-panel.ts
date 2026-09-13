@@ -41,7 +41,7 @@ interface ExplanationTab {
  * optimizers now sit side by side.
  *
  * **One tab per optimizer that had something to say about the slot**, in
- * pipeline order, each carrying its own outcome as a glyph and a word. An
+ * traced-phase order, each carrying its own outcome as a glyph and a word. An
  * optimizer that said nothing (`absent`) or whose step never ran
  * (`step_skipped`) has no matrix behind it and so gets no tab. With exactly one
  * tab there is no tab strip: a single chip above a diagram names what the
@@ -66,6 +66,27 @@ export class SchedulingExplanationPanel extends LitElement {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 6px;
+            }
+
+            .pipeline {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+
+            .pipeline-stage {
+                padding: 4px 8px;
+                border: 1px solid var(--divider-color);
+                border-radius: 999px;
+                color: var(--secondary-text-color);
+                font-size: 0.78rem;
+            }
+
+            /* The explicit current label also conveys state without colour. */
+            .pipeline-stage.active {
+                border-color: var(--primary-color);
+                color: var(--primary-text-color);
+                font-weight: 600;
             }
 
             /* The day switcher's chips, in the same shape: a row of choices
@@ -222,6 +243,7 @@ export class SchedulingExplanationPanel extends LitElement {
         const active = tabs.length === 0 ? null : this._activeTab(tabs);
         return html`
             <div class="explanation-panel">
+                ${this._renderPipeline(active?.column.phase ?? null)}
                 ${showStrip ? this._renderTabStrip(tabs, active, inactive) : nothing}
                 ${active === null ? html`
                     <div class="placeholder empty">${this._text("empty")}</div>
@@ -240,6 +262,33 @@ export class SchedulingExplanationPanel extends LitElement {
                     ${this._renderTraceDialog()}
                     ${this._renderEditDialog()}
                 `}
+            </div>
+        `;
+    }
+
+    /** The full run context; phase 1 is intentionally informational only. */
+    private _renderPipeline(activePhase: ExplanationColumn["phase"]) {
+        const stages: Array<{ phase: number; label: string; unavailable?: boolean }> = [
+            { phase: 1, label: this._text("pipeline.appliance_estimate"), unavailable: true },
+            { phase: 2, label: this._text("pipeline.system_plan") },
+            { phase: 3, label: this._text("pipeline.final_appliance_placement") },
+        ];
+        return html`
+            <div class="pipeline" aria-label=${this._text("pipeline.label")}>
+                ${stages.map((stage) => {
+                    const active = stage.phase === activePhase;
+                    return html`
+                        <span
+                            class=${`pipeline-stage${active ? " active" : ""}`}
+                            data-phase=${stage.phase}
+                            aria-current=${active ? "step" : nothing}
+                        >
+                            ${this._text(`pipeline.phase_${stage.phase}`)}: ${stage.label}
+                            ${stage.unavailable ? html` — ${this._text("pipeline.unavailable")}` : nothing}
+                            ${active ? html` — ${this._text("pipeline.current")}` : nothing}
+                        </span>
+                    `;
+                })}
             </div>
         `;
     }

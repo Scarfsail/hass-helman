@@ -3,7 +3,7 @@
  *
  * The backend serves one lane on one date: a single ascending `slotIds` array
  * (the row axis) and one entry per optimizer that touched the lane, already in
- * pipeline order. This module turns that into the level-1 grid the explanation
+ * traced-phase order. This module turns that into the level-1 grid the explanation
  * dialog draws -- rows = slots, one column per optimizer, plus a Result column
  * -- and keeps everything level 2 needs (groups, condition nodes, gates, the
  * union condition-column set) hanging off the same cells, so the drill-down is
@@ -42,6 +42,9 @@ export type ExplanationNodeScope = "slot" | "day" | "window" | "run";
 export type ExplanationVerdict = "execute" | "candidate" | "skip";
 
 export type ExplanationStatus = "ok" | "skipped" | "failed";
+
+/** The authoritative runtime phases that emit explanation records. */
+export type ExplanationPhase = 2 | 3;
 
 export type ExplanationParamsSource =
     | "slot_matched"
@@ -130,6 +133,8 @@ export interface ExplanationCell {
 export interface ExplanationColumn {
     optimizerId: string;
     kind: string;
+    /** Runtime phase carried by the payload; never inferred from kind or lane. */
+    phase: ExplanationPhase | null;
     /** The lane this optimizer writes: the controllable's own id. */
     controllableId: string;
     status: ExplanationStatus;
@@ -184,6 +189,7 @@ const NODE_STATES = new Set<string>([
 const NODE_SCOPES = new Set<string>(["slot", "day", "window", "run"]);
 const VERDICTS = new Set<string>(["execute", "candidate", "skip"]);
 const STATUSES = new Set<string>(["ok", "skipped", "failed"]);
+const PHASES = new Set<number>([2, 3]);
 const PARAMS_SOURCES = new Set<string>([
     "slot_matched",
     "day_resolved",
@@ -485,6 +491,9 @@ function parseColumn(
     return {
         optimizerId,
         kind: typeof payload.kind === "string" ? payload.kind : "",
+        phase: typeof payload.phase === "number" && PHASES.has(payload.phase)
+            ? payload.phase as ExplanationPhase
+            : null,
         controllableId:
             typeof payload.controllableId === "string" ? payload.controllableId : "",
         status,
@@ -510,8 +519,8 @@ export function parseScheduleExplanation(payload: unknown): ScheduleExplanationM
         ? payload.slotIds.filter((slotId): slotId is string => typeof slotId === "string")
         : [];
 
-    // Pipeline order is the payload's order. Re-sorting would break winner
-    // attribution, which is last-writer-wins *in that order*.
+    // Traced-phase order is the payload's order. Re-sorting would break winner
+    // attribution, which is last-writer-wins within that order.
     const columns = (Array.isArray(payload.optimizers) ? payload.optimizers : [])
         .filter(isRecord)
         .map((entry) => parseColumn(entry, slotIds));

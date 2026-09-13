@@ -15,7 +15,11 @@ from .config import AutomationConfig
 from .day_context import DayContext, build_day_contexts
 from .input_bundle import AutomationInputBundle
 from .conditions.types import ConditionRailsUnavailable
-from .explain import RunExplanation
+from .explain import (
+    PHASE_FINAL_APPLIANCE_PLACEMENT,
+    PHASE_SYSTEM_PLAN,
+    RunExplanation,
+)
 from .ownership import (
     count_automation_owned_actions,
     is_user_owned_appliance_action,
@@ -774,6 +778,7 @@ def run_optimizer_loop_pure(
             build_snapshot=build_snapshot,
             resolve_day_contexts=resolve_day_contexts,
             traced=False,
+            phase=1,
             optimizer_summaries=(),
             capture_reserve_floor=False,
         )
@@ -796,6 +801,7 @@ def run_optimizer_loop_pure(
             build_snapshot=build_snapshot,
             resolve_day_contexts=resolve_day_contexts,
             traced=True,
+            phase=PHASE_SYSTEM_PLAN,
             optimizer_summaries=tuple(optimizer_summaries),
             capture_reserve_floor=capture_reserve_floor,
         )
@@ -834,6 +840,7 @@ def run_optimizer_loop_pure(
             build_snapshot=build_snapshot,
             resolve_day_contexts=resolve_day_contexts,
             traced=True,
+            phase=PHASE_FINAL_APPLIANCE_PLACEMENT,
             optimizer_summaries=tuple(optimizer_summaries),
             capture_reserve_floor=False,
         )
@@ -888,6 +895,7 @@ def _run_optimizer_step(
     build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
     resolve_day_contexts: "Callable[..., dict] | None",
     traced: bool,
+    phase: int,
     optimizer_summaries: tuple[OptimizerRunSummary, ...],
     capture_reserve_floor: bool,
 ) -> tuple[
@@ -937,6 +945,7 @@ def _run_optimizer_step(
             # and winner attribution can match writes against the step that
             # made them.
             controllable_id=optimizer_config.controllable_id,
+            phase=phase,
         )
         # Stamp the step with its execution-condition state so the run
         # explanation can present this optimizer's placements as candidates
@@ -968,6 +977,7 @@ def _run_optimizer_step(
                 optimizer_config.id,
                 optimizer_config.kind,
                 controllable_id=optimizer_config.controllable_id,
+                phase=phase,
             )
         # Discards any partial decisions/notes from a traced (phase-3) attempt
         # that raised mid-way, and collapses the column to a single
@@ -992,6 +1002,7 @@ def _run_optimizer_step(
                 optimizer_config.id,
                 optimizer_config.kind,
                 controllable_id=optimizer_config.controllable_id,
+                phase=phase,
             )
         trace.end_step(status="failed")
         raise _build_optimizer_error(
@@ -1016,6 +1027,7 @@ def _run_optimizer_step(
                 optimizer_config.id,
                 optimizer_config.kind,
                 controllable_id=optimizer_config.controllable_id,
+                phase=phase,
             )
         trace.end_step(status="failed")
         raise _build_optimizer_error(

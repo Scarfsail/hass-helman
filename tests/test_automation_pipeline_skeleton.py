@@ -1883,6 +1883,9 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             [optimizer.controllable_id for optimizer in explanation.optimizers],
             ["inverter", "boiler"],
         )
+        self.assertEqual(
+            [optimizer.phase for optimizer in explanation.optimizers], [2, 3]
+        )
 
     async def test_a_failed_run_records_no_explanation(self) -> None:
         # The previous good record must stand: a run that blew up mid-loop has

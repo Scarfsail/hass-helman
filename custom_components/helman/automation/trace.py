@@ -147,6 +147,9 @@ class _MutableStep:
     # `TraceWrite.controllable_id`. Set at `begin_step`; empty for callers that
     # do not supply it (unit tests), which simply forgoes winner attribution.
     controllable_id: str = ""
+    #: The runtime pipeline phase that produced this trace. Phase 1 is never
+    #: traced, so explanation records only carry the authoritative phases 2/3.
+    phase: int = 2
     status: str = "ok"
     complete: bool = True
     # False when this optimizer carries an execution condition that is NOT met:
@@ -214,6 +217,7 @@ class _MutableStep:
             optimizer_id=self.optimizer_id,
             kind=self.kind,
             controllable_id=self.controllable_id,
+            phase=self.phase,
             status=self.explain_status or STATUS_OK,
             status_reason=self.explain_status_reason,
             slots=tuple(slots),
@@ -311,7 +315,12 @@ class OptimizerTrace:
     # --- step lifecycle ------------------------------------------------------
 
     def begin_step(
-        self, optimizer_id: str, kind: str, *, controllable_id: str = ""
+        self,
+        optimizer_id: str,
+        kind: str,
+        *,
+        controllable_id: str = "",
+        phase: int = 2,
     ) -> None:
         """Open a step. ``controllable_id`` is the lane it writes.
 
@@ -321,7 +330,10 @@ class OptimizerTrace:
         landed on its lane.
         """
         self._current = _MutableStep(
-            optimizer_id=optimizer_id, kind=kind, controllable_id=controllable_id
+            optimizer_id=optimizer_id,
+            kind=kind,
+            controllable_id=controllable_id,
+            phase=phase,
         )
 
     def set_condition_met(self, condition_met: bool) -> None:

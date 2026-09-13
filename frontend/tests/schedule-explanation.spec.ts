@@ -57,6 +57,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "export_price",
             kind: "export_price",
+            phase: 2,
             controllableId: "inverter",
             status: "ok",
             runAt: [[RUN_AT, 5]],
@@ -80,6 +81,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "charge_hold",
             kind: "charge_hold",
+            phase: 2,
             controllableId: "inverter",
             status: "ok",
             runAt: [[RUN_AT, 5]],
@@ -150,6 +152,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "charge_from_grid",
             kind: "charge_from_grid",
+            phase: 2,
             controllableId: "inverter",
             status: "skipped",
             statusReason: "battery_params_missing",
@@ -168,6 +171,7 @@ const APPLIANCE_PAYLOAD = {
     optimizers: [{
         optimizerId: "appliance_runtime:boiler",
         kind: "appliance_runtime",
+        phase: 3,
         controllableId: "boiler",
         status: "ok",
         runAt: [[RUN_AT, 2]],
@@ -280,7 +284,32 @@ async function openTab(page: Page): Promise<string | null> {
 }
 
 test.describe("slot explanation, the tab strip", () => {
-    test("a tab per optimizer that had an account of the slot, in pipeline order", async ({ page }) => {
+    test("shows all pipeline phases and marks the traced phase without a phase-1 tab", async ({ page }) => {
+        await mountPanel(page, INVERTER_PAYLOAD, 2);
+
+        await expect(panel(page).locator(".pipeline-stage")).toHaveCount(3);
+        await expect(panel(page).locator('.pipeline-stage[data-phase="1"]'))
+            .toContainText("scheduling.explanation.pipeline.unavailable");
+        await expect(panel(page).locator('.pipeline-stage[data-phase="2"]'))
+            .toHaveAttribute("aria-current", "step");
+        await expect(panel(page).locator('.pipeline-stage[data-phase="3"]'))
+            .not.toHaveAttribute("aria-current", "step");
+        await expect(panel(page).locator('.pipeline-stage[data-phase="1"] button'))
+            .toHaveCount(0);
+    });
+
+    test("marks an appliance account as the final phase", async ({ page }) => {
+        await mountPanel(page, APPLIANCE_PAYLOAD, 0);
+
+        await expect(panel(page).locator('.pipeline-stage[data-phase="1"]'))
+            .toContainText("scheduling.explanation.pipeline.unavailable");
+        await expect(panel(page).locator('.pipeline-stage[data-phase="2"]'))
+            .not.toHaveAttribute("aria-current", "step");
+        await expect(panel(page).locator('.pipeline-stage[data-phase="3"]'))
+            .toHaveAttribute("aria-current", "step");
+    });
+
+    test("a tab per optimizer that had an account of the slot, in traced-phase order", async ({ page }) => {
         // 14:00: charge_hold and export_price both decided execute;
         // charge_from_grid never ran, so it is on the strip but not openable.
         await mountPanel(page, INVERTER_PAYLOAD, 2);
@@ -288,7 +317,7 @@ test.describe("slot explanation, the tab strip", () => {
         const optimizers = await panel(page).locator(".tab").evaluateAll(
             (nodes) => nodes.map((node) => node.getAttribute("data-optimizer")),
         );
-        // Pipeline order is the payload's order, never re-sorted.
+        // Traced-phase order is the payload's order, never re-sorted.
         expect(optimizers).toEqual(["export_price", "charge_hold", "charge_from_grid"]);
         await expect(panel(page).locator("scheduling-logic-diagram")).toHaveCount(1);
     });
@@ -297,7 +326,7 @@ test.describe("slot explanation, the tab strip", () => {
         await mountPanel(page, INVERTER_PAYLOAD, 2);
 
         // charge_hold decided execute first; export_price came later in the
-        // pipeline and took the slot, so its account is the one that matches
+        // traced phase and took the slot, so its account is the one that matches
         // what the schedule shows.
         expect(await openTab(page)).toBe("export_price");
     });
