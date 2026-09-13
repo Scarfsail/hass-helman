@@ -94,7 +94,7 @@ def _optimizer(*groups: dict) -> dict:
 
 
 def _coordinator(hass: FakeHass, *optimizers: dict) -> HelmanCoordinator:
-    config = {"automation": {"optimizers": list(optimizers)}}
+    config = {"automation": {"system_optimizers": list(optimizers)}}
     coordinator = HelmanCoordinator(hass, FakeStorage(config))
     coordinator._active_config = config
     return coordinator
@@ -577,7 +577,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator._active_config = {
             "automation": {
-                "optimizers": [_optimizer({"when_price_below": 1.0, "custom": custom})]
+                "system_optimizers": [_optimizer({"when_price_below": 1.0, "custom": custom})]
             }
         }
         await coordinator._async_evaluate_optimizer_conditions()

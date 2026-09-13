@@ -15,7 +15,13 @@ from .fields import (
     merge_params,
     read_fields,
 )
-from .spec import KNOWN_OPTIMIZER_KINDS, OPTIMIZER_SPECS, OptimizerSpec
+from .spec import (
+    KNOWN_OPTIMIZER_KINDS,
+    OPTIMIZER_BUCKET_APPLIANCE,
+    OPTIMIZER_BUCKET_SYSTEM,
+    OPTIMIZER_SPECS,
+    OptimizerSpec,
+)
 
 __all__ = [
     "AutomationConfig",
@@ -127,8 +133,11 @@ class DayContextConfig:
 @dataclass(frozen=True)
 class AutomationConfig:
     enabled: bool = True
-    optimizers: tuple[OptimizerInstanceConfig, ...] = ()
-    execution_optimizers: tuple[OptimizerInstanceConfig, ...] = ()
+    #: Configured, in order, enabled and disabled. Appliance kinds are the ones
+    #: that add house demand of their own (``OptimizerSpec.bucket ==
+    #: "appliance"``); system kinds read that demand rather than add to it.
+    appliance_optimizers: tuple[OptimizerInstanceConfig, ...] = ()
+    system_optimizers: tuple[OptimizerInstanceConfig, ...] = ()
     day_context: DayContextConfig = field(default_factory=DayContextConfig)
 
     @classmethod
@@ -143,25 +152,47 @@ class AutomationConfig:
             data.get("enabled", True),
             path=f"{path}.enabled",
         )
-        optimizers = _read_optimizers(
-            data.get("optimizers", MISSING),
-            path=f"{path}.optimizers",
+        appliance_optimizers, system_optimizers = _read_optimizer_buckets(
+            data,
+            path=path,
         )
         day_context = _read_day_context(
             data.get("day_context", MISSING),
             path=f"{path}.day_context",
         )
-        execution_optimizers = (
-            ()
-            if not enabled
-            else tuple(optimizer for optimizer in optimizers if optimizer.enabled)
-        )
         return cls(
             enabled=enabled,
-            optimizers=optimizers,
-            execution_optimizers=execution_optimizers,
+            appliance_optimizers=appliance_optimizers,
+            system_optimizers=system_optimizers,
             day_context=day_context,
         )
+
+    @property
+    def enabled_appliance_optimizers(self) -> tuple[OptimizerInstanceConfig, ...]:
+        """Enabled appliance optimizers, in order; empty when disabled."""
+        if not self.enabled:
+            return ()
+        return tuple(
+            optimizer for optimizer in self.appliance_optimizers if optimizer.enabled
+        )
+
+    @property
+    def enabled_system_optimizers(self) -> tuple[OptimizerInstanceConfig, ...]:
+        """Enabled system optimizers, in order; empty when disabled."""
+        if not self.enabled:
+            return ()
+        return tuple(
+            optimizer for optimizer in self.system_optimizers if optimizer.enabled
+        )
+
+    @property
+    def all_optimizers(self) -> tuple[OptimizerInstanceConfig, ...]:
+        """Both buckets concatenated, for consumers that need every entry.
+
+        Regardless of order — this exists for "is there anything configured at
+        all" style consumers, not for anything that depends on run order.
+        """
+        return self.appliance_optimizers + self.system_optimizers
 
 
 def read_automation_config(
@@ -205,9 +236,51 @@ def _read_day_context(
     )
 
 
-def _read_optimizers(
+#: Bucket key -> the bucket its ``OptimizerSpec.bucket`` must match.
+_BUCKET_KEYS: dict[str, str] = {
+    "appliance_optimizers": OPTIMIZER_BUCKET_APPLIANCE,
+    "system_optimizers": OPTIMIZER_BUCKET_SYSTEM,
+}
+
+
+def _read_optimizer_buckets(
+    data: Mapping[str, Any],
+    *,
+    path: str,
+) -> tuple[tuple[OptimizerInstanceConfig, ...], tuple[OptimizerInstanceConfig, ...]]:
+    """Read ``appliance_optimizers`` / ``system_optimizers``, ids unique across both.
+
+    The flat ``optimizers`` key is no longer accepted — there is no dual-schema
+    path — so it is rejected here rather than silently ignored, which would
+    otherwise look like "automation configured with no optimizers".
+    """
+    if "optimizers" in data:
+        raise AutomationConfigError(
+            path=f"{path}.optimizers",
+            code="invalid_value",
+            message=(
+                f"{path}.optimizers moved to {path}.appliance_optimizers and "
+                f"{path}.system_optimizers"
+            ),
+        )
+
+    seen_ids: set[str] = set()
+    buckets: dict[str, tuple[OptimizerInstanceConfig, ...]] = {}
+    for key, expected_bucket in _BUCKET_KEYS.items():
+        buckets[key] = _read_optimizer_list(
+            data.get(key, MISSING),
+            expected_bucket=expected_bucket,
+            seen_ids=seen_ids,
+            path=f"{path}.{key}",
+        )
+    return buckets["appliance_optimizers"], buckets["system_optimizers"]
+
+
+def _read_optimizer_list(
     value: object,
     *,
+    expected_bucket: str,
+    seen_ids: set[str],
     path: str,
 ) -> tuple[OptimizerInstanceConfig, ...]:
     if value is MISSING:
@@ -219,7 +292,6 @@ def _read_optimizers(
             message=f"{path} must be a list",
         )
 
-    seen_ids: set[str] = set()
     optimizers: list[OptimizerInstanceConfig] = []
     for index, raw_optimizer in enumerate(value):
         optimizer = _read_optimizer(raw_optimizer, path=f"{path}[{index}]")
@@ -230,6 +302,15 @@ def _read_optimizers(
                 message=f"duplicate optimizer id {optimizer.id!r}",
             )
         seen_ids.add(optimizer.id)
+        if optimizer.spec.bucket != expected_bucket:
+            raise AutomationConfigError(
+                path=f"{path}[{index}].kind",
+                code="wrong_bucket",
+                message=(
+                    f"{path}[{index}].kind {optimizer.kind!r} belongs in the "
+                    f"{optimizer.spec.bucket} bucket, not {expected_bucket}"
+                ),
+            )
         optimizers.append(optimizer)
     return tuple(optimizers)
 

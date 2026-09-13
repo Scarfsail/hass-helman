@@ -368,6 +368,17 @@ class AutomationRunner:
     ) -> None:
         self._coordinator = coordinator
         self._automation_config = automation_config
+        # Appliance bucket first, system bucket second: #270's own accepted
+        # risk for this phase states the flattened order is
+        # appliances-then-system once the buckets exist but the single-pass
+        # runner is still in use — every appliance optimizer plans with no
+        # inverter actions written yet, a known regression P2 (#272) fixes by
+        # restructuring the run into phases. Not fixed here; P1 must not ship
+        # to `main` alone.
+        self._execution_optimizers = (
+            automation_config.enabled_appliance_optimizers
+            + automation_config.enabled_system_optimizers
+        )
 
     async def run(
         self,
@@ -410,7 +421,7 @@ class AutomationRunner:
                         cleanup_outcome=cleanup_outcome,
                     )
                     last_result = result
-                elif not self._automation_config.execution_optimizers:
+                elif not self._execution_optimizers:
                     current_stage = "cleanup_persist"
                     cleanup_outcome = await self._async_persist_cleanup_only_locked(
                         baseline_schedule_document=baseline_schedule_document,
@@ -441,18 +452,29 @@ class AutomationRunner:
                             include_condition_flags=True,
                         )
                     )
-                    # Nothing has run yet, so every appliance lane is still
-                    # pending: take them all back from the baseline so the day
-                    # classification and the static rails read the house the run
-                    # will actually have, not the one left by stripping.
+                    # Nothing has run yet, so every appliance lane behind the
+                    # first optimizer is still pending: take those back from
+                    # the baseline so the day classification and the static
+                    # rails read the house the run will actually have, not the
+                    # one left by stripping. If the first optimizer is itself
+                    # an appliance one, its own lane is excluded here too — it
+                    # is about to re-plan that lane, so its own initial view
+                    # must not read its previous run's placements as fixed,
+                    # same as `_pending_appliance_ids_by_index` already
+                    # guarantees for every later index.
+                    pending_appliance_ids_by_index = _pending_appliance_ids_by_index(
+                        self._execution_optimizers
+                    )
                     initial_snapshot = (
                         await self._coordinator._build_automation_snapshot_from_schedule_locked(
                             schedule_document=schedule_document,
                             demand_schedule_document=restore_automation_owned_appliance_actions(
                                 baseline=baseline_schedule_document,
                                 current=schedule_document,
-                                appliance_ids=_appliance_lane_ids(
-                                    self._automation_config.execution_optimizers
+                                appliance_ids=(
+                                    pending_appliance_ids_by_index[0]
+                                    if pending_appliance_ids_by_index
+                                    else ()
                                 ),
                             ),
                             input_bundle=input_bundle,
@@ -528,7 +550,7 @@ class AutomationRunner:
                             optimizer_ids={
                                 optimizer.id
                                 for optimizer in (
-                                    self._automation_config.execution_optimizers
+                                    self._execution_optimizers
                                 )
                             },
                         )
@@ -638,7 +660,7 @@ class AutomationRunner:
         return await self._coordinator._hass.async_add_executor_job(
             functools.partial(
                 run_optimizer_loop_pure,
-                execution_optimizers=self._automation_config.execution_optimizers,
+                execution_optimizers=self._execution_optimizers,
                 baseline_schedule_document=baseline_schedule_document,
                 schedule_document=schedule_document,
                 initial_snapshot=initial_snapshot,
@@ -701,21 +723,6 @@ _APPLIANCE_OPTIMIZER_KIND = "appliance_runtime"
 #: this kind can exist in one run (config enforces unique ids, not unique
 #: kinds), and each is captured independently, keyed by its own id.
 _CHARGE_FROM_GRID_KIND = "charge_from_grid"
-
-
-def _appliance_lane_ids(
-    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
-) -> tuple[str, ...]:
-    """Every appliance lane this run will re-plan.
-
-    All of them are still pending before the loop starts, which is what the
-    initial snapshot has to assume.
-    """
-    return tuple(
-        optimizer.controllable_id
-        for optimizer in execution_optimizers
-        if optimizer.kind == _APPLIANCE_OPTIMIZER_KIND
-    )
 
 
 def _pending_appliance_ids_by_index(

@@ -888,7 +888,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
-            execution_optimizers=[
+            enabled_appliance_optimizers=[
                 # The real config object, not a stand-in: the coordinator reads
                 # the target through `controllable_id`, and a namespace that
                 # answered `target` alone would pass while the property it
@@ -921,7 +921,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
-            execution_optimizers=[
+            enabled_appliance_optimizers=[
                 OptimizerInstanceConfig(
                     id="pool",
                     kind="appliance_runtime",
@@ -962,14 +962,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             {"pool-filtration": 14, "dishwasher": 4, "boiler": 1},
         )
 
-    def test_optimizers_of_other_kinds_need_no_history(self) -> None:
+    def test_no_appliance_optimizers_need_no_history(self) -> None:
+        # `_resolve_runtime_history_requirements` walks the appliance bucket
+        # only -- a system-kind optimizer like `charge_hold` cannot land there
+        # (config parsing rejects it with `wrong_bucket`), so there is nothing
+        # left to filter by kind any more.
         coordinator = self._coordinator()
-        config = SimpleNamespace(
-            enabled=True,
-            execution_optimizers=[
-                OptimizerInstanceConfig(id="hold", kind="charge_hold"),
-            ],
-        )
+        config = SimpleNamespace(enabled=True, enabled_appliance_optimizers=[])
 
         with patch.object(
             coordinator_module, "read_automation_config", return_value=config
@@ -1037,7 +1036,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     def _config():
         return SimpleNamespace(
             enabled=True,
-            execution_optimizers=[
+            enabled_appliance_optimizers=[
                 OptimizerInstanceConfig(
                     id="pool",
                     kind="appliance_runtime",
@@ -1118,7 +1117,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "automation": {
                     "enabled": True,
-                    "optimizers": [
+                    "appliance_optimizers": [
                         {
                             "id": "pool",
                             "kind": "appliance_runtime",
