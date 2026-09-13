@@ -43,6 +43,7 @@ from ...scheduling.schedule import (
 )
 from ..base import ScheduleWriter
 from ..conditions import build_eligibility
+from ..day_context import ImportBand
 from ..explain import (
     SCOPE_WINDOW,
     STATE_FALSE,
@@ -60,7 +61,6 @@ from ..trace import NULL_TRACE, ReserveFloorObservation
 if TYPE_CHECKING:
     from ..conditions import SlotEligibility
     from ..config import OptimizerInstanceConfig
-    from ..day_context import ImportBand
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
@@ -162,50 +162,49 @@ class ChargeFromGridOptimizer:
         )
 
         emit = _ChargeFromGridEmission(trace)
-        for day_context in snapshot.context.day_contexts.values():
-            bands = day_context.import_bands
-            for index, band in enumerate(bands):
-                if band.level != IMPORT_BAND_LEVEL_EXPENSIVE:
-                    continue
-                cheap_band = _find_preceding_cheap_band(bands, index)
-                if cheap_band is None:
-                    continue
-                cheap_slots = horizon_slots_between(
-                    cheap_band.start,
-                    cheap_band.end,
-                    horizon_start=horizon_start,
-                    horizon_end=horizon_end,
-                )
-                # Self-gating: every group's mask is all-true, so any slot of
-                # the band resolves to the same group. No slots in the horizon
-                # means nothing to write for this band.
-                resolved = next(
-                    (
-                        candidate
-                        for candidate in map(eligibility.at, cheap_slots)
-                        if candidate is not None
-                    ),
-                    None,
-                )
-                if resolved is None:
-                    continue
-                self._plan_window(
-                    writer=writer,
-                    resolved=resolved,
-                    expensive_band=band,
-                    cheap_band=cheap_band,
-                    cheap_slots=cheap_slots,
-                    soc_by_bucket=soc_by_bucket,
-                    import_price_by_bucket=import_price_by_bucket,
-                    usable_capacity_kwh=usable_capacity_kwh,
-                    charge_efficiency=charge_efficiency,
-                    max_charge_power_kw=max_charge_power_kw,
-                    upper_target=min(
-                        battery_state.max_soc, resolved.params["max_target_soc"]
-                    ),
-                    lower_target=battery_state.min_soc,
-                    emit=emit,
-                )
+        bands = _build_import_band_timeline(snapshot.context.day_contexts.values())
+        for index, band in enumerate(bands):
+            if band.level != IMPORT_BAND_LEVEL_EXPENSIVE:
+                continue
+            cheap_band = _find_preceding_cheap_band(bands, index)
+            if cheap_band is None:
+                continue
+            cheap_slots = horizon_slots_between(
+                cheap_band.start,
+                cheap_band.end,
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+            )
+            # Self-gating: every group's mask is all-true, so any slot of
+            # the band resolves to the same group. No slots in the horizon
+            # means nothing to write for this band.
+            resolved = next(
+                (
+                    candidate
+                    for candidate in map(eligibility.at, cheap_slots)
+                    if candidate is not None
+                ),
+                None,
+            )
+            if resolved is None:
+                continue
+            self._plan_window(
+                writer=writer,
+                resolved=resolved,
+                expensive_band=band,
+                cheap_band=cheap_band,
+                cheap_slots=cheap_slots,
+                soc_by_bucket=soc_by_bucket,
+                import_price_by_bucket=import_price_by_bucket,
+                usable_capacity_kwh=usable_capacity_kwh,
+                charge_efficiency=charge_efficiency,
+                max_charge_power_kw=max_charge_power_kw,
+                upper_target=min(
+                    battery_state.max_soc, resolved.params["max_target_soc"]
+                ),
+                lower_target=battery_state.min_soc,
+                emit=emit,
+            )
 
         emit.flush()
         return writer.flush(action=_ACTION)
@@ -654,13 +653,53 @@ class _ChargeFromGridEmission:
 
 
 def _find_preceding_cheap_band(
-    bands: tuple["ImportBand", ...],
+    bands: tuple[ImportBand, ...],
     expensive_index: int,
 ) -> "ImportBand | None":
+    if expensive_index <= 0:
+        return None
+
+    # Overlapping expensive windows may share one cheap predecessor, but a
+    # missing interval must end the search.  Track how far continuous coverage
+    # reaches backward so an older cheap band cannot bridge a forecast gap.
+    coverage_start = dt_util.as_utc(bands[expensive_index].start)
     for band in reversed(bands[:expensive_index]):
+        band_end = dt_util.as_utc(band.end)
+        if band_end < coverage_start:
+            return None
+        coverage_start = min(coverage_start, dt_util.as_utc(band.start))
         if band.level == IMPORT_BAND_LEVEL_CHEAP:
             return band
     return None
+
+
+def _build_import_band_timeline(day_contexts) -> tuple[ImportBand, ...]:
+    """Join equal-level import bands that are continuous in elapsed time.
+
+    Day contexts deliberately remain calendar-scoped.  This boundary-local
+    timeline lets a tariff window cross that calendar boundary without changing
+    their representation or classification semantics.
+    """
+    ordered = sorted(
+        (band for day_context in day_contexts for band in day_context.import_bands),
+        key=lambda band: dt_util.as_utc(band.start),
+    )
+    timeline: list[ImportBand] = []
+    for band in ordered:
+        if (
+            timeline
+            and timeline[-1].level == band.level
+            and dt_util.as_utc(timeline[-1].end) == dt_util.as_utc(band.start)
+        ):
+            previous = timeline[-1]
+            timeline[-1] = ImportBand(
+                level=previous.level,
+                start=previous.start,
+                end=band.end,
+            )
+            continue
+        timeline.append(band)
+    return tuple(timeline)
 
 
 def _min_soc_over(

@@ -6,6 +6,7 @@ import unittest
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,7 @@ from custom_components.helman.automation.day_context import (  # noqa: E402
     ImportBand,
 )
 from custom_components.helman.automation.optimizers.charge_from_grid import (  # noqa: E402
+    _build_import_band_timeline,
     build_charge_from_grid_optimizer,
 )
 from custom_components.helman.automation.snapshot import (  # noqa: E402
@@ -160,6 +162,8 @@ def _make_snapshot(
     bands: tuple[ImportBand, ...],
     schedule_document: ScheduleDocument | None = None,
     battery_configured: bool = True,
+    day_contexts: dict[date, DayContext] | None = None,
+    now: datetime = REFERENCE_TIME,
 ) -> OptimizationSnapshot:
     battery_state = (
         types.SimpleNamespace(current_soc=50.0, min_soc=10.0, max_soc=100.0)
@@ -172,7 +176,7 @@ def _make_snapshot(
         battery_forecast={"status": "available", "series": soc_series},
         grid_forecast={"status": "available", "series": []},
         context=OptimizationContext(
-            now=REFERENCE_TIME,
+            now=now,
             battery_state=battery_state,
             solar_forecast={"status": "available", "points": []},
             import_price_forecast={
@@ -187,7 +191,7 @@ def _make_snapshot(
             battery_usable_capacity_kwh=10.0,
             battery_charge_efficiency=1.0,
             runtime_hours_by_appliance_id_by_local_date={},
-            day_contexts={DAY: _day_context(bands)},
+            day_contexts=day_contexts or {DAY: _day_context(bands)},
         ),
     )
 
@@ -220,6 +224,109 @@ _BANDS = (
 
 
 class ChargeFromGridOptimizerTests(unittest.TestCase):
+    def test_joins_a_cheap_window_across_midnight_for_ranking(self) -> None:
+        previous_day = DAY - timedelta(days=1)
+        cheap_start = datetime(2026, 7, 9, 22, tzinfo=TZ)
+        midnight = datetime(2026, 7, 10, 0, tzinfo=TZ)
+        expensive_start = datetime(2026, 7, 10, 6, tzinfo=TZ)
+        expensive_end = datetime(2026, 7, 10, 22, tzinfo=TZ)
+        day_contexts = {
+            previous_day: _day_context((
+                ImportBand(level="cheap", start=cheap_start, end=midnight),
+            )),
+            DAY: _day_context((
+                ImportBand(level="cheap", start=midnight, end=expensive_start),
+                ImportBand(
+                    level="expensive", start=expensive_start, end=expensive_end
+                ),
+            )),
+        }
+        soc = []
+        prices = []
+        cursor = cheap_start
+        while cursor < expensive_end:
+            soc_pct = 45.0 if cursor < expensive_start else 40.0
+            if cursor >= expensive_start + timedelta(hours=1):
+                soc_pct = 20.0
+            soc.append({"timestamp": cursor.isoformat(), "socPct": soc_pct})
+            prices.append({"timestamp": cursor.isoformat(), "value": 2.0})
+            cursor += timedelta(minutes=30)
+
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(
+            soc_series=soc,
+            import_points=prices,
+            bands=(),
+            day_contexts=day_contexts,
+            now=cheap_start - timedelta(hours=1),
+        )
+        result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=snapshot.context.now
+        )
+
+        charged = _charge_slots(result)
+        cheap_start_id = cheap_start.isoformat(timespec="seconds")
+        self.assertEqual(list(charged), [cheap_start_id])
+        rank = _gate(_slots_by_id(trace)[cheap_start_id], "cheapest_rank")
+        self.assertEqual(rank.params["rankOf"], 32)
+        self.assertEqual(rank.params["rank"], 1)
+
+    def test_timeline_only_joins_equal_level_exactly_adjacent_bands(self) -> None:
+        start = datetime(2026, 7, 9, 22, tzinfo=TZ)
+        midnight = datetime(2026, 7, 10, 0, tzinfo=TZ)
+        six = datetime(2026, 7, 10, 6, tzinfo=TZ)
+        contexts = {
+            DAY: _day_context((
+                ImportBand(level="cheap", start=midnight, end=six),
+                ImportBand(level="expensive", start=six, end=six + timedelta(hours=1)),
+            )),
+            DAY - timedelta(days=1): _day_context((
+                ImportBand(level="cheap", start=start, end=midnight),
+            )),
+        }
+        timeline = _build_import_band_timeline(contexts.values())
+        self.assertEqual(len(timeline), 2)
+        self.assertEqual((timeline[0].start, timeline[0].end), (start, six))
+
+        gap = _build_import_band_timeline((_day_context((
+            ImportBand(level="cheap", start=start, end=midnight),
+            ImportBand(level="cheap", start=midnight + timedelta(minutes=15), end=six),
+        )),))
+        self.assertEqual(len(gap), 2)
+        level_change = _build_import_band_timeline((_day_context((
+            ImportBand(level="cheap", start=start, end=midnight),
+            ImportBand(level="expensive", start=midnight, end=six),
+        )),))
+        self.assertEqual(len(level_change), 2)
+
+    def test_timeline_merges_across_dst_by_elapsed_time(self) -> None:
+        berlin = ZoneInfo("Europe/Berlin")
+        start = datetime(2026, 10, 24, 22, tzinfo=berlin)
+        boundary = datetime(2026, 10, 25, 3, tzinfo=berlin)
+        end = datetime(2026, 10, 25, 6, tzinfo=berlin)
+        timeline = _build_import_band_timeline((_day_context((
+            ImportBand(level="cheap", start=start, end=boundary),
+        )), _day_context((
+            ImportBand(level="cheap", start=boundary, end=end),
+        ))))
+        self.assertEqual(len(timeline), 1)
+        self.assertEqual((timeline[0].start, timeline[0].end), (start, end))
+
+    def test_does_not_bridge_an_expensive_window_across_a_coverage_gap(self) -> None:
+        bands = (
+            ImportBand(level="cheap", start=_at(6), end=_at(8)),
+            ImportBand(level="expensive", start=_at(9), end=_at(11)),
+        )
+        soc = _soc_series({0: 45, 6: 45, 9: 40, 10: 20, 11: 60})
+        prices = _import_points({6: 2.0, 9: 6.0})
+
+        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+            _make_snapshot(soc_series=soc, import_points=prices, bands=bands),
+            _make_config(),
+        )
+
+        self.assertEqual(_charge_slots(result), {})
+
     def test_charges_cheapest_slots_to_bridge_dip(self) -> None:
         # SoC dips to 20 during expensive window (floor 30 -> dip 10).
         # window_start_soc (08:00) = 40 -> target = 40 + 10 = 50.
