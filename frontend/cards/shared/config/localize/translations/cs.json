@@ -300,7 +300,7 @@
       "training_time": "Čas dne (HH:MM v místním čase), kdy se spouští noční dávka trénování.",
       "import_price_unit": "Např.: CZK/kWh",
       "mode_entity": "Helman zapisuje volby akcí plánování do této entity.",
-      "automation_enabled": "Zapnutí vytvoří automation: { enabled: true, optimizers: [] }. Vypnutí zachová aktuální seznam optimalizátorů pro pozdější úpravy.",
+      "automation_enabled": "Zapnutí vytvoří automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] }. Vypnutí zachová aktuální seznamy optimalizátorů pro pozdější úpravy.",
       "optimizer_target": "Vyberte ovládaný prvek, který tento optimalizátor řídí. Nabízejí se jen druhy, které skutečně řídit umí; klimatický spotřebič zobrazí živý výběr režimu, jakmile jsou k dispozici jeho runtime schopnosti.",
       "optimizer_target_missing_from_draft": "Tento optimalizátor stále odkazuje na id ovládaného prvku, který už v aktuálním seznamu ovládaných prvků není. Hodnota zůstává zachovaná, dokud nevyberete náhradu.",
       "optimizer_target_pending_reload": "Některé klimatické spotřebiče jsou zobrazené, ale zůstávají zakázané, dokud jejich živě podporované režimy nezpřístupní uložení a znovunačtení.",

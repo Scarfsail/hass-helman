@@ -300,7 +300,7 @@
       "training_time": "Time of day (HH:MM in local time) when the nightly training batch runs.",
       "import_price_unit": "Example: CZK/kWh",
       "mode_entity": "Helman writes schedule action options to this entity.",
-      "automation_enabled": "Turning this on materializes automation: { enabled: true, optimizers: [] }. Turning it off keeps the current optimizer list for later edits.",
+      "automation_enabled": "Turning this on materializes automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] }. Turning it off keeps the current optimizer lists for later edits.",
       "optimizer_target": "Pick the controllable this optimizer drives. Only the kinds it can actually drive are offered; a climate appliance exposes a live mode selector once runtime capabilities are available.",
       "optimizer_target_missing_from_draft": "This optimizer still references a controllable id that is no longer present in the current controllables list. The value is preserved until you choose a replacement.",
       "optimizer_target_pending_reload": "Some climate appliances are shown but disabled until save and reload makes their live supported modes available.",
