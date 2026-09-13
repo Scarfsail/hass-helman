@@ -204,6 +204,8 @@ There is no surplus to distribute. Everything an appliance runs will come from t
 
 Phase 1 still does the same real work here, through a different channel. `charge_from_grid` does not read surplus at all — it reads the **projected battery SoC trajectory** and decides whether an expensive import window needs bridging with cheap energy bought beforehand. That trajectory is built from phase 1's appliance demand:
 
+Import-price bands are classified per local calendar day, but a continuous price window may span midnight and is treated as one window when `charge_from_grid` ranks its slots. [#285](https://github.com/Scarfsail/hass-helman/issues/285) follows up with a separate placement-policy change.
+
 - It projects the battery *including* the 3.8 kWh of appliance load phase 1 placed, sees it dip below the reserve floor during the evening peak, and buys enough cheap energy beforehand to bridge it.
 - Had phase 1 not run first — a bare house instead — the battery would look 3.8 kWh healthier than it will be, no bridge would be bought, and the evening peak would be covered at peak import prices. That is exactly issue #116, and it is what running appliances for real in phase 1 (rather than restoring a previous run's placement) closes for cold start too — see Example 5.
 
