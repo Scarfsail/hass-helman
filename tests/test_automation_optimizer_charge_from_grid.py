@@ -312,6 +312,21 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertEqual(len(timeline), 1)
         self.assertEqual((timeline[0].start, timeline[0].end), (start, end))
 
+    def test_does_not_bridge_an_expensive_window_across_a_coverage_gap(self) -> None:
+        bands = (
+            ImportBand(level="cheap", start=_at(6), end=_at(8)),
+            ImportBand(level="expensive", start=_at(9), end=_at(11)),
+        )
+        soc = _soc_series({0: 45, 6: 45, 9: 40, 10: 20, 11: 60})
+        prices = _import_points({6: 2.0, 9: 6.0})
+
+        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+            _make_snapshot(soc_series=soc, import_points=prices, bands=bands),
+            _make_config(),
+        )
+
+        self.assertEqual(_charge_slots(result), {})
+
     def test_charges_cheapest_slots_to_bridge_dip(self) -> None:
         # SoC dips to 20 during expensive window (floor 30 -> dip 10).
         # window_start_soc (08:00) = 40 -> target = 40 + 10 = 50.

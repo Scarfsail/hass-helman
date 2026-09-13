@@ -656,7 +656,18 @@ def _find_preceding_cheap_band(
     bands: tuple[ImportBand, ...],
     expensive_index: int,
 ) -> "ImportBand | None":
+    if expensive_index <= 0:
+        return None
+
+    # Overlapping expensive windows may share one cheap predecessor, but a
+    # missing interval must end the search.  Track how far continuous coverage
+    # reaches backward so an older cheap band cannot bridge a forecast gap.
+    coverage_start = dt_util.as_utc(bands[expensive_index].start)
     for band in reversed(bands[:expensive_index]):
+        band_end = dt_util.as_utc(band.end)
+        if band_end < coverage_start:
+            return None
+        coverage_start = min(coverage_start, dt_util.as_utc(band.start))
         if band.level == IMPORT_BAND_LEVEL_CHEAP:
             return band
     return None
