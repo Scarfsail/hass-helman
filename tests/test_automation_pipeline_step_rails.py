@@ -2,7 +2,9 @@
 
 The automation inspector renders each optimizer's effect as a before->after
 delta, so ``_capture_step_rails`` must surface every system parameter an
-optimizer can move: surplus, SoC, and the effective grid import/export energy.
+optimizer can move: surplus, SoC, the effective grid import/export energy, and
+(since #272, P2 of #270, moved it here from the static rails -- house demand
+is not run-invariant once the run is phased) the house demand the step read.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ class CaptureStepRailsTest(unittest.TestCase):
                         "socPct": 55.0,
                         "importedFromGridKwh": 0.3,
                         "exportedToGridKwh": 1.1,
+                        "baselineHouseKwh": 4.2,
                     },
                 ]
             },
@@ -50,6 +53,7 @@ class CaptureStepRailsTest(unittest.TestCase):
                 "batterySocPct": [55.0],
                 "importedFromGridKwh": [0.3],
                 "exportedToGridKwh": [1.1],
+                "houseKwh": [4.2],
             },
         )
 
@@ -62,6 +66,7 @@ class CaptureStepRailsTest(unittest.TestCase):
             "batterySocPct",
             "importedFromGridKwh",
             "exportedToGridKwh",
+            "houseKwh",
         ):
             self.assertIsNone(rails[key][1], key)
 

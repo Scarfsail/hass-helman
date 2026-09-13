@@ -1646,7 +1646,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
     def _build_coordinator(self, optimizers: list[dict]) -> HelmanCoordinator:
         storage = FakeStorage(
             schedule_document={"executionEnabled": False, "slots": {}},
-            config={"automation": {"optimizers": optimizers}},
+            config={"automation": {"system_optimizers": optimizers}},
         )
         coordinator = HelmanCoordinator(FakeHass(), storage)
         coordinator._active_config = storage.config

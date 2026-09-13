@@ -1104,7 +1104,10 @@ class HelmanCoordinator:
         # Stale automation-owned actions are stripped when automation itself is
         # off. This is independent of execution_enabled: with execution off the
         # optimizers still plan, so their actions stay.
-        if not (automation_config.enabled and automation_config.execution_optimizers):
+        if not (
+            automation_config.enabled_appliance_optimizers
+            or automation_config.enabled_system_optimizers
+        ):
             await self._async_cleanup_automation_owned_actions_if_needed(
                 reference_time=reference_time,
             )
@@ -3173,7 +3176,10 @@ class HelmanCoordinator:
                 reference_time=request_now
             )
 
-        if not (automation_config.enabled and automation_config.execution_optimizers):
+        if not (
+            automation_config.enabled_appliance_optimizers
+            or automation_config.enabled_system_optimizers
+        ):
             if not has_automation_owned_actions(schedule_document):
                 return
         elif not (
@@ -3619,7 +3625,7 @@ class HelmanCoordinator:
         traces: dict[tuple[str, int], dict[str, Any]] = {}
         run_at = dt_util.now().isoformat()
         active_keys: set[tuple[str, int]] = set()
-        for optimizer in automation_config.optimizers:
+        for optimizer in automation_config.all_optimizers:
             group_results: list[CustomConditionGroupResult] = []
             for group in optimizer.conditions:
                 if not group.custom:
@@ -4007,7 +4013,6 @@ class HelmanCoordinator:
         reference_time: datetime,
         day_contexts: dict[date, DayContext] | None = None,
         compute_inputs: ComputeInputs | None = None,
-        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         """Async wrapper: gather the run-invariant live inputs once (unless the
         caller already has them), then build the snapshot with the pure core.
@@ -4030,7 +4035,6 @@ class HelmanCoordinator:
                 reference_time=reference_time,
                 day_contexts=day_contexts,
                 compute_inputs=compute_inputs,
-                demand_schedule_document=demand_schedule_document,
             )
         )
 
@@ -4042,7 +4046,6 @@ class HelmanCoordinator:
         reference_time: datetime,
         day_contexts: dict[date, DayContext] | None = None,
         compute_inputs: ComputeInputs,
-        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         """Pure, synchronous snapshot build.
 
@@ -4057,20 +4060,11 @@ class HelmanCoordinator:
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=strip_candidate_actions(schedule_document)
         )
-        # House demand may be read from a *different* document than the one the
-        # snapshot carries: mid-run, the appliance lanes still ahead in the
-        # optimizer order have been stripped and are taken back from the
-        # baseline so demand stays whole (issue #116). Only the projection is
-        # built from it — `schedule` and the inverter overlay stay the working
-        # document, or a restored action would ride back into the plan the
-        # optimizer returns.
-        projection_schedule_document = (
-            schedule_documents.projection_schedule_document
-            if demand_schedule_document is None
-            else self._build_forecast_schedule_documents(
-                schedule_document=strip_candidate_actions(demand_schedule_document)
-            ).projection_schedule_document
-        )
+        # #272 (P2 of #270): the phased run rebuilds the snapshot from
+        # ``working_schedule_document`` alone after every step — there is no
+        # more pending-lane restoration concept, so the projection always
+        # comes from this same document's own schedule documents.
+        projection_schedule_document = schedule_documents.projection_schedule_document
         rebuild = self._build_forecast_rebuild_pure(
             solar_forecast=input_bundle.solar_forecast,
             original_house_forecast=input_bundle.original_house_forecast,
@@ -4775,9 +4769,7 @@ class HelmanCoordinator:
         if automation_config is None or not automation_config.enabled:
             return None
         lookback_days_by_appliance_id: dict[str, int] = {}
-        for optimizer in automation_config.execution_optimizers:
-            if optimizer.kind != "appliance_runtime":
-                continue
+        for optimizer in automation_config.enabled_appliance_optimizers:
             appliance_id = optimizer.controllable_id
             if not appliance_id:
                 continue

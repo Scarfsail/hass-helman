@@ -102,6 +102,43 @@ class TraceNote:
         return {"code": self.code, "params": self.params}
 
 
+@dataclass(frozen=True)
+class ReserveFloorObservation:
+    """One evaluated expensive window from a ``charge_from_grid`` step (#274).
+
+    Raw and unreduced — one entry per evaluated window, including overlapping
+    windows — unlike ``_ChargeFromGridEmission`` (charge_from_grid.py), which
+    is lossy per slot by design. This is the transport for the P0 reserve-floor
+    breach classifier (#270/#274): a diagnostic-only collector on
+    :class:`OptimizerTrace`, deliberately excluded from ``to_dict()`` and
+    ``optimizer_explanations()`` so it never reaches the wire format or the
+    inspector.
+
+    ``limit`` records which cap bound the write: ``"cap"`` (target_soc clamped
+    at ``max_target_soc``), ``"capacity"`` (the cheap window held fewer
+    rankable slots than needed), or ``None``. Never ``"power"`` — charge power
+    is already folded into ``slots_needed`` before this point.
+    """
+
+    #: The ``charge_from_grid`` instance that evaluated this window.
+    optimizer_id: str
+    #: The condition group whose ``reserve_floor_soc`` was consulted.
+    group_index: int
+    #: ``(start_slot_id, end_slot_id)`` of the expensive band being bridged.
+    window: tuple[str, str]
+    #: The resolved ``reserve_floor_soc`` for this group.
+    reserve_floor_soc: float
+    #: Whether the group's execution conditions were active this run.
+    conditions_active: bool
+    #: The projected SoC minimum across the window, as this step read it.
+    #: ``None`` when the trajectory did not cover the window.
+    projected_min_soc: float | None
+    #: Whether this step actually wrote a bridge for the window.
+    bridge_written: bool
+    #: ``"cap"``, ``"capacity"``, or ``None``.
+    limit: str | None = None
+
+
 @dataclass
 class _MutableStep:
     optimizer_id: str
@@ -255,6 +292,9 @@ class OptimizerTrace:
         self._rails_final: dict[str, list[float | None]] = {}
         self._steps: list[_MutableStep] = []
         self._current: _MutableStep | None = None
+        # Raw #274 collector, kept strictly separate from the decisions/gates
+        # above: see `ReserveFloorObservation`. Never serialized.
+        self._reserve_floor_observations: list[ReserveFloorObservation] = []
 
     @property
     def slot_ids(self) -> tuple[str, ...]:
@@ -583,6 +623,34 @@ class OptimizerTrace:
             _LOGGER.warning("trace step has unknown status %r", status)
         step.explain_status = status
         step.explain_status_reason = reason
+
+    # --- #274 reserve-floor observations --------------------------------
+
+    def record_reserve_floor_observation(
+        self, observation: ReserveFloorObservation
+    ) -> None:
+        """Append one raw observation for the current step (#274).
+
+        No-ops with no open step, mirroring every other mutator — so calling
+        an optimizer against ``NULL_TRACE`` (no ``begin_step``) never leaks
+        into the shared singleton. Swallows its own errors: observability must
+        never fail the run.
+        """
+        if self._current is None:
+            return
+        try:
+            self._reserve_floor_observations.append(observation)
+        except Exception:  # pragma: no cover - observability must not fail runs
+            _LOGGER.debug("trace reserve floor observation failed", exc_info=True)
+
+    @property
+    def reserve_floor_observations(self) -> tuple[ReserveFloorObservation, ...]:
+        """The raw, unreduced observations recorded this run.
+
+        Deliberately absent from ``to_dict()`` and ``optimizer_explanations()``
+        — see :class:`ReserveFloorObservation`.
+        """
+        return tuple(self._reserve_floor_observations)
 
     def winning_optimizers(self) -> dict[tuple[str, str], str]:
         """``(lane, slot id) -> the optimizer whose write survived``.

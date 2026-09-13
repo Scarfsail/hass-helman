@@ -6,7 +6,11 @@ import {
     type ConditionGroupsOptions,
 } from "./optimizer-condition-groups";
 import { renderSchemaFields } from "./optimizer-field-renderer";
-import type { OptimizerEditorHost, OptimizerSchema } from "./optimizer-schema";
+import type {
+    OptimizerConfigBucket,
+    OptimizerEditorHost,
+    OptimizerSchema,
+} from "./optimizer-schema";
 
 /**
  * One card renderer for every optimizer kind.
@@ -23,11 +27,19 @@ export interface OptimizerCardOptions {
     host: OptimizerEditorHost;
     schema: OptimizerSchema;
     optimizer: JsonObject;
+    /** Which bucket this optimizer lives in -- roots every path the card builds. */
+    bucket: OptimizerConfigBucket;
     index: number;
     total: number;
     enabled: boolean;
     /** Card heading — kinds with an appliance target show the appliance's name. */
     title: string;
+    /**
+     * A validation warning against this optimizer, shown as a badge beside the
+     * title. `required_appliance_planned_later` is the one case today: the
+     * card itself is where reordering fixes it.
+     */
+    warning?: string | null;
     /**
      * Whether the card starts open.
      *
@@ -44,12 +56,12 @@ export interface OptimizerCardOptions {
         total: number,
         enabled: boolean,
     ): TemplateResult;
-    conditionGroups: Omit<ConditionGroupsOptions, "host" | "schema" | "optimizerIndex">;
+    conditionGroups: Omit<ConditionGroupsOptions, "host" | "schema" | "bucket" | "optimizerIndex">;
 }
 
 export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResult {
-    const { host, schema, index, total, enabled, title } = options;
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const { host, schema, bucket, index, total, enabled, title, warning } = options;
+    const basePath: PathSegment[] = ["automation", bucket, index];
 
     return html`
         <details
@@ -67,6 +79,11 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
                                 ${host.t(`editor.values.${schema.kind}`)}
                             </span>
                         </div>
+                        ${warning
+                            ? html`<span class="optimizer-warning-badge" title=${warning}
+                                  >${host.t("editor.badges.optimizer_warning")}</span
+                              >`
+                            : nothing}
                     </div>
                     ${options.renderListActions(basePath, index, total, enabled)}
                 </div>
@@ -89,6 +106,7 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
                     ? renderConditionGroups({
                           host,
                           schema,
+                          bucket,
                           optimizerIndex: index,
                           ...options.conditionGroups,
                       })

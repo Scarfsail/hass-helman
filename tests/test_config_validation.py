@@ -394,7 +394,7 @@ class ConfigValidationTests(unittest.TestCase):
         config["controllables"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "appliance_optimizers": [
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "appliance_runtime",
@@ -413,7 +413,7 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "appliance_optimizers": [
                 {
                     "id": "run-unknown-on-surplus",
                     "kind": "appliance_runtime",
@@ -429,7 +429,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.optimizers[0].target.controllable_id"
+                issue.path == "automation.appliance_optimizers[0].target.controllable_id"
                 for issue in report.errors
             )
         )
@@ -441,7 +441,7 @@ class ConfigValidationTests(unittest.TestCase):
         config["controllables"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "appliance_optimizers": [
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "appliance_runtime",
@@ -460,7 +460,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.optimizers[0].target.climate_mode"
+                issue.path == "automation.appliance_optimizers[0].target.climate_mode"
                 for issue in report.errors
             )
         )
@@ -475,7 +475,7 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "system_optimizers": [
                 {
                     "id": "hold",
                     "kind": "charge_hold",
@@ -503,7 +503,7 @@ class ConfigValidationTests(unittest.TestCase):
         config["controllables"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "system_optimizers": [
                 {
                     "id": "hold",
                     "kind": "charge_hold",
@@ -525,7 +525,7 @@ class ConfigValidationTests(unittest.TestCase):
         ]
         self.assertEqual(len(incompatible), 1)
         self.assertEqual(
-            incompatible[0].path, "automation.optimizers[0].target.controllable_id"
+            incompatible[0].path, "automation.system_optimizers[0].target.controllable_id"
         )
         # The kind that cannot be driven is named, not just the id.
         self.assertIn("'generic'", incompatible[0].message)
@@ -543,7 +543,7 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "appliance_optimizers": [
                 {
                     "id": "charge-the-car",
                     "kind": "appliance_runtime",
@@ -571,7 +571,7 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         config["automation"] = {
             "enabled": True,
-            "optimizers": [
+            "appliance_optimizers": [
                 {
                     "id": "ghost",
                     "kind": "appliance_runtime",
@@ -621,7 +621,7 @@ class ConfigValidationTests(unittest.TestCase):
 
         config["automation"] = {
             "enabled": True,
-            "optimizers": list(optimizers)
+            "appliance_optimizers": list(optimizers)
             or [
                 self._pool_optimizer("filter", "filtration"),
                 self._pool_optimizer("heat", "heatpump", requires="filtration"),
@@ -666,7 +666,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(
             findings[0].path,
-            "automation.optimizers[0].conditions[0].requires_appliance",
+            "automation.appliance_optimizers[0].conditions[0].requires_appliance",
         )
 
     def test_a_provider_whose_only_optimizer_is_disabled_warns(self) -> None:
@@ -686,7 +686,7 @@ class ConfigValidationTests(unittest.TestCase):
         # pointing the editor there would highlight the wrong card.
         self.assertEqual(
             findings[0].path,
-            "automation.optimizers[1].conditions[0].requires_appliance",
+            "automation.appliance_optimizers[1].conditions[0].requires_appliance",
         )
 
     def test_an_unconfigured_provider_is_rejected(self) -> None:

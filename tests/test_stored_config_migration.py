@@ -67,7 +67,7 @@ class StoredConfigMigrationTests(unittest.TestCase):
         # migration forgot to move or drop fails right here.
         automation = read_automation_config(migrated)
         if automation is not None:
-            for optimizer in automation.optimizers:
+            for optimizer in automation.all_optimizers:
                 self.assertTrue(
                     optimizer.conditions,
                     f"{optimizer.id!r} migrated without a condition group",

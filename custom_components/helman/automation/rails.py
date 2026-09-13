@@ -319,10 +319,11 @@ def read_planned_appliance_slot_ids(
     """The slots where ``appliance_id`` is planned to actually run.
 
     The one reader that looks at the *plan* rather than at a forecast series.
-    ``snapshot.schedule`` is rebuilt after every optimizer
-    (:func:`..pipeline._build_pending_aware_snapshot`), so this sees the writes
-    of every optimizer before the caller's — and nothing of the ones after it,
-    which is why a dependency on a lane planned later is a config warning.
+    ``snapshot.schedule`` is rebuilt after every optimizer step
+    (:func:`..pipeline.run_optimizer_loop_pure`), so this sees the writes of
+    every optimizer before the caller's in the same phase — and nothing of the
+    ones after it, which is why a dependency on a lane planned later is a
+    config warning.
 
     Two exclusions, both deliberate:
 

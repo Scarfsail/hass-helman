@@ -14,8 +14,23 @@ if TYPE_CHECKING:
     )
 
 
-def strip_automation_owned_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
+def strip_automation_owned_actions(
+    doc: "ScheduleDocument",
+    *,
+    controllable_ids: "Iterable[str] | None" = None,
+) -> "ScheduleDocument":
+    """Drop automation-owned actions from ``doc``.
+
+    With ``controllable_ids`` omitted, every automation-owned action in the
+    document is dropped (the whole-run strip at the top of each automation
+    run). Passing ``controllable_ids`` narrows the strip to just those lanes —
+    used by phase 3 (#272) to clear the appliance lanes it is about to
+    re-plan while leaving the phase-2 inverter/system lanes untouched, rather
+    than adding a second stripper.
+    """
     from ..scheduling.schedule import ControllableScheduleActions, ScheduleDocument
+
+    wanted = None if controllable_ids is None else frozenset(controllable_ids)
 
     stripped_slots: dict[str, ControllableScheduleActions] = {}
 
@@ -23,7 +38,10 @@ def strip_automation_owned_actions(doc: "ScheduleDocument") -> "ScheduleDocument
         stripped = {
             controllable_id: action
             for controllable_id, action in actions.items()
-            if not _is_automation_owned(action)
+            if not (
+                (wanted is None or controllable_id in wanted)
+                and _is_automation_owned(action)
+            )
         }
         if not stripped:
             continue
@@ -32,41 +50,6 @@ def strip_automation_owned_actions(doc: "ScheduleDocument") -> "ScheduleDocument
     return ScheduleDocument(
         execution_enabled=doc.execution_enabled,
         slots=stripped_slots,
-    )
-
-
-def restore_automation_owned_appliance_actions(
-    *,
-    baseline: "ScheduleDocument",
-    current: "ScheduleDocument",
-    appliance_ids: "Iterable[str]",
-) -> "ScheduleDocument":
-    """``current`` with the named appliance lanes taken back from ``baseline``.
-
-    Only lanes ``current`` says nothing about are restored, so a lane an
-    optimizer has already re-planned this run keeps its fresh actions.
-    """
-    from ..scheduling.schedule import ControllableScheduleActions, ScheduleDocument
-
-    wanted = tuple(appliance_ids)
-    if not wanted:
-        return current
-
-    restored_slots: dict[str, ControllableScheduleActions] = {}
-    for slot_id in sorted(set(baseline.slots) | set(current.slots)):
-        baseline_actions = baseline.slots.get(slot_id, {})
-        restored = dict(current.slots.get(slot_id, {}))
-        for appliance_id in wanted:
-            baseline_action = baseline_actions.get(appliance_id)
-            if appliance_id not in restored and _is_automation_owned(baseline_action):
-                restored[appliance_id] = dict(baseline_action)
-        if not restored:
-            continue
-        restored_slots[slot_id] = restored
-
-    return ScheduleDocument(
-        execution_enabled=current.execution_enabled,
-        slots=restored_slots,
     )
 
 

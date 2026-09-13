@@ -363,6 +363,7 @@ _install_import_stubs()
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
+from custom_components.helman.automation.spec import OPTIMIZER_BUCKET_APPLIANCE
 from custom_components.helman.automation.explain import (
     ExplanationBook,
     OptimizerExplanation,
@@ -594,14 +595,28 @@ def _make_automation_config(
     *optimizers: OptimizerInstanceConfig,
     enabled: bool = True,
 ) -> AutomationConfig:
+    """Partition hand-built optimizers into the two config buckets.
+
+    Preserves each optimizer's relative position within its own bucket. The
+    tests in this file that care about cross-bucket execution order (the
+    pending-appliance-demand fix, #116) already list system-kind optimizers
+    before appliance-kind ones, matching the order ``AutomationRunner`` derives
+    from ``AutomationConfig`` (system bucket, then appliance bucket).
+    """
+    appliance = tuple(
+        optimizer
+        for optimizer in optimizers
+        if optimizer.spec.bucket == OPTIMIZER_BUCKET_APPLIANCE
+    )
+    system = tuple(
+        optimizer
+        for optimizer in optimizers
+        if optimizer.spec.bucket != OPTIMIZER_BUCKET_APPLIANCE
+    )
     return AutomationConfig(
         enabled=enabled,
-        optimizers=tuple(optimizers),
-        execution_optimizers=(
-            ()
-            if not enabled
-            else tuple(optimizer for optimizer in optimizers if optimizer.enabled)
-        ),
+        appliance_optimizers=appliance,
+        system_optimizers=system,
     )
 
 
@@ -687,20 +702,12 @@ class _FakeCoordinator:
         reference_time: datetime,
         day_contexts: dict | None = None,
         compute_inputs=None,
-        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
                 "schedule_document": schedule_document,
                 "input_bundle": input_bundle,
                 "reference_time": reference_time,
-                # What house demand was read from: the working document unless
-                # lanes still ahead in the order were taken back from baseline.
-                "demand_schedule_document": (
-                    schedule_document
-                    if demand_schedule_document is None
-                    else demand_schedule_document
-                ),
             }
         )
         return self._snapshot_factory(
@@ -717,7 +724,6 @@ class _FakeCoordinator:
         reference_time: datetime,
         day_contexts: dict | None = None,
         compute_inputs=None,
-        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         return self._build_automation_snapshot_from_schedule_pure(
             schedule_document=schedule_document,
@@ -725,7 +731,6 @@ class _FakeCoordinator:
             reference_time=reference_time,
             day_contexts=day_contexts,
             compute_inputs=compute_inputs,
-            demand_schedule_document=demand_schedule_document,
         )
 
     async def _persist_automation_result_locked(
@@ -1388,9 +1393,16 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document_to_dict(final_schedule),
         )
 
-    async def test_run_preserves_existing_target_actions_when_surplus_optimizer_skips(
+    async def test_run_fails_and_persists_nothing_when_appliance_rails_unavailable(
         self,
     ) -> None:
+        """#272 (P2 of #270): with no baseline to fall back to, a
+        ``ConditionRailsUnavailable`` for an appliance escalates to the
+        existing run-failure path rather than restoring that appliance's lane
+        and continuing — persisting it empty would silently erase a required
+        appliance schedule on a transient forecast gap. The previous complete
+        schedule is left standing.
+        """
         schedule_document = ScheduleDocument(
             execution_enabled=True,
             slots={
@@ -1430,21 +1442,17 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ).run(reference_time=REFERENCE_TIME)
 
-        self.assertTrue(result.ran_automation)
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "optimizer_failed")
         self.assertEqual(len(result.optimizers), 1)
-        self.assertEqual(result.optimizers[0].status, "skipped")
+        self.assertEqual(result.optimizers[0].status, "failed")
         self.assertEqual(result.optimizers[0].error, "when-active demand is unavailable")
-        self.assertEqual(len(coordinator.persist_calls), 1)
-        self.assertEqual(
-            schedule_document_to_dict(
-                coordinator.persist_calls[0]["automation_result"]
-            ),
-            schedule_document_to_dict(schedule_document),
-        )
-        self.assertEqual(
-            schedule_document_to_dict(result.snapshot.schedule),
-            schedule_document_to_dict(schedule_document),
-        )
+        # Nothing persisted: the previous good record stands.
+        self.assertEqual(coordinator.persist_calls, [])
+        self.assertEqual(coordinator.post_write_calls, [])
+        # The "optimizer_skipped" note stays visible on the failed run's trace.
+        step = result.trace.to_dict()["steps"][0]
+        self.assertEqual(step["notes"][0]["code"], "optimizer_skipped")
 
     async def test_run_returns_failure_when_optimizer_raises(self) -> None:
         coordinator = _FakeCoordinator(
@@ -1713,12 +1721,20 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(trace["slotIds"]), expected_len)
         for rail in trace["staticRails"].values():
             self.assertEqual(len(rail), expected_len)
+        # #272 (P2 of #270): house demand is not run-invariant once the run is
+        # phased, so it left the static rails entirely -- staticRails carries
+        # only prices and solar, and houseKwh lives on each step instead.
+        self.assertEqual(
+            set(trace["staticRails"]), {"importPrice", "exportPrice", "solarKwh"}
+        )
         self.assertEqual(len(trace["steps"]), 1)
         step = trace["steps"][0]
         self.assertEqual(step["optimizerId"], "avoid-negative-export")
         self.assertEqual(step["status"], "ok")
         self.assertEqual(len(step["railsIn"]["availableSurplusKwh"]), expected_len)
+        self.assertIn("houseKwh", step["railsIn"])
         self.assertEqual(len(trace["railsFinal"]["batterySocPct"]), expected_len)
+        self.assertIn("houseKwh", trace["railsFinal"])
 
     async def test_validator_never_fails_the_run_on_an_unbacked_write(self) -> None:
         # The mocked optimizer writes the boiler on without emitting an
@@ -1787,6 +1803,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                         optimizer_id="run-boiler",
                         kind="appliance_runtime",
                         params={"appliance_id": "boiler", "action": "on"},
+                        target={"controllable_id": "boiler"},
                     )
                 ),
             ).run(reference_time=REFERENCE_TIME)
@@ -1859,6 +1876,9 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         explanation = coordinator.recorded_explanations[0]
+        # Only phases 2 and 3 are traced (#272, P2 of #270): the system
+        # optimizer ("inverter") is phase 2, the appliance one ("boiler")
+        # runs again in phase 3 — its phase-1 pass is untraced.
         self.assertEqual(
             [optimizer.controllable_id for optimizer in explanation.optimizers],
             ["inverter", "boiler"],
@@ -1914,7 +1934,14 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["trace"]["steps"]), 1)
         self.assertEqual(payload["trace"]["steps"][0]["status"], "failed")
 
-    async def test_surplus_skip_collapses_column_to_skipped_note(self) -> None:
+    async def test_surplus_skip_collapses_column_to_skipped_note_on_the_failed_trace(
+        self,
+    ) -> None:
+        """#272 (P2 of #270): the run fails (see the persists-nothing test
+        above), but the trace it reports still carries the collapsed
+        single-note column for the appliance whose rails were unavailable —
+        the "optimizer_skipped" visibility the issue asks to keep.
+        """
         schedule_document = ScheduleDocument(
             execution_enabled=True,
             slots={
@@ -1954,7 +1981,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ).run(reference_time=REFERENCE_TIME)
 
-        self.assertTrue(result.ran_automation)
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "optimizer_failed")
         self.assertIsNotNone(result.trace)
         step = result.to_dict()["trace"]["steps"][0]
         self.assertEqual(step["status"], "skipped")
@@ -2516,8 +2544,8 @@ def _run_pure_loop(build_snapshot) -> _PipelineExecutionResult:
         return_value=_RecordingOptimizer(_make_schedule_document()),
     ):
         return run_optimizer_loop_pure(
-            execution_optimizers=optimizers,
-            baseline_schedule_document=_make_schedule_document(),
+            appliance_optimizers=(),
+            system_optimizers=optimizers,
             schedule_document=_make_schedule_document(),
             initial_snapshot=_make_snapshot(),
             reference_time=REFERENCE_TIME,
@@ -2579,28 +2607,35 @@ def _day_context_snapshot(*, house_kwh_per_slot: float) -> OptimizationSnapshot:
 class PerOptimizerDayContextTests(unittest.TestCase):
     """Two optimizers, one calendar day, two bands — by design (#264).
 
-    `charge_hold` runs first and reads a house that still carries every
-    appliance lane this run is about to re-plan; the appliance that runs after
-    it reads a house with its own lane taken out, because it is the one
-    planning it. The classification follows each of those views rather than
-    being computed once up front.
+    Under the phased pipeline (#272, P2 of #270), phase 1's appliance reads
+    the bare initial house view; ``charge_hold`` (phase 2) reads whatever
+    phase 1's own rebuild produced. The classification follows each of those
+    views rather than being computed once up front.
     """
 
     def test_each_optimizer_sees_the_band_of_its_own_house_view(self) -> None:
-        optimizers = [
-            _make_optimizer_instance(optimizer_id="charge-hold", kind="charge_hold"),
-            _make_optimizer_instance(
-                optimizer_id="pool-filtration",
-                kind="appliance_runtime",
-                target={"controllable_id": "pool"},
-            ),
-        ]
-        seen_by_optimizer: dict[str, _RecordingOptimizer] = {}
+        charge_hold = _make_optimizer_instance(
+            optimizer_id="charge-hold", kind="charge_hold"
+        )
+        filtration = _make_optimizer_instance(
+            optimizer_id="pool-filtration",
+            kind="appliance_runtime",
+            target={"controllable_id": "pool"},
+        )
+        pool_snapshots: list[OptimizationSnapshot] = []
 
         def _build_optimizer(config, **kwargs):
-            optimizer = _RecordingOptimizer(_make_schedule_document())
-            seen_by_optimizer[config.id] = optimizer
-            return optimizer
+            if config.id == "pool-filtration":
+                optimizer = _RecordingOptimizer(_make_schedule_document())
+                original_optimize = optimizer.optimize
+
+                def _optimize(snapshot, cfg, trace):
+                    pool_snapshots.append(snapshot)
+                    return original_optimize(snapshot, cfg, trace)
+
+                optimizer.optimize = _optimize
+                return optimizer
+            return _RecordingOptimizer(_make_schedule_document())
 
         resolver = DayContextResolver(
             deficit_below_ratio=0.7,
@@ -2613,54 +2648,56 @@ class PerOptimizerDayContextTests(unittest.TestCase):
             pipeline_module, "build_optimizer", side_effect=_build_optimizer
         ):
             result = run_optimizer_loop_pure(
-                execution_optimizers=optimizers,
-                baseline_schedule_document=_make_schedule_document(),
+                appliance_optimizers=(filtration,),
+                system_optimizers=(charge_hold,),
                 schedule_document=_make_schedule_document(),
-                # What charge-hold gets: the pool lane still in the house.
-                initial_snapshot=_day_context_snapshot(house_kwh_per_slot=5.0),
+                # Phase 1's filtration sees this bare initial view directly.
+                initial_snapshot=_day_context_snapshot(house_kwh_per_slot=3.0),
                 reference_time=REFERENCE_TIME,
                 control_config=None,
                 appliance_registry=AppliancesRuntimeRegistry(),
-                # What filtration gets: nothing is pending behind it, so the
-                # rebuild is the plain plan without its own lane restored.
-                build_snapshot=lambda document, **kwargs: _day_context_snapshot(
-                    house_kwh_per_slot=3.0
+                # Every rebuild after phase 1's own step (feeding phase 2's
+                # charge-hold, and phase 3's re-plan of filtration) sees this.
+                build_snapshot=lambda document: _day_context_snapshot(
+                    house_kwh_per_slot=5.0
                 ),
                 resolve_day_contexts=resolver,
             )
 
-        charge_hold_context = seen_by_optimizer["charge-hold"].seen_snapshots[0]
-        filtration_context = seen_by_optimizer["pool-filtration"].seen_snapshots[0]
-        # 10 kWh of solar against 20 kWh of house, then against 12 kWh: the
-        # same shape as the day in #264, where the appliance's own 6 kWh sat in
-        # the denominator deciding whether it could run.
+        # pool_snapshots[0] is phase 1 (untraced, the bare initial view);
+        # pool_snapshots[1] is phase 3 (traced, after phase 2's rebuild).
+        self.assertEqual(len(pool_snapshots), 2)
+        phase1_context = pool_snapshots[0]
+        # 10 kWh of solar against 12 kWh of house (phase 1), then against 20
+        # kWh (phase 2/3): the same shape as the day in #264, where the
+        # appliance's own load sat in the denominator deciding whether it
+        # could run.
         self.assertEqual(
-            charge_hold_context.context.day_contexts[
-                _DAY_CONTEXT_DATE
-            ].classification,
-            "deficit",
-        )
-        self.assertEqual(
-            filtration_context.context.day_contexts[
-                _DAY_CONTEXT_DATE
-            ].classification,
+            phase1_context.context.day_contexts[_DAY_CONTEXT_DATE].classification,
             "tight",
         )
-        # Each band is stamped with the denominator it was measured over, and
-        # both are handed back for the hysteresis store — the loop is pure and
-        # cannot write them itself.
         self.assertEqual(
-            filtration_context.context.day_contexts[
+            phase1_context.context.day_contexts[
                 _DAY_CONTEXT_DATE
             ].denominator_optimizer_id,
             "pool-filtration",
         )
+        # Phase 1 emits no day band -- only phase 2 (charge-hold) and phase 3
+        # (filtration, re-planning against the phase-2 rebuild) do.
         self.assertEqual(
             result.emitted_day_bands,
             {
                 (_DAY_CONTEXT_DATE, "charge-hold"): "deficit",
-                (_DAY_CONTEXT_DATE, "pool-filtration"): "tight",
+                (_DAY_CONTEXT_DATE, "pool-filtration"): "deficit",
             },
+        )
+        # The canonical reading the run reports (#272, P2 of #270): the final
+        # plan, whole house, appliances placed -- not phase 1's bare initial
+        # view. Phase 1 alone reads "tight" (see above); the final snapshot
+        # reads "deficit", the same band phase 2 and phase 3 actually saw.
+        self.assertEqual(
+            result.snapshot.context.day_contexts[_DAY_CONTEXT_DATE].classification,
+            "deficit",
         )
 
     def test_the_previous_band_of_the_same_optimizer_damps_the_new_one(self) -> None:
@@ -2690,14 +2727,14 @@ class PerOptimizerDayContextTests(unittest.TestCase):
             pipeline_module, "build_optimizer", side_effect=_build_optimizer
         ):
             result = run_optimizer_loop_pure(
-                execution_optimizers=optimizers,
-                baseline_schedule_document=_make_schedule_document(),
+                appliance_optimizers=(),
+                system_optimizers=optimizers,
                 schedule_document=_make_schedule_document(),
                 initial_snapshot=_day_context_snapshot(house_kwh_per_slot=3.75),
                 reference_time=REFERENCE_TIME,
                 control_config=None,
                 appliance_registry=AppliancesRuntimeRegistry(),
-                build_snapshot=lambda document, **kwargs: _day_context_snapshot(
+                build_snapshot=lambda document: _day_context_snapshot(
                     house_kwh_per_slot=3.75
                 ),
                 resolve_day_contexts=resolver,
@@ -2738,11 +2775,7 @@ class RunOptimizerLoopPurityTests(unittest.TestCase):
     def test_runs_in_worker_thread_without_hass(self) -> None:
         rebuilt_documents: list[ScheduleDocument] = []
 
-        def build_snapshot(
-            document: ScheduleDocument,
-            *,
-            demand_schedule_document: ScheduleDocument | None = None,
-        ) -> OptimizationSnapshot:
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
             rebuilt_documents.append(document)
             return _make_snapshot(schedule_document=document)
 
@@ -2761,11 +2794,7 @@ class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
     """Moving the loop across the executor boundary must not change its result."""
 
     async def test_executor_hop_matches_inline(self) -> None:
-        def build_snapshot(
-            document: ScheduleDocument,
-            *,
-            demand_schedule_document: ScheduleDocument | None = None,
-        ) -> OptimizationSnapshot:
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
             return _make_snapshot(schedule_document=document)
 
         inline_result = _run_pure_loop(build_snapshot)
@@ -2806,13 +2835,14 @@ def _make_appliance_optimizer_instance(
     )
 
 
-class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
-    """Issue #116: an optimizer must read the appliance demand of the lanes
-    *behind* it in the order, not a house stripped of every appliance run.
+class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
+    """#272 (P2 of #270): the three-phase replacement for the old
+    baseline-restore machinery (#116's original fix).
 
-    The run strips all automation-owned actions and re-plans from scratch, so
-    without this the first optimizer sizes the day against a house carrying none
-    of the load the same run is about to schedule.
+    Phase 1 (appliance, untraced) plans every appliance against no inverter
+    action. Phase 2 (system, traced) reads the whole phase-1 appliance demand.
+    Phase 3 (appliance, traced) re-plans each appliance against earlier
+    phase-3 appliances plus the phase-2 inverter plan.
     """
 
     APPLIANCE_ACTION = {"on": True, "setBy": "automation"}
@@ -2837,43 +2867,41 @@ class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    def test_pending_lanes_exclude_own_lane_and_non_appliance_kinds(self) -> None:
-        first, second = self._optimizers()
-        pending = pipeline_module._pending_appliance_ids_by_index((first, second))
-        # The battery-first optimizer reads the appliance lane behind it...
-        self.assertEqual(pending[0], ("pool-filtration",))
-        # ...while the appliance optimizer is re-planning that lane itself, so
-        # nothing is restored into its own view of it.
-        self.assertEqual(pending[1], ())
-        self.assertEqual(
-            pipeline_module._appliance_lane_ids((first, second)),
-            ("pool-filtration",),
-        )
-
-    async def _run(self):
+    async def test_cold_start_sizes_charge_hold_against_full_appliance_demand(
+        self,
+    ) -> None:
+        """The #116 assertion, now with no baseline present (G1's cold-start
+        fix): with nothing stored from a previous run at all, phase 1 still
+        places the appliance for real before ``charge_hold`` (phase 2) ever
+        reads the house.
+        """
         coordinator = _FakeCoordinator(
-            schedule_document=self._baseline_document(),
+            # No prior plan whatsoever -- true cold start.
+            schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
-        fresh_appliance_plan = ScheduleDocument(
+        appliance_plan = ScheduleDocument(
             execution_enabled=True,
             slots={
                 CURRENT_SLOT_ID: {
-                    "pool-filtration": {"on": False, "setBy": "automation"},
+                    "pool-filtration": dict(self.APPLIANCE_ACTION),
                 }
             },
         )
+        charge_hold_seen: list[OptimizationSnapshot] = []
 
         def _build_optimizer_side_effect(config, *, control_config, appliance_registry):
-            if config.id == "charge-hold":
-                # Writes nothing: this test is about what it *reads*.
+            if config.id == "pool":
                 return SimpleNamespace(
-                    optimize=Mock(side_effect=lambda snapshot, *a, **kw: snapshot.schedule)
+                    optimize=Mock(return_value=deepcopy(appliance_plan))
                 )
-            return SimpleNamespace(
-                optimize=Mock(return_value=deepcopy(fresh_appliance_plan))
-            )
+
+            def _charge_hold_optimize(snapshot, current_config, trace=None):
+                charge_hold_seen.append(snapshot)
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_charge_hold_optimize))
 
         with patch.object(
             pipeline_module,
@@ -2884,53 +2912,328 @@ class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
                 coordinator=coordinator,
                 automation_config=_make_automation_config(*self._optimizers()),
             ).run(reference_time=REFERENCE_TIME)
-        return coordinator, result
 
-    async def test_first_optimizer_reads_the_pending_appliance_load(self) -> None:
-        coordinator, result = await self._run()
         self.assertTrue(result.ran_automation)
-        first_demand = coordinator.snapshot_calls[0]["demand_schedule_document"]
-        slot = schedule_document_to_dict(first_demand)["slots"][CURRENT_SLOT_ID]
-        # The lane the *later* optimizer owns is taken back from the baseline,
-        # so the house demand this optimizer ranks against is whole.
+        self.assertEqual(len(charge_hold_seen), 1)
+        slot = schedule_document_to_dict(charge_hold_seen[0].schedule)["slots"][
+            CURRENT_SLOT_ID
+        ]
         self.assertEqual(slot.get("pool-filtration"), self.APPLIANCE_ACTION)
-        # Its own lane stays stripped: it is re-planning that one, and restoring
-        # it would have it read its own previous placements as fixed.
-        self.assertNotIn("inverter", slot)
 
-    async def test_appliance_optimizer_does_not_see_its_own_stale_lane(self) -> None:
-        coordinator, _ = await self._run()
-        second_demand = coordinator.snapshot_calls[1]["demand_schedule_document"]
-        slots = schedule_document_to_dict(second_demand)["slots"]
-        self.assertNotIn("pool-filtration", slots.get(CURRENT_SLOT_ID, {}))
+    async def test_run_output_is_independent_of_the_prior_plan(self) -> None:
+        """G1's determinism acceptance for #272: holding every other input
+        fixed (forecasts, prices, live state, day-context bands, appliance
+        runtime history) and varying only the automation-owned content of the
+        schedule already on disk -- present, different, or absent entirely --
+        must produce a byte-identical finished document. The prior plan is
+        stripped before phase 1 ever runs and never read again, so nothing
+        about it can leak into a decision.
 
-    async def test_restored_demand_never_leaks_into_the_plan(self) -> None:
-        """The lane is restored for demand only.
-
-        ``snapshot.schedule`` is what an optimizer's writer builds its result on
-        top of, so a restored action placed there would ride back out as this
-        run's plan and resurrect the previous run's appliance placements.
+        This must not be confused with history-dependent variation (a
+        different hysteresis band, a different appliance runtime history),
+        which stays legitimate -- only the *prior plan's content* is varied
+        here, nothing else.
         """
-        coordinator, result = await self._run()
-        for call in coordinator.snapshot_calls:
-            slot = schedule_document_to_dict(call["schedule_document"])["slots"].get(
-                CURRENT_SLOT_ID, {}
-            )
-            self.assertNotEqual(slot.get("pool-filtration"), self.APPLIANCE_ACTION)
-        planned = schedule_document_to_dict(result.snapshot.schedule)["slots"]
-        self.assertNotEqual(
-            planned.get(CURRENT_SLOT_ID, {}).get("pool-filtration"),
-            self.APPLIANCE_ACTION,
+        pool_plan = ScheduleDocument(
+            execution_enabled=True,
+            slots={CURRENT_SLOT_ID: {"pool-filtration": dict(self.APPLIANCE_ACTION)}},
         )
 
-    async def test_final_rebuild_carries_the_finished_plan_only(self) -> None:
-        coordinator, result = await self._run()
-        final_document = coordinator.snapshot_calls[-1]["schedule_document"]
-        slot = schedule_document_to_dict(final_document)["slots"][CURRENT_SLOT_ID]
-        # Nothing pending any more: the appliance lane is the fresh plan, not
-        # the baseline it was restored from earlier in the loop.
-        self.assertEqual(slot["pool-filtration"], {"on": False, "setBy": "automation"})
-        self.assertEqual(
-            schedule_document_to_dict(result.snapshot.schedule),
-            schedule_document_to_dict(final_document),
+        def _build_optimizer_side_effect(config, *, control_config, appliance_registry):
+            if config.id == "pool":
+                return SimpleNamespace(
+                    optimize=Mock(return_value=deepcopy(pool_plan))
+                )
+
+            def _charge_hold_optimize(snapshot, current_config, trace=None):
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_charge_hold_optimize))
+
+        other_slot_id = "2026-03-20T21:15:00+01:00"
+        prior_plans = (
+            # Absent: true cold start, nothing on disk at all.
+            ScheduleDocument(execution_enabled=True),
+            # Present: a prior plan occupying the exact lanes this run will
+            # write, at the exact slot this run will choose.
+            self._baseline_document(),
+            # Different: a prior plan occupying the same lanes, but at a
+            # different slot than this run will choose.
+            ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    other_slot_id: {
+                        "inverter": dict(self.INVERTER_ACTION),
+                        "pool-filtration": dict(self.APPLIANCE_ACTION),
+                    }
+                },
+            ),
         )
+
+        outputs: list[dict] = []
+        for prior_plan in prior_plans:
+            coordinator = _FakeCoordinator(
+                schedule_document=prior_plan,
+                bundle=_make_automation_bundle(),
+                snapshot_factory=_make_snapshot,
+            )
+            with patch.object(
+                pipeline_module,
+                "build_optimizer",
+                side_effect=_build_optimizer_side_effect,
+            ):
+                result = await AutomationRunner(
+                    coordinator=coordinator,
+                    automation_config=_make_automation_config(*self._optimizers()),
+                ).run(reference_time=REFERENCE_TIME)
+            self.assertTrue(result.ran_automation)
+            outputs.append(schedule_document_to_dict(result.snapshot.schedule))
+
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0], outputs[2])
+
+    def test_phase1_appliance_sees_earlier_appliances_and_no_inverter_action(
+        self,
+    ) -> None:
+        pool = _make_appliance_optimizer_instance(
+            optimizer_id="pool", controllable_id="pool-filtration"
+        )
+        washer = _make_appliance_optimizer_instance(
+            optimizer_id="washer", controllable_id="washer"
+        )
+        charge_hold = _make_optimizer_instance(
+            optimizer_id="charge-hold", kind="charge_hold"
+        )
+        pool_plan = ScheduleDocument(
+            execution_enabled=True,
+            slots={CURRENT_SLOT_ID: {"pool-filtration": dict(self.APPLIANCE_ACTION)}},
+        )
+        seen_by_id: dict[str, OptimizationSnapshot] = {}
+
+        def _build_optimizer(config, **kwargs):
+            def _optimize(snapshot, current_config, trace=None):
+                seen_by_id[current_config.id] = snapshot
+                if current_config.id == "pool":
+                    return deepcopy(pool_plan)
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_optimize))
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            return _make_snapshot(schedule_document=document)
+
+        with patch.object(pipeline_module, "build_optimizer", side_effect=_build_optimizer):
+            pipeline_module.run_optimizer_loop_pure(
+                appliance_optimizers=(pool, washer),
+                system_optimizers=(charge_hold,),
+                schedule_document=self._baseline_document(),
+                initial_snapshot=build_snapshot(self._baseline_document()),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=build_snapshot,
+            )
+
+        washer_phase1_slot = schedule_document_to_dict(
+            seen_by_id["washer"].schedule
+        )["slots"].get(CURRENT_SLOT_ID, {})
+        # Washer (second appliance, phase 1) sees pool's fresh phase-1 write...
+        self.assertEqual(
+            washer_phase1_slot.get("pool-filtration"), self.APPLIANCE_ACTION
+        )
+        # ...but no inverter action at all: phase 2 has not run yet.
+        self.assertNotIn("inverter", washer_phase1_slot)
+
+    async def test_phase3_appliance_sees_the_phase2_inverter_plan(self) -> None:
+        """Phase 3 placements are computed against the phase-2 inverter lane:
+        a ``charge_hold``-written action is visible to the appliance
+        optimizer re-planning in phase 3 (earlier appliances + phase-2
+        inverter plan)."""
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        charge_hold_write = ScheduleDocument(
+            execution_enabled=True,
+            slots={CURRENT_SLOT_ID: {"inverter": dict(self.INVERTER_ACTION)}},
+        )
+        phase3_seen: list[OptimizationSnapshot] = []
+
+        def _build_optimizer_side_effect(config, *, control_config, appliance_registry):
+            if config.id == "charge-hold":
+                return SimpleNamespace(
+                    optimize=Mock(return_value=deepcopy(charge_hold_write))
+                )
+
+            def _pool_optimize(snapshot, current_config, trace=None):
+                phase3_seen.append(snapshot)
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_pool_optimize))
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=_build_optimizer_side_effect,
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(*self._optimizers()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        # phase3_seen[0] is phase 1 (no inverter yet), phase3_seen[1] is phase 3.
+        self.assertEqual(len(phase3_seen), 2)
+        phase1_slot = schedule_document_to_dict(phase3_seen[0].schedule)["slots"].get(
+            CURRENT_SLOT_ID, {}
+        )
+        phase3_slot = schedule_document_to_dict(phase3_seen[1].schedule)["slots"].get(
+            CURRENT_SLOT_ID, {}
+        )
+        self.assertNotIn("inverter", phase1_slot)
+        self.assertEqual(phase3_slot.get("inverter"), self.INVERTER_ACTION)
+        # Phase 1's provisional run must not leak into the reported result:
+        # each configured optimizer (system and appliance alike) appears
+        # exactly once, as its authoritative (phase-2 or phase-3) summary.
+        self.assertEqual(
+            sorted(summary.id for summary in result.optimizers),
+            ["charge-hold", "pool"],
+        )
+
+    def test_same_lane_composes_in_bucket_order_in_both_appliance_phases(self) -> None:
+        """Two optimizers targeting one appliance lane: the later one sees the
+        earlier one's writes in that lane, in both phase 1 and phase 3."""
+        first = _make_appliance_optimizer_instance(
+            optimizer_id="first", controllable_id="boiler"
+        )
+        second = _make_appliance_optimizer_instance(
+            optimizer_id="second", controllable_id="boiler"
+        )
+        first_write = ScheduleDocument(
+            execution_enabled=True,
+            slots={CURRENT_SLOT_ID: {"boiler": {"on": True, "setBy": "automation"}}},
+        )
+        seen_before_second: list[dict] = []
+
+        def _build_optimizer(config, **kwargs):
+            if config.id == "first":
+                return SimpleNamespace(
+                    optimize=Mock(return_value=deepcopy(first_write))
+                )
+
+            def _second_optimize(snapshot, current_config, trace=None):
+                seen_before_second.append(
+                    schedule_document_to_dict(snapshot.schedule)["slots"].get(
+                        CURRENT_SLOT_ID, {}
+                    )
+                )
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_second_optimize))
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            return _make_snapshot(schedule_document=document)
+
+        with patch.object(pipeline_module, "build_optimizer", side_effect=_build_optimizer):
+            pipeline_module.run_optimizer_loop_pure(
+                appliance_optimizers=(first, second),
+                system_optimizers=(),
+                schedule_document=ScheduleDocument(execution_enabled=True),
+                initial_snapshot=build_snapshot(ScheduleDocument(execution_enabled=True)),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=build_snapshot,
+            )
+
+        # Once from phase 1, once from phase 3 -- both see "first"'s write.
+        self.assertEqual(len(seen_before_second), 2)
+        for slot in seen_before_second:
+            self.assertEqual(slot.get("boiler"), {"on": True, "setBy": "automation"})
+
+    def test_house_kwh_differs_between_phase2_and_phase3_when_phase3_moves_it(
+        self,
+    ) -> None:
+        """``houseKwh`` is captured per step (#272, P2 of #270), not once for
+        the whole run: phase 2's step shows the phase-1 estimate it actually
+        read, and a phase-3 step shows a different figure once phase 3 moves
+        the appliance's load out of the slot phase 1 put it in.
+        """
+        charge_hold = _make_optimizer_instance(
+            optimizer_id="charge-hold", kind="charge_hold"
+        )
+        boiler = _make_appliance_optimizer_instance(
+            optimizer_id="boiler", controllable_id="boiler"
+        )
+        boiler_action = {"on": True, "setBy": "automation"}
+        other_slot_id = "2026-03-20T21:15:00+01:00"
+
+        def _build_optimizer(config, **kwargs):
+            if config.id == "boiler":
+                calls = {"count": 0}
+
+                def _boiler_optimize(snapshot, current_config, trace=None):
+                    calls["count"] += 1
+                    slot_id = CURRENT_SLOT_ID if calls["count"] == 1 else other_slot_id
+                    return ScheduleDocument(
+                        execution_enabled=True,
+                        slots={slot_id: {"boiler": dict(boiler_action)}},
+                    )
+
+                return SimpleNamespace(optimize=Mock(side_effect=_boiler_optimize))
+
+            # charge_hold: reads, writes nothing.
+            def _charge_hold_optimize(snapshot, current_config, trace=None):
+                return snapshot.schedule
+
+            return SimpleNamespace(optimize=Mock(side_effect=_charge_hold_optimize))
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            # houseKwh at CURRENT_SLOT_ID depends on whether the boiler's
+            # automation-owned action is present there in this document --
+            # exactly what a real forecast rebuild would reflect.
+            slot_actions = document.slots.get(CURRENT_SLOT_ID, {})
+            boiler_present = slot_actions.get("boiler", {}).get("setBy") == "automation"
+            house_kwh = 3.0 + (2.0 if boiler_present else 0.0)
+            base = _make_snapshot(schedule_document=document)
+            return replace(
+                base,
+                battery_forecast={
+                    **base.battery_forecast,
+                    "series": [
+                        {
+                            "timestamp": CURRENT_SLOT_ID,
+                            "durationHours": 0.25,
+                            "importedFromGridKwh": 1.4,
+                            "exportedToGridKwh": 0.2,
+                            "baselineHouseKwh": house_kwh,
+                        }
+                    ],
+                },
+            )
+
+        with patch.object(pipeline_module, "build_optimizer", side_effect=_build_optimizer):
+            result = pipeline_module.run_optimizer_loop_pure(
+                appliance_optimizers=(boiler,),
+                system_optimizers=(charge_hold,),
+                schedule_document=ScheduleDocument(execution_enabled=True),
+                initial_snapshot=build_snapshot(ScheduleDocument(execution_enabled=True)),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=build_snapshot,
+            )
+
+        trace = result.trace.to_dict()
+        steps_by_id = {step["optimizerId"]: step for step in trace["steps"]}
+        # Phase 2 (charge-hold) reads the phase-1 estimate: boiler present at
+        # CURRENT_SLOT_ID -> houseKwh includes it.
+        charge_hold_house_kwh = steps_by_id["charge-hold"]["railsIn"]["houseKwh"][0]
+        # Phase 3 (boiler) reads the house after the phase-3 strip cleared
+        # phase 1's placement: boiler absent from CURRENT_SLOT_ID until this
+        # very step writes it (to a different slot) -> houseKwh excludes it.
+        boiler_house_kwh = steps_by_id["boiler"]["railsIn"]["houseKwh"][0]
+        self.assertEqual(charge_hold_house_kwh, 5.0)
+        self.assertEqual(boiler_house_kwh, 3.0)
+        self.assertNotEqual(charge_hold_house_kwh, boiler_house_kwh)
