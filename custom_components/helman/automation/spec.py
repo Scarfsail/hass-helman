@@ -94,10 +94,11 @@ class OptimizerSpec:
         tuple reads as nothing may be targeted" convention. This is the one
         place *config-level* bucket membership is decided — parsing,
         migration, validation and the editor all read this property, never a
-        literal kind list. ``pipeline.py``'s own internal
-        ``_APPLIANCE_OPTIMIZER_KIND`` lane-restoration check predates this
-        property and is untouched here; #272 (P2) deletes that machinery
-        entirely rather than rewiring it to read ``.bucket``.
+        literal kind list. ``pipeline.py``'s three-phase run
+        (:func:`..pipeline.run_optimizer_loop_pure`) reads the config's own
+        ``AutomationConfig.enabled_appliance_optimizers`` /
+        ``enabled_system_optimizers`` (#271, P1) rather than this property
+        directly, but those are themselves built from it.
         """
         appliance_kinds = appliance_controllable_kinds()
         controllable_kinds = self.controllable_kinds

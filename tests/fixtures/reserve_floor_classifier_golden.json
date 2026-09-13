@@ -52,14 +52,14 @@
   ],
   "cold_start_no_prior_plan": [
     {
-      "applianceLaneChanged": true,
-      "class": "downstream_introduced",
+      "applianceLaneChanged": null,
+      "class": "none",
       "groupIndex": 0,
-      "inverterLaneChanged": false,
-      "laneSummary": "exclusive_appliance",
+      "inverterLaneChanged": null,
+      "laneSummary": null,
       "optimizerId": "grid-bridge",
       "reason": null,
-      "shortfallPp": 25.0,
+      "shortfallPp": 0.0,
       "status": "measured",
       "window": [
         "2026-07-10T08:00:00+02:00",

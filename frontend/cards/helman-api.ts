@@ -650,6 +650,7 @@ export interface TraceStepRailsDTO {
     batterySocPct?: (number | null)[];
     importedFromGridKwh?: (number | null)[];
     exportedToGridKwh?: (number | null)[];
+    houseKwh?: (number | null)[];
 }
 
 export interface TraceStepDTO {
@@ -670,7 +671,6 @@ export interface TraceStaticRailsDTO {
     importPrice?: (number | null)[];
     exportPrice?: (number | null)[];
     solarKwh?: (number | null)[];
-    houseKwh?: (number | null)[];
 }
 
 export interface AutomationTraceDTO {
