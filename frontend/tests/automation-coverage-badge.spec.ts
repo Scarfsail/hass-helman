@@ -34,11 +34,13 @@ const CONFIG = {
     config_version: 4,
     automation: {
         enabled: true,
-        optimizers: [
+        appliance_optimizers: [
+            { id: "boiler_surplus", kind: "appliance_runtime", target: { controllable_id: "boiler" }, enabled: false },
+        ],
+        system_optimizers: [
             { id: "charge_hold", kind: "charge_hold", target: { controllable_id: "inverter" }, enabled: true },
             { id: "export_price", kind: "export_price", target: { controllable_id: "inverter" }, enabled: false },
             { id: "night_charge", kind: "night_charge", target: { controllable_id: "inverter" }, enabled: true },
-            { id: "boiler_surplus", kind: "appliance_runtime", target: { controllable_id: "boiler" }, enabled: false },
         ],
     },
 };
@@ -282,7 +284,7 @@ test.describe("automation coverage on the schedule band", () => {
                 config_version: 5,
                 automation: {
                     enabled: true,
-                    optimizers: [{
+                    appliance_optimizers: [{
                         id: "boiler_surplus",
                         kind: "appliance_runtime",
                         target: { controllable_id: "boiler" },
@@ -309,7 +311,7 @@ test.describe("automation coverage on the schedule band", () => {
                 config_version: 4,
                 automation: {
                     enabled: true,
-                    optimizers: [{ id: "charge_hold", kind: "charge_hold", enabled: true }],
+                    system_optimizers: [{ id: "charge_hold", kind: "charge_hold", enabled: true }],
                 },
             },
             schema: {
@@ -352,7 +354,7 @@ test.describe("automation coverage on the schedule band", () => {
                 config_version: 5,
                 automation: {
                     enabled: true,
-                    optimizers: [{
+                    appliance_optimizers: [{
                         id: "pump_surplus",
                         kind: "appliance_runtime",
                         target: { controllable_id: "pump" },
@@ -430,8 +432,10 @@ test.describe("switching an automation on from the dialog", () => {
         expect(saved).toHaveLength(1);
         const sent = saved[0].config as typeof CONFIG;
         // The one optimizer that moved, and nothing else in the document.
-        expect(sent.automation.optimizers.map((entry) => entry.enabled))
-            .toEqual([true, false, true, true]);
+        expect(sent.automation.appliance_optimizers.map((entry) => entry.enabled))
+            .toEqual([true]);
+        expect(sent.automation.system_optimizers.map((entry) => entry.enabled))
+            .toEqual([true, false, true]);
         expect(sent.config_version).toBe(CONFIG.config_version);
     });
 });

@@ -90,6 +90,7 @@ import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
 import {
   fetchOptimizerSchema,
+  type OptimizerConfigBucket,
   type OptimizerSchema,
   type OptimizerSchemaDocument,
 } from "../cards/shared/optimizer/optimizer-schema";
@@ -152,6 +153,9 @@ const GENERIC_PROJECTION_STRATEGIES = [
 
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const INVERTER_CONTROLLABLE_KIND = "inverter";
+
+/** The two config buckets `automation` splits its optimizers into (#271, P1). */
+type OptimizerBucket = OptimizerConfigBucket;
 
 /**
  * The schedule actions an inverter's `controls.mode.options` maps, in the order
@@ -2477,8 +2481,6 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderAutomationTab(): TemplateResult {
-    const optimizers = asJsonArray(this._getValue(["automation", "optimizers"])) ?? [];
-
     return html`
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.automation.settings,
@@ -2506,26 +2508,59 @@ export class HelmanConfigEditorPanel
         `,
       )}
 
+      ${this._renderOptimizerBucketSection("appliance_optimizers")}
+      ${this._renderOptimizerBucketSection("system_optimizers")}
+    `;
+  }
+
+  /**
+   * One bucket's ordered optimizer list, as its own section.
+   *
+   * Appliance and system optimizers follow different rules -- an appliance
+   * optimizer's order decides what a later one plans around, a system
+   * optimizer's does not -- and the point of the split is that this is legible
+   * from the shape of the screen: two sections, each with its own heading,
+   * reorder bounds and add buttons, rather than one flat list a docs paragraph
+   * has to explain.
+   */
+  private _renderOptimizerBucketSection(bucket: OptimizerBucket): TemplateResult {
+    const optimizers = this._optimizersInBucket(bucket);
+    const scopeId =
+      bucket === "appliance_optimizers"
+        ? SECTION_SCOPE_IDS.automation.appliance_optimizer_pipeline
+        : SECTION_SCOPE_IDS.automation.system_optimizer_pipeline;
+    const noteKey =
+      bucket === "appliance_optimizers"
+        ? "editor.notes.appliance_optimizer_pipeline"
+        : "editor.notes.system_optimizer_pipeline";
+    const emptyKey =
+      bucket === "appliance_optimizers"
+        ? "editor.empty.no_appliance_optimizers"
+        : "editor.empty.no_system_optimizers";
+    // Only kinds whose schema-derived bucket matches this section -- never a
+    // literal kind list, which is exactly the drift `OptimizerSpec.bucket`
+    // exists to prevent.
+    const addableKinds = (this._optimizerSchema?.kinds ?? []).filter(
+      (schema) => this._bucketKindOf(schema) === bucket,
+    );
+
+    return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.automation.optimizer_pipeline,
+        scopeId,
         html`
-          <p class="inline-note">
-            ${this._t("editor.notes.optimizer_pipeline")}
-          </p>
+          <p class="inline-note">${this._t(noteKey)}</p>
           <div class="list-stack">
             ${optimizers.map((_optimizer, index) =>
-              this._renderOptimizerEditor(index, optimizers.length),
+              this._renderOptimizerEditor(bucket, index, optimizers.length),
             )}
           </div>
           ${optimizers.length === 0
             ? html`
-                <div class="message info">
-                  ${this._t("editor.empty.no_automation_optimizers")}
-                </div>
+                <div class="message info">${this._t(emptyKey)}</div>
               `
             : nothing}
           <div class="section-footer">
-            ${(this._optimizerSchema?.kinds ?? []).map(
+            ${addableKinds.map(
               (schema) => html`
                 <button
                   type="button"
@@ -2544,6 +2579,23 @@ export class HelmanConfigEditorPanel
   }
 
   /**
+   * Which bucket a kind's own add button belongs in.
+   *
+   * Reads `schema.bucket`, served from `OptimizerSpec.bucket` -- never a kind
+   * list here. `schema.bucket` is optional only because a card must still
+   * render against a schema served by an older backend; such a schema has no
+   * bucket to be wrong about, so it falls back to the appliance section rather
+   * than becoming impossible to add at all.
+   */
+  private _bucketKindOf(schema: OptimizerSchema): OptimizerBucket {
+    return schema.bucket === "system" ? "system_optimizers" : "appliance_optimizers";
+  }
+
+  private _optimizersInBucket(bucket: OptimizerBucket): JsonValue[] {
+    return asJsonArray(this._getValue(["automation", bucket])) ?? [];
+  }
+
+  /**
    * One optimizer, drawn by the element the solar inspector also mounts.
    *
    * The panel keeps the pipeline: the list actions in the card's summary are
@@ -2551,10 +2603,15 @@ export class HelmanConfigEditorPanel
    * optimizers exist and that is a document-level edit. Everything inside the
    * card belongs to the element.
    */
-  private _renderOptimizerEditor(index: number, total: number): TemplateResult {
+  private _renderOptimizerEditor(
+    bucket: OptimizerBucket,
+    index: number,
+    total: number,
+  ): TemplateResult {
     return html`
       <helman-optimizer-editor
         .config=${this._config}
+        .bucket=${bucket}
         .index=${index}
         .total=${total}
         .schema=${this._optimizerSchema}
@@ -2562,11 +2619,34 @@ export class HelmanConfigEditorPanel
         .hass=${this.hass}
         .narrow=${this.narrow ?? false}
         .localize=${(key: string) => this._t(key)}
+        .warning=${this._optimizerOrderingWarning(bucket, index)}
         .listActions=${(basePath: PathSegment[], enabled: boolean) =>
-          this._renderOptimizerListActions(basePath, index, total, enabled)}
+          this._renderOptimizerListActions(bucket, basePath, index, total, enabled)}
         @optimizer-config-changed=${this._handleOptimizerConfigChanged}
       ></helman-optimizer-editor>
     `;
+  }
+
+  /**
+   * The `required_appliance_planned_later` warning against this card, if any.
+   *
+   * `config_validation.py`'s `_validate_requires_appliance` reports it at
+   * `automation.<bucket>[<index>].conditions[<n>].requires_appliance` -- a
+   * path under this optimizer's own `_basePath` -- so matching by prefix finds
+   * it without a second copy of the rule that produced it. Reordering within
+   * the appliance section is the fix, so the card is where a reader can act on
+   * it, the same mechanism `automation-coverage.ts` uses to badge a lane.
+   */
+  private _optimizerOrderingWarning(bucket: OptimizerBucket, index: number): string | null {
+    if (!this._validation) {
+      return null;
+    }
+    const prefix = `automation.${bucket}[${index}].`;
+    const issue = this._validation.warnings.find(
+      (warning) =>
+        warning.code === "required_appliance_planned_later" && warning.path.startsWith(prefix),
+    );
+    return issue?.message ?? null;
   }
 
   private _handleOptimizerConfigChanged = (event: Event): void => {
@@ -2600,6 +2680,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderOptimizerListActions(
+    bucket: OptimizerBucket,
     basePath: PathSegment[],
     index: number,
     total: number,
@@ -2611,17 +2692,17 @@ export class HelmanConfigEditorPanel
         <button
           type="button"
           ?disabled=${index === 0}
-          @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
+          @click=${() => this._moveListItem(["automation", bucket], index, index - 1)}
         >${this._t("editor.actions.up")}</button>
         <button
           type="button"
           ?disabled=${index === total - 1}
-          @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
+          @click=${() => this._moveListItem(["automation", bucket], index, index + 1)}
         >${this._t("editor.actions.down")}</button>
         <button
           type="button"
           class="danger"
-          @click=${() => this._removeListItem(["automation", "optimizers"], index)}
+          @click=${() => this._removeListItem(["automation", bucket], index)}
         >${this._t("editor.actions.remove")}</button>
       </div>
     `;
@@ -4637,48 +4718,30 @@ export class HelmanConfigEditorPanel
   };
 
   private _addOptimizer(schema: OptimizerSchema): void {
-    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
+    const bucket = this._bucketKindOf(schema);
+    // Ids are unique across both buckets, not just the one being added to --
+    // `config_validation.py`'s `_read_optimizer_buckets` rejects a collision
+    // either way, so the draft must not offer one.
+    const existingIds = [
+      ...(asJsonArray(this._getValue(["automation", "appliance_optimizers"])) ?? []),
+      ...(asJsonArray(this._getValue(["automation", "system_optimizers"])) ?? []),
+    ]
       .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
       .filter((value) => value.length > 0);
     const draftOptimizer = createOptimizerDraft(existingIds, schema.kind, schema.newDraft);
     this._applyMutation((draft) => {
-      if (!asJsonObject(getValueAtPath(draft, ["automation"]))) {
+      const automationObject = asJsonObject(getValueAtPath(draft, ["automation"]));
+      if (!automationObject) {
         setValueAtPath(draft, ["automation"], {
           enabled: true,
-          optimizers: [draftOptimizer],
+          appliance_optimizers: bucket === "appliance_optimizers" ? [draftOptimizer] : [],
+          system_optimizers: bucket === "system_optimizers" ? [draftOptimizer] : [],
         });
         return;
       }
-      appendListItem(draft, ["automation", "optimizers"], draftOptimizer);
+      appendListItem(draft, ["automation", bucket], draftOptimizer);
     });
   }
-
-  /** A new group starts from the kind's seed, so it is valid the moment it appears. */
-  private _addConditionGroup(index: number, schema: OptimizerSchema): void {
-    const seed = asJsonArray(schema.newDraft.conditions)?.[0];
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["automation", "optimizers", index, "conditions"],
-        (asJsonObject(seed) ?? {}) as JsonObject,
-      );
-    });
-  }
-
-  /**
-   * Remove a group — never the last one.
-   *
-   * Zero groups is an unsavable automation, so the UI must not be able to reach
-   * that state. The button is disabled too; this is the second lock.
-   */
-  private _removeConditionGroup(index: number, groupIndex: number): void {
-    const path: PathSegment[] = ["automation", "optimizers", index, "conditions"];
-    if ((asJsonArray(this._getValue(path)) ?? []).length <= 1) return;
-    this._removeListItem(path, groupIndex);
-  }
-
-
-
 
   private _handleAddInverter = (): void => {
     this._applyMutation((draft) => {
@@ -4899,15 +4962,19 @@ export class HelmanConfigEditorPanel
 
       if (automationObject) {
         setValueAtPath(draft, ["automation", "enabled"], enabled);
-        if (!Array.isArray(automationObject["optimizers"])) {
-          setValueAtPath(draft, ["automation", "optimizers"], []);
+        if (!Array.isArray(automationObject["appliance_optimizers"])) {
+          setValueAtPath(draft, ["automation", "appliance_optimizers"], []);
+        }
+        if (!Array.isArray(automationObject["system_optimizers"])) {
+          setValueAtPath(draft, ["automation", "system_optimizers"], []);
         }
         return;
       }
 
       setValueAtPath(draft, ["automation"], {
         enabled,
-        optimizers: [],
+        appliance_optimizers: [],
+        system_optimizers: [],
       });
     });
   }
@@ -4923,9 +4990,13 @@ export class HelmanConfigEditorPanel
    *
    * Only `appliance_runtime` has a climate mode to keep, so only it is walked —
    * the other kinds drive the inverter, which has no modes of this sort.
+   * `appliance_runtime`'s own `controllableKinds` are all appliance kinds, so
+   * `OptimizerSpec.bucket` places it in `appliance_optimizers` always -- the
+   * only bucket this needs to walk.
    */
   private _normalizeApplianceOptimizerTargets(config: JsonObject): boolean {
-    const optimizers = asJsonArray(getValueAtPath(config, ["automation", "optimizers"])) ?? [];
+    const optimizers =
+      asJsonArray(getValueAtPath(config, ["automation", "appliance_optimizers"])) ?? [];
     let changed = false;
     optimizers.forEach((optimizer, index) => {
       const optimizerObject = asJsonObject(optimizer);
@@ -4934,7 +5005,7 @@ export class HelmanConfigEditorPanel
         return;
       }
 
-      const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
+      const targetPath: PathSegment[] = ["automation", "appliance_optimizers", index, "target"];
       const applianceId = this._stringValue(
         getValueAtPath(config, [...targetPath, "controllable_id"]),
       );

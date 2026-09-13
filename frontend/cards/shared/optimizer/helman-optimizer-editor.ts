@@ -46,6 +46,7 @@ import { renderOptimizerCard } from "./optimizer-card";
 import { optimizerCardStyles } from "./optimizer-styles";
 import type {
     GroupNameEdit,
+    OptimizerConfigBucket,
     OptimizerEditorHost,
     OptimizerSchema,
     OptimizerSchemaDocument,
@@ -76,7 +77,7 @@ export interface OptimizerConfigChangedDetail {
  * ### Why it takes the whole document
  *
  * Every path the renderers build is absolute -- `optimizer-card.ts` roots its
- * card at `automation.optimizers[index]`, `optimizer-condition-groups.ts` roots
+ * card at `automation.<bucket>[index]`, `optimizer-condition-groups.ts` roots
  * the group list at the same place. More than tidiness keeps it that way: the
  * target picker reads the document's `controllables` list to name its options,
  * and a group's param override renders the *master* params as its placeholders.
@@ -101,7 +102,14 @@ export class HelmanOptimizerEditor
     /** The whole config document. Not mutated -- edits are reported, not applied. */
     @property({ attribute: false }) config: JsonObject | null = null;
 
-    /** Which entry of `automation.optimizers` this card edits. */
+    /**
+     * Which bucket this card's optimizer lives in -- `automation.appliance_optimizers`
+     * or `automation.system_optimizers`. Rooting `_basePath`, so every path this
+     * element and the renderers it drives build follows from it.
+     */
+    @property({ type: String }) bucket: OptimizerConfigBucket = "appliance_optimizers";
+
+    /** Which entry of that bucket this card edits. */
     @property({ type: Number }) index = 0;
 
     /** How many optimizers there are, for the list actions' bounds. */
@@ -120,6 +128,17 @@ export class HelmanOptimizerEditor
     @property({ type: Boolean }) expanded = false;
 
     @property({ attribute: false }) localize: (key: string) => string = (key) => key;
+
+    /**
+     * A validation warning against this optimizer, or none.
+     *
+     * Only `required_appliance_planned_later` reaches here today -- reordering
+     * within the appliance section is the fix for it, so the card the warning
+     * is *about* is where a reader can act on it, not only the validation panel.
+     * A message rather than a code: the panel already has the backend's wording
+     * and there is no second copy to keep in step with it here.
+     */
+    @property({ attribute: false }) warning: string | null = null;
 
     /**
      * The up/down/remove/enabled row in the card's summary, or nothing.
@@ -160,10 +179,12 @@ export class HelmanOptimizerEditor
             host: this,
             schema,
             optimizer,
+            bucket: this.bucket,
             index: this.index,
             total: this.total,
             enabled,
             title: this._cardTitle(schema, optimizer),
+            warning: this.warning,
             open: this.expanded,
             renderSvgIcon,
             renderListActions: (basePath) =>
@@ -223,13 +244,19 @@ export class HelmanOptimizerEditor
     }
 
     /**
-     * An appliance-driving card is titled by the appliance it drives.
+     * An appliance-driving card is titled by the appliance it drives, plus its
+     * own id.
      *
      * Every kind carries a `controllable_id` now, so "has a target" no longer
      * separates them — the inverter does. Its three optimizers share one lane
      * and one name, so titling them "Inverter" three times would tell the
      * reader nothing and lose the ids that tell them apart; they keep their id,
-     * exactly as before.
+     * exactly as before. An appliance can just as legitimately carry two
+     * optimizers in the same bucket (P2, #272) -- composing in order rather
+     * than one replacing the other -- so two cards sharing an appliance's name
+     * is expected, not a bug, and the id is what tells them apart. Reuses
+     * `appliance_option`'s "{name} ({id})" shape rather than inventing a
+     * second one for the same pairing.
      */
     private _cardTitle(schema: OptimizerSchema, optimizer: JsonObject): string {
         const fallback =
@@ -242,7 +269,10 @@ export class HelmanOptimizerEditor
         if (selectionState.selectedOption) {
             return selectionState.selectedOption.kind === "inverter"
                 ? fallback
-                : selectionState.selectedOption.name;
+                : this._tFormat("editor.dynamic.appliance_option", {
+                      name: selectionState.selectedOption.name,
+                      id: fallback,
+                  });
         }
         if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
             return this._tFormat("editor.dynamic.stale_appliance", {
@@ -257,7 +287,7 @@ export class HelmanOptimizerEditor
     }
 
     private get _basePath(): PathSegment[] {
-        return ["automation", "optimizers", this.index];
+        return ["automation", this.bucket, this.index];
     }
 
     // --- FormFieldHost / OptimizerEditorHost --------------------------------

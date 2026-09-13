@@ -12,6 +12,18 @@ import { MISSING_TRANSLATION_PREFIX } from "../config/localize/localize";
  * came to render a `hold_action` field no Python code has ever read.
  */
 
+/**
+ * The two config-path buckets an optimizer instance lives under:
+ * `automation.appliance_optimizers` or `automation.system_optimizers`.
+ *
+ * Declared once here and imported everywhere a `_basePath` gets built, so a
+ * third bucket (or a rename) is a one-line change instead of an independent
+ * literal to find and update in every file that builds one of these paths.
+ * Distinct from `OptimizerSchema.bucket` above, which is the schema's own
+ * singular `"appliance" | "system"` kind, not the plural config array name.
+ */
+export type OptimizerConfigBucket = "appliance_optimizers" | "system_optimizers";
+
 export interface SchemaField {
     key: string;
     type: "number" | "integer" | "time" | "string" | "day_classifications" | "object";
@@ -48,6 +60,17 @@ export interface OptimizerSchema {
      * card must still render against a schema served by an older backend.
      */
     controllableKinds?: string[];
+    /**
+     * Which config bucket this kind belongs to: `"appliance"` or `"system"`.
+     *
+     * Derived in Python from `OptimizerSpec.bucket` -- never a kind list here,
+     * which is exactly the drift that derivation exists to prevent. Optional
+     * for the same reason `controllableKinds` is: a card must still render
+     * against a schema served by an older backend, and an optimizer whose kind
+     * cannot be placed falls back to the appliance section (see
+     * `helman-config-editor.ts`'s `_bucketKindOf`).
+     */
+    bucket?: "appliance" | "system";
     /** What "Add <kind>" seeds, authored beside the schema in Python. */
     newDraft: JsonObject;
 }

@@ -81,7 +81,8 @@ const CONFIG = {
     appliances: [],
     automation: {
         enabled: true,
-        optimizers: [
+        appliance_optimizers: [],
+        system_optimizers: [
             {
                 id: "charge_hold",
                 kind: "charge_hold",
@@ -430,13 +431,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                 controllables,
                 automation: {
                     enabled: true,
-                    optimizers: [{
+                    appliance_optimizers: [{
                         id: "heat",
                         kind: "appliance_runtime",
                         enabled: true,
                         target: { controllable_id: "heatpump" },
                         conditions: [{ requires_appliance: requires }],
                     }],
+                    system_optimizers: [],
                 },
             },
         });
@@ -539,13 +541,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                 ],
                 automation: {
                     enabled: true,
-                    optimizers: [{
+                    appliance_optimizers: [{
                         id: "heat",
                         kind: "appliance_runtime",
                         enabled: true,
                         target: { controllable_id: "heatpump" },
                         conditions: [{ requires_appliance: "filtration" }],
                     }],
+                    system_optimizers: [],
                 },
             },
         });
@@ -578,8 +581,8 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // whole-document save that dropped a sibling would be the worst
         // possible bug here, and it would be silent.
         expect(sent.power_devices).toEqual(CONFIG.power_devices);
-        expect(sent.automation.optimizers[0]).toEqual(CONFIG.automation.optimizers[0]);
-        expect(sent.automation.optimizers[1].conditions).toEqual([{ when_price_below: 2.5 }]);
+        expect(sent.automation.system_optimizers[0]).toEqual(CONFIG.automation.system_optimizers[0]);
+        expect(sent.automation.system_optimizers[1].conditions).toEqual([{ when_price_below: 2.5 }]);
     });
 
     test("a rejected save says so and keeps the dialog open", async ({ page }) => {
@@ -599,7 +602,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
 
     test("an optimizer the config no longer has is named, not blanked", async ({ page }) => {
         await mountPanel(page, {
-            config: { ...CONFIG, automation: { enabled: true, optimizers: [CONFIG.automation.optimizers[0]] } },
+            config: {
+                ...CONFIG,
+                automation: {
+                    enabled: true,
+                    appliance_optimizers: [],
+                    system_optimizers: [CONFIG.automation.system_optimizers[0]],
+                },
+            },
         });
         await openDialog(page);
 
@@ -762,9 +772,9 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
             ...CONFIG,
             automation: {
                 ...CONFIG.automation,
-                optimizers: [
-                    CONFIG.automation.optimizers[0],
-                    { ...CONFIG.automation.optimizers[1], conditions: [{ when_price_below: 2.5 }] },
+                system_optimizers: [
+                    CONFIG.automation.system_optimizers[0],
+                    { ...CONFIG.automation.system_optimizers[1], conditions: [{ when_price_below: 2.5 }] },
                 ],
             },
         };
