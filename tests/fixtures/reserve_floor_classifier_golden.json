@@ -1,0 +1,219 @@
+{
+  "appliance_moves_into_expensive_window": [
+    {
+      "applianceLaneChanged": true,
+      "class": "downstream_introduced",
+      "groupIndex": 0,
+      "inverterLaneChanged": false,
+      "laneSummary": "exclusive_appliance",
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 25.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "bridge_lands_early_discharges_before_window": [
+    {
+      "applianceLaneChanged": null,
+      "class": "unresolved_at_boundary",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": "unresolved",
+      "shortfallPp": 25.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "cheap_window_capacity_short": [
+    {
+      "applianceLaneChanged": null,
+      "class": "known_unrepairable",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": "capacity",
+      "shortfallPp": 20.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "cold_start_no_prior_plan": [
+    {
+      "applianceLaneChanged": true,
+      "class": "downstream_introduced",
+      "groupIndex": 0,
+      "inverterLaneChanged": false,
+      "laneSummary": "exclusive_appliance",
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 25.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "control_below_floor_never_restored": [
+    {
+      "applianceLaneChanged": null,
+      "class": "pre_existing_physical",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 18.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "control_below_floor_repaired": [
+    {
+      "applianceLaneChanged": null,
+      "class": "none",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 0.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "floor_needs_more_than_max_target_soc": [
+    {
+      "applianceLaneChanged": null,
+      "class": "known_unrepairable",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": "cap",
+      "shortfallPp": 10.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "later_optimizer_overwrites_bridge": [
+    {
+      "applianceLaneChanged": false,
+      "class": "downstream_introduced",
+      "groupIndex": 0,
+      "inverterLaneChanged": true,
+      "laneSummary": "exclusive_inverter",
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 20.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "overlapping_expensive_windows": [
+    {
+      "applianceLaneChanged": null,
+      "class": "none",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 0.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T09:30:00+02:00"
+      ]
+    },
+    {
+      "applianceLaneChanged": null,
+      "class": "pre_existing_physical",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": 20.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T09:00:00+02:00",
+        "2026-07-10T10:30:00+02:00"
+      ]
+    }
+  ],
+  "truncated_soc_series": [
+    {
+      "applianceLaneChanged": null,
+      "class": "unmeasurable",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "grid-bridge",
+      "reason": null,
+      "shortfallPp": null,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ],
+  "two_charge_from_grid_instances": [
+    {
+      "applianceLaneChanged": null,
+      "class": "none",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "bridge-a",
+      "reason": null,
+      "shortfallPp": 0.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    },
+    {
+      "applianceLaneChanged": null,
+      "class": "pre_existing_physical",
+      "groupIndex": 0,
+      "inverterLaneChanged": null,
+      "laneSummary": null,
+      "optimizerId": "bridge-b",
+      "reason": null,
+      "shortfallPp": 50.0,
+      "status": "measured",
+      "window": [
+        "2026-07-10T08:00:00+02:00",
+        "2026-07-10T10:00:00+02:00"
+      ]
+    }
+  ]
+}

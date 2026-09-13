@@ -55,7 +55,7 @@ from ..explain import (
 )
 from ..ownership import is_user_owned_inverter_action
 from ..rails import horizon_slots_between, read_price_by_bucket, read_soc_by_bucket
-from ..trace import NULL_TRACE
+from ..trace import NULL_TRACE, ReserveFloorObservation
 
 if TYPE_CHECKING:
     from ..conditions import SlotEligibility
@@ -233,10 +233,37 @@ class ChargeFromGridOptimizer:
         ]
         floor = resolved.condition_value("reserve_floor_soc")
         group_index = resolved.group.index
+
+        # #274 (P0 of #270): one raw observation per evaluated expensive
+        # window, regardless of outcome — the reserve-floor breach classifier
+        # joins these against snapshots the pipeline captures separately.
+        # Deliberately a plain closure, not `emit`: `_ChargeFromGridEmission`
+        # dedupes/reduces per slot by design and must stay lossy; this must
+        # not be.
+        def _observe(
+            *,
+            min_soc: float | None,
+            bridge_written: bool,
+            limit: str | None = None,
+        ) -> None:
+            emit.observe_reserve_floor(
+                ReserveFloorObservation(
+                    optimizer_id=self.id,
+                    group_index=group_index,
+                    window=(expensive_window[0], expensive_window[1]),
+                    reserve_floor_soc=floor,
+                    conditions_active=resolved.condition_met,
+                    projected_min_soc=min_soc,
+                    bridge_written=bridge_written,
+                    limit=limit,
+                )
+            )
+
         window_min_soc = _min_soc_over(
             soc_by_bucket, expensive_band.start, expensive_band.end
         )
         if window_min_soc is None:
+            _observe(min_soc=None, bridge_written=False)
             emit.window_unknown(
                 cheap_slots,
                 expensive_window=expensive_window,
@@ -258,6 +285,7 @@ class ChargeFromGridOptimizer:
         dip = floor - window_min_soc
         if dip <= 0:
             # covered — SoC never dips below the reserve floor.
+            _observe(min_soc=window_min_soc, bridge_written=False)
             emit.window_covered(
                 cheap_slots,
                 gates=[soc_known],
@@ -270,17 +298,20 @@ class ChargeFromGridOptimizer:
 
         window_start_soc = _soc_at(soc_by_bucket, expensive_band.start)
         if window_start_soc is None:
+            _observe(min_soc=window_min_soc, bridge_written=False)
             emit.window_unknown(
                 cheap_slots,
                 expensive_window=expensive_window,
                 floor=breached,
             )
             return
-        target = window_start_soc + dip * (1 + resolved.params["margin_pct"] / 100)
-        target = max(lower_target, min(upper_target, target))
+        raw_target = window_start_soc + dip * (1 + resolved.params["margin_pct"] / 100)
+        target = max(lower_target, min(upper_target, raw_target))
+        capped_at_max_target = raw_target > upper_target
 
         cheap_start_soc = _soc_at(soc_by_bucket, cheap_band.start)
         if cheap_start_soc is None:
+            _observe(min_soc=window_min_soc, bridge_written=False)
             emit.window_unknown(
                 cheap_slots,
                 expensive_window=expensive_window,
@@ -300,6 +331,15 @@ class ChargeFromGridOptimizer:
         )
         if soc_gap <= 0 or slots_needed <= 0:
             # already at/above target entering the cheap window.
+            # A cap can itself make this branch reachable: the uncapped target
+            # may require a bridge even though the clamped target is already
+            # below the cheap-window starting SoC.  Preserve that binding limit
+            # so the classifier does not report the residual as unexplained.
+            _observe(
+                min_soc=window_min_soc,
+                bridge_written=False,
+                limit="cap" if capped_at_max_target else None,
+            )
             emit.charge_not_needed(
                 cheap_slots,
                 gates=[
@@ -345,6 +385,19 @@ class ChargeFromGridOptimizer:
 
         chosen = ranked[:slots_needed]
         chosen_price = max((price for price, _ in chosen), default=0.0)
+        capacity_short = len(ranked) < slots_needed
+        _observe(
+            min_soc=window_min_soc,
+            bridge_written=bool(chosen),
+            # `capacity` takes priority: when both are true, raising
+            # `max_target_soc` alone would not close the gap either, since
+            # there are not enough rankable slots to charge into regardless.
+            limit=(
+                "capacity"
+                if capacity_short
+                else "cap" if capped_at_max_target else None
+            ),
+        )
 
         def _rank_gates(index: int, price: float, made_the_cut: bool) -> list["_Gate"]:
             return [
@@ -453,6 +506,15 @@ class _ChargeFromGridEmission:
     def __init__(self, trace) -> None:
         self._trace = trace
         self._by_slot: dict[str, _SlotRecord] = {}
+
+    def observe_reserve_floor(self, observation: "ReserveFloorObservation") -> None:
+        """Forward one raw #274 observation straight to the trace.
+
+        Unlike every other method here, this is not accumulated/deduped by
+        slot: it is recorded once per evaluated window immediately, since the
+        classifier needs the raw, unreduced list.
+        """
+        self._trace.record_reserve_floor_observation(observation)
 
     def _add(self, slot_id: str, record: _SlotRecord) -> None:
         current = self._by_slot.get(slot_id)
