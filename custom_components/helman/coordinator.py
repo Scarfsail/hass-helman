@@ -1104,7 +1104,10 @@ class HelmanCoordinator:
         # Stale automation-owned actions are stripped when automation itself is
         # off. This is independent of execution_enabled: with execution off the
         # optimizers still plan, so their actions stay.
-        if not (automation_config.enabled and automation_config.execution_optimizers):
+        if not (
+            automation_config.enabled_appliance_optimizers
+            or automation_config.enabled_system_optimizers
+        ):
             await self._async_cleanup_automation_owned_actions_if_needed(
                 reference_time=reference_time,
             )
@@ -3173,7 +3176,10 @@ class HelmanCoordinator:
                 reference_time=request_now
             )
 
-        if not (automation_config.enabled and automation_config.execution_optimizers):
+        if not (
+            automation_config.enabled_appliance_optimizers
+            or automation_config.enabled_system_optimizers
+        ):
             if not has_automation_owned_actions(schedule_document):
                 return
         elif not (
@@ -3619,7 +3625,7 @@ class HelmanCoordinator:
         traces: dict[tuple[str, int], dict[str, Any]] = {}
         run_at = dt_util.now().isoformat()
         active_keys: set[tuple[str, int]] = set()
-        for optimizer in automation_config.optimizers:
+        for optimizer in automation_config.all_optimizers:
             group_results: list[CustomConditionGroupResult] = []
             for group in optimizer.conditions:
                 if not group.custom:
@@ -4775,9 +4781,7 @@ class HelmanCoordinator:
         if automation_config is None or not automation_config.enabled:
             return None
         lookback_days_by_appliance_id: dict[str, int] = {}
-        for optimizer in automation_config.execution_optimizers:
-            if optimizer.kind != "appliance_runtime":
-                continue
+        for optimizer in automation_config.enabled_appliance_optimizers:
             appliance_id = optimizer.controllable_id
             if not appliance_id:
                 continue

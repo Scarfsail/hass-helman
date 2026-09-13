@@ -19,10 +19,18 @@ from typing import Any
 from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
 from ..const import DAY_CLASSIFICATIONS
 from ..controllables.config import CONTROLLABLE_ID_INVERTER
-from ..controllables.spec import controllable_kinds_for_optimizer_kind
+from ..controllables.spec import (
+    appliance_controllable_kinds,
+    controllable_kinds_for_optimizer_kind,
+)
 from . import fields as F
 from .conditions.types import CONDITION_TYPES, ConditionType, Scope
 from .fields import Field, OptimizerConfigError
+
+#: The two config buckets an optimizer kind can fall into. See
+#: :attr:`OptimizerSpec.bucket`.
+OPTIMIZER_BUCKET_APPLIANCE = "appliance"
+OPTIMIZER_BUCKET_SYSTEM = "system"
 
 @dataclass(frozen=True)
 class OptimizerSpec:
@@ -73,6 +81,32 @@ class OptimizerSpec:
         """
         return controllable_kinds_for_optimizer_kind(self.kind)
 
+    @property
+    def bucket(self) -> str:
+        """Which config bucket this kind belongs to: ``appliance`` or ``system``.
+
+        Derived from :attr:`controllable_kinds`, never declared here: an
+        optimizer is an appliance optimizer exactly when every controllable
+        kind it may drive is itself an appliance kind (one whose
+        ``affects_consumption`` marks it as having demand of its own — see
+        :func:`..controllables.spec.appliance_controllable_kinds`). A kind no
+        controllable accepts returns ``system``, matching the existing "empty
+        tuple reads as nothing may be targeted" convention. This is the one
+        place *config-level* bucket membership is decided — parsing,
+        migration, validation and the editor all read this property, never a
+        literal kind list. ``pipeline.py``'s own internal
+        ``_APPLIANCE_OPTIMIZER_KIND`` lane-restoration check predates this
+        property and is untouched here; #272 (P2) deletes that machinery
+        entirely rather than rewiring it to read ``.bucket``.
+        """
+        appliance_kinds = appliance_controllable_kinds()
+        controllable_kinds = self.controllable_kinds
+        if controllable_kinds and all(
+            kind in appliance_kinds for kind in controllable_kinds
+        ):
+            return OPTIMIZER_BUCKET_APPLIANCE
+        return OPTIMIZER_BUCKET_SYSTEM
+
     def to_dict(self) -> dict[str, Any]:
         """Serialise for ``helman/get_optimizer_schema``."""
         return {
@@ -88,6 +122,7 @@ class OptimizerSpec:
                 for condition in self.condition_type_list
             ],
             "controllableKinds": list(self.controllable_kinds),
+            "bucket": self.bucket,
             "newDraft": self.new_draft,
         }
 

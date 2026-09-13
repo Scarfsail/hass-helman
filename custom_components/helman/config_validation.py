@@ -1330,98 +1330,112 @@ def _validate_automation_config(
     appliance_registry = build_appliances_runtime_registry(config)
     battery_issue = describe_battery_entity_config_issue(config)
     controllable_kinds_by_id = read_controllable_kinds_by_id(config)
-    seen_export_price = False
-    # `execution_optimizers` drops the disabled ones, so its index is not the
+    # `enabled_*_optimizers` drops the disabled ones, so its index is not the
     # index the path has to address — and the two differ exactly when a
     # disabled optimizer exists, which is when
-    # `required_appliance_optimizer_disabled` fires. Ids are unique by then
-    # (`_read_optimizers` rejects duplicates), so they carry the mapping.
+    # `required_appliance_optimizer_disabled` fires. Ids are unique across both
+    # buckets (`_read_optimizer_buckets` rejects duplicates), so they carry the
+    # mapping to the bucket and document index a finding's path must address.
     document_index_by_optimizer_id = {
-        optimizer.id: document_index
-        for document_index, optimizer in enumerate(automation_config.optimizers)
+        optimizer.id: (bucket_key, document_index)
+        for bucket_key, optimizers in (
+            ("appliance_optimizers", automation_config.appliance_optimizers),
+            ("system_optimizers", automation_config.system_optimizers),
+        )
+        for document_index, optimizer in enumerate(optimizers)
     }
-    earliest_planner_index = _earliest_planner_index_by_controllable(automation_config)
+    # Positions within the appliance bucket only: that is the order both
+    # appliance phases walk (per P2's future design), and a `requires_appliance`
+    # provider is always an appliance, so no cross-bucket comparison arises.
+    earliest_appliance_planner_index = _earliest_planner_index_by_controllable(
+        automation_config.enabled_appliance_optimizers
+    )
     controllables_planned_by_disabled = _controllables_planned_by_disabled_optimizer(
         automation_config
     )
-    # Enabled optimizers only, deliberately: a disabled optimizer with a broken
-    # group is a config the user parked, not an error to surface.
-    for index, optimizer in enumerate(automation_config.execution_optimizers):
-        path = (
-            "automation.optimizers"
-            f"[{document_index_by_optimizer_id[optimizer.id]}]"
-        )
-        if optimizer.kind in _BATTERY_DEPENDENT_KINDS and battery_issue is not None:
-            report.add_error(
-                section="automation",
-                path=path,
-                code="battery_required",
-                message=(
-                    f"{optimizer.kind} optimizer {optimizer.id!r} requires a "
-                    f"configured battery: {battery_issue}"
-                ),
-            )
-        if not _validate_optimizer_target(
-            optimizer, controllable_kinds_by_id, path=path, report=report
-        ):
-            # Building would fail again on the same id, in the appliance
-            # registry's words this time. One finding per fault.
-            continue
 
-        _validate_requires_appliance(
-            optimizer,
-            index=index,
-            controllable_kinds_by_id=controllable_kinds_by_id,
-            earliest_planner_index=earliest_planner_index,
-            controllables_planned_by_disabled=controllables_planned_by_disabled,
-            path=path,
-            report=report,
-        )
+    for bucket_key, enabled_optimizers in (
+        ("appliance_optimizers", automation_config.enabled_appliance_optimizers),
+        ("system_optimizers", automation_config.enabled_system_optimizers),
+    ):
+        seen_export_price = False
+        # Enabled optimizers only, deliberately: a disabled optimizer with a
+        # broken group is a config the user parked, not an error to surface.
+        for index, optimizer in enumerate(enabled_optimizers):
+            _, document_index = document_index_by_optimizer_id[optimizer.id]
+            path = f"automation.{bucket_key}[{document_index}]"
+            if optimizer.kind in _BATTERY_DEPENDENT_KINDS and battery_issue is not None:
+                report.add_error(
+                    section="automation",
+                    path=path,
+                    code="battery_required",
+                    message=(
+                        f"{optimizer.kind} optimizer {optimizer.id!r} requires a "
+                        f"configured battery: {battery_issue}"
+                    ),
+                )
+            if not _validate_optimizer_target(
+                optimizer, controllable_kinds_by_id, path=path, report=report
+            ):
+                # Building would fail again on the same id, in the appliance
+                # registry's words this time. One finding per fault.
+                continue
 
-        # Building is the validation: the generic reader has already checked the
-        # declared schema, so what is left is the runtime resolution (appliance
-        # lookups, authorable modes) that only a builder can do.
-        try:
-            build_optimizer(
+            _validate_requires_appliance(
                 optimizer,
-                control_config=None,
-                appliance_registry=appliance_registry,
+                index=index,
+                controllable_kinds_by_id=controllable_kinds_by_id,
+                earliest_planner_index=earliest_appliance_planner_index,
+                controllables_planned_by_disabled=controllables_planned_by_disabled,
                 path=path,
-            )
-        except AutomationConfigError as err:
-            report.add_error(
-                section="automation",
-                path=err.path,
-                code=err.code,
-                message=str(err),
+                report=report,
             )
 
-        if optimizer.kind == "export_price":
-            seen_export_price = True
-        elif optimizer.kind == "charge_hold" and seen_export_price:
-            report.add_warning(
-                section="automation",
-                path=path,
-                code="charge_hold_after_export_price",
-                message=(
-                    f"charge_hold optimizer {optimizer.id!r} is ordered after an "
-                    "export_price optimizer; export_price's stop_export will win "
-                    "shared inverter slots. Place charge_hold first."
-                ),
-            )
+            # Building is the validation: the generic reader has already checked
+            # the declared schema, so what is left is the runtime resolution
+            # (appliance lookups, authorable modes) that only a builder can do.
+            try:
+                build_optimizer(
+                    optimizer,
+                    control_config=None,
+                    appliance_registry=appliance_registry,
+                    path=path,
+                )
+            except AutomationConfigError as err:
+                report.add_error(
+                    section="automation",
+                    path=err.path,
+                    code=err.code,
+                    message=str(err),
+                )
+
+            if optimizer.kind == "export_price":
+                seen_export_price = True
+            elif optimizer.kind == "charge_hold" and seen_export_price:
+                report.add_warning(
+                    section="automation",
+                    path=path,
+                    code="charge_hold_after_export_price",
+                    message=(
+                        f"charge_hold optimizer {optimizer.id!r} is ordered after "
+                        "an export_price optimizer; export_price's stop_export "
+                        "will win shared inverter slots. Place charge_hold first."
+                    ),
+                )
 
 
 def _earliest_planner_index_by_controllable(
-    automation_config: Any,
+    enabled_appliance_optimizers: Any,
 ) -> dict[str, int]:
-    """For each controllable, the earliest enabled optimizer that plans it.
+    """For each appliance, the earliest enabled appliance optimizer that plans it.
 
-    Indices are positions in ``execution_optimizers`` — the order the pipeline
-    actually runs — because that is what decides whether one optimizer can see
-    another's writes.
+    Indices are positions within the appliance bucket, since that is the order
+    both appliance phases walk (per P2's future design), and a
+    ``requires_appliance`` provider is always an appliance — no other bucket's
+    order could answer this question.
     """
     earliest: dict[str, int] = {}
-    for index, optimizer in enumerate(automation_config.execution_optimizers):
+    for index, optimizer in enumerate(enabled_appliance_optimizers):
         earliest.setdefault(optimizer.controllable_id, index)
     return earliest
 
@@ -1429,20 +1443,21 @@ def _earliest_planner_index_by_controllable(
 def _controllables_planned_by_disabled_optimizer(
     automation_config: Any,
 ) -> frozenset[str]:
-    """Controllables whose only optimizer is switched off.
+    """Appliances whose only optimizer is switched off.
 
-    Reads the *full* optimizer list rather than ``execution_optimizers``, which
-    is enabled-only by design: a disabled optimizer is exactly what this has to
-    see. A controllable that also has an enabled optimizer is not in here — the
-    ordering check owns that case.
+    A ``requires_appliance`` provider is always an appliance, so only the
+    appliance bucket needs checking. Reads the *full* appliance bucket rather
+    than the enabled-only one, which is enabled-only by design: a disabled
+    optimizer is exactly what this has to see. An appliance that also has an
+    enabled optimizer is not in here — the ordering check owns that case.
     """
     enabled_ids = {
         optimizer.controllable_id
-        for optimizer in automation_config.execution_optimizers
+        for optimizer in automation_config.enabled_appliance_optimizers
     }
     return frozenset(
         optimizer.controllable_id
-        for optimizer in automation_config.optimizers
+        for optimizer in automation_config.appliance_optimizers
         if not optimizer.enabled and optimizer.controllable_id not in enabled_ids
     )
 

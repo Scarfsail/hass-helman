@@ -436,7 +436,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 "config": {
                     "automation": {
                         "enabled": True,
-                        "optimizers": [
+                        "system_optimizers": [
                             {
                                 "id": "export",
                                 "kind": "does_not_exist",
@@ -455,7 +455,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             connection.results[0][1]["errors"][0]["path"],
-            "automation.optimizers[0].kind",
+            "automation.system_optimizers[0].kind",
         )
         self.assertIn("does_not_exist", connection.results[0][1]["errors"][0]["message"])
 
@@ -524,7 +524,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         config = {
             "automation": {
                 "enabled": True,
-                "optimizers": [],
+                "system_optimizers": [],
             }
         }
 
@@ -545,7 +545,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         config = {
             "automation": {
                 "enabled": False,
-                "optimizers": [
+                "system_optimizers": [
                     {
                         "id": "export",
                         "kind": "export_price",
@@ -563,8 +563,8 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(storage.saved_payloads, [self._stamped(config)])
         self.assertEqual(
-            storage.config["automation"]["optimizers"],
-            config["automation"]["optimizers"],
+            storage.config["automation"]["system_optimizers"],
+            config["automation"]["system_optimizers"],
         )
         self.assertTrue(connection.results[0][1]["success"])
 
@@ -592,7 +592,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             ],
             "automation": {
                 "enabled": True,
-                "optimizers": [
+                "appliance_optimizers": [
                     {
                         "id": "preheat-living-room",
                         "kind": "appliance_runtime",

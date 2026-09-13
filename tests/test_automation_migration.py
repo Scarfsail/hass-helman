@@ -48,9 +48,19 @@ def _document(*optimizers):
     return {"automation": {"enabled": True, "optimizers": list(optimizers)}}
 
 
+def _all_optimizers(migrated):
+    """Both buckets concatenated, appliance first, for tests that migrate all
+    the way to the current version and no longer have a single flat list to
+    read back."""
+    automation = migrated["automation"]
+    return list(automation.get("appliance_optimizers", [])) + list(
+        automation.get("system_optimizers", [])
+    )
+
+
 def _migrate_one(optimizer):
     migrated, _ids = migrate_config_document(_document(optimizer))
-    return migrated["automation"]["optimizers"][0]
+    return _all_optimizers(migrated)[0]
 
 
 class VersionGateTests(unittest.TestCase):
@@ -88,7 +98,7 @@ class VersionGateTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            [o["id"] for o in migrated["automation"]["optimizers"]], ["hold", "export"]
+            [o["id"] for o in _all_optimizers(migrated)], ["hold", "export"]
         )
         self.assertEqual(ids, ["hold", "export"])
 
@@ -267,7 +277,7 @@ class PriceConditionSplitTests(unittest.TestCase):
     def _migrate_from_v4(*optimizers):
         document = {**_document(*optimizers), "config_version": 4}
         migrated, _ids = migrate_config_document(document)
-        return migrated["automation"]["optimizers"][0]
+        return _all_optimizers(migrated)[0]
 
     def test_appliance_runtime_price_condition_is_renamed(self) -> None:
         migrated = self._migrate_from_v4(
@@ -533,7 +543,7 @@ class ControllableTargetTests(unittest.TestCase):
         migrated, ids = migrate_config_document(
             {**_document(*optimizers), "config_version": 7}
         )
-        return migrated["automation"]["optimizers"], ids
+        return _all_optimizers(migrated), ids
 
     def test_appliance_id_becomes_controllable_id(self) -> None:
         (optimizer,), ids = self._migrate_from_v7(
@@ -593,7 +603,7 @@ class ControllableTargetTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["automation"]["optimizers"][0]["target"],
+            _all_optimizers(migrated)[0]["target"],
             {"controllable_id": "boiler"},
         )
 
@@ -935,7 +945,7 @@ class SelfSustainabilityUnificationTests(unittest.TestCase):
     def _migrate_from_v10(optimizer):
         document = {**_document(optimizer), "config_version": 10}
         migrated, ids = migrate_config_document(document)
-        return migrated["automation"]["optimizers"][0], ids
+        return _all_optimizers(migrated)[0], ids
 
     @staticmethod
     def _runtime(*, params=None, conditions):
@@ -1378,6 +1388,76 @@ class TrainingSectionRelocationTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(_document())
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 14)
+
+
+class OptimizerBucketSplitTests(unittest.TestCase):
+    """v14 -> v15: ``optimizers`` splits into ``appliance_optimizers`` /
+    ``system_optimizers``, partitioned by ``OptimizerSpec.bucket``.
+    """
+
+    @staticmethod
+    def _migrate_from_v14(*optimizers):
+        document = {**_document(*optimizers), "config_version": 14}
+        migrated, ids = migrate_config_document(document)
+        return migrated["automation"], ids
+
+    def test_interleaved_kinds_migrate_with_relative_order_preserved(self) -> None:
+        automation, ids = self._migrate_from_v14(
+            {"id": "hold", "kind": "charge_hold"},
+            {"id": "runtime-a", "kind": "appliance_runtime", "target": {"controllable_id": "dhw"}},
+            {"id": "export", "kind": "export_price"},
+            {"id": "runtime-b", "kind": "appliance_runtime", "target": {"controllable_id": "pool"}},
+            {"id": "grid", "kind": "charge_from_grid"},
+        )
+
+        self.assertNotIn("optimizers", automation)
+        self.assertEqual(
+            [o["id"] for o in automation["appliance_optimizers"]],
+            ["runtime-a", "runtime-b"],
+        )
+        self.assertEqual(
+            [o["id"] for o in automation["system_optimizers"]],
+            ["hold", "export", "grid"],
+        )
+        self.assertEqual(ids, ["hold", "runtime-a", "export", "runtime-b", "grid"])
+
+    def test_charge_hold_before_export_price_survives(self) -> None:
+        automation, _ids = self._migrate_from_v14(
+            {"id": "hold", "kind": "charge_hold"},
+            {"id": "export", "kind": "export_price"},
+        )
+
+        self.assertEqual(
+            [o["id"] for o in automation["system_optimizers"]], ["hold", "export"]
+        )
+
+    def test_an_unknown_kind_goes_to_the_system_bucket(self) -> None:
+        automation, _ids = self._migrate_from_v14({"id": "x", "kind": "mystery"})
+
+        self.assertEqual([o["id"] for o in automation["system_optimizers"]], ["x"])
+        self.assertEqual(automation["appliance_optimizers"], [])
+
+    def test_a_document_without_automation_survives(self) -> None:
+        migrated, ids = migrate_config_document({"config_version": 14})
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(ids, [])
+
+    def test_a_document_without_optimizers_survives(self) -> None:
+        migrated, ids = migrate_config_document(
+            {"config_version": 14, "automation": {"enabled": True}}
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertNotIn("optimizers", migrated["automation"])
+        self.assertNotIn("appliance_optimizers", migrated["automation"])
+        self.assertNotIn("system_optimizers", migrated["automation"])
+        self.assertEqual(ids, [])
+
+    def test_migrating_to_the_current_version_covers_this_step(self) -> None:
+        migrated, _ids = migrate_config_document(_document())
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 15)
 
 
 if __name__ == "__main__":

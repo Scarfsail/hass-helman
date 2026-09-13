@@ -363,6 +363,7 @@ _install_import_stubs()
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
+from custom_components.helman.automation.spec import OPTIMIZER_BUCKET_APPLIANCE
 from custom_components.helman.automation.explain import (
     ExplanationBook,
     OptimizerExplanation,
@@ -594,14 +595,28 @@ def _make_automation_config(
     *optimizers: OptimizerInstanceConfig,
     enabled: bool = True,
 ) -> AutomationConfig:
+    """Partition hand-built optimizers into the two config buckets.
+
+    Preserves each optimizer's relative position within its own bucket. The
+    tests in this file that care about cross-bucket execution order (the
+    pending-appliance-demand fix, #116) already list system-kind optimizers
+    before appliance-kind ones, matching the order ``AutomationRunner`` derives
+    from ``AutomationConfig`` (system bucket, then appliance bucket).
+    """
+    appliance = tuple(
+        optimizer
+        for optimizer in optimizers
+        if optimizer.spec.bucket == OPTIMIZER_BUCKET_APPLIANCE
+    )
+    system = tuple(
+        optimizer
+        for optimizer in optimizers
+        if optimizer.spec.bucket != OPTIMIZER_BUCKET_APPLIANCE
+    )
     return AutomationConfig(
         enabled=enabled,
-        optimizers=tuple(optimizers),
-        execution_optimizers=(
-            ()
-            if not enabled
-            else tuple(optimizer for optimizer in optimizers if optimizer.enabled)
-        ),
+        appliance_optimizers=appliance,
+        system_optimizers=system,
     )
 
 
@@ -1859,9 +1874,13 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         explanation = coordinator.recorded_explanations[0]
+        # Execution order is appliance-bucket-first, system-bucket-second
+        # (see AutomationRunner.__init__), so the appliance optimizer
+        # ("boiler") runs before the system one ("inverter") even though it
+        # was declared second here.
         self.assertEqual(
             [optimizer.controllable_id for optimizer in explanation.optimizers],
-            ["inverter", "boiler"],
+            ["boiler", "inverter"],
         )
 
     async def test_a_failed_run_records_no_explanation(self) -> None:
@@ -2845,10 +2864,6 @@ class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
         # ...while the appliance optimizer is re-planning that lane itself, so
         # nothing is restored into its own view of it.
         self.assertEqual(pending[1], ())
-        self.assertEqual(
-            pipeline_module._appliance_lane_ids((first, second)),
-            ("pool-filtration",),
-        )
 
     async def _run(self):
         coordinator = _FakeCoordinator(
@@ -2887,21 +2902,73 @@ class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
         return coordinator, result
 
     async def test_first_optimizer_reads_the_pending_appliance_load(self) -> None:
-        coordinator, result = await self._run()
+        """#116 within the appliance bucket.
+
+        P1 (#271) forces every appliance optimizer to run before every system
+        optimizer, so the original cross-bucket scenario here (a system
+        optimizer reading a still-pending appliance's baseline demand) can no
+        longer arise: by the time a system optimizer like ``charge-hold`` runs,
+        every appliance has already planned for real, so its demand is the
+        actual fresh plan, not a restored baseline. The #116 guarantee this
+        test protects — an earlier optimizer sees a *later* one's still-pending
+        appliance lane, not a house stripped of it — now lives entirely inside
+        the appliance bucket, between two appliance optimizers.
+        """
+        optimizers = (
+            _make_appliance_optimizer_instance(
+                optimizer_id="pool", controllable_id="pool-filtration"
+            ),
+            _make_appliance_optimizer_instance(
+                optimizer_id="washer", controllable_id="washer"
+            ),
+        )
+        baseline = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "pool-filtration": dict(self.APPLIANCE_ACTION),
+                    "washer": dict(self.APPLIANCE_ACTION),
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=baseline,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        def _build_optimizer_side_effect(config, *, control_config, appliance_registry):
+            return SimpleNamespace(
+                optimize=Mock(side_effect=lambda snapshot, *a, **kw: snapshot.schedule)
+            )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=_build_optimizer_side_effect,
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(*optimizers),
+            ).run(reference_time=REFERENCE_TIME)
         self.assertTrue(result.ran_automation)
         first_demand = coordinator.snapshot_calls[0]["demand_schedule_document"]
         slot = schedule_document_to_dict(first_demand)["slots"][CURRENT_SLOT_ID]
-        # The lane the *later* optimizer owns is taken back from the baseline,
+        # The lane the *later* appliance owns is taken back from the baseline,
         # so the house demand this optimizer ranks against is whole.
-        self.assertEqual(slot.get("pool-filtration"), self.APPLIANCE_ACTION)
+        self.assertEqual(slot.get("washer"), self.APPLIANCE_ACTION)
         # Its own lane stays stripped: it is re-planning that one, and restoring
         # it would have it read its own previous placements as fixed.
-        self.assertNotIn("inverter", slot)
+        self.assertNotIn("pool-filtration", slot)
 
     async def test_appliance_optimizer_does_not_see_its_own_stale_lane(self) -> None:
+        """With appliances running first (P1/#271), the first optimizer in
+        the run can itself be an appliance one — its own initial demand view
+        must exclude its own baseline lane the same way a later index already
+        did before this phase (see ``_pending_appliance_ids_by_index``)."""
         coordinator, _ = await self._run()
-        second_demand = coordinator.snapshot_calls[1]["demand_schedule_document"]
-        slots = schedule_document_to_dict(second_demand)["slots"]
+        own_demand = coordinator.snapshot_calls[0]["demand_schedule_document"]
+        slots = schedule_document_to_dict(own_demand)["slots"]
         self.assertNotIn("pool-filtration", slots.get(CURRENT_SLOT_ID, {}))
 
     async def test_restored_demand_never_leaks_into_the_plan(self) -> None:

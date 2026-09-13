@@ -838,6 +838,64 @@ def _migrate_v13_to_v14(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v14_to_v15(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``automation.optimizers`` splits into ``appliance_optimizers`` / ``system_optimizers``.
+
+    :attr:`~.spec.OptimizerSpec.bucket` decides which list an optimizer lands
+    in — the one place bucket membership is decided, never a list here. An
+    optimizer of an unknown kind has no spec and goes to ``system_optimizers``,
+    where it fails validation as it does today rather than being silently
+    dropped.
+
+    Relative order is preserved *within* each partition, which is exactly what
+    keeps ``charge_hold`` before ``export_price`` when the source document had
+    that order: both are system-bucket kinds, so they land in the same list in
+    the same relative order. Order *between* the two new lists is not, and
+    cannot be, preserved — that is the point of the split, and the accepted
+    risk of this phase landing without P2's runtime restructuring.
+
+    A document with no ``automation`` block or no ``optimizers`` key is
+    returned unchanged apart from the version stamp, consistent with
+    :func:`_migrate_optimizers`.
+    """
+    automation = document.get("automation")
+    if not isinstance(automation, Mapping):
+        return (document, [])
+    optimizers = automation.get("optimizers")
+    if not isinstance(optimizers, list):
+        return (document, [])
+
+    # Imported here, not at module level: this module documents itself as
+    # Home-Assistant-free (pure ``dict -> dict``), and ``.spec`` pulls in the
+    # conditions/scheduling chain, which does reach into Home Assistant. Doing
+    # the import lazily keeps every *other* migration step, and every caller
+    # that never reaches a v14 document, free of that dependency.
+    from .spec import OPTIMIZER_BUCKET_APPLIANCE, OPTIMIZER_SPECS
+
+    appliance_optimizers: list[Any] = []
+    system_optimizers: list[Any] = []
+    migrated_ids: list[str] = []
+    for raw in optimizers:
+        if not isinstance(raw, Mapping):
+            system_optimizers.append(raw)
+            continue
+        kind = raw.get("kind")
+        spec = OPTIMIZER_SPECS.get(kind) if isinstance(kind, str) else None
+        bucket = spec.bucket if spec is not None else None
+        if bucket == OPTIMIZER_BUCKET_APPLIANCE:
+            appliance_optimizers.append(raw)
+        else:
+            system_optimizers.append(raw)
+        migrated_ids.append(str(raw.get("id", "?")))
+
+    document["automation"] = {
+        **{key: value for key, value in automation.items() if key != "optimizers"},
+        "appliance_optimizers": appliance_optimizers,
+        "system_optimizers": system_optimizers,
+    }
+    return (document, migrated_ids)
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -852,6 +910,7 @@ _MIGRATIONS = {
     11: _migrate_v11_to_v12,
     12: _migrate_v12_to_v13,
     13: _migrate_v13_to_v14,
+    14: _migrate_v14_to_v15,
 }
 
 
