@@ -72,6 +72,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleAction,
     ScheduleDocument,
     inverter_action,
 )
@@ -281,6 +282,44 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         charges = [slot_id for slot_id, kind in actions.items() if kind == "charge_to_target_soc"]
         self.assertEqual(charges, [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
 
+    def test_simulated_charge_rounds_fractional_target_up(self) -> None:
+        result = self._run_with_fake_simulator(
+            holds_needed=99,
+            charges_needed=3,
+            fractional_target=True,
+        )
+
+        # A target of 50.4% needs a 51% inverter target.  A 50% target can
+        # never cross the simulated boundary, regardless of how many slots are
+        # added.
+        self.assertEqual(set(_charge_slots(result).values()), {51})
+        self.assertEqual(len(_charge_slots(result)), 5)
+
+    def test_simulation_does_not_restore_inactive_document_action(self) -> None:
+        inactive = ScheduleDocument(slots={
+            _slot_id(6): {
+                "inverter": ScheduleAction(
+                    kind="stop_discharging",
+                    set_by="automation",
+                    condition_met=False,
+                )
+            }
+        })
+        result = self._run_with_fake_simulator(
+            holds_needed=4,
+            charges_needed=99,
+            schedule_document=inactive,
+        )
+
+        # The candidate is omitted by the forecast overlay and must not count
+        # as a hold while selecting the latest cutoff.
+        holds = [
+            slot_id for slot_id, actions in result.slots.items()
+            if inverter_action(actions).kind == "stop_discharging"
+            and inverter_action(actions).condition_met
+        ]
+        self.assertEqual(holds, [_slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
+
     def test_simulated_hold_trace_records_the_actual_action(self) -> None:
         _result, trace = self._run_with_fake_simulator(
             holds_needed=4, charges_needed=99, with_trace=True
@@ -293,22 +332,47 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertEqual(applied[0]["action"]["kind"], "stop_discharging")
 
     def _run_with_fake_simulator(
-        self, *, holds_needed: int, charges_needed: int, with_trace: bool = False
+        self,
+        *,
+        holds_needed: int,
+        charges_needed: int,
+        with_trace: bool = False,
+        fractional_target: bool = False,
+        schedule_document: ScheduleDocument | None = None,
     ) -> ScheduleDocument | tuple[ScheduleDocument, object]:
         class FakeSimulator:
             def simulate(self, _demand, *, action_overrides):
                 holds = sum(action.kind == "stop_discharging" for action in action_overrides.values())
-                charges = sum(action.kind == "charge_to_target_soc" for action in action_overrides.values())
-                reached = holds >= holds_needed or charges >= charges_needed
-                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): 50.0 if reached else 0.0})
+                targets = [
+                    action.target_soc
+                    for action in action_overrides.values()
+                    if action.kind == "charge_to_target_soc"
+                ]
+                reached_by_hold = holds >= holds_needed
+                reached = reached_by_hold or len(targets) >= charges_needed
+                boundary_soc = (
+                    50.0 if reached_by_hold else max(targets, default=0)
+                ) if reached else 0.0
+                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): boundary_soc})
 
         fake_module = types.ModuleType("custom_components.helman.automation.horizon_simulation")
         fake_module.build_horizon_simulator = lambda *_args, **_kwargs: FakeSimulator()
-        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        soc = _soc_series({
+            0: 45,
+            6: 45,
+            8: 40.4 if fractional_target else 40,
+            9: 20,
+            10: 60,
+        })
         prices = _import_points({6: 2.0, 8: 6.0})
         with patch.dict(sys.modules, {fake_module.__name__: fake_module}):
             optimizer = build_charge_from_grid_optimizer(_make_config())
-            snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
+            snapshot = _make_snapshot(
+                soc_series=soc,
+                import_points=prices,
+                bands=_BANDS,
+                schedule_document=schedule_document,
+            )
             if with_trace:
                 return run_optimizer_with_trace(
                     optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME

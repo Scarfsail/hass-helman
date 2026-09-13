@@ -211,6 +211,7 @@
       "margin_pct": "Rezerva %",
       "reserve_floor_soc": "Rezervní minimum SoC %",
       "max_target_soc": "Max. cílové SoC %",
+      "charge_start_margin_slots": "Rezerva slotů před začátkem nabíjení",
       "min_hours_per_day": "Min. hodin za den",
       "max_consecutive_skips": "Max. po sobě jdoucích vynechání",
       "appliance_name": "Název spotřebiče",

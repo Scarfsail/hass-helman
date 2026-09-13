@@ -211,6 +211,7 @@
       "margin_pct": "Margin %",
       "reserve_floor_soc": "Reserve floor SoC %",
       "max_target_soc": "Max target SoC %",
+      "charge_start_margin_slots": "Charge start margin slots",
       "min_hours_per_day": "Min hours per day",
       "max_consecutive_skips": "Max consecutive skips",
       "appliance_name": "Appliance name",

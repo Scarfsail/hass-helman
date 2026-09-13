@@ -369,7 +369,10 @@ class ChargeFromGridOptimizer:
             )
             return
 
-        target_soc = int(round(target))
+        # Inverter targets are integral percentages.  Round upward so a
+        # simulated target action can actually satisfy the fractional bridge
+        # target used by the sizing and capacity checks below.
+        target_soc = ceil(target)
         if simulator is not None and self._plan_simulated_window(
             writer=writer,
             resolved=resolved,
@@ -502,11 +505,12 @@ class ChargeFromGridOptimizer:
         ]
         if not writable:
             return False
-        base_actions = {
-            parse_slot_id(slot_id): inverter_action(actions)
-            for slot_id, actions in writer.document.slots.items()
-            if inverter_action(actions).kind != "empty"
-        }
+        # ``simulator`` is built from ``snapshot.schedule_overlay``, the
+        # effective action set used for the battery forecast.  Trial actions
+        # must therefore only override the slots this plan changes.  Rebuilding
+        # them from ``writer.document`` would revive disabled, candidate, or
+        # unsupported actions deliberately omitted from that overlay.
+        base_actions: dict[datetime, ScheduleAction] = {}
         boundary = dt_util.as_utc(expensive_band.start)
 
         def projected(actions: dict[datetime, ScheduleAction]) -> float | None:
