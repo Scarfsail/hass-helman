@@ -109,8 +109,16 @@ OPTIMIZER_STATUSES: frozenset[str] = frozenset(
     {STATUS_OK, STATUS_SKIPPED, STATUS_FAILED}
 )
 
+#: Traced phases of the optimizer pipeline. Phase 1 is deliberately absent:
+#: it is a provisional appliance-demand estimate, not an explanation record.
+PHASE_SYSTEM_PLAN = 2
+PHASE_FINAL_APPLIANCE_PLACEMENT = 3
+OPTIMIZER_PHASES: frozenset[int] = frozenset(
+    {PHASE_SYSTEM_PLAN, PHASE_FINAL_APPLIANCE_PLACEMENT}
+)
 
-def _warn_unknown(label: str, value: Any, allowed: frozenset[str]) -> None:
+
+def _warn_unknown(label: str, value: Any, allowed: frozenset[Any]) -> None:
     """Log an unknown vocabulary member. Never raises: this is observability."""
     if value not in allowed:
         _LOGGER.warning("explanation has unknown %s %r", label, value)
@@ -480,12 +488,16 @@ class OptimizerExplanation:
     #: written by three optimizer kinds, so one lane click has no single
     #: optimizer to ask.
     controllable_id: str = ""
+    #: Runtime phase that produced this authoritative trace record. Phase 1 is
+    #: intentionally never represented because it is provisional and untraced.
+    phase: int = PHASE_SYSTEM_PLAN
     status: str = STATUS_OK
     status_reason: str | None = None
     slots: tuple[SlotExplanation, ...] = ()
 
     def __post_init__(self) -> None:
         _warn_unknown("optimizer status", self.status, OPTIMIZER_STATUSES)
+        _warn_unknown("optimizer phase", self.phase, OPTIMIZER_PHASES)
 
     def _aligned_slots(
         self, slot_ids: Sequence[str]
@@ -510,6 +522,7 @@ class OptimizerExplanation:
         payload: dict[str, Any] = {
             "optimizerId": self.optimizer_id,
             "kind": self.kind,
+            "phase": self.phase,
             "status": self.status,
             # the presence column: null == this optimizer said nothing about
             # that slot.
@@ -565,6 +578,7 @@ class OptimizerExplanation:
             optimizer_id=payload.get("optimizerId", ""),
             kind=payload.get("kind", ""),
             controllable_id=payload.get("controllableId", ""),
+            phase=payload.get("phase", PHASE_SYSTEM_PLAN),
             status=payload.get("status", STATUS_OK),
             status_reason=payload.get("statusReason"),
             slots=tuple(slots),
@@ -632,6 +646,7 @@ class _OptimizerRecord:
     optimizer_id: str
     kind: str
     controllable_id: str
+    phase: int
     status: str
     status_reason: str | None
     #: Newest run that reported this optimizer for this date; owns the header
@@ -699,6 +714,7 @@ class ExplanationBook:
                         optimizer_id=optimizer.optimizer_id,
                         kind=optimizer.kind,
                         controllable_id=controllable_id,
+                        phase=optimizer.phase,
                         status=optimizer.status,
                         status_reason=optimizer.status_reason,
                         run_at=run_at,
@@ -706,6 +722,7 @@ class ExplanationBook:
                     bucket[optimizer.optimizer_id] = record
                 elif record.run_at <= run_at:
                     record.kind = optimizer.kind
+                    record.phase = optimizer.phase
                     record.status = optimizer.status
                     record.status_reason = optimizer.status_reason
                     record.run_at = run_at
@@ -764,6 +781,7 @@ class ExplanationBook:
                 optimizer_id=record.optimizer_id,
                 kind=record.kind,
                 controllable_id=record.controllable_id,
+                phase=record.phase,
                 status=record.status,
                 status_reason=record.status_reason,
                 slots=tuple(

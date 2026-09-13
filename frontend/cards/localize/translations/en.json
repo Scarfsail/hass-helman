@@ -153,6 +153,19 @@
     }
   },
   "scheduling": {
+    "explanation": {
+      "pipeline": {
+        "label": "Automation pipeline",
+        "phase_1": "Phase 1",
+        "phase_2": "Phase 2",
+        "phase_3": "Phase 3",
+        "appliance_estimate": "Appliance demand estimate",
+        "system_plan": "System plan",
+        "final_appliance_placement": "Final appliance placement",
+        "unavailable": "provisional; no drill-down data",
+        "current": "selected optimizer runs here"
+      }
+    },
     "forecast": {
       "solar_label": "Solar",
       "measured": "measured",

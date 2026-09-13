@@ -314,6 +314,17 @@
       "explain_hint": "Klepnutím na slot v některém pruhu zobrazíte, proč je naplánovaný takhle."
     },
     "explanation": {
+      "pipeline": {
+        "label": "Postup automatizace",
+        "phase_1": "Fáze 1",
+        "phase_2": "Fáze 2",
+        "phase_3": "Fáze 3",
+        "appliance_estimate": "Odhad spotřeby zařízení",
+        "system_plan": "Plán systému",
+        "final_appliance_placement": "Konečné umístění zařízení",
+        "unavailable": "předběžné; bez podrobností",
+        "current": "vybraný optimalizátor běží zde"
+      },
       "loading": "Načítám vyhodnocení…",
       "error": "Vyhodnocení se nepodařilo načíst.",
       "empty": "Pro tento den není u tohoto pruhu zaznamenané žádné vyhodnocení.",

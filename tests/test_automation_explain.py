@@ -646,6 +646,7 @@ class ExplanationBookTests(unittest.TestCase):
         controllable_id: str = "inverter",
         optimizer_id: str = "export",
         kind: str = "export_price",
+        phase: int = 2,
         verdict: str = "skip",
         status: str = "ok",
     ) -> RunExplanation:
@@ -657,6 +658,7 @@ class ExplanationBookTests(unittest.TestCase):
                     optimizer_id=optimizer_id,
                     kind=kind,
                     controllable_id=controllable_id,
+                    phase=phase,
                     status=status,
                     slots=tuple(
                         SlotExplanation(slot_id=slot_id, verdict=verdict)
@@ -693,6 +695,17 @@ class ExplanationBookTests(unittest.TestCase):
         )
         # The header stamp is the newest run contributing to the lane/date.
         self.assertEqual(record["runAt"], self.RUN_20.isoformat())
+
+    def test_phase_survives_serialization_and_accumulation(self) -> None:
+        book = ExplanationBook()
+        run = self._run(self.RUN_08, self.MORNING, phase=3)
+
+        self.assertEqual(RunExplanation.from_dict(run.to_dict()), run)
+        book.record(run)
+        book.record(self._run(self.RUN_20, self.EVENING, phase=3))
+
+        record = book.get(controllable_id="inverter", date="2026-07-31")
+        self.assertEqual(record["optimizers"][0]["phase"], 3)
 
     def test_a_newer_run_overwrites_the_same_slot(self) -> None:
         book = ExplanationBook()
