@@ -77,7 +77,17 @@ export function buildAutomationCoverageIndex(
     const masterEnabled = booleanValue(automation?.enabled, true);
     const index = new Map<string, { optimizerIds: string[]; anyEnabled: boolean }>();
 
-    for (const entry of asJsonArray(automation?.optimizers) ?? []) {
+    // Both buckets, in document order within each: coverage answers "which
+    // lane does this optimizer drive", a question the bucket split does not
+    // change. Appliance first is arbitrary -- a lane driven from both buckets
+    // does not exist today (the inverter is system-only, appliances are
+    // appliance-only), so no ordering question actually arises here.
+    const optimizerEntries = [
+        ...(asJsonArray(automation?.appliance_optimizers) ?? []),
+        ...(asJsonArray(automation?.system_optimizers) ?? []),
+    ];
+
+    for (const entry of optimizerEntries) {
         const optimizer = asJsonObject(entry);
         if (!optimizer) {
             continue;

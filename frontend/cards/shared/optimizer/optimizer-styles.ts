@@ -23,6 +23,20 @@ export const optimizerCardStyles = css`
         border-color: rgba(127, 127, 127, 0.22);
     }
 
+    /* A requires_appliance provider planned later in the appliance section --
+       the same warning palette the config editor's own tab counters use. */
+    .optimizer-warning-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 0.76rem;
+        font-weight: var(--ha-font-weight-medium, 500);
+        background: rgba(255, 152, 0, 0.12);
+        color: #ef6c00;
+        white-space: nowrap;
+    }
+
     details.condition-section {
         border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
         border-radius: 8px;

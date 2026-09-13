@@ -11,6 +11,7 @@ import {
     fieldChoiceLabel,
     fieldHelpKey,
     fieldLabelKey,
+    type OptimizerConfigBucket,
     type OptimizerEditorHost,
     type OptimizerSchema,
 } from "./optimizer-schema";
@@ -36,7 +37,9 @@ const PENCIL_ICON =
 export interface ConditionGroupsOptions {
     host: OptimizerEditorHost;
     schema: OptimizerSchema;
-    /** Index of the optimizer inside `automation.optimizers`. */
+    /** Which bucket the optimizer lives in -- roots `groupsPath`/`paramsPath`. */
+    bucket: OptimizerConfigBucket;
+    /** Index of the optimizer inside that bucket. */
     optimizerIndex: number;
     addGroup(): void;
     removeGroup(groupIndex: number): void;
@@ -46,10 +49,10 @@ export interface ConditionGroupsOptions {
 export function renderConditionGroups(
     options: ConditionGroupsOptions,
 ): TemplateResult {
-    const { host, optimizerIndex } = options;
+    const { host, bucket, optimizerIndex } = options;
     const groupsPath: PathSegment[] = [
         "automation",
-        "optimizers",
+        bucket,
         optimizerIndex,
         "conditions",
     ];
@@ -84,7 +87,7 @@ function renderGroup(
     const hasOverride = Object.keys(asJsonObject(group.params) ?? {}).length > 0;
     const paramsPath: PathSegment[] = [
         "automation",
-        "optimizers",
+        options.bucket,
         options.optimizerIndex,
         "params",
     ];

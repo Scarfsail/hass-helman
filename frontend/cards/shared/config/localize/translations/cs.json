@@ -59,7 +59,8 @@
       "battery": "Baterie",
       "grid": "Síť",
       "automation_settings": "Nastavení automatizace",
-      "optimizer_pipeline": "Pipeline optimalizátorů",
+      "appliance_optimizer_pipeline": "Optimalizátory spotřebičů",
+      "system_optimizer_pipeline": "Systémové optimalizátory",
       "configured_controllables": "Nakonfigurované ovládané prvky",
       "identity": "Identita",
       "action_options": "Volby akcí",
@@ -84,7 +85,8 @@
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
-      "optimizer_pipeline": "Tady nastavíte seřazený seznam optimalizátorů. Optimalizátory běží v pořadí, runtime mezi kroky znovu sestavuje snapshot a neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
+      "appliance_optimizer_pipeline": "Běží v tomto pořadí. Dřívější optimalizátory si nejdřív zaberou svůj podíl spotřeby a pozdější s tím už počítají; optimalizátor, který závisí na jiném, musí být uvedený až po něm. Runtime mezi kroky znovu sestavuje snapshot a neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
+      "system_optimizer_pipeline": "Běží jednou, až po všech optimalizátorech spotřebičů, a vidí celkovou naplánovanou spotřebu spotřebičů za celý den -- takže automatizace střídače reaguje na to, co si spotřebiče už zabraly, a neplánuje naslepo. Neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
       "controllables": "Všechno, co Helman ovládá, je v jednom seznamu: střídač a EV nabíječka, topení/klimatizace i obecný spotřebič. Všechny čtyři typy se editují přímo tady. Nepodporované budoucí typy se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
       "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
       "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu.",
@@ -96,10 +98,14 @@
       "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce níže -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná."
     },
     "empty": {
-      "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
+      "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
+      "no_system_optimizers": "Zatím nejsou nakonfigurovány žádné systémové optimalizátory.",
       "no_controllables": "Zatím nejsou nakonfigurovány žádné ovládané prvky.",
       "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků.",
       "no_entities_on_tab": "Tato záložka nekonfiguruje žádné entity."
+    },
+    "badges": {
+      "optimizer_warning": "Upozornění na pořadí"
     },
     "card": {
       "category": "Kategorie",
@@ -453,7 +459,7 @@
       "inverter_action_option": "Hodnota volby, kterou Helman zapíše do entity režimu při naplánování této akce. Musí přesně odpovídat jedné z voleb v entitě select. Nechte prázdné, pokud váš střídač tuto akci nepodporuje.",
       "controllable_id": "Jedinečný interní identifikátor tohoto ovládaného prvku. Používá se v odkazech automatizací a sledování plánování. Neměňte ho po nakonfigurování, mohlo by to rozbít existující automatizace.",
       "controllable_name": "Zobrazovaný název tohoto ovládaného prvku v dashboardu Helman a v pruzích plánu.",
-      "automation_optimizer_id": "Jedinečný identifikátor optimalizátoru uložený v automation.optimizers[].id. Držte ho stabilní, aby budoucí reference, logy a ladění zůstaly čitelné.",
+      "automation_optimizer_id": "Jedinečný identifikátor optimalizátoru, uložený jako id této položky v automation.appliance_optimizers nebo automation.system_optimizers. Držte ho stabilní, aby budoucí reference, logy a ladění zůstaly čitelné.",
       "export_price_when_price_below": "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Když předpovězená exportní cena klesne pod tuto hodnotu, optimalizátor vytvoří sloty stop_export tam, kde je očekávaný export.",
       "optimizer_target": "Ovládaný prvek, na který tento optimalizátor působí. Seznam se řídí aktuálními ovládanými prvky v editoru, takže rozpracované přidání i smazání se projeví hned, a je filtrován na druhy, které tento druh optimalizátoru umí řídit.",
       "appliance_runtime_climate_mode": "Povinné jen pro klimatické spotřebiče. Editor zobrazuje jen živě podporované režimy vrácené pro zvolený spotřebič.",

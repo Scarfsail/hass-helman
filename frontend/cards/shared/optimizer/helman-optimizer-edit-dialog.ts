@@ -23,11 +23,28 @@ import type {
     PathSegment,
     SaveConfigResponse,
 } from "../config/types";
-import { fetchOptimizerSchema, type OptimizerSchemaDocument } from "./optimizer-schema";
+import {
+    fetchOptimizerSchema,
+    type OptimizerConfigBucket,
+    type OptimizerSchemaDocument,
+} from "./optimizer-schema";
 import type { OptimizerConfigChangedDetail } from "./helman-optimizer-editor";
 import "./helman-optimizer-editor";
 
 const KEY_PREFIX = "scheduling.explanation.diagram.edit";
+
+type OptimizerBucket = OptimizerConfigBucket;
+
+const OPTIMIZER_BUCKETS: readonly OptimizerBucket[] = [
+    "appliance_optimizers",
+    "system_optimizers",
+];
+
+/** Where one named optimizer sits: its bucket and its index inside it. */
+interface OptimizerLocation {
+    bucket: OptimizerBucket;
+    index: number;
+}
 
 /**
  * What the dialog is doing. The render branches on this and nothing else.
@@ -54,10 +71,15 @@ type EditViewState =
          * A lane can be driven by several optimizers -- the inverter routinely
          * is -- and the badge that opens this dialog names all of them at once.
          * They share one draft and one Save, because they share one document.
+         *
+         * Each carries its own bucket: a lane's optimizers all share one bucket
+         * in practice (the inverter is system-only, an appliance is
+         * appliance-only), but nothing here assumes that -- the card renders
+         * from whichever bucket its own location names.
          */
-        indices: readonly number[];
-        /** How many optimizers the document holds, for the cards' bounds. */
-        total: number;
+        indices: readonly OptimizerLocation[];
+        /** How many optimizers each bucket holds, for the cards' list bounds. */
+        totals: Record<OptimizerBucket, number>;
         schema: OptimizerSchemaDocument | null;
         applianceMetadata: ApplianceMetadataResponse | null;
     };
@@ -144,7 +166,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
 
     /**
-     * Which optimizers to edit, by `automation.optimizers[].id`.
+     * Which optimizers to edit, by id -- looked up across both buckets.
      *
      * A list rather than one id because a lane is not a single automation: the
      * inverter has three, and the coverage badge that opens this dialog means
@@ -306,11 +328,12 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 // than one, and one shared draft with one Save is what makes
                 // them one edit rather than several.
                 return html`
-                    ${view.indices.map((index) => html`
+                    ${view.indices.map((location) => html`
                         <helman-optimizer-editor
                             .config=${view.config}
-                            .index=${index}
-                            .total=${view.total}
+                            .bucket=${location.bucket}
+                            .index=${location.index}
+                            .total=${view.totals[location.bucket]}
                             .schema=${view.schema}
                             .applianceMetadata=${view.applianceMetadata}
                             .expanded=${true}
@@ -411,7 +434,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 return;
             }
             this._baseline = canonicalJson(document);
-            const indices = findOptimizerIndices(document, this.optimizerIds);
+            const indices = findOptimizerLocations(document, this.optimizerIds);
             this._view =
                 indices.length === 0
                     ? { kind: "not_found" }
@@ -419,7 +442,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                           kind: "ready",
                           config: cloneJson(document),
                           indices,
-                          total: optimizerCount(document),
+                          totals: optimizerCounts(document),
                           schema,
                           applianceMetadata: appliances,
                       };
@@ -683,26 +706,39 @@ export class HelmanOptimizerEditDialog extends LitElement {
  * Config order rather than the order the ids were asked for: the cards are read
  * top to bottom as the pipeline that produced the lane, and the pipeline's
  * order is the document's, not the caller's. Ids that no longer resolve are
- * dropped -- an empty result is what raises `not_found`.
+ * dropped -- an empty result is what raises `not_found`. Both buckets are
+ * searched -- the caller only has ids, not which bucket owns them, and a lane
+ * badge names whatever actually drives that lane regardless of bucket.
  */
-function findOptimizerIndices(config: JsonObject, optimizerIds: readonly string[]): number[] {
+function findOptimizerLocations(
+    config: JsonObject,
+    optimizerIds: readonly string[],
+): OptimizerLocation[] {
     const wanted = new Set(optimizerIds.filter((id) => id.length > 0));
     if (wanted.size === 0) {
         return [];
     }
-    return readOptimizers(config)
-        .map((entry, index): [number, string | undefined] => [index, asJsonObject(entry)?.id as string | undefined])
-        .filter(([, id]) => id !== undefined && wanted.has(id))
-        .map(([index]) => index);
+    return OPTIMIZER_BUCKETS.flatMap((bucket) =>
+        readOptimizers(config, bucket)
+            .map((entry, index): [number, string | undefined] => [
+                index,
+                asJsonObject(entry)?.id as string | undefined,
+            ])
+            .filter(([, id]) => id !== undefined && wanted.has(id))
+            .map(([index]): OptimizerLocation => ({ bucket, index })),
+    );
 }
 
-/** How many optimizers the pipeline holds, for the cards' list bounds. */
-function optimizerCount(config: JsonObject): number {
-    return readOptimizers(config).length;
+/** How many optimizers each bucket holds, for the cards' list bounds. */
+function optimizerCounts(config: JsonObject): Record<OptimizerBucket, number> {
+    return {
+        appliance_optimizers: readOptimizers(config, "appliance_optimizers").length,
+        system_optimizers: readOptimizers(config, "system_optimizers").length,
+    };
 }
 
-function readOptimizers(config: JsonObject) {
-    return asJsonArray(asJsonObject(config.automation)?.optimizers) ?? [];
+function readOptimizers(config: JsonObject, bucket: OptimizerBucket) {
+    return asJsonArray(asJsonObject(config.automation)?.[bucket]) ?? [];
 }
 
 /** One spelling of "this id set", so the two sides of the comparison cannot drift. */

@@ -45,6 +45,7 @@ const SCHEMA = {
             kind: "export_price",
             target: [],
             params: [],
+            bucket: "system",
             conditionTypes: [
                 {
                     key: "when_price_below",
@@ -62,7 +63,7 @@ const CONFIG = {
     config_version: 7,
     automation: {
         enabled: true,
-        optimizers: [
+        system_optimizers: [
             {
                 id: "export-when-cheap",
                 kind: "export_price",

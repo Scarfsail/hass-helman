@@ -59,7 +59,8 @@
       "battery": "Battery",
       "grid": "Grid",
       "automation_settings": "Automation settings",
-      "optimizer_pipeline": "Optimizer pipeline",
+      "appliance_optimizer_pipeline": "Appliance optimizers",
+      "system_optimizer_pipeline": "System optimizers",
       "configured_controllables": "Configured controllables",
       "identity": "Identity",
       "action_options": "Action options",
@@ -84,7 +85,8 @@
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
       "automation": "Visual mode supports the automation enable switch plus the export_price and appliance_runtime optimizers. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
-      "optimizer_pipeline": "Configure the ordered optimizer list here. Optimizers run in order, the runtime rebuilds the snapshot between steps, and unknown future optimizer keys and kinds are preserved exactly as stored so they can still be edited in YAML.",
+      "appliance_optimizer_pipeline": "Runs in this order. Earlier optimizers commit their demand first, and later ones plan around it; an optimizer that depends on another must come after it. The runtime rebuilds the snapshot between steps, and unknown future optimizer keys and kinds are preserved exactly as stored so they can still be edited in YAML.",
+      "system_optimizer_pipeline": "Runs once, after every appliance optimizer, and reads the day's total planned appliance demand — so an inverter automation reacts to what the appliances have already committed to rather than planning blind. Unknown future optimizer keys and kinds are preserved exactly as stored so they can still be edited in YAML.",
       "controllables": "Everything Helman drives lives in one list: the inverter and the EV charger, climate and generic appliances. All four are edited directly here. Unsupported future kinds are preserved and shown read-only unless you remove them.",
       "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
       "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient.",
@@ -96,10 +98,14 @@
       "training_solar_bias_what": "The solar forecast comes from an outside provider, and it is wrong in ways that repeat: a given array is shaded at the same hour each morning, or the provider is optimistic about haze. Helman learns that repeating error by comparing the forecast published for each slot against what the array actually produced, and applies the correction to future forecasts. Both sides of that comparison are in the table below -- the published forecast is recovered from the recorded attributes of the first daily forecast entity. Grid power and battery state of charge are read for one purpose only: to recognise the slots where production was capped rather than genuinely low. With a full battery and nothing being exported, the inverter throttles, and a slot like that would otherwise teach the correction that the forecast was too optimistic when it was right."
     },
     "empty": {
-      "no_automation_optimizers": "No optimizers configured yet.",
+      "no_appliance_optimizers": "No appliance optimizers configured yet.",
+      "no_system_optimizers": "No system optimizers configured yet.",
       "no_controllables": "No controllables configured yet.",
       "no_device_label_categories": "No device label categories configured.",
       "no_entities_on_tab": "This tab configures no entities."
+    },
+    "badges": {
+      "optimizer_warning": "Ordering warning"
     },
     "card": {
       "category": "Category",
@@ -453,7 +459,7 @@
       "inverter_action_option": "The option value that Helman will write to the mode entity when this action is scheduled. Must exactly match one of the options in the select entity. Leave empty if this action is not supported by your inverter.",
       "controllable_id": "Unique internal identifier for this controllable. Used in automation references and schedule tracking. Should not be changed once configured, as it may break existing automations.",
       "controllable_name": "Display name shown for this controllable in the Helman dashboard and the schedule lanes.",
-      "automation_optimizer_id": "Unique optimizer identifier stored in automation.optimizers[].id. Keep it stable so future references, logs, and debugging stay readable.",
+      "automation_optimizer_id": "Unique optimizer identifier, stored as this entry's id in automation.appliance_optimizers or automation.system_optimizers. Keep it stable so future references, logs, and debugging stay readable.",
       "export_price_when_price_below": "Threshold in the same unit as the export price forecast. When the forecasted export price drops below this value, the optimizer authors stop_export slots where export is projected.",
       "optimizer_target": "The controllable this optimizer acts on. The list is driven by the current controllables in the editor — so draft additions and deletions show up immediately — and is filtered to the kinds this optimizer kind can drive.",
       "appliance_runtime_climate_mode": "Required only for climate appliances. The editor only shows live runtime-supported modes returned for the selected appliance.",

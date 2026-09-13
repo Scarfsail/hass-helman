@@ -26,6 +26,7 @@ const SCHEMA = {
             kind: "export_price",
             target: [],
             params: [],
+            bucket: "system",
             conditionTypes: [
                 {
                     key: "when_price_below",
@@ -38,6 +39,7 @@ const SCHEMA = {
         {
             kind: "charge_hold",
             target: [],
+            bucket: "system",
             params: [
                 {
                     key: "window",
@@ -99,7 +101,7 @@ const SCHEMA = {
 const CONFIG = {
     automation: {
         enabled: true,
-        optimizers: [
+        system_optimizers: [
             {
                 id: "morning-hold",
                 kind: "charge_hold",
@@ -183,7 +185,7 @@ test.describe("schema-driven optimizer card", () => {
         const panel = await mountEditor(page, {
             automation: {
                 enabled: true,
-                optimizers: [
+                system_optimizers: [
                     {
                         id: "export",
                         kind: "export_price",
@@ -320,7 +322,7 @@ test.describe("schema-driven optimizer card", () => {
         const panel = await mountEditor(page, {
             automation: {
                 enabled: true,
-                optimizers: [
+                system_optimizers: [
                     {
                         id: "export",
                         kind: "export_price",
