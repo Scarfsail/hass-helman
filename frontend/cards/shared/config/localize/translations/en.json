@@ -470,6 +470,7 @@
       "charge_hold_margin_pct": "Safety margin (%) added on top of the needed energy when deciding the latest safe release slot.",
       "charge_from_grid_reserve_floor_soc": "Reserve floor SoC (%). Expensive windows where the simulated SoC dips below this are bridged from the grid.",
       "charge_from_grid_margin_pct": "Safety margin (%) added on top of the computed dip when sizing the grid-charge target.",
+      "charge_start_margin_slots": "Additional 15-minute charge opportunities before the required latest slots. This advances charging without raising the target.",
       "charge_from_grid_max_target_soc": "Upper cap (%) for the grid-charge target, also clamped to the battery max SoC.",
       "appliance_runtime_daily_minimum": "Guarantee a minimum number of hours per day, placed on the cheapest slots. Leave off to run on every slot the conditions allow instead.",
       "appliance_runtime_daily_minimum_min_hours_per_day": "Minimum hours the appliance should run each day; already-observed runtime is subtracted.",

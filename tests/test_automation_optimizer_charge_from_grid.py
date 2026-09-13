@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
+from custom_components.helman.automation.fields import AutomationConfigError  # noqa: E402
 from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
@@ -224,6 +226,95 @@ _BANDS = (
 
 
 class ChargeFromGridOptimizerTests(unittest.TestCase):
+    def test_charge_start_margin_slots_defaults_and_rejects_invalid_values(self) -> None:
+        defaulted = make_optimizer_config(
+            id="grid-bridge-charge",
+            kind="charge_from_grid",
+            params={"margin_pct": 0, "max_target_soc": 100},
+            conditions=[{"reserve_floor_soc": 30}],
+        )
+        self.assertEqual(defaulted.params["charge_start_margin_slots"], 2)
+        disabled = make_optimizer_config(
+            id="grid-bridge-charge",
+            kind="charge_from_grid",
+            params={
+                "margin_pct": 0,
+                "max_target_soc": 100,
+                "charge_start_margin_slots": 0,
+            },
+            conditions=[{"reserve_floor_soc": 30}],
+        )
+        self.assertEqual(disabled.params["charge_start_margin_slots"], 0)
+        with self.assertRaises(AutomationConfigError):
+            make_optimizer_config(
+                id="grid-bridge-charge",
+                kind="charge_from_grid",
+                params={
+                    "margin_pct": 0,
+                    "max_target_soc": 100,
+                    "charge_start_margin_slots": -1,
+                },
+                conditions=[{"reserve_floor_soc": 30}],
+            )
+
+    def test_simulated_preservation_uses_latest_hold_cutoff_without_charging(self) -> None:
+        # Four late holds are enough; a simulator-backed plan must not buy
+        # energy simply because all cheap slots have the same price.
+        result = self._run_with_fake_simulator(holds_needed=4, charges_needed=99)
+        actions = {
+            slot_id: inverter_action(slot_actions).kind
+            for slot_id, slot_actions in result.slots.items()
+            if inverter_action(slot_actions).set_by == "automation"
+        }
+        self.assertEqual(
+            list(actions.values()), ["stop_discharging"] * 4
+        )
+        self.assertEqual(list(actions)[0], _slot_id(7, 0))
+
+    def test_simulated_residual_charges_latest_slots_with_default_margin(self) -> None:
+        result = self._run_with_fake_simulator(holds_needed=99, charges_needed=3)
+        actions = {
+            slot_id: inverter_action(slot_actions).kind
+            for slot_id, slot_actions in result.slots.items()
+            if inverter_action(slot_actions).set_by == "automation"
+        }
+        charges = [slot_id for slot_id, kind in actions.items() if kind == "charge_to_target_soc"]
+        self.assertEqual(charges, [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
+
+    def test_simulated_hold_trace_records_the_actual_action(self) -> None:
+        _result, trace = self._run_with_fake_simulator(
+            holds_needed=4, charges_needed=99, with_trace=True
+        )
+        applied = [
+            decision for decision in trace.to_dict()["steps"][0]["decisions"]
+            if decision["outcome"] == "applied"
+        ]
+        self.assertTrue(applied)
+        self.assertEqual(applied[0]["action"]["kind"], "stop_discharging")
+
+    def _run_with_fake_simulator(
+        self, *, holds_needed: int, charges_needed: int, with_trace: bool = False
+    ) -> ScheduleDocument | tuple[ScheduleDocument, object]:
+        class FakeSimulator:
+            def simulate(self, _demand, *, action_overrides):
+                holds = sum(action.kind == "stop_discharging" for action in action_overrides.values())
+                charges = sum(action.kind == "charge_to_target_soc" for action in action_overrides.values())
+                reached = holds >= holds_needed or charges >= charges_needed
+                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): 50.0 if reached else 0.0})
+
+        fake_module = types.ModuleType("custom_components.helman.automation.horizon_simulation")
+        fake_module.build_horizon_simulator = lambda *_args, **_kwargs: FakeSimulator()
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 2.0, 8: 6.0})
+        with patch.dict(sys.modules, {fake_module.__name__: fake_module}):
+            optimizer = build_charge_from_grid_optimizer(_make_config())
+            snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
+            if with_trace:
+                return run_optimizer_with_trace(
+                    optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+                )
+            return optimizer.optimize(snapshot, _make_config())
+
     def test_joins_a_cheap_window_across_midnight_for_ranking(self) -> None:
         previous_day = DAY - timedelta(days=1)
         cheap_start = datetime(2026, 7, 9, 22, tzinfo=TZ)
