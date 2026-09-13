@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..scheduling.schedule import appliance_actions, inverter_action, parse_slot_id
 from .optimizers.charge_from_grid import _min_soc_over
-from .rails import read_soc_by_bucket
+from .rails import forecast_covers_horizon, read_soc_by_bucket
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -143,10 +143,19 @@ def _min_soc_for_window(
 ) -> float | None:
     if snapshot is None:
         return None
+    start, end = _window_bounds(window)
+    # A partial forecast truncates its series rather than padding the missing
+    # tail.  Taking the minimum of whatever prefix happens to be present can
+    # therefore make an uncovered breach look clean.  The forecast metadata is
+    # the authoritative coverage signal; only evaluate windows it fully spans.
+    if not forecast_covers_horizon(
+        snapshot.battery_forecast,
+        required_coverage_until=end,
+    ):
+        return None
     soc_by_bucket = read_soc_by_bucket(snapshot)
     if not soc_by_bucket:
         return None
-    start, end = _window_bounds(window)
     return _min_soc_over(soc_by_bucket, start, end)
 
 

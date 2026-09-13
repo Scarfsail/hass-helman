@@ -331,7 +331,15 @@ class ChargeFromGridOptimizer:
         )
         if soc_gap <= 0 or slots_needed <= 0:
             # already at/above target entering the cheap window.
-            _observe(min_soc=window_min_soc, bridge_written=False)
+            # A cap can itself make this branch reachable: the uncapped target
+            # may require a bridge even though the clamped target is already
+            # below the cheap-window starting SoC.  Preserve that binding limit
+            # so the classifier does not report the residual as unexplained.
+            _observe(
+                min_soc=window_min_soc,
+                bridge_written=False,
+                limit="cap" if capped_at_max_target else None,
+            )
             emit.charge_not_needed(
                 cheap_slots,
                 gates=[

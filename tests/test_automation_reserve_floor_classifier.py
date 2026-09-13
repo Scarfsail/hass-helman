@@ -108,6 +108,7 @@ from custom_components.helman.automation.reserve_floor_classifier import (  # no
     STATUS_UNAVAILABLE,
     ReserveFloorBoundary,
     classify_reserve_floor_observation,
+    classify_reserve_floor_observations,
 )
 from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
@@ -131,8 +132,16 @@ from automation_config_builders import make_optimizer_config  # noqa: E402
 class _FakeSnapshot:
     """The only thing the classifier reads off a snapshot: its SoC series."""
 
-    def __init__(self, series: list[dict[str, object]]) -> None:
-        self.battery_forecast = {"status": "available", "series": series}
+    def __init__(
+        self,
+        series: list[dict[str, object]],
+        *,
+        status: str = "available",
+        coverage_until: str | None = None,
+    ) -> None:
+        self.battery_forecast = {"status": status, "series": series}
+        if coverage_until is not None:
+            self.battery_forecast["coverageUntil"] = coverage_until
 
 
 def _series(soc_by_hour: dict[int, float]) -> list[dict[str, object]]:
@@ -145,9 +154,15 @@ def _series(soc_by_hour: dict[int, float]) -> list[dict[str, object]]:
 _WINDOW = ("2026-07-10T08:00:00+02:00", "2026-07-10T10:00:00+02:00")
 
 
-def _observation(*, floor=40.0, limit=None, conditions_active=True) -> ReserveFloorObservation:
+def _observation(
+    *,
+    optimizer_id="grid-bridge",
+    floor=40.0,
+    limit=None,
+    conditions_active=True,
+) -> ReserveFloorObservation:
     return ReserveFloorObservation(
-        optimizer_id="grid-bridge",
+        optimizer_id=optimizer_id,
         group_index=0,
         window=_WINDOW,
         reserve_floor_soc=floor,
@@ -181,17 +196,41 @@ def _classify(*, final_min, boundary_min=None, control_min=None, limit=None, bou
 
 class DecisionTableTests(unittest.TestCase):
     def test_rule1_unmeasurable_when_final_coverage_partial(self) -> None:
-        result = _classify(final_min=None, boundary_min=50.0)
-        # boundary is unused since final_min is None -> observed directly
+        # A partial forecast can still contain usable points inside the window;
+        # those points are only a prefix and must not be mistaken for complete
+        # coverage merely because their observed minimum is above the floor.
         result = classify_reserve_floor_observation(
             _observation(),
             control_snapshot=None,
             boundary=_boundary(50.0),
-            final_snapshot=_FakeSnapshot([]),
+            final_snapshot=_FakeSnapshot(
+                _series({8: 45.0}),
+                status="partial",
+                coverage_until="2026-07-10T09:00:00+02:00",
+            ),
             final_document=ScheduleDocument(),
         )
         self.assertEqual(result.status, STATUS_MEASURED)
         self.assertEqual(result.klass, CLASS_UNMEASURABLE)
+
+    def test_batch_joins_each_optimizer_to_its_own_boundary(self) -> None:
+        observations = (
+            _observation(optimizer_id="bridge-a"),
+            _observation(optimizer_id="bridge-b"),
+        )
+        results = classify_reserve_floor_observations(
+            observations,
+            control_snapshot=_FakeSnapshot(_series({8: 50.0, 9: 50.0})),
+            boundaries={
+                "bridge-a": _boundary(50.0),
+                "bridge-b": _boundary(10.0),
+            },
+            final_snapshot=_FakeSnapshot(_series({8: 10.0, 9: 10.0})),
+            final_document=ScheduleDocument(),
+        )
+        by_id = {result.optimizer_id: result for result in results}
+        self.assertEqual(by_id["bridge-a"].klass, CLASS_DOWNSTREAM_INTRODUCED)
+        self.assertEqual(by_id["bridge-b"].klass, CLASS_UNRESOLVED_AT_BOUNDARY)
 
     def test_rule2_none_when_final_at_or_above_floor(self) -> None:
         result = _classify(final_min=45.0, boundary_min=10.0, control_min=10.0, limit="cap")
@@ -540,9 +579,27 @@ def _run(
     mutations_by_id: dict[str, object] | None = None,
     build_snapshot,
     schedule_document: ScheduleDocument | None = None,
+    baseline_schedule_document: ScheduleDocument | None = None,
 ):
     document = ScheduleDocument(execution_enabled=True) if schedule_document is None else schedule_document
+    baseline = document if baseline_schedule_document is None else baseline_schedule_document
     mutations_by_id = mutations_by_id or {}
+
+    # Mirror AutomationRunner's real pre-loop snapshot: every still-pending
+    # appliance lane is restored from the previous plan as projection demand,
+    # while the snapshot's own schedule remains the stripped working document.
+    pending_appliance_ids = tuple(
+        config.controllable_id
+        for config in execution_optimizers
+        if config.kind == "appliance_runtime"
+    )
+    initial_demand_document = (
+        pipeline_module.restore_automation_owned_appliance_actions(
+            baseline=baseline,
+            current=document,
+            appliance_ids=pending_appliance_ids,
+        )
+    )
 
     def dispatch(config, **kwargs):
         if config.kind == "charge_from_grid":
@@ -552,9 +609,12 @@ def _run(
     with patch.object(pipeline_module, "build_optimizer", side_effect=dispatch):
         return run_optimizer_loop_pure(
             execution_optimizers=execution_optimizers,
-            baseline_schedule_document=document,
+            baseline_schedule_document=baseline,
             schedule_document=document,
-            initial_snapshot=build_snapshot(document),
+            initial_snapshot=build_snapshot(
+                document,
+                demand_schedule_document=initial_demand_document,
+            ),
             reference_time=REFERENCE_TIME,
             control_config=None,
             appliance_registry=AppliancesRuntimeRegistry(),
@@ -584,16 +644,35 @@ class ScenarioSuiteTests(unittest.TestCase):
     def test_cold_start_no_prior_plan(self) -> None:
         build_snapshot = _make_build_snapshot()
         result = _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[
+                _charge_from_grid_config(),
+                _stub_config(
+                    optimizer_id="boiler",
+                    kind="appliance_runtime",
+                    controllable_id="boiler",
+                ),
+            ],
+            mutations_by_id={"boiler": self._add_draining_appliance},
             build_snapshot=build_snapshot,
         )
         self._record("cold_start_no_prior_plan", result.reserve_floor_results)
-        self.assertTrue(result.reserve_floor_results)
-        for observation in result.reserve_floor_results:
-            self.assertEqual(observation.status, STATUS_MEASURED)
+        outcome = result.reserve_floor_results[0]
+        # With no previous appliance plan to restore, charge_from_grid sees the
+        # bare house.  The later appliance placement introduces the breach —
+        # the cold-start form of the #116 look-ahead gap this baseline must pin.
+        self.assertEqual(outcome.klass, CLASS_DOWNSTREAM_INTRODUCED)
+        self.assertEqual(outcome.lane_summary, LANE_EXCLUSIVE_APPLIANCE)
 
     def test_appliance_moves_into_expensive_window_is_exclusive_appliance(self) -> None:
         build_snapshot = _make_build_snapshot()
+        baseline = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                _slot_id(11): {
+                    "boiler": {"on": True, "setBy": "automation"}
+                }
+            },
+        )
 
         def add_appliance(document: ScheduleDocument) -> None:
             document.slots.setdefault(_slot_id(9), {})["boiler"] = {
@@ -608,6 +687,7 @@ class ScenarioSuiteTests(unittest.TestCase):
             ],
             mutations_by_id={"boiler": add_appliance},
             build_snapshot=build_snapshot,
+            baseline_schedule_document=baseline,
         )
         self._record("appliance_moves_into_expensive_window", result.reserve_floor_results)
         self.assertEqual(len(result.reserve_floor_results), 1)
@@ -690,8 +770,14 @@ class ScenarioSuiteTests(unittest.TestCase):
         self.assertEqual(outcome.reason, REASON_CAPACITY)
 
     def test_floor_needs_more_than_max_target_soc_is_cap(self) -> None:
+        # The cheap-window starting SoC is already above the clamped target.
+        # The cap therefore suppresses the write altogether even though the
+        # uncapped target would require one; it must still be recorded as the
+        # binding limit.
+        high_start_soc = {0: 60, 6: 60, 7: 60, 8: 60, 9: 60, 10: 60, 20: 60}
         build_snapshot = _make_build_snapshot(
-            base_soc_by_hour=self._FLAT_SOC_BY_HOUR, charge_bump_pp=15.0
+            base_soc_by_hour=high_start_soc,
+            charge_bump_pp=15.0,
         )
         result = _run(
             execution_optimizers=[
@@ -706,6 +792,9 @@ class ScenarioSuiteTests(unittest.TestCase):
         outcome = result.reserve_floor_results[0]
         self.assertEqual(outcome.klass, CLASS_KNOWN_UNREPAIRABLE)
         self.assertEqual(outcome.reason, REASON_CAP)
+        observation = result.trace.reserve_floor_observations[0]
+        self.assertFalse(observation.bridge_written)
+        self.assertEqual(observation.limit, REASON_CAP)
 
     def test_bridge_lands_early_discharges_before_window_is_unresolved(self) -> None:
         # charge_from_grid computes and writes a bridge that (per its own,
@@ -734,25 +823,56 @@ class ScenarioSuiteTests(unittest.TestCase):
         self.assertEqual(outcome.reason, REASON_UNRESOLVED)
 
     def test_two_charge_from_grid_instances_join_their_own_boundary(self) -> None:
-        # Same window, two instances with very different floors. bridge-b
-        # (floor 95, effectively unreachable, run FIRST) is still broken at
-        # its own boundary and nothing later helps its 95 target; bridge-a
-        # (floor 40, run SECOND) closes the ordinary gap on top of whatever
-        # bridge-b left behind and ships a sound plan. If either observation
-        # were joined to the other instance's boundary, this pairing of
-        # outcomes could not both hold.
+        # Record each boundary object in build order, then inspect the mapping
+        # handed to the batch classifier.  The outcome classes alone are not a
+        # sufficient assertion here: rule 2 makes bridge-a clean before its
+        # boundary is read, while rule 4 makes bridge-b pre-existing under
+        # either of these particular trajectories.
         build_snapshot = _make_build_snapshot()
-        result = _run(
-            execution_optimizers=[
-                _charge_from_grid_config(optimizer_id="bridge-b", floor=95, max_target_soc=41),
-                _charge_from_grid_config(optimizer_id="bridge-a", floor=FLOOR),
-            ],
-            build_snapshot=build_snapshot,
-        )
+        built_boundaries: list[ReserveFloorBoundary] = []
+        classified_boundaries: dict[str, ReserveFloorBoundary] = {}
+        real_build_boundary = pipeline_module._safe_build_reserve_floor_boundary
+
+        def recording_build_boundary(**kwargs):
+            boundary = real_build_boundary(**kwargs)
+            if boundary is not None:
+                built_boundaries.append(boundary)
+            return boundary
+
+        def recording_classify(observations, **kwargs):
+            classified_boundaries.update(kwargs["boundaries"])
+            return classify_reserve_floor_observations(observations, **kwargs)
+
+        with patch.object(
+            pipeline_module,
+            "_safe_build_reserve_floor_boundary",
+            side_effect=recording_build_boundary,
+        ), patch.object(
+            pipeline_module,
+            "classify_reserve_floor_observations",
+            side_effect=recording_classify,
+        ):
+            result = _run(
+                execution_optimizers=[
+                    _charge_from_grid_config(
+                        optimizer_id="bridge-b",
+                        floor=95,
+                        max_target_soc=41,
+                    ),
+                    _charge_from_grid_config(
+                        optimizer_id="bridge-a",
+                        floor=FLOOR,
+                    ),
+                ],
+                build_snapshot=build_snapshot,
+            )
         self._record("two_charge_from_grid_instances", result.reserve_floor_results)
         by_id: dict[str, object] = {r.optimizer_id: r for r in result.reserve_floor_results}
         self.assertIn("bridge-a", by_id)
         self.assertIn("bridge-b", by_id)
+        self.assertEqual(len(built_boundaries), 2)
+        self.assertIs(classified_boundaries["bridge-b"], built_boundaries[0])
+        self.assertIs(classified_boundaries["bridge-a"], built_boundaries[1])
         # bridge-a runs last, closes the ordinary 40% gap, ships sound.
         self.assertEqual(by_id["bridge-a"].klass, CLASS_NONE)
         # bridge-b's 95% floor is never realistically reachable -- its own
@@ -791,14 +911,26 @@ class ScenarioSuiteTests(unittest.TestCase):
         )
         late_expensive = ImportBand(level="expensive", start=_at(9), end=_at(10, 30))
         bands = (_CHEAP_BAND, early_expensive, late_expensive)
-        build_snapshot = _make_build_snapshot(bands=bands)
+        # The early window retains the bridge, while it has bled off halfway
+        # through the late window.  Distinct expected classes make this a real
+        # guard against applying one scenario-level verdict to both windows.
+        build_snapshot = _make_build_snapshot(
+            bands=bands,
+            bump_expires_at=_at(9, 30),
+        )
         result = _run(
             execution_optimizers=[_charge_from_grid_config()],
             build_snapshot=build_snapshot,
         )
         self._record("overlapping_expensive_windows", result.reserve_floor_results)
-        windows = {r.window for r in result.reserve_floor_results}
-        self.assertEqual(len(windows), 2)
+        by_window = {r.window: r.klass for r in result.reserve_floor_results}
+        self.assertEqual(
+            by_window,
+            {
+                (_slot_id(8), _slot_id(9, 30)): CLASS_NONE,
+                (_slot_id(9), _slot_id(10, 30)): CLASS_PRE_EXISTING_PHYSICAL,
+            },
+        )
 
     def test_truncated_soc_series_is_unmeasurable(self) -> None:
         build_snapshot = _make_build_snapshot(truncate_before=_at(7))

@@ -52,14 +52,14 @@
   ],
   "cold_start_no_prior_plan": [
     {
-      "applianceLaneChanged": null,
-      "class": "none",
+      "applianceLaneChanged": true,
+      "class": "downstream_introduced",
       "groupIndex": 0,
-      "inverterLaneChanged": null,
-      "laneSummary": null,
+      "inverterLaneChanged": false,
+      "laneSummary": "exclusive_appliance",
       "optimizerId": "grid-bridge",
       "reason": null,
-      "shortfallPp": 0.0,
+      "shortfallPp": 25.0,
       "status": "measured",
       "window": [
         "2026-07-10T08:00:00+02:00",
@@ -153,13 +153,13 @@
     },
     {
       "applianceLaneChanged": null,
-      "class": "none",
+      "class": "pre_existing_physical",
       "groupIndex": 0,
       "inverterLaneChanged": null,
       "laneSummary": null,
       "optimizerId": "grid-bridge",
       "reason": null,
-      "shortfallPp": 0.0,
+      "shortfallPp": 20.0,
       "status": "measured",
       "window": [
         "2026-07-10T09:00:00+02:00",
