@@ -176,9 +176,12 @@ def _make_snapshot(
     battery_configured: bool = True,
     day_contexts: dict[date, DayContext] | None = None,
     now: datetime = REFERENCE_TIME,
+    battery_max_soc: float = 100.0,
 ) -> OptimizationSnapshot:
     battery_state = (
-        types.SimpleNamespace(current_soc=50.0, min_soc=10.0, max_soc=100.0)
+        types.SimpleNamespace(
+            current_soc=50.0, min_soc=10.0, max_soc=battery_max_soc
+        )
         if battery_configured
         else None
     )
@@ -303,6 +306,21 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         # added.
         self.assertEqual(set(_charge_slots(result).values()), {51})
         self.assertEqual(len(_charge_slots(result)), 5)
+
+    def test_simulated_charge_stays_below_fractional_battery_cap(self) -> None:
+        result, trace = self._run_with_fake_simulator(
+            holds_needed=99,
+            charges_needed=3,
+            soc={0: 80.5, 6: 80.5, 7: 80.5, 9: 20, 10: 60},
+            battery_max_soc=90.5,
+            with_trace=True,
+        )
+
+        # The 90.5% bridge target would normally round up to 91%, but 90% is
+        # the highest integral inverter target valid under a 90.5% battery cap.
+        self.assertEqual(set(_charge_slots(result).values()), {90})
+        (observation,) = trace.reserve_floor_observations
+        self.assertEqual(observation.limit, "cap")
 
     def test_simulation_does_not_restore_inactive_document_action(self) -> None:
         inactive = ScheduleDocument(slots={
@@ -547,6 +565,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         bands: tuple[ImportBand, ...] = _BANDS,
         boundary_soc=None,
         trajectory_end: datetime | None = None,
+        battery_max_soc: float = 100.0,
     ) -> ScheduleDocument | tuple[ScheduleDocument, object]:
         class FakeSimulator:
             def simulate(self, _demand, *, action_overrides):
@@ -589,6 +608,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                 import_points=prices,
                 bands=bands,
                 schedule_document=schedule_document,
+                battery_max_soc=battery_max_soc,
             )
             if with_trace:
                 return run_optimizer_with_trace(

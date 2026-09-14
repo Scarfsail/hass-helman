@@ -354,8 +354,12 @@ class ChargeFromGridOptimizer:
 
         # Inverter targets are integral percentages.  Round upward so a
         # simulated target action can actually satisfy the fractional bridge
-        # target used by the sizing and capacity checks below.
-        target_soc = ceil(target)
+        # target used by the sizing and capacity checks below, unless the
+        # battery's cap is itself fractional.  In that case the highest valid
+        # integral action is below the bridge target and the remainder is
+        # necessarily cap-limited.
+        target_soc = min(ceil(target), int(upper_target))
+        capped_at_max_target = capped_at_max_target or target_soc < target
         # Decided before the entry-SoC shortcut below: a battery can enter the
         # cheap window above the target and still drain through it, which only
         # the simulated trajectory can see.
