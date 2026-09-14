@@ -211,13 +211,11 @@ def _make_snapshot(
     )
 
 
-def _make_config(
-    *, reserve_floor_soc: int = 30, margin_pct: int = 0, max_target_soc: int = 100
-) -> OptimizerInstanceConfig:
+def _make_config(*, reserve_floor_soc: int = 30) -> OptimizerInstanceConfig:
     return make_optimizer_config(
         id="grid-bridge-charge",
         kind="charge_from_grid",
-        params={"margin_pct": margin_pct, "max_target_soc": max_target_soc},
+        params={},
         conditions=[{"reserve_floor_soc": reserve_floor_soc}],
     )
 
@@ -243,18 +241,14 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         defaulted = make_optimizer_config(
             id="grid-bridge-charge",
             kind="charge_from_grid",
-            params={"margin_pct": 0, "max_target_soc": 100},
+            params={},
             conditions=[{"reserve_floor_soc": 30}],
         )
         self.assertEqual(defaulted.params["charge_start_margin_slots"], 2)
         disabled = make_optimizer_config(
             id="grid-bridge-charge",
             kind="charge_from_grid",
-            params={
-                "margin_pct": 0,
-                "max_target_soc": 100,
-                "charge_start_margin_slots": 0,
-            },
+            params={"charge_start_margin_slots": 0},
             conditions=[{"reserve_floor_soc": 30}],
         )
         self.assertEqual(disabled.params["charge_start_margin_slots"], 0)
@@ -262,13 +256,19 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             make_optimizer_config(
                 id="grid-bridge-charge",
                 kind="charge_from_grid",
-                params={
-                    "margin_pct": 0,
-                    "max_target_soc": 100,
-                    "charge_start_margin_slots": -1,
-                },
+                params={"charge_start_margin_slots": -1},
                 conditions=[{"reserve_floor_soc": 30}],
             )
+
+    def test_retired_sizing_params_are_rejected(self) -> None:
+        for key in ("margin_pct", "max_target_soc"):
+            with self.subTest(key=key), self.assertRaises(AutomationConfigError):
+                make_optimizer_config(
+                    id="grid-bridge-charge",
+                    kind="charge_from_grid",
+                    params={key: 10},
+                    conditions=[{"reserve_floor_soc": 30}],
+                )
 
     def test_simulated_preservation_uses_latest_hold_cutoff_without_charging(self) -> None:
         # Four late holds are enough; a simulator-backed plan must not buy
@@ -473,7 +473,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         # 12:00; the window needs 30 % there.  Sixteen normal-band buckets
         # drain 32 % after charging stops, so the inverter target must be 62 %.
         # A 30 % target would charge the whole band and still enter at 10 %.
-        result, trace = self._run_with_real_simulator(max_target_soc=100)
+        result, trace = self._run_with_real_simulator(battery_max_soc=100.0)
 
         self.assertEqual(
             _charge_slots(result),
@@ -490,8 +490,8 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
 
     def test_real_simulation_reports_cap_when_the_gap_needs_more(self) -> None:
         # Charging to the 50 % cap leaves 18 % at 12:00.  More slots cannot
-        # help; a higher `max_target_soc` would, so the cap is the limit.
-        result, trace = self._run_with_real_simulator(max_target_soc=50)
+        # help; a higher battery `max_soc` would, so the cap is the limit.
+        result, trace = self._run_with_real_simulator(battery_max_soc=50.0)
 
         self.assertEqual(set(_charge_slots(result).values()), {50})
         slot = _slots_by_id(trace)[_slot_id(7, 45)]
@@ -499,7 +499,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         (observation,) = trace.reserve_floor_observations
         self.assertEqual(observation.limit, "cap")
 
-    def _run_with_real_simulator(self, *, max_target_soc: int):
+    def _run_with_real_simulator(self, *, battery_max_soc: float):
         """Cheap 06-08, normal 08-12, expensive 12-14 on the real simulator.
 
         The house draws 0.2 kWh per 15 min (2 % of a lossless 10 kWh battery)
@@ -536,16 +536,16 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=10.0,
-                    max_soc=100.0,
+                    max_soc=battery_max_soc,
                     nominal_capacity_kwh=10.0,
                     min_energy_kwh=1.0,
-                    max_energy_kwh=10.0,
+                    max_energy_kwh=10.0 * battery_max_soc / 100,
                 ),
                 battery_max_discharge_power_kw=5.0,
                 battery_discharge_efficiency=1.0,
             ),
         )
-        config = _make_config(max_target_soc=max_target_soc)
+        config = _make_config()
         return run_optimizer_with_trace(
             build_charge_from_grid_optimizer(config),
             snapshot,
@@ -746,15 +746,18 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         )
         self.assertEqual(_charge_slots(result), {})
 
-    def test_clamps_target_to_max_target_soc(self) -> None:
-        # Big dip pushes target above cap; clamp to max_target_soc=60.
+    def test_clamps_target_to_battery_max_soc(self) -> None:
+        # Big dip pushes target above cap; clamp to battery max_soc=60.
         soc = _soc_series({0: 55, 6: 55, 8: 55, 9: 5, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
-        result = build_charge_from_grid_optimizer(
-            _make_config(max_target_soc=60)
-        ).optimize(
-            _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS),
-            _make_config(max_target_soc=60),
+        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                soc_series=soc,
+                import_points=prices,
+                bands=_BANDS,
+                battery_max_soc=60.0,
+            ),
+            _make_config(),
         )
         charged = _charge_slots(result)
         self.assertTrue(charged)

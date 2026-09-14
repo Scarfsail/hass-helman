@@ -101,7 +101,7 @@
       ]
     }
   ],
-  "floor_needs_more_than_max_target_soc": [
+  "floor_needs_more_than_max_soc_is_cap": [
     {
       "applianceLaneChanged": null,
       "class": "known_unrepairable",

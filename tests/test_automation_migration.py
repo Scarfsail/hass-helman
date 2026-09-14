@@ -242,7 +242,8 @@ class PerKindMoveTests(unittest.TestCase):
                 "params": {"reserve_floor_soc": 20, "margin_pct": 10},
             }
         )
-        self.assertEqual(migrated["params"], {"margin_pct": 10})
+        # `margin_pct` itself is retired later in the chain (v15 -> v16).
+        self.assertEqual(migrated["params"], {})
         self.assertEqual(migrated["conditions"][0]["reserve_floor_soc"], 20)
 
     def test_daily_runtime_appliance_moves_to_target(self) -> None:
@@ -1112,12 +1113,12 @@ class SelfSustainabilityUnificationTests(unittest.TestCase):
             {
                 "id": "grid",
                 "kind": "charge_from_grid",
-                "params": {"margin_pct": 10},
+                "params": {"charge_start_margin_slots": 3},
                 "conditions": [{"reserve_floor_soc": 30}],
             }
         )
 
-        self.assertEqual(migrated["params"], {"margin_pct": 10})
+        self.assertEqual(migrated["params"], {"charge_start_margin_slots": 3})
         self.assertEqual(migrated["conditions"][0], {"reserve_floor_soc": 30})
 
     def test_migrating_to_the_current_version_covers_this_step(self) -> None:
@@ -1458,6 +1459,91 @@ class OptimizerBucketSplitTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(_document())
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 15)
+
+
+class ChargeFromGridParamRetirementTests(unittest.TestCase):
+    """v15 -> v16: ``charge_from_grid`` drops ``margin_pct`` and ``max_target_soc``."""
+
+    @staticmethod
+    def _migrate_from_v15(*optimizers):
+        document = {
+            "config_version": 15,
+            "automation": {
+                "enabled": True,
+                "appliance_optimizers": [],
+                "system_optimizers": list(optimizers),
+            },
+        }
+        migrated, ids = migrate_config_document(document)
+        return migrated["automation"]["system_optimizers"], ids
+
+    def test_master_params_lose_both_keys(self) -> None:
+        optimizers, ids = self._migrate_from_v15(
+            {
+                "id": "grid",
+                "kind": "charge_from_grid",
+                "params": {
+                    "margin_pct": 10,
+                    "max_target_soc": 90,
+                    "charge_start_margin_slots": 2,
+                },
+                "conditions": [{"reserve_floor_soc": 30}],
+            }
+        )
+
+        self.assertEqual(optimizers[0]["params"], {"charge_start_margin_slots": 2})
+        self.assertEqual(optimizers[0]["conditions"], [{"reserve_floor_soc": 30}])
+        self.assertEqual(ids, ["grid"])
+
+    def test_group_overrides_lose_both_keys_and_an_emptied_override_is_dropped(self) -> None:
+        optimizers, _ids = self._migrate_from_v15(
+            {
+                "id": "grid",
+                "kind": "charge_from_grid",
+                "params": {},
+                "conditions": [
+                    {"reserve_floor_soc": 30, "params": {"margin_pct": 5}},
+                    {
+                        "reserve_floor_soc": 40,
+                        "params": {"max_target_soc": 80, "charge_start_margin_slots": 4},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(
+            optimizers[0]["conditions"],
+            [
+                {"reserve_floor_soc": 30},
+                {"reserve_floor_soc": 40, "params": {"charge_start_margin_slots": 4}},
+            ],
+        )
+
+    def test_charge_hold_margin_is_untouched(self) -> None:
+        hold = {
+            "id": "hold",
+            "kind": "charge_hold",
+            "params": {"battery_first": {"target_soc": 100, "margin_pct": 20}},
+            "conditions": [{"run_when": ALL_DAYS, "params": {"margin_pct": 1}}],
+        }
+        optimizers, ids = self._migrate_from_v15(dict(hold))
+
+        self.assertEqual(optimizers[0], hold)
+        self.assertEqual(ids, [])
+
+    def test_a_document_without_system_optimizers_survives(self) -> None:
+        migrated, ids = migrate_config_document(
+            {"config_version": 15, "automation": {"enabled": True}}
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(migrated["automation"], {"enabled": True})
+        self.assertEqual(ids, [])
+
+    def test_migrating_to_the_current_version_covers_this_step(self) -> None:
+        migrated, _ids = migrate_config_document(_document())
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 16)
 
 
 if __name__ == "__main__":
