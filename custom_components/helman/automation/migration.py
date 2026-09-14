@@ -896,6 +896,71 @@ def _migrate_v14_to_v15(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, migrated_ids)
 
 
+#: ``charge_from_grid`` params retired in v16: the bridge is sized by
+#: ``reserve_floor_soc`` alone and capped at the battery's own ``max_soc``.
+_V15_CHARGE_FROM_GRID_DROPPED_PARAMS = ("margin_pct", "max_target_soc")
+
+
+def _migrate_v15_to_v16(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop ``margin_pct`` / ``max_target_soc`` from ``charge_from_grid``.
+
+    Removed from the master ``params`` and from every group's ``params``
+    override; an override emptied by this is dropped. No value is folded into
+    ``reserve_floor_soc``: ``margin_pct`` scaled each window's own dip, so no
+    fixed floor shift reproduces it. Other kinds — ``charge_hold``'s
+    ``battery_first.margin_pct`` included — are untouched.
+
+    Returns the ids of the optimizers that actually carried a removed key.
+    """
+    automation = document.get("automation")
+    if not isinstance(automation, Mapping):
+        return (document, [])
+    optimizers = automation.get("system_optimizers")
+    if not isinstance(optimizers, list):
+        return (document, [])
+
+    migrated_ids: list[str] = []
+    rebuilt: list[Any] = []
+    for raw in optimizers:
+        if not isinstance(raw, Mapping) or raw.get("kind") != "charge_from_grid":
+            rebuilt.append(raw)
+            continue
+        optimizer = dict(raw)
+        changed = False
+        params = optimizer.get("params")
+        if isinstance(params, Mapping):
+            optimizer["params"], changed = _without_dropped_params(params)
+        conditions = optimizer.get("conditions")
+        if isinstance(conditions, list):
+            groups: list[Any] = []
+            for group in conditions:
+                if isinstance(group, Mapping) and isinstance(group.get("params"), Mapping):
+                    group = dict(group)
+                    override, group_changed = _without_dropped_params(group["params"])
+                    changed = changed or group_changed
+                    if override:
+                        group["params"] = override
+                    else:
+                        group.pop("params")
+                groups.append(group)
+            optimizer["conditions"] = groups
+        rebuilt.append(optimizer)
+        if changed:
+            migrated_ids.append(str(raw.get("id", "?")))
+
+    document["automation"] = {**automation, "system_optimizers": rebuilt}
+    return (document, migrated_ids)
+
+
+def _without_dropped_params(params: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    kept = {
+        key: value
+        for key, value in params.items()
+        if key not in _V15_CHARGE_FROM_GRID_DROPPED_PARAMS
+    }
+    return (kept, len(kept) != len(params))
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -911,6 +976,7 @@ _MIGRATIONS = {
     12: _migrate_v12_to_v13,
     13: _migrate_v13_to_v14,
     14: _migrate_v14_to_v15,
+    15: _migrate_v15_to_v16,
 }
 
 

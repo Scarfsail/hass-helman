@@ -494,6 +494,7 @@ def _make_build_snapshot(
     base_soc_by_hour: dict[int, float] = _BASE_SOC_BY_HOUR,
     charge_bump_pp: float = 25.0,
     appliance_drain_pp: float = 30.0,
+    battery_max_soc: float = 100.0,
 ):
     def build(document: ScheduleDocument):
         soc_series = _project_soc(
@@ -517,7 +518,7 @@ def _make_build_snapshot(
             context=OptimizationContext(
                 now=REFERENCE_TIME,
                 battery_state=types.SimpleNamespace(
-                    current_soc=50.0, min_soc=10.0, max_soc=100.0
+                    current_soc=50.0, min_soc=10.0, max_soc=battery_max_soc
                 ),
                 solar_forecast={"status": "available", "points": []},
                 import_price_forecast={
@@ -555,12 +556,12 @@ class _MutatingOptimizer:
 
 
 def _charge_from_grid_config(
-    *, optimizer_id: str = "grid-bridge", floor: int = FLOOR, max_target_soc: int = 100
+    *, optimizer_id: str = "grid-bridge", floor: int = FLOOR
 ) -> OptimizerInstanceConfig:
     return make_optimizer_config(
         id=optimizer_id,
         kind="charge_from_grid",
-        params={"margin_pct": 0, "max_target_soc": max_target_soc},
+        params={},
         conditions=[{"reserve_floor_soc": floor}],
     )
 
@@ -806,7 +807,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         self.assertEqual(outcome.klass, CLASS_KNOWN_UNREPAIRABLE)
         self.assertEqual(outcome.reason, REASON_CAPACITY)
 
-    def test_floor_needs_more_than_max_target_soc_is_cap(self) -> None:
+    def test_floor_needs_more_than_max_soc_is_cap(self) -> None:
         # The cheap-window starting SoC is already above the clamped target.
         # The cap therefore suppresses the write altogether even though the
         # uncapped target would require one; it must still be recorded as the
@@ -815,16 +816,17 @@ class ScenarioSuiteTests(unittest.TestCase):
         build_snapshot = _make_build_snapshot(
             base_soc_by_hour=high_start_soc,
             charge_bump_pp=15.0,
+            battery_max_soc=50.0,
         )
         result = _run(
             execution_optimizers=[
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
-                _charge_from_grid_config(max_target_soc=50),
+                _charge_from_grid_config(),
             ],
             mutations_by_id={"boiler": self._add_draining_appliance},
             build_snapshot=build_snapshot,
         )
-        self._record("floor_needs_more_than_max_target_soc", result.reserve_floor_results)
+        self._record("floor_needs_more_than_max_soc_is_cap", result.reserve_floor_results)
         self.assertEqual(len(result.reserve_floor_results), 1)
         outcome = result.reserve_floor_results[0]
         self.assertEqual(outcome.klass, CLASS_KNOWN_UNREPAIRABLE)
@@ -865,7 +867,9 @@ class ScenarioSuiteTests(unittest.TestCase):
         # sufficient assertion here: rule 2 makes bridge-a clean before its
         # boundary is read, while rule 4 makes bridge-b pre-existing under
         # either of these particular trajectories.
-        build_snapshot = _make_build_snapshot()
+        # A small per-slot bump keeps bridge-b's uncapped 100 % target short of
+        # its 95 % floor (four slots, +25 pp), since the cap is battery-wide.
+        build_snapshot = _make_build_snapshot(charge_bump_pp=6.25)
         built_boundaries: list[ReserveFloorBoundary] = []
         classified_boundaries: dict[str, ReserveFloorBoundary] = {}
         real_build_boundary = pipeline_module._safe_build_reserve_floor_boundary
@@ -894,7 +898,6 @@ class ScenarioSuiteTests(unittest.TestCase):
                     _charge_from_grid_config(
                         optimizer_id="bridge-b",
                         floor=95,
-                        max_target_soc=41,
                     ),
                     _charge_from_grid_config(
                         optimizer_id="bridge-a",

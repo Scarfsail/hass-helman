@@ -115,7 +115,7 @@ class ReserveFloorObservation:
     inspector.
 
     ``limit`` records which cap bound the write: ``"cap"`` (target_soc clamped
-    at ``max_target_soc``), ``"capacity"`` (the cheap window held fewer
+    at the battery's ``max_soc``), ``"capacity"`` (the cheap window held fewer
     rankable slots than needed), or ``None``. Never ``"power"`` — charge power
     is already folded into ``slots_needed`` before this point.
     """

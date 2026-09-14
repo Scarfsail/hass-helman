@@ -232,9 +232,7 @@ class ChargeFromGridOptimizer:
                 usable_capacity_kwh=usable_capacity_kwh,
                 charge_efficiency=charge_efficiency,
                 max_charge_power_kw=max_charge_power_kw,
-                upper_target=min(
-                    battery_state.max_soc, resolved.params["max_target_soc"]
-                ),
+                upper_target=battery_state.max_soc,
                 lower_target=battery_state.min_soc,
                 live_soc=battery_state.current_soc,
                 simulator=simulator,
@@ -348,9 +346,9 @@ class ChargeFromGridOptimizer:
                 floor=breached,
             )
             return
-        raw_target = window_start_soc + dip * (1 + resolved.params["margin_pct"] / 100)
+        raw_target = window_start_soc + dip
         target = max(lower_target, min(upper_target, raw_target))
-        capped_at_max_target = raw_target > upper_target
+        capped_at_max_soc = raw_target > upper_target
 
         # Inverter targets are integral percentages.  Round upward so a
         # simulated target action can actually satisfy the fractional bridge
@@ -359,7 +357,7 @@ class ChargeFromGridOptimizer:
         # integral action is below the bridge target and the remainder is
         # necessarily cap-limited.
         target_soc = min(ceil(target), int(upper_target))
-        capped_at_max_target = capped_at_max_target or target_soc < target
+        capped_at_max_soc = capped_at_max_soc or target_soc < target
         # Decided before the entry-SoC shortcut below: a battery can enter the
         # cheap window above the target and still drain through it, which only
         # the simulated trajectory can see.
@@ -371,7 +369,7 @@ class ChargeFromGridOptimizer:
             target=target,
             target_soc=target_soc,
             upper_target=upper_target,
-            capped_at_max_target=capped_at_max_target,
+            capped_at_max_soc=capped_at_max_soc,
             window_min_soc=window_min_soc,
             soc_known=soc_known,
             floor=breached,
@@ -412,7 +410,7 @@ class ChargeFromGridOptimizer:
             _observe(
                 min_soc=window_min_soc,
                 bridge_written=False,
-                limit="cap" if capped_at_max_target else None,
+                limit="cap" if capped_at_max_soc else None,
             )
             emit.charge_not_needed(
                 cheap_slots,
@@ -462,13 +460,13 @@ class ChargeFromGridOptimizer:
         _observe(
             min_soc=window_min_soc,
             bridge_written=bool(chosen),
-            # `capacity` takes priority: when both are true, raising
-            # `max_target_soc` alone would not close the gap either, since
+            # `capacity` takes priority: when both are true, a higher battery
+            # `max_soc` alone would not close the gap either, since
             # there are not enough rankable slots to charge into regardless.
             limit=(
                 "capacity"
                 if capacity_short
-                else "cap" if capped_at_max_target else None
+                else "cap" if capped_at_max_soc else None
             ),
         )
 
@@ -520,7 +518,7 @@ class ChargeFromGridOptimizer:
         target: float,
         target_soc: int,
         upper_target: float,
-        capped_at_max_target: bool,
+        capped_at_max_soc: bool,
         window_min_soc: float,
         soc_known: "_Gate",
         floor: "_FloorResolution",
@@ -620,7 +618,7 @@ class ChargeFromGridOptimizer:
         if reaches(boundary_soc):
             emit.observe_reserve_floor(ReserveFloorObservation(
                 **observation, bridge_written=False,
-                limit="cap" if capped_at_max_target else None,
+                limit="cap" if capped_at_max_soc else None,
             ))
             emit.charge_not_needed(
                 cheap_slots,
@@ -724,10 +722,10 @@ class ChargeFromGridOptimizer:
                 floor=floor,
             )
         final = compose(sorted(hold_set), sorted(charge_set), charge_soc)
-        limit = "cap" if capped_at_max_target else None
+        limit = "cap" if capped_at_max_soc else None
         if capacity_short:
             # Short with the battery pinned at the cap inside the cheap band:
-            # a higher ``max_target_soc`` would carry more across the gap, so
+            # a higher battery ``max_soc`` would carry more across the gap, so
             # the cap binds.  Short below it, the slots themselves ran out.
             peak_soc = max(
                 (
