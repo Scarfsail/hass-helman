@@ -306,12 +306,13 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             params=(
                 F.margin_pct("margin_pct"),
                 F.soc("max_target_soc", default=100.0),
+                F.non_negative_int("charge_start_margin_slots", default=2),
             ),
             condition_types=("reserve_floor_soc",),
             param_scope=Scope.RUN,
             new_draft={
                 "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
-                "params": {"margin_pct": 10, "max_target_soc": 100},
+                "params": {"margin_pct": 10, "max_target_soc": 100, "charge_start_margin_slots": 2},
                 "conditions": [{"reserve_floor_soc": 30}],
             },
         ),

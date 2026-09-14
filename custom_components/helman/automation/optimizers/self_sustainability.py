@@ -71,6 +71,8 @@ class Trajectory:
     #: stops at its target. All four appear in the baseline too, which is why
     #: the strict test compares a delta rather than testing for absolute zero.
     imported_kwh_by_date: Mapping[date, float] = MappingProxyType({})
+    #: SoC after each simulated bucket, keyed by the canonical slot start.
+    soc_by_bucket: Mapping[datetime, float] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -128,14 +130,22 @@ class HorizonSimulator:
         """
         return self._prefix[len(self._buckets)]
 
-    def simulate(self, extra_demand_by_bucket: dict[datetime, float]) -> Trajectory:
+    def simulate(
+        self,
+        extra_demand_by_bucket: dict[datetime, float],
+        *,
+        action_overrides: Mapping[datetime, ScheduleAction] | None = None,
+    ) -> Trajectory:
         """The trajectory with ``extra_demand_by_bucket`` added to the house.
 
         Resumes from the earliest bucket the extra demand touches rather than
         from ``now``: everything before it is by definition the baseline, whose
         trajectory and running totals are already recorded.
         """
-        start = self._first_touched_index(extra_demand_by_bucket)
+        # An action can change every later bucket, so an action overlay always
+        # starts from the live state. Appliance-only candidates retain the
+        # prefix optimisation this class originally provided.
+        start = 0 if action_overrides else self._first_touched_index(extra_demand_by_bucket)
         if start is None:
             return self.baseline
 
@@ -146,9 +156,15 @@ class HorizonSimulator:
             min_soc_at=prefix.min_soc_at,
             end_energy_kwh_by_date=dict(prefix.end_energy_kwh_by_date),
             imported_kwh_by_date=dict(prefix.imported_kwh_by_date),
+            soc_by_bucket=dict(prefix.soc_by_bucket),
         )
         for bucket in self._buckets[start:]:
-            self._step(state, bucket, extra_demand_by_bucket.get(bucket.key, 0.0))
+            self._step(
+                state,
+                bucket,
+                extra_demand_by_bucket.get(bucket.key, 0.0),
+                action=(action_overrides or {}).get(bucket.key, bucket.action),
+            )
         return state.to_trajectory()
 
     def _simulate_baseline(self) -> None:
@@ -158,6 +174,7 @@ class HorizonSimulator:
             min_soc_at=None,
             end_energy_kwh_by_date={},
             imported_kwh_by_date={},
+            soc_by_bucket={},
         )
         self._energy_before.append(state.remaining_energy_kwh)
         self._prefix.append(state.to_trajectory())
@@ -167,7 +184,12 @@ class HorizonSimulator:
             self._prefix.append(state.to_trajectory())
 
     def _step(
-        self, state: "_WalkState", bucket: _Bucket, extra_demand_kwh: float
+        self,
+        state: "_WalkState",
+        bucket: _Bucket,
+        extra_demand_kwh: float,
+        *,
+        action: ScheduleAction | None = None,
     ) -> None:
         result = simulate_schedule_action_slot(
             slot_start=bucket.start,
@@ -177,7 +199,7 @@ class HorizonSimulator:
             remaining_energy_kwh=state.remaining_energy_kwh,
             live_state=self._live_state,
             settings=self._settings,
-            action=bucket.action,
+            action=action or bucket.action,
         )
         state.remaining_energy_kwh = result.remaining_energy_kwh
         soc_pct = result.slot["socPct"]
@@ -193,6 +215,7 @@ class HorizonSimulator:
             state.imported_kwh_by_date.get(local_date, 0.0)
             + result.slot["importedFromGridKwh"]
         )
+        state.soc_by_bucket[bucket.key] = soc_pct
 
     def _first_touched_index(
         self, extra_demand_by_bucket: dict[datetime, float]
@@ -214,6 +237,7 @@ class _WalkState:
     min_soc_at: str | None
     end_energy_kwh_by_date: dict[date, float]
     imported_kwh_by_date: dict[date, float]
+    soc_by_bucket: dict[datetime, float]
 
     def to_trajectory(self) -> Trajectory:
         return Trajectory(
@@ -223,6 +247,7 @@ class _WalkState:
                 dict(self.end_energy_kwh_by_date)
             ),
             imported_kwh_by_date=MappingProxyType(dict(self.imported_kwh_by_date)),
+            soc_by_bucket=MappingProxyType(dict(self.soc_by_bucket)),
         )
 
 
