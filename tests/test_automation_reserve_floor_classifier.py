@@ -393,8 +393,9 @@ _EXPENSIVE_BAND = ImportBand(level="expensive", start=datetime(2026, 7, 10, 8, t
 _BANDS = (_CHEAP_BAND, _EXPENSIVE_BAND)
 
 # Natural (no-automation) trajectory: dips to 20 inside the expensive window,
-# well under FLOOR=40 -- the physical hazard #274 exists to catch.
-_BASE_SOC_BY_HOUR = {0: 45, 6: 45, 7: 45, 8: 35, 9: 20, 10: 60, 20: 45}
+# well under FLOOR=40 -- the physical hazard #274 exists to catch. Points carry
+# end-of-slot SoC, so the window is entered with the 07:30 point (35).
+_BASE_SOC_BY_HOUR = {0: 45, 6: 45, 7: 35, 9: 20, 10: 60, 20: 45}
 # Cheapest cheap slot is 07:00, so a bridge lands there.
 _PRICE_BY_HOUR = {0: 3.0, 6: 3.0, 7: 1.0, 8: 6.0}
 

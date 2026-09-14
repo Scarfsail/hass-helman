@@ -58,7 +58,12 @@ from ..explain import (
     VERDICT_SKIP,
 )
 from ..ownership import is_user_owned_inverter_action
-from ..rails import horizon_slots_between, read_price_by_bucket, read_soc_by_bucket
+from ..rails import (
+    horizon_slots_between,
+    read_forecast_soc_at,
+    read_price_by_bucket,
+    read_soc_by_bucket,
+)
 from ..trace import NULL_TRACE, ReserveFloorObservation
 
 if TYPE_CHECKING:
@@ -78,8 +83,9 @@ _HOLD_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_DISCHARGING}
 #: The SoC trajectory covers the expensive band (and the two points the sizing
 #: reads). Without it nothing downstream can be evaluated, false or otherwise.
 GATE_WINDOW_SOC_KNOWN = "window_soc_known"
-#: Charging is actually needed: the battery does not already enter the cheap
-#: window at or above the target the dip implies.
+#: Charging is actually needed: the battery does not already reach the target
+#: the dip implies — at the expensive window's start when simulated, else on
+#: entering the cheap window.
 GATE_CHARGE_NEEDED = "charge_needed"
 #: The cheap window holds enough writable slots for the whole deficit. False
 #: still charges — as much as the window allows — so this reads as "the bridge
@@ -180,6 +186,11 @@ class ChargeFromGridOptimizer:
             simulator = None
         except ConditionRailsUnavailable:
             simulator = None
+        # Expensive windows may share one cheap band.  Each simulated plan starts
+        # from what the earlier windows already placed, so a later window can
+        # build on those actions instead of simulating past (and overwriting)
+        # them.
+        planned_actions: dict[datetime, ScheduleAction] = {}
         bands = _build_import_band_timeline(snapshot.context.day_contexts.values())
         for index, band in enumerate(bands):
             if band.level != IMPORT_BAND_LEVEL_EXPENSIVE:
@@ -207,6 +218,7 @@ class ChargeFromGridOptimizer:
             if resolved is None:
                 continue
             self._plan_window(
+                snapshot=snapshot,
                 writer=writer,
                 resolved=resolved,
                 expensive_band=band,
@@ -221,7 +233,9 @@ class ChargeFromGridOptimizer:
                     battery_state.max_soc, resolved.params["max_target_soc"]
                 ),
                 lower_target=battery_state.min_soc,
+                live_soc=battery_state.current_soc,
                 simulator=simulator,
+                planned_actions=planned_actions,
                 emit=emit,
             )
 
@@ -231,6 +245,7 @@ class ChargeFromGridOptimizer:
     def _plan_window(
         self,
         *,
+        snapshot: "OptimizationSnapshot",
         writer: ScheduleWriter,
         resolved: "SlotEligibility",
         expensive_band: "ImportBand",
@@ -243,7 +258,9 @@ class ChargeFromGridOptimizer:
         max_charge_power_kw: float,
         upper_target: float,
         lower_target: float,
+        live_soc: float | None,
         simulator,
+        planned_actions: dict[datetime, ScheduleAction],
         emit: "_ChargeFromGridEmission",
     ) -> None:
         expensive_window = [
@@ -315,7 +332,11 @@ class ChargeFromGridOptimizer:
             return
         breached = _FloorResolution(STATE_TRUE, floor, None, group_index)
 
-        window_start_soc = _soc_at(soc_by_bucket, expensive_band.start)
+        # Rail values are end-of-slot: read the SoC *entering* each band, or the
+        # live reading when the band starts in the bucket in progress.
+        window_start_soc = _first_known(
+            read_forecast_soc_at(snapshot, expensive_band.start), live_soc
+        )
         if window_start_soc is None:
             _observe(min_soc=window_min_soc, bridge_written=False)
             emit.window_unknown(
@@ -328,7 +349,33 @@ class ChargeFromGridOptimizer:
         target = max(lower_target, min(upper_target, raw_target))
         capped_at_max_target = raw_target > upper_target
 
-        cheap_start_soc = _soc_at(soc_by_bucket, cheap_band.start)
+        # Inverter targets are integral percentages.  Round upward so a
+        # simulated target action can actually satisfy the fractional bridge
+        # target used by the sizing and capacity checks below.
+        target_soc = ceil(target)
+        # Decided before the entry-SoC shortcut below: a battery can enter the
+        # cheap window above the target and still drain through it, which only
+        # the simulated trajectory can see.
+        if simulator is not None and self._plan_simulated_window(
+            writer=writer,
+            resolved=resolved,
+            expensive_band=expensive_band,
+            cheap_slots=cheap_slots,
+            target=target,
+            target_soc=target_soc,
+            capped_at_max_target=capped_at_max_target,
+            window_min_soc=window_min_soc,
+            soc_known=soc_known,
+            floor=breached,
+            emit=emit,
+            simulator=simulator,
+            planned_actions=planned_actions,
+        ):
+            return
+
+        cheap_start_soc = _first_known(
+            read_forecast_soc_at(snapshot, cheap_band.start), live_soc
+        )
         if cheap_start_soc is None:
             _observe(min_soc=window_min_soc, bridge_written=False)
             emit.window_unknown(
@@ -369,25 +416,6 @@ class ChargeFromGridOptimizer:
             )
             return
 
-        # Inverter targets are integral percentages.  Round upward so a
-        # simulated target action can actually satisfy the fractional bridge
-        # target used by the sizing and capacity checks below.
-        target_soc = ceil(target)
-        if simulator is not None and self._plan_simulated_window(
-            writer=writer,
-            resolved=resolved,
-            expensive_band=expensive_band,
-            cheap_slots=cheap_slots,
-            target=target,
-            target_soc=target_soc,
-            capped_at_max_target=capped_at_max_target,
-            window_min_soc=window_min_soc,
-            soc_known=soc_known,
-            floor=breached,
-            emit=emit,
-            simulator=simulator,
-        ):
-            return
         ranked = _rank_cheapest_slots(
             document=writer.document,
             cheap_slots=cheap_slots,
@@ -489,11 +517,17 @@ class ChargeFromGridOptimizer:
         floor: "_FloorResolution",
         emit: "_ChargeFromGridEmission",
         simulator,
+        planned_actions: dict[datetime, ScheduleAction],
     ) -> bool:
         """Place the latest hold/charge plan that reaches the bridge target.
 
         Returning false deliberately retains the legacy rail-only path for old
         or partial forecast payloads.  Complete rails always use this path.
+
+        ``planned_actions`` holds what earlier windows of this run placed; it is
+        both the simulation base and a floor under this plan (a hold never
+        replaces an earlier charge, a charge never lowers an earlier target).
+        The accepted plan is merged back into it.
         """
         from ...scheduling.schedule import parse_slot_id
 
@@ -507,13 +541,37 @@ class ChargeFromGridOptimizer:
             return False
         # ``simulator`` is built from ``snapshot.schedule_overlay``, the
         # effective action set used for the battery forecast.  Trial actions
-        # must therefore only override the slots this plan changes.  Rebuilding
+        # must therefore only override the slots this run changes.  Rebuilding
         # them from ``writer.document`` would revive disabled, candidate, or
         # unsupported actions deliberately omitted from that overlay.
-        base_actions: dict[datetime, ScheduleAction] = {}
         boundary = dt_util.as_utc(expensive_band.start)
+        keys = [parse_slot_id(slot_id) for slot_id in writable]
+
+        def compose(
+            hold_indices: range | list[int], charge_indices: list[int]
+        ) -> dict[datetime, ScheduleAction]:
+            actions = dict(planned_actions)
+            for index in hold_indices:
+                actions.setdefault(
+                    keys[index], ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING)
+                )
+            for index in charge_indices:
+                existing = actions.get(keys[index])
+                existing_target = (
+                    existing.target_soc or 0
+                    if existing is not None
+                    and existing.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
+                    else 0
+                )
+                actions[keys[index]] = ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                    target_soc=max(existing_target, target_soc),
+                )
+            return actions
 
         def projected(actions: dict[datetime, ScheduleAction]) -> float | None:
+            # SoC values are end-of-slot, so the last slot before the boundary
+            # carries the SoC the expensive window starts from.
             trajectory = simulator.simulate({}, action_overrides=actions)
             preceding = [
                 (key, soc) for key, soc in trajectory.soc_by_bucket.items()
@@ -521,17 +579,44 @@ class ChargeFromGridOptimizer:
             ]
             return max(preceding, key=lambda item: dt_util.as_utc(item[0]))[1] if preceding else None
 
+        def reaches(soc: float | None) -> bool:
+            return soc is not None and soc >= target - 1e-6
+
+        margin = resolved.params.get("charge_start_margin_slots", 2)
+        observation = dict(
+            optimizer_id=self.id, group_index=resolved.group.index,
+            window=(format_slot_id(expensive_band.start), format_slot_id(expensive_band.end)),
+            reserve_floor_soc=resolved.condition_value("reserve_floor_soc"),
+            conditions_active=resolved.condition_met, projected_min_soc=window_min_soc,
+        )
+
+        # The run so far (or the forecast's own overlay) may already carry the
+        # boundary to the target; nothing to place then.
+        boundary_soc = projected(dict(planned_actions))
+        if reaches(boundary_soc):
+            emit.observe_reserve_floor(ReserveFloorObservation(
+                **observation, bridge_written=False,
+                limit="cap" if capped_at_max_target else None,
+            ))
+            emit.charge_not_needed(
+                cheap_slots,
+                gates=[
+                    soc_known,
+                    _Gate(GATE_CHARGE_NEEDED, STATE_FALSE, {
+                        "targetSoc": round(target, 1),
+                        "projectedBoundarySoc": round(boundary_soc, 1),
+                    }),
+                ],
+                floor=floor,
+            )
+            return True
+
         # A later cutoff is always preferred.  The first one that reaches the
         # target preserves ordinary self-consumption for as long as possible.
         hold_start: int | None = None
         for index in range(len(writable) - 1, -1, -1):
-            actions = dict(base_actions)
-            actions.update({
-                parse_slot_id(slot_id): ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING)
-                for slot_id in writable[index:]
-            })
-            boundary_soc = projected(actions)
-            if boundary_soc is not None and boundary_soc >= target - 1e-6:
+            boundary_soc = projected(compose(range(index, len(writable)), []))
+            if reaches(boundary_soc):
                 hold_start = index
                 break
 
@@ -540,59 +625,51 @@ class ChargeFromGridOptimizer:
             # target actions until the residual reaches the boundary target.
             hold_start = 0
             charge_indices: list[int] = []
-            boundary_soc = None
             for index in range(len(writable) - 1, -1, -1):
                 charge_indices.append(index)
-                actions = dict(base_actions)
-                actions.update({
-                    parse_slot_id(slot_id): ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING)
-                    for slot_id in writable
-                })
-                actions.update({
-                    parse_slot_id(writable[item]): ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=target_soc
-                    ) for item in charge_indices})
-                boundary_soc = projected(actions)
-                if boundary_soc is not None and boundary_soc >= target - 1e-6:
+                boundary_soc = projected(
+                    compose(range(len(writable)), charge_indices)
+                )
+                if reaches(boundary_soc):
                     break
             required = sorted(charge_indices)
             # Extra slots are opportunities, not extra target.  They extend
             # backward only after every physically required latest slot.
-            margin = resolved.params.get("charge_start_margin_slots", 2)
             extra = list(range(max(0, min(required, default=0) - margin), min(required, default=0)))
             charge_indices = sorted(set(required + extra))
         else:
             charge_indices = []
-            boundary_soc = projected({
-                **base_actions,
-                **{parse_slot_id(slot_id): ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING) for slot_id in writable[hold_start:]},
-            })
 
         charge_set = set(charge_indices)
         hold_set = set(range(hold_start, len(writable))) - charge_set
-        capacity_short = boundary_soc is None or boundary_soc < target - 1e-6
+        capacity_short = not reaches(boundary_soc)
         gates = [
             soc_known,
             _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, {
                 "targetSoc": round(target, 1), "projectedBoundarySoc": None if boundary_soc is None else round(boundary_soc, 1),
-                "forcedChargeSlots": len(charge_set), "chargeStartMarginSlots": resolved.params.get("charge_start_margin_slots", 2),
+                "forcedChargeSlots": len(charge_set), "chargeStartMarginSlots": margin,
             }),
             _Gate(GATE_CHEAP_WINDOW_CAPACITY, STATE_FALSE if capacity_short else STATE_TRUE, {
                 "slotsAvailable": len(writable), "slotsNeeded": len(charge_set),
             }),
         ]
+        final = compose(sorted(hold_set), sorted(charge_set))
         for index, slot_id in enumerate(writable):
-            if index in charge_set:
-                writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=target_soc)
-                emit.applied(slot_id, gates=gates, floor=floor, condition_met=resolved.condition_met, action=_ACTION)
-            elif index in hold_set:
-                writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_DISCHARGING)
-                emit.applied(slot_id, gates=gates, floor=floor, condition_met=resolved.condition_met, action=_HOLD_ACTION)
+            if index not in charge_set and index not in hold_set:
+                continue
+            action = final[keys[index]]
+            if planned_actions.get(keys[index]) == action:
+                # An earlier window already placed exactly this; its record
+                # stays the explanation.
+                continue
+            planned_actions[keys[index]] = action
+            writer.set_inverter(slot_id, kind=action.kind, target_soc=action.target_soc)
+            emit.applied(
+                slot_id, gates=gates, floor=floor, condition_met=resolved.condition_met,
+                action=_ACTION if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC else _HOLD_ACTION,
+            )
         emit.observe_reserve_floor(ReserveFloorObservation(
-            optimizer_id=self.id, group_index=resolved.group.index,
-            window=(format_slot_id(expensive_band.start), format_slot_id(expensive_band.end)),
-            reserve_floor_soc=resolved.condition_value("reserve_floor_soc"),
-            conditions_active=resolved.condition_met, projected_min_soc=window_min_soc,
+            **observation,
             bridge_written=bool(charge_set or hold_set),
             limit="capacity" if capacity_short else "cap" if capped_at_max_target else None,
         ))
@@ -654,8 +731,9 @@ class _ChargeFromGridEmission:
 
     The same cheap slot can be evaluated by more than one expensive window, so
     a slot is resolved to a single record (applied > cheaper_slot_chosen >
-    unavailable > covered/not-needed) before anything is emitted. Gates and the
-    floor resolution ride along with the record rather than being written as the
+    unavailable > covered/not-needed; between two applied records the later
+    write wins, as it does in the document) before anything is emitted. Gates
+    and the floor resolution ride along with the record rather than being written as the
     windows are walked: emitting them eagerly would let a later, weaker window
     overwrite the gates of the window that actually placed the action, leaving a
     slot whose verdict says `execute` and whose gates say `window_covered`.
@@ -681,7 +759,13 @@ class _ChargeFromGridEmission:
 
     def _add(self, slot_id: str, record: _SlotRecord) -> None:
         current = self._by_slot.get(slot_id)
-        if current is None or record.priority > current.priority:
+        if (
+            current is None
+            or record.priority > current.priority
+            # A later write replaces the slot's action, so the window that
+            # wrote last is the one that explains it.
+            or record.priority == current.priority == self._APPLIED
+        ):
             self._by_slot[slot_id] = record
 
     def applied(self, slot_id, *, gates, floor, condition_met, action) -> None:
@@ -869,6 +953,10 @@ def _build_import_band_timeline(day_contexts) -> tuple[ImportBand, ...]:
     return tuple(timeline)
 
 
+def _first_known(*values: float | None) -> float | None:
+    return next((value for value in values if value is not None), None)
+
+
 def _min_soc_over(
     soc_by_bucket: list[tuple[datetime, float]],
     start: datetime,
@@ -884,23 +972,6 @@ def _min_soc_over(
     if not values:
         return None
     return min(values)
-
-
-def _soc_at(
-    soc_by_bucket: list[tuple[datetime, float]],
-    at: datetime,
-) -> float | None:
-    at_utc = dt_util.as_utc(at)
-    latest: float | None = None
-    for bucket_start, soc in soc_by_bucket:
-        if dt_util.as_utc(bucket_start) <= at_utc:
-            latest = soc
-        else:
-            break
-    if latest is not None:
-        return latest
-    # Fall back to the earliest known SoC if the window starts before the series.
-    return soc_by_bucket[0][1] if soc_by_bucket else None
 
 
 def build_charge_from_grid_optimizer(

@@ -331,6 +331,78 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertTrue(applied)
         self.assertEqual(applied[0]["action"]["kind"], "stop_discharging")
 
+    def test_simulated_holds_when_cheap_window_is_entered_above_target(self) -> None:
+        # #285: the battery enters the cheap window at 80% — above the 50%
+        # bridge target — and drains to 40% by 08:00.  The entry SoC alone says
+        # "not needed"; the simulated boundary says hold.
+        result = self._run_with_fake_simulator(
+            holds_needed=4,
+            charges_needed=99,
+            soc={0: 80, 6: 80, 7: 40, 9: 20, 10: 60},
+        )
+        holds = [
+            slot_id for slot_id, actions in result.slots.items()
+            if inverter_action(actions).kind == "stop_discharging"
+        ]
+        self.assertEqual(holds, [_slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
+
+    def test_simulated_writes_nothing_when_boundary_already_reaches_target(self) -> None:
+        result, trace = self._run_with_fake_simulator(
+            holds_needed=0, charges_needed=99, with_trace=True
+        )
+        self.assertEqual(result.slots, {})
+        gate = _gate(_slots_by_id(trace)[_slot_id(7, 45)], "charge_needed")
+        self.assertEqual(gate.state, "false")
+
+    def test_overlapping_windows_do_not_overwrite_an_earlier_plan(self) -> None:
+        # Both expensive bands share the 06:00-08:00 cheap band.  The first
+        # needs a residual charge; the second is already carried by it and
+        # must not replace those charges with holds.
+        bands = (
+            ImportBand(level="cheap", start=_at(6), end=_at(8)),
+            ImportBand(level="expensive", start=_at(8), end=_at(10)),
+            ImportBand(level="expensive", start=_at(9), end=_at(11)),
+        )
+        def boundary_soc(holds: int, charges: int, _overrides) -> float:
+            if charges >= 3:
+                return 60.0
+            return 50.0 if holds >= 4 else 0.0
+
+        result, trace = self._run_with_fake_simulator(
+            holds_needed=4,
+            charges_needed=3,
+            soc={0: 45, 6: 45, 7: 40, 8: 15, 10: 50, 11: 60},
+            bands=bands,
+            boundary_soc=boundary_soc,
+            with_trace=True,
+        )
+        kinds = {
+            slot_id: inverter_action(actions).kind
+            for slot_id, actions in result.slots.items()
+        }
+        self.assertEqual(
+            [slot_id for slot_id, kind in kinds.items() if kind == "charge_to_target_soc"],
+            [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)],
+        )
+        self.assertEqual(set(_charge_slots(result).values()), {55})
+        # The explanation names the action the document actually carries.
+        charge_decision = next(
+            decision for decision in trace.to_dict()["steps"][0]["decisions"]
+            if decision["action"]["kind"] == "charge_to_target_soc"
+        )
+        self.assertIn(_slot_id(7, 45), charge_decision["slotIds"])
+
+    def test_legacy_target_reads_soc_entering_the_expensive_window(self) -> None:
+        # The 08:00 point is the SoC *after* 08:00-08:30; the window is entered
+        # with the 07:30 point (45), so the target is 45 + dip 10 = 55.
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 2.0, 8: 6.0})
+        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+            _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS),
+            _make_config(),
+        )
+        self.assertEqual(set(_charge_slots(result).values()), {55})
+
     def _run_with_fake_simulator(
         self,
         *,
@@ -339,6 +411,9 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         with_trace: bool = False,
         fractional_target: bool = False,
         schedule_document: ScheduleDocument | None = None,
+        soc: dict[int, float] | None = None,
+        bands: tuple[ImportBand, ...] = _BANDS,
+        boundary_soc=None,
     ) -> ScheduleDocument | tuple[ScheduleDocument, object]:
         class FakeSimulator:
             def simulate(self, _demand, *, action_overrides):
@@ -348,19 +423,24 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                     for action in action_overrides.values()
                     if action.kind == "charge_to_target_soc"
                 ]
+                if boundary_soc is not None:
+                    soc_pct = boundary_soc(holds, len(targets), action_overrides)
+                    return types.SimpleNamespace(soc_by_bucket={_at(7, 45): soc_pct})
                 reached_by_hold = holds >= holds_needed
                 reached = reached_by_hold or len(targets) >= charges_needed
-                boundary_soc = (
+                soc_pct = (
                     50.0 if reached_by_hold else max(targets, default=0)
                 ) if reached else 0.0
-                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): boundary_soc})
+                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): soc_pct})
 
         fake_module = types.ModuleType("custom_components.helman.automation.horizon_simulation")
         fake_module.build_horizon_simulator = lambda *_args, **_kwargs: FakeSimulator()
-        soc = _soc_series({
+        # Points carry end-of-slot SoC, so the 07:xx values are what the
+        # expensive window at 08:00 is entered with.
+        soc_series = _soc_series(soc if soc is not None else {
             0: 45,
             6: 45,
-            8: 40.4 if fractional_target else 40,
+            7: 40.4 if fractional_target else 40,
             9: 20,
             10: 60,
         })
@@ -368,9 +448,9 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         with patch.dict(sys.modules, {fake_module.__name__: fake_module}):
             optimizer = build_charge_from_grid_optimizer(_make_config())
             snapshot = _make_snapshot(
-                soc_series=soc,
+                soc_series=soc_series,
                 import_points=prices,
-                bands=_BANDS,
+                bands=bands,
                 schedule_document=schedule_document,
             )
             if with_trace:
@@ -484,9 +564,9 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
 
     def test_charges_cheapest_slots_to_bridge_dip(self) -> None:
         # SoC dips to 20 during expensive window (floor 30 -> dip 10).
-        # window_start_soc (08:00) = 40 -> target = 40 + 10 = 50.
-        # cheap_start_soc (06:00) = 45 -> gap 5 pts -> 0.5 kWh -> 1 slot.
-        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        # Entering 08:00 (the 07:30 point, end-of-slot) = 40 -> target 50.
+        # Entering 06:00 (the 05:30 point) = 45 -> gap 5 pts -> 0.5 kWh -> 1 slot.
+        soc = _soc_series({0: 45, 6: 45, 7: 40, 9: 20, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})  # cheap slots equal price
         # make 07:00 the cheapest cheap slot
         prices = _import_points({6: 3.0, 8: 6.0})
