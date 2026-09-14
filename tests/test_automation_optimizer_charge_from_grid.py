@@ -4,6 +4,7 @@ import sys
 import types
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -40,6 +41,14 @@ def _install_import_stubs() -> None:
     if homeassistant_pkg is None:
         homeassistant_pkg = types.ModuleType("homeassistant")
         sys.modules["homeassistant"] = homeassistant_pkg
+    # ``battery_state`` imports ``HomeAssistant`` only for annotations; stubbing
+    # it lets the real horizon simulator load.
+    core_mod = sys.modules.get("homeassistant.core")
+    if core_mod is None:
+        core_mod = types.ModuleType("homeassistant.core")
+        sys.modules["homeassistant.core"] = core_mod
+    if not hasattr(core_mod, "HomeAssistant"):
+        core_mod.HomeAssistant = object
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:
         util_pkg = types.ModuleType("homeassistant.util")
@@ -440,6 +449,91 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             _make_config(),
         )
         self.assertEqual(set(_charge_slots(result).values()), {55})
+
+    def test_real_simulation_charges_across_a_normal_band_gap(self) -> None:
+        # The battery enters the cheap band at 42 % and would sit at 10 % by
+        # 12:00; the window needs 30 % there.  Sixteen normal-band buckets
+        # drain 32 % after charging stops, so the inverter target must be 62 %.
+        # A 30 % target would charge the whole band and still enter at 10 %.
+        result, trace = self._run_with_real_simulator(max_target_soc=100)
+
+        self.assertEqual(
+            _charge_slots(result),
+            {_slot_id(7, minute): 62 for minute in (0, 15, 30, 45)},
+        )
+        slot = _slots_by_id(trace)[_slot_id(7, 45)]
+        self.assertEqual(_gate(slot, "charge_needed").params["chargeTargetSoc"], 62)
+        self.assertEqual(
+            _gate(slot, "charge_needed").params["projectedBoundarySoc"], 30.0
+        )
+        self.assertEqual(_gate(slot, "cheap_window_capacity").state, "true")
+        (observation,) = trace.reserve_floor_observations
+        self.assertIsNone(observation.limit)
+
+    def test_real_simulation_reports_cap_when_the_gap_needs_more(self) -> None:
+        # Charging to the 50 % cap leaves 18 % at 12:00.  More slots cannot
+        # help; a higher `max_target_soc` would, so the cap is the limit.
+        result, trace = self._run_with_real_simulator(max_target_soc=50)
+
+        self.assertEqual(set(_charge_slots(result).values()), {50})
+        slot = _slots_by_id(trace)[_slot_id(7, 45)]
+        self.assertEqual(_gate(slot, "cheap_window_capacity").state, "false")
+        (observation,) = trace.reserve_floor_observations
+        self.assertEqual(observation.limit, "cap")
+
+    def _run_with_real_simulator(self, *, max_target_soc: int):
+        """Cheap 06-08, normal 08-12, expensive 12-14 on the real simulator.
+
+        The house draws 0.2 kWh per 15 min (2 % of a lossless 10 kWh battery)
+        with no solar, starting from 50 % at 05:00.
+        """
+        from custom_components.helman.battery_state import BatteryLiveState
+
+        bands = (
+            ImportBand(level="cheap", start=_at(6), end=_at(8)),
+            ImportBand(level="normal", start=_at(8), end=_at(12)),
+            ImportBand(level="expensive", start=_at(12), end=_at(14)),
+        )
+        series = [
+            {
+                "timestamp": (
+                    REFERENCE_TIME + timedelta(minutes=15 * index)
+                ).isoformat(timespec="seconds"),
+                "durationHours": 0.25,
+                "solarKwh": 0.0,
+                "baselineHouseKwh": 0.2,
+                "socPct": max(10.0, 50.0 - 2.0 * (index + 1)),
+            }
+            for index in range(48 * 4)
+        ]
+        prices = _import_points({6: 2.0, 8: 4.0, 12: 6.0, 14: 4.0})
+        snapshot = _make_snapshot(
+            soc_series=series, import_points=prices, bands=bands
+        )
+        snapshot = replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                battery_state=BatteryLiveState(
+                    current_remaining_energy_kwh=5.0,
+                    current_soc=50.0,
+                    min_soc=10.0,
+                    max_soc=100.0,
+                    nominal_capacity_kwh=10.0,
+                    min_energy_kwh=1.0,
+                    max_energy_kwh=10.0,
+                ),
+                battery_max_discharge_power_kw=5.0,
+                battery_discharge_efficiency=1.0,
+            ),
+        )
+        config = _make_config(max_target_soc=max_target_soc)
+        return run_optimizer_with_trace(
+            build_charge_from_grid_optimizer(config),
+            snapshot,
+            config,
+            reference_time=REFERENCE_TIME,
+        )
 
     def _run_with_fake_simulator(
         self,

@@ -366,6 +366,7 @@ class ChargeFromGridOptimizer:
             cheap_slots=cheap_slots,
             target=target,
             target_soc=target_soc,
+            upper_target=upper_target,
             capped_at_max_target=capped_at_max_target,
             window_min_soc=window_min_soc,
             soc_known=soc_known,
@@ -514,6 +515,7 @@ class ChargeFromGridOptimizer:
         cheap_slots: list[str],
         target: float,
         target_soc: int,
+        upper_target: float,
         capped_at_max_target: bool,
         window_min_soc: float,
         soc_known: "_Gate",
@@ -551,7 +553,9 @@ class ChargeFromGridOptimizer:
         keys = [parse_slot_id(slot_id) for slot_id in writable]
 
         def compose(
-            hold_indices: range | list[int], charge_indices: list[int]
+            hold_indices: range | list[int],
+            charge_indices: list[int],
+            charge_soc: int = target_soc,
         ) -> dict[datetime, ScheduleAction]:
             actions = dict(planned_actions)
             for index in hold_indices:
@@ -568,7 +572,7 @@ class ChargeFromGridOptimizer:
                 )
                 actions[keys[index]] = ScheduleAction(
                     kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    target_soc=max(existing_target, target_soc),
+                    target_soc=max(existing_target, charge_soc),
                 )
             return actions
 
@@ -640,20 +644,47 @@ class ChargeFromGridOptimizer:
                 hold_start = index
                 break
 
+        # ``target`` is the SoC the expensive window must be *entered* with,
+        # but the inverter stops charging at its own target inside the cheap
+        # band.  Whatever drains between the two (normal hours, an earlier
+        # expensive window) has to be bought on top, so the inverter target is
+        # searched up to the cap rather than fixed at ``target``.
+        charge_soc = target_soc
+        max_charge_soc = max(target_soc, int(upper_target))
         if hold_start is None:
             # Preservation is already maximised; replace the latest holds with
             # target actions until the residual reaches the boundary target.
             hold_start = 0
+            all_holds = range(len(writable))
             charge_indices: list[int] = []
             for index in range(len(writable) - 1, -1, -1):
                 charge_indices.append(index)
                 boundary_covered, boundary_soc = projected(
-                    compose(range(len(writable)), charge_indices)
+                    compose(all_holds, charge_indices, max_charge_soc)
                 )
                 if not boundary_covered:
                     return False
                 if reaches(boundary_soc):
                     break
+            charge_soc = max_charge_soc
+            if reaches(boundary_soc):
+                # The fewest latest slots are fixed; now the lowest inverter
+                # target that still carries them to the boundary.  A higher
+                # target never lowers the boundary SoC, so bisect.
+                low, high = target_soc, max_charge_soc
+                while low < high:
+                    middle = (low + high) // 2
+                    _covered, middle_soc = projected(
+                        compose(all_holds, charge_indices, middle)
+                    )
+                    if reaches(middle_soc):
+                        high = middle
+                    else:
+                        low = middle + 1
+                charge_soc = low
+                _covered, boundary_soc = projected(
+                    compose(all_holds, charge_indices, charge_soc)
+                )
             required = sorted(charge_indices)
             # Extra slots are opportunities, not extra target.  They extend
             # backward only after every physically required latest slot.
@@ -670,6 +701,7 @@ class ChargeFromGridOptimizer:
             _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, {
                 "targetSoc": round(target, 1), "projectedBoundarySoc": None if boundary_soc is None else round(boundary_soc, 1),
                 "forcedChargeSlots": len(charge_set), "chargeStartMarginSlots": margin,
+                "chargeTargetSoc": charge_soc if charge_set else None,
             }),
             _Gate(GATE_CHEAP_WINDOW_CAPACITY, STATE_FALSE if capacity_short else STATE_TRUE, {
                 "slotsAvailable": len(writable), "slotsNeeded": len(charge_set),
@@ -687,7 +719,26 @@ class ChargeFromGridOptimizer:
                 gates=[*gates, _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {})],
                 floor=floor,
             )
-        final = compose(sorted(hold_set), sorted(charge_set))
+        final = compose(sorted(hold_set), sorted(charge_set), charge_soc)
+        limit = "cap" if capped_at_max_target else None
+        if capacity_short:
+            # Short with the battery pinned at the cap inside the cheap band:
+            # a higher ``max_target_soc`` would carry more across the gap, so
+            # the cap binds.  Short below it, the slots themselves ran out.
+            peak_soc = max(
+                (
+                    soc for key, soc in simulator.simulate(
+                        {}, action_overrides=final
+                    ).soc_by_bucket.items()
+                    if key in keys
+                ),
+                default=None,
+            )
+            limit = (
+                "cap"
+                if peak_soc is not None and peak_soc >= charge_soc - 1e-6
+                else "capacity"
+            )
         for index, slot_id in enumerate(writable):
             if index not in charge_set and index not in hold_set:
                 emit.cheaper_slot_chosen(
@@ -721,7 +772,7 @@ class ChargeFromGridOptimizer:
         emit.observe_reserve_floor(ReserveFloorObservation(
             **observation,
             bridge_written=bool(charge_set or hold_set),
-            limit="capacity" if capacity_short else "cap" if capped_at_max_target else None,
+            limit=limit,
         ))
         return True
 
