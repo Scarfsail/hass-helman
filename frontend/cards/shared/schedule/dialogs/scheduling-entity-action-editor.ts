@@ -77,7 +77,18 @@ export class SchedulingEntityActionEditor extends LitElement {
             }
 
             .target-field {
-                width: min(180px, 100%);
+                width: min(120px, 100%);
+            }
+
+            .target-input-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+
+            .target-input-row .number-input {
+                flex: 1;
+                min-width: 0;
             }
         `,
     ];
@@ -143,18 +154,22 @@ export class SchedulingEntityActionEditor extends LitElement {
                     `)}
                 </div>
                 ${this._isTargetActionKind(this._actionKind) ? html`
-                    <ha-textfield
-                        class="target-field"
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="1"
-                        no-spinner
-                        .label=${this.localize("scheduling.dialog.target_soc")}
-                        .suffix=${"%"}
-                        .value=${this._targetSocInput}
-                        @input=${this._handleTargetSocInput}
-                    ></ha-textfield>
+                    <label class="field target-field">
+                        <span class="field-label">${this.localize("scheduling.dialog.target_soc")}</span>
+                        <span class="target-input-row">
+                            <input
+                                class="number-input"
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="1"
+                                inputmode="numeric"
+                                .value=${this._targetSocInput}
+                                @input=${this._handleTargetSocInput}
+                            />
+                            <span aria-hidden="true">%</span>
+                        </span>
+                    </label>
                 ` : nothing}
             </div>
         `;

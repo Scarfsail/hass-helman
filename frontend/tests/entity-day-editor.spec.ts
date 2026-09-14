@@ -1221,10 +1221,19 @@ test.describe("entity day editor", () => {
             const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
             await page.mouse.click(point.x, point.y);
 
+            // A plain element with a value property would pass the typing checks
+            // even if it rendered nothing, so assert the field has a real box.
+            const fieldHeight = await page.evaluate(() => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const editor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
+                return editor.shadowRoot.querySelector(".target-field input")?.getBoundingClientRect().height ?? 0;
+            });
+            expect(fieldHeight).toBeGreaterThan(0);
+
             const typeSoc = (value: string) => page.evaluate((next) => {
                 const el = document.querySelector("scheduling-entity-day-editor") as any;
                 const editor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
-                const field = editor.shadowRoot.querySelector("ha-textfield") as any;
+                const field = editor.shadowRoot.querySelector(".target-field input") as any;
                 field.value = next;
                 field.dispatchEvent(new Event("input", { bubbles: true }));
                 return el.updateComplete.then(() => editor.updateComplete).then(() => field.value);
