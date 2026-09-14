@@ -99,6 +99,9 @@ GATE_CHEAPEST_RANK = "cheapest_rank"
 #: The slot is writable at all — user-owned cheap slots are dropped before the
 #: ranking, so the writer never sees them and cannot veto them itself.
 GATE_SLOT_AVAILABLE = "slot_available"
+#: The slot lies at or after the latest simulated hold cutoff that still carries
+#: the battery to the expensive-window boundary target.
+GATE_LATEST_CUTOFF = "latest_cutoff"
 
 
 @dataclass(frozen=True)
@@ -569,7 +572,9 @@ class ChargeFromGridOptimizer:
                 )
             return actions
 
-        def projected(actions: dict[datetime, ScheduleAction]) -> float | None:
+        def projected(
+            actions: dict[datetime, ScheduleAction],
+        ) -> tuple[bool, float | None]:
             # SoC values are end-of-slot, so the last slot before the boundary
             # carries the SoC the expensive window starts from.
             trajectory = simulator.simulate({}, action_overrides=actions)
@@ -577,7 +582,12 @@ class ChargeFromGridOptimizer:
                 (key, soc) for key, soc in trajectory.soc_by_bucket.items()
                 if dt_util.as_utc(key) < boundary
             ]
-            return max(preceding, key=lambda item: dt_util.as_utc(item[0]))[1] if preceding else None
+            if not preceding:
+                return False, None
+            bucket, soc = max(
+                preceding, key=lambda item: dt_util.as_utc(item[0])
+            )
+            return dt_util.as_utc(bucket) + _SLOT_DURATION >= boundary, soc
 
         def reaches(soc: float | None) -> bool:
             return soc is not None and soc >= target - 1e-6
@@ -592,7 +602,13 @@ class ChargeFromGridOptimizer:
 
         # The run so far (or the forecast's own overlay) may already carry the
         # boundary to the target; nothing to place then.
-        boundary_soc = projected(dict(planned_actions))
+        boundary_covered, boundary_soc = projected(dict(planned_actions))
+        if not boundary_covered:
+            # A partial rolling horizon cannot answer what SoC the expensive
+            # window is entered with.  Let the rail-based planner size the
+            # still-writable cheap slots instead of treating the horizon's
+            # final, earlier bucket as the boundary value.
+            return False
         if reaches(boundary_soc):
             emit.observe_reserve_floor(ReserveFloorObservation(
                 **observation, bridge_written=False,
@@ -615,7 +631,11 @@ class ChargeFromGridOptimizer:
         # target preserves ordinary self-consumption for as long as possible.
         hold_start: int | None = None
         for index in range(len(writable) - 1, -1, -1):
-            boundary_soc = projected(compose(range(index, len(writable)), []))
+            boundary_covered, boundary_soc = projected(
+                compose(range(index, len(writable)), [])
+            )
+            if not boundary_covered:
+                return False
             if reaches(boundary_soc):
                 hold_start = index
                 break
@@ -627,9 +647,11 @@ class ChargeFromGridOptimizer:
             charge_indices: list[int] = []
             for index in range(len(writable) - 1, -1, -1):
                 charge_indices.append(index)
-                boundary_soc = projected(
+                boundary_covered, boundary_soc = projected(
                     compose(range(len(writable)), charge_indices)
                 )
+                if not boundary_covered:
+                    return False
                 if reaches(boundary_soc):
                     break
             required = sorted(charge_indices)
@@ -653,9 +675,30 @@ class ChargeFromGridOptimizer:
                 "slotsAvailable": len(writable), "slotsNeeded": len(charge_set),
             }),
         ]
+        selected_count = len(charge_set | hold_set)
+        cutoff_params = {
+            "cutoff": writable[hold_start] if selected_count else None,
+            "selectedSlots": selected_count,
+        }
+        unavailable = [slot_id for slot_id in cheap_slots if slot_id not in writable]
+        if unavailable:
+            emit.slot_unavailable(
+                unavailable,
+                gates=[*gates, _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {})],
+                floor=floor,
+            )
         final = compose(sorted(hold_set), sorted(charge_set))
         for index, slot_id in enumerate(writable):
             if index not in charge_set and index not in hold_set:
+                emit.cheaper_slot_chosen(
+                    slot_id,
+                    gates=[
+                        *gates,
+                        _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
+                        _Gate(GATE_LATEST_CUTOFF, STATE_FALSE, cutoff_params),
+                    ],
+                    floor=floor,
+                )
                 continue
             action = final[keys[index]]
             if planned_actions.get(keys[index]) == action:
@@ -665,7 +708,14 @@ class ChargeFromGridOptimizer:
             planned_actions[keys[index]] = action
             writer.set_inverter(slot_id, kind=action.kind, target_soc=action.target_soc)
             emit.applied(
-                slot_id, gates=gates, floor=floor, condition_met=resolved.condition_met,
+                slot_id,
+                gates=[
+                    *gates,
+                    _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
+                    _Gate(GATE_LATEST_CUTOFF, STATE_TRUE, cutoff_params),
+                ],
+                floor=floor,
+                condition_met=resolved.condition_met,
                 action=_ACTION if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC else _HOLD_ACTION,
             )
         emit.observe_reserve_floor(ReserveFloorObservation(

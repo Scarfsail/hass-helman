@@ -331,6 +331,33 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertTrue(applied)
         self.assertEqual(applied[0]["action"]["kind"], "stop_discharging")
 
+        slots = _slots_by_id(trace)
+        skipped = slots[_slot_id(6)]
+        self.assertEqual(skipped.verdict, "skip")
+        self.assertEqual(_gate(skipped, "slot_available").state, "true")
+        self.assertEqual(_gate(skipped, "latest_cutoff").state, "false")
+        selected = slots[_slot_id(7)]
+        self.assertEqual(_gate(selected, "latest_cutoff").state, "true")
+
+    def test_simulated_trace_marks_user_owned_slots_unavailable(self) -> None:
+        owned_slot = _slot_id(6, 30)
+        schedule = ScheduleDocument(slots={
+            owned_slot: {
+                "inverter": ScheduleAction(kind="normal", set_by="user")
+            }
+        })
+        _result, trace = self._run_with_fake_simulator(
+            holds_needed=4,
+            charges_needed=99,
+            schedule_document=schedule,
+            with_trace=True,
+        )
+
+        owned = _slots_by_id(trace)[owned_slot]
+        self.assertEqual(owned.verdict, "skip")
+        self.assertEqual(_gate(owned, "slot_available").state, "false")
+        self.assertIsNone(_gate(owned, "latest_cutoff"))
+
     def test_simulated_holds_when_cheap_window_is_entered_above_target(self) -> None:
         # #285: the battery enters the cheap window at 80% — above the 50%
         # bridge target — and drains to 40% by 08:00.  The entry SoC alone says
@@ -353,6 +380,17 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertEqual(result.slots, {})
         gate = _gate(_slots_by_id(trace)[_slot_id(7, 45)], "charge_needed")
         self.assertEqual(gate.state, "false")
+
+    def test_partial_simulation_before_boundary_falls_back_to_rails(self) -> None:
+        result = self._run_with_fake_simulator(
+            holds_needed=0,
+            charges_needed=99,
+            trajectory_end=_at(7, 30),
+        )
+
+        # The stale simulated value says the target is reached, but it ends one
+        # slot before the 08:00 boundary.  Rail sizing still places the bridge.
+        self.assertEqual(len(_charge_slots(result)), 1)
 
     def test_overlapping_windows_do_not_overwrite_an_earlier_plan(self) -> None:
         # Both expensive bands share the 06:00-08:00 cheap band.  The first
@@ -414,6 +452,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         soc: dict[int, float] | None = None,
         bands: tuple[ImportBand, ...] = _BANDS,
         boundary_soc=None,
+        trajectory_end: datetime | None = None,
     ) -> ScheduleDocument | tuple[ScheduleDocument, object]:
         class FakeSimulator:
             def simulate(self, _demand, *, action_overrides):
@@ -425,13 +464,17 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                 ]
                 if boundary_soc is not None:
                     soc_pct = boundary_soc(holds, len(targets), action_overrides)
-                    return types.SimpleNamespace(soc_by_bucket={_at(7, 45): soc_pct})
+                    return types.SimpleNamespace(
+                        soc_by_bucket={trajectory_end or _at(7, 45): soc_pct}
+                    )
                 reached_by_hold = holds >= holds_needed
                 reached = reached_by_hold or len(targets) >= charges_needed
                 soc_pct = (
                     50.0 if reached_by_hold else max(targets, default=0)
                 ) if reached else 0.0
-                return types.SimpleNamespace(soc_by_bucket={_at(7, 45): soc_pct})
+                return types.SimpleNamespace(
+                    soc_by_bucket={trajectory_end or _at(7, 45): soc_pct}
+                )
 
         fake_module = types.ModuleType("custom_components.helman.automation.horizon_simulation")
         fake_module.build_horizon_simulator = lambda *_args, **_kwargs: FakeSimulator()
