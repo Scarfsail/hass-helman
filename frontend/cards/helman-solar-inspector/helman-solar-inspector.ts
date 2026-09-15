@@ -1342,7 +1342,6 @@ export class HelmanSolarInspector extends LitElement {
     .chart-wrap svg {
       display: block;
       width: 100%;
-      min-width: 360px;
       max-width: none;
       height: 260px;
     }
@@ -1528,7 +1527,6 @@ export class HelmanSolarInspector extends LitElement {
     .soc-strip-wrap svg {
       display: block;
       width: 100%;
-      min-width: 360px;
       height: 65px;
     }
 
@@ -1540,7 +1538,6 @@ export class HelmanSolarInspector extends LitElement {
     .impact-strip-wrap svg {
       display: block;
       width: 100%;
-      min-width: 360px;
       height: 24px;
     }
 
@@ -6116,8 +6113,12 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _updateChartWidth(chartWrap: HTMLElement) {
-    const width = Math.max(360, Math.round(chartWrap.clientWidth || chartWrap.getBoundingClientRect().width));
-    if (Math.abs(width - this._chartWidth) > 1) {
+    // No floor: the viewBox is the card's width, so a unit is a pixel on every
+    // row. A floored viewBox either spills past a narrow card or, squeezed to
+    // fit under a fixed CSS height, letterboxes -- both break the stack's
+    // one-hour-one-column alignment and gap the "now" line between rows.
+    const width = Math.round(chartWrap.clientWidth || chartWrap.getBoundingClientRect().width);
+    if (width > 0 && Math.abs(width - this._chartWidth) > 1) {
       this._chartWidth = width;
     }
   }

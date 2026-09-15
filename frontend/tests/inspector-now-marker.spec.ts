@@ -41,6 +41,8 @@ async function mountInspector(page: Page, date: string): Promise<void> {
     await page.evaluate((day: string) => {
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const socForecast: Array<{ slot: string; pct: number }> = [];
+        const importPrice: Array<{ slot: string; value: number }> = [];
+        const money: Array<{ slot: string; cost: number; gain: number }> = [];
         const impact: Array<{
             slot: string;
             rawWh: number | null;
@@ -54,6 +56,8 @@ async function mountInspector(page: Page, date: string): Promise<void> {
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
             corrected.push({ timestamp: `${day}T${hh}:${mm}:00`, valueWh: v });
             socForecast.push({ slot: `${hh}:${mm}`, pct: 40 + (m / 1440) * 30 });
+            importPrice.push({ slot: `${hh}:${mm}`, value: 3 + (m % 240) / 60 });
+            money.push({ slot: `${hh}:${mm}`, cost: 0.1, gain: 0 });
             impact.push({ slot: `${hh}:${mm}`, rawWh: v, correctedWh: v, impactWh: 0, factor: 1 });
         }
         const payload = {
@@ -85,6 +89,10 @@ async function mountInspector(page: Page, date: string): Promise<void> {
                 gridActual: [],
                 batteryForecast: [],
                 batteryActual: [],
+                importPrice,
+                exportPrice: [],
+                moneyActual: money,
+                moneyForecast: [],
             },
             totals: {
                 rawWh: null,
@@ -198,16 +206,18 @@ async function mountBand(page: Page, date: string): Promise<void> {
     );
 }
 
+/** The line `renderNowMarker` draws, as every chart and strip of the stack carries it. */
+const NOW_LINE = "line[stroke='var(--primary-color)']";
+
 /** viewBox x of every now-marker line drawn in the given container. */
 async function markerXs(page: Page, selector: string): Promise<number[]> {
-    return page.evaluate((sel: string) => {
+    return page.evaluate(({ sel, nowLine }) => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const root = el.shadowRoot.querySelector(sel) as Element | null;
         if (root === null) return [];
-        return Array.from(root.querySelectorAll("line"))
-            .filter((line) => line.getAttribute("stroke") === "var(--primary-color)")
+        return Array.from(root.querySelectorAll(nowLine))
             .map((line) => Number(line.getAttribute("x1")));
-    }, selector);
+    }, { sel: selector, nowLine: NOW_LINE });
 }
 
 /** Where the axis puts the current minute, straight off the chart's own layout. */
@@ -231,7 +241,7 @@ async function expectedNowX(page: Page): Promise<number> {
  * would see the clock move back under it.
  */
 async function markerRects(page: Page, hour: number) {
-    return page.evaluate(async (h: number) => {
+    return page.evaluate(async ({ h, nowLine }) => {
         const inspector = document.querySelector("helman-solar-inspector") as any;
         const band = (window as any).__band;
         const fixed = Date.parse(
@@ -243,9 +253,7 @@ async function markerRects(page: Page, hour: number) {
         await band.updateComplete;
 
         const line = (sel: string) => {
-            const found = Array.from(
-                (inspector.shadowRoot as ShadowRoot).querySelectorAll(`${sel} line`),
-            ).find((l) => l.getAttribute("stroke") === "var(--primary-color)");
+            const found = (inspector.shadowRoot as ShadowRoot).querySelector(`${sel} ${nowLine}`);
             const rect = (found as SVGLineElement).getBoundingClientRect();
             return { center: rect.left + rect.width / 2 };
         };
@@ -256,7 +264,7 @@ async function markerRects(page: Page, hour: number) {
             soc: line(".soc-strip-wrap"),
             band: { center: mr.left + mr.width / 2, width: mr.width },
         };
-    }, hour);
+    }, { h: hour, nowLine: NOW_LINE });
 }
 
 test.describe("solar inspector now marker", () => {
@@ -300,18 +308,15 @@ test.describe("solar inspector now marker", () => {
         await loadCardBundle(page);
         await mountInspector(page, todayUtc());
 
-        const drawn = await page.evaluate(() => {
+        const drawn = await page.evaluate((nowLine: string) => {
             const el = document.querySelector("helman-solar-inspector") as any;
             const root = el.shadowRoot as ShadowRoot;
-            const line = Array.from(root.querySelectorAll(".chart-wrap line"))
-                .find((l) => l.getAttribute("stroke") === "var(--primary-color)")!;
+            const line = root.querySelector(`.chart-wrap ${nowLine}`)!;
             // In the SoC strip, paint order is DOM order: every percentage has
             // to come after the marker for the line to pass behind the digits.
             const soc = root.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
             const painted = Array.from(soc.querySelectorAll("line, text"));
-            const markerIndex = painted.findIndex(
-                (node) => node.getAttribute("stroke") === "var(--primary-color)",
-            );
+            const markerIndex = painted.findIndex((node) => node.matches(nowLine));
             // The column percentages only -- the strip's axis labels sit outside
             // the plot, where the marker never reaches them.
             const labels = painted
@@ -327,7 +332,7 @@ test.describe("solar inspector now marker", () => {
                 labelsAfterMarker: labels.every((index) => index > markerIndex),
                 labelCount: labels.length,
             };
-        });
+        }, NOW_LINE);
 
         // The band's 2px, in CSS pixels rather than viewBox units, so a chart
         // drawn wider than its viewBox never fattens the line.
@@ -337,6 +342,57 @@ test.describe("solar inspector now marker", () => {
         expect(Number(drawn.x)).toBe(Math.round(Number(drawn.x)));
         expect(drawn.labelCount).toBeGreaterThan(0);
         expect(drawn.labelsAfterMarker).toBe(true);
+    });
+
+    test("on a phone narrower than 360px, every row marks the same pixel, top to bottom", async ({ page }) => {
+        // The charts used to floor their width at 360px: in CSS they spilled
+        // past a narrower card while the money strip fit it, so "now" landed
+        // further left on the lower rows; floored in the viewBox alone they
+        // letterboxed under their fixed heights, gapping the line between rows.
+        await page.setViewportSize({ width: 330, height: 900 });
+        await loadCardBundle(page);
+        await mountInspector(page, todayUtc());
+
+        // Each row as a scope holding one svg and its now line; the strips
+        // draw theirs inside their own shadow roots.
+        const rows = await page.evaluate(async (nowLine: string) => {
+            const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
+            const scopes: Record<string, () => ParentNode | null | undefined> = {
+                chart: () => root.querySelector(".chart-wrap"),
+                soc: () => root.querySelector(".soc-strip-wrap"),
+                price: () => root.querySelector("helman-solar-price-strip")?.shadowRoot,
+                money: () => root.querySelector("helman-solar-money-strip")?.shadowRoot,
+            };
+            while (!Object.values(scopes).every((scope) => scope()?.querySelector(nowLine))) {
+                await new Promise(requestAnimationFrame);
+            }
+            const card = (root.querySelector(".chart-wrap") as HTMLElement).getBoundingClientRect().width;
+            return {
+                card,
+                rows: Object.entries(scopes).map(([name, scope]) => {
+                    const svg = scope()!.querySelector("svg")!.getBoundingClientRect();
+                    const line = scope()!.querySelector(nowLine)!;
+                    const box = line.getBoundingClientRect();
+                    return {
+                        name,
+                        width: svg.width,
+                        center: box.left + box.width / 2,
+                        // Pixels drawn per viewBox unit of the line's length:
+                        // 1 unless the svg is scaled, and so letterboxed.
+                        scale: box.height
+                            / (Number(line.getAttribute("y2")) - Number(line.getAttribute("y1"))),
+                    };
+                }),
+            };
+        }, NOW_LINE);
+
+        expect(rows.card).toBeLessThan(360);
+        const chartCenter = rows.rows[0].center;
+        for (const row of rows.rows) {
+            expect(row.width, row.name).toBeCloseTo(rows.card, 0);
+            expect(Math.abs(row.center - chartCenter), row.name).toBeLessThanOrEqual(1);
+            expect(row.scale, row.name).toBeCloseTo(1, 2);
+        }
     });
 
     test("a past day gets no marker", async ({ page }) => {

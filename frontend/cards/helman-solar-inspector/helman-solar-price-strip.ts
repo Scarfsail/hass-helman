@@ -127,7 +127,6 @@ export class HelmanSolarPriceStrip extends LitElement {
         .strip-wrap svg {
             display: block;
             width: 100%;
-            min-width: 360px;
             height: ${PRICE_STRIP.height}px;
         }
     `];
