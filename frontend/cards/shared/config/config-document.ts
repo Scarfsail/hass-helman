@@ -302,9 +302,11 @@ export function createGenericApplianceDraft(
         entity_id: "",
       },
     },
-    projection: {
-      strategy: "fixed",
-      hourly_energy_kwh: 1,
+    consumption: {
+      projection: {
+        strategy: "fixed",
+        hourly_energy_kwh: 1,
+      },
     },
   };
 }
@@ -323,9 +325,11 @@ export function createClimateApplianceDraft(
         entity_id: "",
       },
     },
-    projection: {
-      strategy: "fixed",
-      hourly_energy_kwh: 1,
+    consumption: {
+      projection: {
+        strategy: "fixed",
+        hourly_energy_kwh: 1,
+      },
     },
   };
 }
