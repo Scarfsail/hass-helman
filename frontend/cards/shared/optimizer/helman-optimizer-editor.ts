@@ -522,7 +522,13 @@ export class HelmanOptimizerEditor
                                 </div>
                             </div>
                             <div class="field-grid">
-                                <div class="field">${this._renderTargetPicker(schema, targetPath)}</div>
+                                <div class="field">
+                                    <div class="field-label-row">
+                                        <label>${this.t("editor.fields.optimizer_target")}</label>
+                                        ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
+                                    </div>
+                                    ${this._renderTargetPicker(schema, targetPath)}
+                                </div>
                                 ${this._renderTargetClimateMode(schema, targetPath)}
                             </div>
                         </div>
