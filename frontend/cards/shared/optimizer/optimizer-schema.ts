@@ -26,13 +26,22 @@ export type OptimizerConfigBucket = "appliance_optimizers" | "system_optimizers"
 
 export interface SchemaField {
     key: string;
-    type: "number" | "integer" | "time" | "string" | "day_classifications" | "object";
+    type:
+        | "number"
+        | "integer"
+        | "time"
+        | "string"
+        | "day_classifications"
+        | "object"
+        | "object_list";
     required?: boolean;
     default?: JsonValue;
     minimum?: number;
     minimumExclusive?: boolean;
     maximum?: number;
     choices?: string[];
+    /** `object_list` only: the fewest elements the list may hold. */
+    minItems?: number;
     fields?: SchemaField[];
     /**
      * `false` when a condition group may not override this param — the reader

@@ -30,7 +30,7 @@ export interface LaneAutomationCoverage {
 
 export type LaneAutomationCoverageState = "active" | "disabled_only" | "none";
 
-/** Coverage by controllable id -- `target.controllable_id`, the lane's own key. */
+/** Coverage by controllable id -- the lane's own key. */
 export type AutomationCoverageIndex = ReadonlyMap<string, LaneAutomationCoverage>;
 
 const EMPTY_COVERAGE: LaneAutomationCoverage = { state: "none", optimizerIds: [] };
@@ -46,8 +46,10 @@ export function getLaneAutomationCoverage(
 /**
  * The config's optimizer pipeline, read as "what drives which lane".
  *
- * Every optimizer kind names its lane the same way -- `target.controllable_id`,
- * with `"inverter"` for the inverter -- which is exactly the string a band lane
+ * Every optimizer kind names its lanes by controllable id -- `target.controllable_id`,
+ * with `"inverter"` for the inverter, or one per member of an
+ * `appliance_runtime` group's `target.controllables` -- which is exactly the
+ * string a band lane
  * carries as its `target`. That shared spelling is the whole mapping; nothing
  * here has to know what an appliance is.
  *
@@ -92,22 +94,20 @@ export function buildAutomationCoverageIndex(
         if (!optimizer) {
             continue;
         }
-        const controllableId = stringValue(asJsonObject(optimizer.target)?.controllable_id)
-            || _schemaTargetDefault(schema, stringValue(optimizer.kind));
-        if (controllableId.length === 0) {
-            continue;
-        }
-
-        const existing = index.get(controllableId) ?? { optimizerIds: [], anyEnabled: false };
-        // An optimizer with no id cannot be opened in the edit dialog, which
-        // resolves by id -- but it still counts towards the lane's state, so
-        // the badge does not call an automated lane manual.
+        // An optimizer id counts once per lane it drives, so a group lists its
+        // id under every member.
         const optimizerId = stringValue(optimizer.id);
-        if (optimizerId.length > 0) {
-            existing.optimizerIds.push(optimizerId);
+        for (const controllableId of _targetControllableIds(optimizer, schema)) {
+            const existing = index.get(controllableId) ?? { optimizerIds: [], anyEnabled: false };
+            // An optimizer with no id cannot be opened in the edit dialog, which
+            // resolves by id -- but it still counts towards the lane's state, so
+            // the badge does not call an automated lane manual.
+            if (optimizerId.length > 0) {
+                existing.optimizerIds.push(optimizerId);
+            }
+            existing.anyEnabled ||= masterEnabled && booleanValue(optimizer.enabled, true);
+            index.set(controllableId, existing);
         }
-        existing.anyEnabled ||= masterEnabled && booleanValue(optimizer.enabled, true);
-        index.set(controllableId, existing);
     }
 
     return new Map(
@@ -116,6 +116,25 @@ export function buildAutomationCoverageIndex(
             { state: anyEnabled ? "active" : "disabled_only", optimizerIds },
         ]),
     );
+}
+
+/**
+ * Every lane an optimizer drives: each member of a `target.controllables` group,
+ * or the flat `target.controllable_id`, falling back to the schema's default.
+ */
+function _targetControllableIds(
+    optimizer: JsonObject,
+    schema: OptimizerSchemaDocument | null,
+): string[] {
+    const target = asJsonObject(optimizer.target);
+    const members = asJsonArray(target?.controllables);
+    const ids = members
+        ? members.map((member) => stringValue(asJsonObject(member)?.controllable_id))
+        : [
+              stringValue(target?.controllable_id) ||
+                  _schemaTargetDefault(schema, stringValue(optimizer.kind)),
+          ];
+    return ids.filter((id) => id.length > 0);
 }
 
 /** The lane a kind drives when its document does not say -- the schema's own default. */

@@ -35,7 +35,8 @@
       "up": "Nahoru",
       "down": "Dolů",
       "add_condition_group": "+ Skupina podmínek",
-      "rename_condition_group": "Přejmenovat skupinu"
+      "rename_condition_group": "Přejmenovat skupinu",
+      "add_controllable_target": "+ Spotřebič"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -190,6 +191,7 @@
       "optimizer_id": "ID optimalizátoru",
       "optimizer_enabled": "Povoleno",
       "optimizer_target": "Cílový ovládaný prvek",
+      "optimizer_targets": "Spotřebiče, v pořadí priority",
       "when_price_below": "Když je cena pod",
       "max_run_price": "Max. cena slotu pro běh",
       "requires_appliance": "Vyžaduje spotřebič",
@@ -304,6 +306,7 @@
       "optimizer_target": "Vyberte ovládaný prvek, který tento optimalizátor řídí. Nabízejí se jen druhy, které skutečně řídit umí; klimatický spotřebič zobrazí živý výběr režimu, jakmile jsou k dispozici jeho runtime schopnosti.",
       "optimizer_target_missing_from_draft": "Tento optimalizátor stále odkazuje na id ovládaného prvku, který už v aktuálním seznamu ovládaných prvků není. Hodnota zůstává zachovaná, dokud nevyberete náhradu.",
       "optimizer_target_pending_reload": "Některé klimatické spotřebiče jsou zobrazené, ale zůstávají zakázané, dokud jejich živě podporované režimy nezpřístupní uložení a znovunačtení.",
+      "optimizer_targets": "První spotřebič bere přebytek jako první; každý další plánuje s tím, co mu ty nad ním nechaly.",
       "day_context_deficit_ratio": "Dny s poměrem výroby/spotřeby na této hodnotě nebo pod ní se kloní k deficitu.",
       "day_context_surplus_ratio": "Dny s poměrem výroby/spotřeby na této hodnotě nebo nad ní se kloní k přebytku.",
       "appliance_runtime_max_consecutive_skips": "Kolik dní po sobě lze spotřebič vynechat, než je vynucen jeho běh.",
@@ -407,6 +410,7 @@
       "import_window": "Importní okno {index}",
       "appliance": "Spotřebič {index}",
       "appliance_option": "{name} ({id})",
+      "priority_position": "#{position}",
       "appliance_option_pending_reload": "{label} (zpřístupní se po uložení a znovunačtení)",
       "optimizer": "Optimalizátor {index}",
       "ev_charger": "EV nabíječka {index}",
@@ -462,6 +466,7 @@
       "automation_optimizer_id": "Jedinečný identifikátor optimalizátoru, uložený jako id této položky v automation.appliance_optimizers nebo automation.system_optimizers. Držte ho stabilní, aby budoucí reference, logy a ladění zůstaly čitelné.",
       "export_price_when_price_below": "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Když předpovězená exportní cena klesne pod tuto hodnotu, optimalizátor vytvoří sloty stop_export tam, kde je očekávaný export.",
       "optimizer_target": "Ovládaný prvek, na který tento optimalizátor působí. Seznam se řídí aktuálními ovládanými prvky v editoru, takže rozpracované přidání i smazání se projeví hned, a je filtrován na druhy, které tento druh optimalizátoru umí řídit.",
+      "optimizer_targets": "Spotřebiče, které tento optimalizátor řídí; všechny sdílejí jeho okno, denní minimum i podmínky. Seznam je pořadím priority: každý spotřebič se plánuje postupně proti plánu, který už obsahuje ty nad ním, takže při nedostatku přebytku ho získá začátek seznamu a ostatní dostanou, co zbude. Každý spotřebič má své vlastní denní minimum i historii běhu.",
       "appliance_runtime_climate_mode": "Povinné jen pro klimatické spotřebiče. Editor zobrazuje jen živě podporované režimy vrácené pro zvolený spotřebič.",
       "optimizer_window": "Okno v místním čase ve formátu HH:MM. Pravidlo působí jen v tomto denním okně.",
       "day_context_deficit_ratio": "Předpovězený poměr výroby/spotřeby, na němž nebo pod nímž je den klasifikován jako deficit. Musí být nižší než poměr pro přebytek.",

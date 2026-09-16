@@ -35,7 +35,7 @@ const CONFIG = {
     automation: {
         enabled: true,
         appliance_optimizers: [
-            { id: "boiler_surplus", kind: "appliance_runtime", target: { controllable_id: "boiler" }, enabled: false },
+            { id: "boiler_surplus", kind: "appliance_runtime", target: { controllables: [{ controllable_id: "boiler" }] }, enabled: false },
         ],
         system_optimizers: [
             { id: "charge_hold", kind: "charge_hold", target: { controllable_id: "inverter" }, enabled: true },
@@ -287,7 +287,7 @@ test.describe("automation coverage on the schedule band", () => {
                     appliance_optimizers: [{
                         id: "boiler_surplus",
                         kind: "appliance_runtime",
-                        target: { controllable_id: "boiler" },
+                        target: { controllables: [{ controllable_id: "boiler" }] },
                         enabled: true,
                     }],
                 },
@@ -296,6 +296,32 @@ test.describe("automation coverage on the schedule band", () => {
         await fireDataChanged(page);
 
         expect(await badgeState(page, "boiler")).toBe("active");
+        expect(await badgeState(page, "inverter")).toBe("none");
+    });
+
+    test("a group counts on the lane of every member, not just the first", async ({ page }) => {
+        await mountBand(page, {
+            config: {
+                config_version: 17,
+                automation: {
+                    enabled: true,
+                    appliance_optimizers: [{
+                        id: "heaters",
+                        kind: "appliance_runtime",
+                        target: {
+                            controllables: [
+                                { controllable_id: "boiler" },
+                                { controllable_id: "pump" },
+                            ],
+                        },
+                        enabled: true,
+                    }],
+                },
+            },
+        });
+
+        expect(await badgeState(page, "boiler")).toBe("active");
+        expect(await badgeState(page, "pump")).toBe("active");
         expect(await badgeState(page, "inverter")).toBe("none");
     });
 
@@ -357,7 +383,7 @@ test.describe("automation coverage on the schedule band", () => {
                     appliance_optimizers: [{
                         id: "pump_surplus",
                         kind: "appliance_runtime",
-                        target: { controllable_id: "pump" },
+                        target: { controllables: [{ controllable_id: "pump" }] },
                         enabled: true,
                     }],
                 },

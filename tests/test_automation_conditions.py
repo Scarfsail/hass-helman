@@ -84,7 +84,10 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     iter_horizon_slot_ids,
     parse_slot_id,
 )
-from automation_config_builders import make_optimizer_config  # noqa: E402
+from automation_config_builders import (  # noqa: E402
+    make_appliance_member_config,
+    make_optimizer_config,
+)
 
 
 def _snapshot(
@@ -335,10 +338,10 @@ class MaxRunPriceConditionTests(unittest.TestCase):
 
     @staticmethod
     def _config(threshold):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -499,10 +502,10 @@ class MinSocConditionTests(unittest.TestCase):
 
     @staticmethod
     def _config(threshold):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -681,10 +684,10 @@ class GroupExplanationTests(unittest.TestCase):
                 },
             ),
         )
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"]}],
         )
@@ -699,10 +702,10 @@ class GroupExplanationTests(unittest.TestCase):
         self.assertEqual(node.actual, "surplus")
 
     def test_a_group_that_does_not_configure_a_condition_is_not_applicable(self) -> None:
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[
                 {"run_when": ["tight"], "max_run_price": 2.0},
@@ -718,10 +721,10 @@ class GroupExplanationTests(unittest.TestCase):
         )
 
     def test_a_self_gating_condition_stays_not_evaluated(self) -> None:
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"], "ensure_self_sustainability": 100}],
         )
@@ -744,10 +747,10 @@ class GroupExplanationTests(unittest.TestCase):
         read `not_evaluated` — nothing resolves it — which would put an
         unresolvable block on every group in the inspector.
         """
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[
                 {
@@ -771,10 +774,10 @@ class GroupExplanationTests(unittest.TestCase):
         )
 
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
@@ -832,10 +835,10 @@ class GroupExplanationTests(unittest.TestCase):
         self.assertEqual(explanations[tomorrow][0].params_source, "master_fallback")
 
     def test_each_group_carries_its_own_resolved_params_and_label(self) -> None:
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[
                 {"name": "Cheap", "run_when": ["tight"]},
@@ -940,10 +943,10 @@ class RequiresApplianceConditionTests(unittest.TestCase):
                 for slot_id, action in provider_actions.items()
             }
         )
-        config = make_optimizer_config(
+        config = make_appliance_member_config(
             id="heatpump",
             kind="appliance_runtime",
-            target={"controllable_id": "pool-heatpump"},
+            target={"controllables": [{"controllable_id": "pool-heatpump"}]},
             params={"window": {"start": "00:00", "end": "23:45"}},
             conditions=[{"requires_appliance": provider_id}],
         )

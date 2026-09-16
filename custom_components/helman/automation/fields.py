@@ -49,7 +49,7 @@ class Field:
     """One config key: its type, its bounds and (for objects) its children."""
 
     key: str
-    type: str  # number | integer | time | string | day_classifications | object
+    type: str  # number | integer | time | string | day_classifications | object | object_list
     required: bool = True
     default: Any = MISSING
     minimum: float | None = None
@@ -57,6 +57,8 @@ class Field:
     maximum: float | None = None
     choices: tuple[str, ...] | None = None
     fields: tuple["Field", ...] = ()
+    #: ``object_list`` only: the fewest elements the list may hold.
+    min_items: int | None = None
     #: Whether a condition group may override this param. ``False`` for params
     #: that describe something no single group owns — see
     #: ``appliance_runtime.daily_minimum.max_consecutive_skips``, which is a property of a *chain*
@@ -79,6 +81,8 @@ class Field:
             payload["maximum"] = self.maximum
         if self.choices is not None:
             payload["choices"] = list(self.choices)
+        if self.min_items is not None:
+            payload["minItems"] = self.min_items
         if not self.overridable:
             payload["overridable"] = False
         if self.fields:
@@ -141,6 +145,13 @@ def string(key: str, **kwargs: Any) -> Field:
 
 def obj(key: str, *fields: Field, **kwargs: Any) -> Field:
     return Field(key=key, type="object", fields=fields, **kwargs)
+
+
+def obj_list(key: str, *fields: Field, min_items: int = 1, **kwargs: Any) -> Field:
+    """An ordered list of objects, each read against ``fields``."""
+    return Field(
+        key=key, type="object_list", fields=fields, min_items=min_items, **kwargs
+    )
 
 
 # --- reading ----------------------------------------------------------------
@@ -225,6 +236,8 @@ def read_field(
 
     if field.type == "object":
         return read_fields(field.fields, value, path=path, partial=partial)
+    if field.type == "object_list":
+        return _read_object_list(value, path=path, field=field, partial=partial)
     if field.type == "time":
         return _read_time(value, path=path)
     if field.type == "day_classifications":
@@ -236,6 +249,25 @@ def read_field(
     if field.type == "number":
         return _read_bounded(value, path=path, field=field, integer=False)
     raise AssertionError(f"unsupported field type {field.type!r}")
+
+
+def _read_object_list(
+    value: object, *, path: str, field: Field, partial: bool
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        raise AutomationConfigError(
+            path=path, code="invalid_type", message=f"{path} must be a list"
+        )
+    if field.min_items is not None and len(value) < field.min_items:
+        raise AutomationConfigError(
+            path=path,
+            code="required",
+            message=f"{path} must list at least {field.min_items} item(s)",
+        )
+    return tuple(
+        read_fields(field.fields, item, path=f"{path}[{index}]", partial=partial)
+        for index, item in enumerate(value)
+    )
 
 
 def _read_time(value: object, *, path: str) -> str:

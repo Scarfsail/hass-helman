@@ -112,7 +112,7 @@ from custom_components.helman.automation.trace import OptimizerTrace  # noqa: E4
 from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
 )
-from automation_config_builders import make_optimizer_config  # noqa: E402
+from automation_config_builders import make_appliance_member_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -477,16 +477,16 @@ def _config(
     max_consecutive_skips: int = 0,
     groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    target: dict[str, object] = {"controllable_id": appliance_id}
+    member: dict[str, object] = {"controllable_id": appliance_id}
     if climate_mode is not None:
-        target["climate_mode"] = climate_mode
+        member["climate_mode"] = climate_mode
     group: dict[str, object] = {}
     if run_when is not None:
         group["run_when"] = list(run_when)
-    return make_optimizer_config(
+    return make_appliance_member_config(
         id="daily",
         kind="appliance_runtime",
-        target=target,
+        target={"controllables": [member]},
         params={
             "daily_minimum": {
                 "min_hours_per_day": min_hours_per_day,
@@ -1285,10 +1285,10 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
             group["self_sustainability_margin_pct"] = margin_pct
         if tolerance_pct is not None:
             group["ensure_self_sustainability"] = tolerance_pct
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params=params,
             conditions=kwargs.pop("groups", None) or [group],
         )
@@ -1799,10 +1799,10 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
         window=None,
         groups=None,
     ):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": min_hours_per_day,
@@ -2221,10 +2221,10 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
     """
 
     def _config(self, appliance, *, groups=None):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": ONE_SLOT_HOURS,
@@ -2406,10 +2406,10 @@ class SelfSustainabilityConfigTests(unittest.TestCase):
     """Both numbers are per-group conditions, and one of them is defaulted."""
 
     def _config(self, *, params=None, groups=None):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": "pool-pump"},
+            target={"controllables": [{"controllable_id": "pool-pump"}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -2736,10 +2736,10 @@ def _uncapped_config(
     params: dict[str, object] = {}
     if window is not None:
         params["window"] = window
-    return make_optimizer_config(
+    return make_appliance_member_config(
         id="soak",
         kind="appliance_runtime",
-        target={"controllable_id": appliance_id},
+        target={"controllables": [{"controllable_id": appliance_id}]},
         params=params,
         conditions=groups or [{"run_when": ["tight"]}],
     )
@@ -2987,10 +2987,10 @@ class UncappedValidationTests(unittest.TestCase):
 
     def test_skips_cannot_be_set_without_a_minimum(self) -> None:
         with self.assertRaises(AutomationConfigError):
-            make_optimizer_config(
+            make_appliance_member_config(
                 id="soak",
                 kind="appliance_runtime",
-                target={"controllable_id": "pool-pump"},
+                target={"controllables": [{"controllable_id": "pool-pump"}]},
                 params={"daily_minimum": {"max_consecutive_skips": 2}},
                 conditions=[{"run_when": ["surplus"]}],
             )
@@ -3019,10 +3019,10 @@ class RequiresApplianceTests(unittest.TestCase):
     """
 
     def _config(self, appliance, *, requires="pool-filtration"):
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params={"window": {"start": "06:00", "end": "18:00"}},
             conditions=[{"run_when": ["tight"], "requires_appliance": requires}],
         )
@@ -3069,10 +3069,10 @@ class RequiresApplianceTests(unittest.TestCase):
         """
         appliance = _generic("pool-heatpump")
         provider = _generic("pool-filtration")
-        cfg = make_optimizer_config(
+        cfg = make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 3,
@@ -3104,10 +3104,10 @@ class RequiresApplianceTests(unittest.TestCase):
         appliance = _generic("pool-heatpump")
         provider = _generic("pool-filtration")
         provider_slots = _hour_slots(10)
-        cfg = make_optimizer_config(
+        cfg = make_appliance_member_config(
             id="daily",
             kind="appliance_runtime",
-            target={"controllable_id": appliance.id},
+            target={"controllables": [{"controllable_id": appliance.id}]},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 3,

@@ -547,12 +547,12 @@ class ConditionMatrixTests(unittest.TestCase):
         )
 
     def _appliance_config(self, *groups):
-        from automation_config_builders import make_optimizer_config
+        from automation_config_builders import make_appliance_member_config
 
-        return make_optimizer_config(
+        return make_appliance_member_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"controllable_id": "pool"},
+            target={"controllables": [{"controllable_id": "pool"}]},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=list(groups),
         )

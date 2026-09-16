@@ -265,25 +265,63 @@ export class HelmanOptimizerEditor
         if (!this._targetsControllable(schema)) {
             return fallback;
         }
-        const selectionState = this._selectionState(schema);
-        if (selectionState.selectedOption) {
-            return selectionState.selectedOption.kind === "inverter"
-                ? fallback
-                : this._tFormat("editor.dynamic.appliance_option", {
-                      name: selectionState.selectedOption.name,
-                      id: fallback,
-                  });
+        const states = this._targetPaths(schema).map((targetPath) =>
+            this._selectionState(schema, targetPath),
+        );
+        const selected = states.flatMap((state) =>
+            state.selectedOption ? [state.selectedOption] : [],
+        );
+        if (selected.some((option) => option.kind === "inverter")) {
+            return fallback;
         }
-        if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-            return this._tFormat("editor.dynamic.stale_appliance", {
-                id: selectionState.selectedId,
+        if (selected.length > 0) {
+            // A group is titled by every member it names, in priority order.
+            return this._tFormat("editor.dynamic.appliance_option", {
+                name: selected.map((option) => option.name).join(", "),
+                id: fallback,
             });
+        }
+        const stale = states.find(
+            (state) => state.selectedMissingFromDraft && state.selectedId.length > 0,
+        );
+        if (stale) {
+            return this._tFormat("editor.dynamic.stale_appliance", { id: stale.selectedId });
         }
         return fallback;
     }
 
+    /**
+     * Whether the schema declares a target at all, in either of its two shapes:
+     * a flat `controllable_id` (the inverter kinds) or an ordered
+     * `controllables` group (`appliance_runtime`).
+     */
     private _targetsControllable(schema: OptimizerSchema): boolean {
-        return schema.target.some((field) => field.key === "controllable_id");
+        return (
+            this._targetsControllableGroup(schema) ||
+            schema.target.some((field) => field.key === "controllable_id")
+        );
+    }
+
+    private _targetsControllableGroup(schema: OptimizerSchema): boolean {
+        return schema.target.some(
+            (field) => field.key === "controllables" && field.type === "object_list",
+        );
+    }
+
+    private get _targetListPath(): PathSegment[] {
+        return [...this._basePath, "target", "controllables"];
+    }
+
+    /**
+     * Where each target lives: one path per group member, in priority order, or
+     * the flat `target` itself. Every per-target helper takes one of these.
+     */
+    private _targetPaths(schema: OptimizerSchema): PathSegment[][] {
+        if (!this._targetsControllableGroup(schema)) {
+            return [[...this._basePath, "target"]];
+        }
+        const members = asJsonArray(this.getValue(this._targetListPath)) ?? [];
+        return members.map((_member, memberIndex) => [...this._targetListPath, memberIndex]);
     }
 
     private get _basePath(): PathSegment[] {
@@ -419,6 +457,11 @@ export class HelmanOptimizerEditor
      * the schema, but which instances exist, and the authorable modes of the
      * selected one, come from the draft document and the live registry, neither
      * of which a static schema can carry.
+     *
+     * A group target renders one row per member. The list *is* the priority
+     * order -- the first member takes the surplus first -- so the rows are
+     * numbered and reordered in place, with the same up/down idiom as the
+     * condition groups.
      */
     renderControllableTargetFields(
         _optimizerIndex: number,
@@ -428,55 +471,131 @@ export class HelmanOptimizerEditor
         if (!schema || !this._targetsControllable(schema)) {
             return nothing;
         }
-        const targetPath: PathSegment[] = [...this._basePath, "target"];
-        const selectionState = this._selectionState(schema);
+        if (!this._targetsControllableGroup(schema)) {
+            const targetPath: PathSegment[] = [...this._basePath, "target"];
+            return html`
+                <div class="field">
+                    <div class="field-label-row">
+                        <label>${this.t("editor.fields.optimizer_target")}</label>
+                        ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
+                    </div>
+                    ${this._renderTargetPicker(schema, targetPath)}
+                </div>
+                ${this._renderTargetClimateMode(schema, targetPath)}
+            `;
+        }
+        const targetPaths = this._targetPaths(schema);
+        const total = targetPaths.length;
+        return html`
+            <div class="field controllable-targets">
+                <div class="field-label-row">
+                    <label>${this.t("editor.fields.optimizer_targets")}</label>
+                    ${this.renderHelpIcon("editor.fields.optimizer_targets", "editor.help.optimizer_targets")}
+                </div>
+                <div class="helper">${this.t("editor.helpers.optimizer_targets")}</div>
+                ${targetPaths.map(
+                    (targetPath, memberIndex) => html`
+                        <div class="controllable-target-row">
+                            <div class="appliance-summary-row">
+                                <strong class="controllable-target-position">
+                                    ${this._tFormat("editor.dynamic.priority_position", {
+                                        position: memberIndex + 1,
+                                    })}
+                                </strong>
+                                <div class="list-actions">
+                                    <button
+                                        type="button"
+                                        ?disabled=${memberIndex === 0}
+                                        @click=${() => this._moveTarget(memberIndex, memberIndex - 1)}
+                                    >${this.t("editor.actions.up")}</button>
+                                    <button
+                                        type="button"
+                                        ?disabled=${memberIndex === total - 1}
+                                        @click=${() => this._moveTarget(memberIndex, memberIndex + 1)}
+                                    >${this.t("editor.actions.down")}</button>
+                                    <button
+                                        type="button"
+                                        class="danger remove-controllable-target"
+                                        ?disabled=${total <= 1}
+                                        @click=${() => this._removeTarget(memberIndex)}
+                                    >${this.t("editor.actions.remove")}</button>
+                                </div>
+                            </div>
+                            <div class="field-grid">
+                                <div class="field">
+                                    <div class="field-label-row">
+                                        <label>${this.t("editor.fields.optimizer_target")}</label>
+                                        ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
+                                    </div>
+                                    ${this._renderTargetPicker(schema, targetPath)}
+                                </div>
+                                ${this._renderTargetClimateMode(schema, targetPath)}
+                            </div>
+                        </div>
+                    `,
+                )}
+                <button
+                    type="button"
+                    class="add-button add-controllable-target"
+                    @click=${() => this._addTarget()}
+                >
+                    ${this.t("editor.actions.add_controllable_target")}
+                </button>
+            </div>
+        `;
+    }
+
+    private _renderTargetPicker(schema: OptimizerSchema, targetPath: PathSegment[]): TemplateResult {
+        const selectionState = this._selectionState(schema, targetPath);
+        return html`
+            <select
+                class="controllable-target-picker"
+                @change=${(event: Event) =>
+                    this._applyControllableIdChange(
+                        schema,
+                        targetPath,
+                        (event.currentTarget as HTMLSelectElement).value,
+                    )}
+            >
+                <option value="" ?selected=${selectionState.selectedId.length === 0}>
+                    ${this.t("editor.values.select_controllable")}
+                </option>
+                ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
+                    ? html`
+                          <option value=${selectionState.selectedId} ?selected=${true}>
+                              ${this._tFormat("editor.dynamic.stale_appliance", {
+                                  id: selectionState.selectedId,
+                              })}
+                          </option>
+                      `
+                    : nothing}
+                ${selectionState.options.map(
+                    (option) => html`
+                        <option
+                            value=${option.id}
+                            ?disabled=${option.selectionDisabled}
+                            ?selected=${option.id === selectionState.selectedId}
+                        >
+                            ${this._targetOptionLabel(option)}
+                        </option>
+                    `,
+                )}
+            </select>
+            <div class="helper">${this._targetHelper(selectionState)}</div>
+        `;
+    }
+
+    private _renderTargetClimateMode(
+        schema: OptimizerSchema,
+        targetPath: PathSegment[],
+    ): TemplateResult | typeof nothing {
         const climateModeFieldState = buildClimateModeFieldState(
-            selectionState,
+            this._selectionState(schema, targetPath),
             stringValue(this.getValue([...targetPath, "climate_mode"])),
         );
-        return html`
-            <div class="field">
-                <div class="field-label-row">
-                    <label>${this.t("editor.fields.optimizer_target")}</label>
-                    ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
-                </div>
-                <select
-                    @change=${(event: Event) =>
-                        this._applyControllableIdChange(
-                            schema,
-                            (event.currentTarget as HTMLSelectElement).value,
-                        )}
-                >
-                    <option value="" ?selected=${selectionState.selectedId.length === 0}>
-                        ${this.t("editor.values.select_controllable")}
-                    </option>
-                    ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
-                        ? html`
-                              <option value=${selectionState.selectedId} ?selected=${true}>
-                                  ${this._tFormat("editor.dynamic.stale_appliance", {
-                                      id: selectionState.selectedId,
-                                  })}
-                              </option>
-                          `
-                        : nothing}
-                    ${selectionState.options.map(
-                        (option) => html`
-                            <option
-                                value=${option.id}
-                                ?disabled=${option.selectionDisabled}
-                                ?selected=${option.id === selectionState.selectedId}
-                            >
-                                ${this._targetOptionLabel(option)}
-                            </option>
-                        `,
-                    )}
-                </select>
-                <div class="helper">${this._targetHelper(selectionState)}</div>
-            </div>
-            ${climateModeFieldState.visible
-                ? this._renderClimateModeField(targetPath, climateModeFieldState)
-                : nothing}
-        `;
+        return climateModeFieldState.visible
+            ? this._renderClimateModeField(targetPath, climateModeFieldState)
+            : nothing;
     }
 
     /**
@@ -492,11 +611,12 @@ export class HelmanOptimizerEditor
      * kind; ``controllableKinds`` answers a narrower question — what this
      * optimizer may *drive* — and would hide a charger the backend accepts.
      *
-     * The optimizer's own target is removed, and a stored value equal to it is
-     * surfaced as an explicit entry rather than dropped. An appliance depending
-     * on itself plans against a lane that is stripped every run, so validation
-     * rejects it — and a picker that rendered blank would show no value to
-     * clear while the draft still carried one.
+     * The optimizer's own targets -- every member of a group, not just the
+     * first -- are removed, and a stored value equal to one is surfaced as an
+     * explicit entry rather than dropped. An appliance depending on itself
+     * plans against a lane that is stripped every run, so validation rejects
+     * it — and a picker that rendered blank would show no value to clear while
+     * the draft still carried one.
      *
      * ``selectionDisabled`` is not honoured. It means "cannot be a *target*
      * until the live climate modes load", which has no bearing on being a
@@ -508,8 +628,14 @@ export class HelmanOptimizerEditor
         helpKey: string,
     ): TemplateResult {
         const stored = stringValue(this.getValue(path));
-        const ownTargetId = stringValue(
-            this.getValue([...this._basePath, "target", "controllable_id"]),
+        const kind = stringValue(this.getValue([...this._basePath, "kind"]));
+        const schema = this.schema?.kinds.find((entry) => entry.kind === kind);
+        const ownTargetIds = new Set(
+            schema
+                ? this._targetPaths(schema).map((targetPath) =>
+                      stringValue(this.getValue([...targetPath, "controllable_id"])),
+                  )
+                : [],
         );
         const selectionState = buildControllableSelectionState(
             this.config,
@@ -518,7 +644,7 @@ export class HelmanOptimizerEditor
             this.schema?.applianceKinds ?? [],
         );
         const options = selectionState.options
-            .filter((option) => option.id !== ownTargetId)
+            .filter((option) => !ownTargetIds.has(option.id))
             .map((option) => ({
                 value: option.id,
                 label: this._controllableOptionLabel(option),
@@ -531,7 +657,7 @@ export class HelmanOptimizerEditor
             options.unshift({
                 value: stored,
                 label: this._tFormat(
-                    stored === ownTargetId
+                    ownTargetIds.has(stored)
                         ? "editor.dynamic.self_dependency"
                         : "editor.dynamic.stale_appliance",
                     { id: stored },
@@ -587,11 +713,35 @@ export class HelmanOptimizerEditor
         this._mutate((draft) => removeListItem(draft, path, groupIndex));
     }
 
-    private _applyControllableIdChange(schema: OptimizerSchema, rawValue: string): void {
+    /** A new member joins at the bottom: lowest priority until moved. */
+    private _addTarget(): void {
+        this._mutate((draft) =>
+            appendListItem(draft, this._targetListPath, { controllable_id: "" }),
+        );
+    }
+
+    private _moveTarget(memberIndex: number, targetIndex: number): void {
+        this._mutate((draft) =>
+            moveListItem(draft, this._targetListPath, memberIndex, targetIndex),
+        );
+    }
+
+    /** Never the last member: an empty group is unsavable. The button is disabled too. */
+    private _removeTarget(memberIndex: number): void {
+        if ((asJsonArray(this.getValue(this._targetListPath)) ?? []).length <= 1) {
+            return;
+        }
+        this._mutate((draft) => removeListItem(draft, this._targetListPath, memberIndex));
+    }
+
+    private _applyControllableIdChange(
+        schema: OptimizerSchema,
+        targetPath: PathSegment[],
+        rawValue: string,
+    ): void {
         const controllableId = rawValue.trim();
         // The controllable and its climate mode are `target` — the optimizer's
         // identity — not params, so they are never overridable by a group.
-        const targetPath: PathSegment[] = [...this._basePath, "target"];
         this._mutate((draft) => {
             setValueAtPath(draft, [...targetPath, "controllable_id"], controllableId);
             const selectionState = buildControllableSelectionState(
@@ -622,11 +772,12 @@ export class HelmanOptimizerEditor
      * it — the reader fills it in, and the picker has to show the same answer
      * rather than an empty "select…".
      */
-    private _selectionState(schema: OptimizerSchema): ControllableSelectionState {
+    private _selectionState(
+        schema: OptimizerSchema,
+        targetPath: PathSegment[],
+    ): ControllableSelectionState {
         const field = schema.target.find((entry) => entry.key === "controllable_id");
-        const stored = stringValue(
-            this.getValue([...this._basePath, "target", "controllable_id"]),
-        );
+        const stored = stringValue(this.getValue([...targetPath, "controllable_id"]));
         return buildControllableSelectionState(
             this.config,
             this.applianceMetadata,

@@ -56,6 +56,21 @@ export const optimizerCardStyles = css`
         gap: 10px;
     }
 
+    /* An appliance group spans the card: each row is one member, and the row
+       order is the priority order. */
+    .controllable-targets {
+        grid-column: 1 / -1;
+    }
+
+    .controllable-target-row {
+        display: grid;
+        gap: 8px;
+        padding: 10px 14px;
+        border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+        border-radius: 8px;
+        background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
+    }
+
     .condition-groups {
         display: grid;
         gap: 10px;

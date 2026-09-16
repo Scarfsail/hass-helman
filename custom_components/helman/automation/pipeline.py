@@ -816,8 +816,12 @@ def run_optimizer_loop_pure(
     # phase starts, not once per optimizer, so same-lane composition behaves
     # identically in both appliance phases.
     if appliance_optimizers:
+        # Every member of every group: a lane left out here survives the strip
+        # and its stale actions read as already committed.
         appliance_lane_ids = {
-            optimizer.controllable_id for optimizer in appliance_optimizers
+            controllable_id
+            for optimizer in appliance_optimizers
+            for controllable_id in optimizer.controllable_ids
         }
         working_schedule_document = strip_automation_owned_actions(
             working_schedule_document, controllable_ids=appliance_lane_ids
@@ -907,161 +911,183 @@ def _run_optimizer_step(
 ]:
     """Run one optimizer step, shared by every phase.
 
+    An ``appliance_runtime`` group expands here into one single-target run per
+    member, in priority order (#291). Each member gets a narrowed config
+    (:meth:`OptimizerInstanceConfig.member_configs`), so the optimizer, the
+    target resolver and the condition masks see exactly the single-target shape
+    they always did. The working document and snapshot carry forward from one
+    member to the next — the same rebuild that makes stacked optimizers compose
+    — so member *k* ranks against a surplus members *1..k-1* already consumed.
+    The inverter kinds have exactly one member, so they run as before.
+
     ``traced`` gates only what phase 1 must not do: open a trace step (so
-    ``explain.py``'s one-step-per-optimizer model stays intact — see the
-    module's own #272 note) and emit a day band (so hysteresis is driven by
-    the phase-3 reading alone). Every trace mutator the optimizer itself calls
-    already no-ops when no step is open, so nothing else here needs to branch
-    on ``traced`` for the success path.
+    ``explain.py``'s one-step-per-lane model stays intact — a group opens one
+    step per member, each on its own controllable, so its N steps share an
+    optimizer id but land in N lane buckets without colliding; see the module's
+    own #272 note) and emit a day band (so hysteresis is driven by the phase-3
+    reading alone). Every trace mutator the optimizer itself calls already
+    no-ops when no step is open, so nothing else here needs to branch on
+    ``traced`` for the success path.
 
     A ``ConditionRailsUnavailable`` (an appliance's rails could not be
     resolved) and any other exception both fail the whole run — see the
     "rails-unavailable policy" in #272: with no baseline to fall back to,
-    continuing would persist that appliance's lane empty. A step is opened (if
-    one is not already) purely so the failure note is visible on the trace the
-    failed run reports.
+    continuing would persist that appliance's lane empty. That holds per
+    member: there is no partial group. A step is opened (if one is not already)
+    purely so the failure note is visible on the trace the failed run reports.
     """
     optimizer_started_at = time.perf_counter()
     emitted_bands: dict[tuple[date, str], str] = {}
     # Which band a day holds depends on whose house view it is read over, so
     # every optimizer is handed the classification derived from the snapshot
     # it actually receives rather than one fixed reading of the run (#264).
+    # Resolved once per optimizer, not per member: a later member's snapshot
+    # already carries the earlier members' demand, and a group is one policy
+    # that must see one classification.
+    step_day_contexts = None
     if resolve_day_contexts is not None:
         step_day_contexts = resolve_day_contexts(
             snapshot, optimizer_id=optimizer_config.id
         )
-        snapshot = attach_day_contexts(snapshot, step_day_contexts)
         if traced:
             for local_date, day_context in step_day_contexts.items():
                 emitted_bands[(local_date, optimizer_config.id)] = (
                     day_context.classification
                 )
-    if traced:
-        trace.begin_step(
-            optimizer_config.id,
-            optimizer_config.kind,
-            # The lane this step writes — the controllable's own id, so the
-            # explanation record can be queried by the lane the user clicked
-            # and winner attribution can match writes against the step that
-            # made them.
-            controllable_id=optimizer_config.controllable_id,
-            phase=phase,
-        )
-        # Stamp the step with its execution-condition state so the run
-        # explanation can present this optimizer's placements as candidates
-        # (tentative, won't execute) rather than as planned-for-execution.
-        condition_met_by_group = snapshot.context.condition_met_by_optimizer_id.get(
-            optimizer_config.id
-        )
-        trace.set_condition_met(
-            True if condition_met_by_group is None else any(condition_met_by_group)
-        )
-        # railsIn is the rail segment the optimizer received (pre-rebuild).
-        trace.set_rails_in(
-            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-        )
-    try:
-        optimizer = build_optimizer(
-            optimizer_config,
-            control_config=control_config,
-            appliance_registry=appliance_registry,
-        )
-        candidate_schedule_document = optimizer.optimize(
-            snapshot,
-            optimizer_config,
-            trace,
-        )
-    except ConditionRailsUnavailable as err:
-        if not traced:
-            trace.begin_step(
-                optimizer_config.id,
-                optimizer_config.kind,
-                controllable_id=optimizer_config.controllable_id,
-                phase=phase,
-            )
-        # Discards any partial decisions/notes from a traced (phase-3) attempt
-        # that raised mid-way, and collapses the column to a single
-        # horizon-wide `skipped` note; the coverage validator exempts it.
-        trace.discard_step_decisions()
-        trace.note_horizon(
-            code="optimizer_skipped",
-            params={"applianceId": err.appliance_id, "reason": str(err)},
-        )
-        trace.end_step(status="skipped")
-        raise _build_optimizer_error(
-            config=optimizer_config,
-            duration_ms=_elapsed_ms(optimizer_started_at),
-            error=str(err),
-            completed_optimizers=optimizer_summaries,
-            snapshot=snapshot,
-            trace=trace,
-        ) from err
-    except Exception as err:
-        if not traced:
-            trace.begin_step(
-                optimizer_config.id,
-                optimizer_config.kind,
-                controllable_id=optimizer_config.controllable_id,
-                phase=phase,
-            )
-        trace.end_step(status="failed")
-        raise _build_optimizer_error(
-            config=optimizer_config,
-            duration_ms=_elapsed_ms(optimizer_started_at),
-            error=str(err),
-            completed_optimizers=optimizer_summaries,
-            snapshot=snapshot,
-            trace=trace,
-        ) from err
-
-    previous_schedule_document = working_schedule_document
-    try:
-        working_schedule_document = _coerce_optimizer_result_schedule_document(
-            candidate_document=candidate_schedule_document,
-            execution_enabled=working_schedule_document.execution_enabled,
-        )
-        snapshot = build_snapshot(working_schedule_document)
-    except Exception as err:
-        if not traced:
-            trace.begin_step(
-                optimizer_config.id,
-                optimizer_config.kind,
-                controllable_id=optimizer_config.controllable_id,
-                phase=phase,
-            )
-        trace.end_step(status="failed")
-        raise _build_optimizer_error(
-            config=optimizer_config,
-            duration_ms=_elapsed_ms(optimizer_started_at),
-            error=str(err),
-            completed_optimizers=optimizer_summaries,
-            snapshot=snapshot,
-            trace=trace,
-        ) from err
-
-    write_records = _collect_changed_writable_action_records(
-        before_document=previous_schedule_document,
-        after_document=working_schedule_document,
-    )
-    trace.record_writes(write_records)
+    slots_written = 0
     boundary: ReserveFloorBoundary | None = None
-    if capture_reserve_floor and optimizer_config.kind == _CHARGE_FROM_GRID_KIND:
-        step_observations = [
-            observation
-            for observation in trace.reserve_floor_observations
-            if observation.optimizer_id == optimizer_config.id
-        ]
-        if step_observations:
-            boundary = _safe_build_reserve_floor_boundary(
-                build_snapshot=build_snapshot,
-                working_schedule_document=working_schedule_document,
+    for member_config in optimizer_config.member_configs():
+        (controllable_id,) = member_config.controllable_ids
+        if step_day_contexts is not None:
+            snapshot = attach_day_contexts(snapshot, step_day_contexts)
+        if traced:
+            trace.begin_step(
+                optimizer_config.id,
+                optimizer_config.kind,
+                # The lane this step writes — the controllable's own id, so the
+                # explanation record can be queried by the lane the user clicked
+                # and winner attribution can match writes against the step that
+                # made them.
+                controllable_id=controllable_id,
+                phase=phase,
             )
-    trace.end_step(status="ok")
+            # Stamp the step with its execution-condition state so the run
+            # explanation can present this optimizer's placements as candidates
+            # (tentative, won't execute) rather than as planned-for-execution.
+            condition_met_by_group = (
+                snapshot.context.condition_met_by_optimizer_id.get(optimizer_config.id)
+            )
+            trace.set_condition_met(
+                True if condition_met_by_group is None else any(condition_met_by_group)
+            )
+            # railsIn is the rail segment the optimizer received (pre-rebuild).
+            trace.set_rails_in(
+                _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+            )
+        try:
+            optimizer = build_optimizer(
+                member_config,
+                control_config=control_config,
+                appliance_registry=appliance_registry,
+            )
+            candidate_schedule_document = optimizer.optimize(
+                snapshot,
+                member_config,
+                trace,
+            )
+        except ConditionRailsUnavailable as err:
+            if not traced:
+                trace.begin_step(
+                    optimizer_config.id,
+                    optimizer_config.kind,
+                    controllable_id=controllable_id,
+                    phase=phase,
+                )
+            # Discards any partial decisions/notes from a traced (phase-3) attempt
+            # that raised mid-way, and collapses the column to a single
+            # horizon-wide `skipped` note; the coverage validator exempts it.
+            trace.discard_step_decisions()
+            trace.note_horizon(
+                code="optimizer_skipped",
+                params={"applianceId": err.appliance_id, "reason": str(err)},
+            )
+            trace.end_step(status="skipped")
+            raise _build_optimizer_error(
+                config=optimizer_config,
+                duration_ms=_elapsed_ms(optimizer_started_at),
+                error=str(err),
+                completed_optimizers=optimizer_summaries,
+                snapshot=snapshot,
+                trace=trace,
+            ) from err
+        except Exception as err:
+            if not traced:
+                trace.begin_step(
+                    optimizer_config.id,
+                    optimizer_config.kind,
+                    controllable_id=controllable_id,
+                    phase=phase,
+                )
+            trace.end_step(status="failed")
+            raise _build_optimizer_error(
+                config=optimizer_config,
+                duration_ms=_elapsed_ms(optimizer_started_at),
+                error=str(err),
+                completed_optimizers=optimizer_summaries,
+                snapshot=snapshot,
+                trace=trace,
+            ) from err
+
+        previous_schedule_document = working_schedule_document
+        try:
+            working_schedule_document = _coerce_optimizer_result_schedule_document(
+                candidate_document=candidate_schedule_document,
+                execution_enabled=working_schedule_document.execution_enabled,
+            )
+            snapshot = build_snapshot(working_schedule_document)
+        except Exception as err:
+            if not traced:
+                trace.begin_step(
+                    optimizer_config.id,
+                    optimizer_config.kind,
+                    controllable_id=controllable_id,
+                    phase=phase,
+                )
+            trace.end_step(status="failed")
+            raise _build_optimizer_error(
+                config=optimizer_config,
+                duration_ms=_elapsed_ms(optimizer_started_at),
+                error=str(err),
+                completed_optimizers=optimizer_summaries,
+                snapshot=snapshot,
+                trace=trace,
+            ) from err
+
+        write_records = _collect_changed_writable_action_records(
+            before_document=previous_schedule_document,
+            after_document=working_schedule_document,
+        )
+        trace.record_writes(write_records)
+        slots_written += len(write_records)
+        if capture_reserve_floor and optimizer_config.kind == _CHARGE_FROM_GRID_KIND:
+            step_observations = [
+                observation
+                for observation in trace.reserve_floor_observations
+                if observation.optimizer_id == optimizer_config.id
+            ]
+            if step_observations:
+                boundary = _safe_build_reserve_floor_boundary(
+                    build_snapshot=build_snapshot,
+                    working_schedule_document=working_schedule_document,
+                )
+        trace.end_step(status="ok")
+    # One summary per optimizer, whatever its member count: the run result
+    # reports configured optimizers, not lanes.
     summary = _build_optimizer_summary(
         optimizer_id=optimizer_config.id,
         optimizer_kind=optimizer_config.kind,
         status="ok",
-        slots_written=len(write_records),
+        slots_written=slots_written,
         duration_ms=_elapsed_ms(optimizer_started_at),
     )
     return working_schedule_document, snapshot, summary, emitted_bands, boundary

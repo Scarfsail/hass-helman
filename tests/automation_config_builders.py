@@ -34,3 +34,15 @@ def make_optimizer_config(**optimizer: Any):
         else "system_optimizers"
     )
     return AutomationConfig.from_dict({bucket_key: [optimizer]}).all_optimizers[0]
+
+
+def make_appliance_member_config(**optimizer: Any):
+    """Read one ``appliance_runtime`` dict and return its first member's config.
+
+    ``appliance_runtime`` names an ordered group in ``target.controllables``;
+    the pipeline hands the optimizer one narrowed, single-target config per
+    member (``OptimizerInstanceConfig.member_configs``). Optimizer-level tests
+    drive the optimizer directly, so they take the same narrowed config the
+    pipeline would hand it.
+    """
+    return make_optimizer_config(**optimizer).member_configs()[0]

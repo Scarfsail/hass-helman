@@ -279,9 +279,11 @@ class ControllableSpecRegistryTests(unittest.TestCase):
         """No kind may infer its target from its own kind any more."""
         for kind, spec in OPTIMIZER_SPECS.items():
             with self.subTest(kind):
-                self.assertIn(
-                    "controllable_id", {field.key for field in spec.target}
-                )
+                # Either flat, or once per member of an ordered group.
+                keys = {field.key for field in spec.target} | {
+                    child.key for field in spec.target for child in field.fields
+                }
+                self.assertIn("controllable_id", keys)
 
 
 class ControllableEntitiesPayloadTests(unittest.TestCase):

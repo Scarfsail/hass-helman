@@ -4758,7 +4758,7 @@ class HelmanCoordinator:
 
         **The appliance lives on ``target``, not on ``params``.** It is identity,
         which a condition group may never override, and every other reader takes
-        it from there (``config.controllable_id``, ``base.py``,
+        it from there (``config.controllable_ids``, ``base.py``,
         ``conditions/types.py``). Reading ``params`` found nothing, so this
         returned ``None``, the runtime map came back empty, and every appliance's
         ``delivered_hours`` was 0 for every day — a daily minimum that never
@@ -4770,9 +4770,6 @@ class HelmanCoordinator:
             return None
         lookback_days_by_appliance_id: dict[str, int] = {}
         for optimizer in automation_config.enabled_appliance_optimizers:
-            appliance_id = optimizer.controllable_id
-            if not appliance_id:
-                continue
             max_consecutive_skips = 0
             # ``params.daily_minimum.max_consecutive_skips``, which is where the
             # consumer reads it (``optimizers/appliance_runtime.py``). The old
@@ -4785,10 +4782,15 @@ class HelmanCoordinator:
                 raw = daily_minimum.get("max_consecutive_skips")
                 if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
                     max_consecutive_skips = raw
-            lookback_days_by_appliance_id[appliance_id] = max(
-                lookback_days_by_appliance_id.get(appliance_id, 0),
-                max_consecutive_skips + 1,
-            )
+            # Every member of a group runs its own daily-minimum chain against
+            # the optimizer's shared ``max_consecutive_skips``.
+            for appliance_id in optimizer.controllable_ids:
+                if not appliance_id:
+                    continue
+                lookback_days_by_appliance_id[appliance_id] = max(
+                    lookback_days_by_appliance_id.get(appliance_id, 0),
+                    max_consecutive_skips + 1,
+                )
         if not lookback_days_by_appliance_id:
             return None
         return lookback_days_by_appliance_id

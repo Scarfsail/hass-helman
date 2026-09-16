@@ -35,7 +35,8 @@
       "up": "Up",
       "down": "Down",
       "add_condition_group": "+ Condition group",
-      "rename_condition_group": "Rename group"
+      "rename_condition_group": "Rename group",
+      "add_controllable_target": "+ Appliance"
     },
     "status": {
       "loading_config": "Loading stored config...",
@@ -190,6 +191,7 @@
       "optimizer_id": "Optimizer id",
       "optimizer_enabled": "Enabled",
       "optimizer_target": "Target controllable",
+      "optimizer_targets": "Appliances, in priority order",
       "when_price_below": "When price below",
       "max_run_price": "Max slot price to run",
       "requires_appliance": "Requires appliance",
@@ -304,6 +306,7 @@
       "optimizer_target": "Pick the controllable this optimizer drives. Only the kinds it can actually drive are offered; a climate appliance exposes a live mode selector once runtime capabilities are available.",
       "optimizer_target_missing_from_draft": "This optimizer still references a controllable id that is no longer present in the current controllables list. The value is preserved until you choose a replacement.",
       "optimizer_target_pending_reload": "Some climate appliances are shown but disabled until save and reload makes their live supported modes available.",
+      "optimizer_targets": "The first appliance takes the surplus first; each one below plans against what those above it left.",
       "day_context_deficit_ratio": "Days whose solar/consumption ratio is at or below this value lean deficit.",
       "day_context_surplus_ratio": "Days whose solar/consumption ratio is at or above this value lean surplus.",
       "appliance_runtime_max_consecutive_skips": "How many days in a row the appliance may be skipped before it is forced to run.",
@@ -407,6 +410,7 @@
       "import_window": "Import window {index}",
       "appliance": "Appliance {index}",
       "appliance_option": "{name} ({id})",
+      "priority_position": "#{position}",
       "appliance_option_pending_reload": "{label} (save and reload to enable)",
       "optimizer": "Optimizer {index}",
       "ev_charger": "EV Charger {index}",
@@ -462,6 +466,7 @@
       "automation_optimizer_id": "Unique optimizer identifier, stored as this entry's id in automation.appliance_optimizers or automation.system_optimizers. Keep it stable so future references, logs, and debugging stay readable.",
       "export_price_when_price_below": "Threshold in the same unit as the export price forecast. When the forecasted export price drops below this value, the optimizer authors stop_export slots where export is projected.",
       "optimizer_target": "The controllable this optimizer acts on. The list is driven by the current controllables in the editor — so draft additions and deletions show up immediately — and is filtered to the kinds this optimizer kind can drive.",
+      "optimizer_targets": "The appliances this optimizer drives, all sharing its window, daily minimum and conditions. The list is the priority order: each appliance is planned in turn against a plan that already contains the ones above it, so where the surplus is scarce the top of the list wins it and the rest take what is left. Each appliance keeps its own daily minimum and its own runtime history.",
       "appliance_runtime_climate_mode": "Required only for climate appliances. The editor only shows live runtime-supported modes returned for the selected appliance.",
       "optimizer_window": "Local-time window as HH:MM. The rule only acts within this daily window.",
       "day_context_deficit_ratio": "Predicted solar/consumption ratio at or below which a day is classified deficit. Must be below the surplus ratio.",

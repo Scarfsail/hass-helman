@@ -85,12 +85,18 @@ def migrate_config_document(
 def _migrate_optimizers(
     document: dict[str, Any],
     migrate: Any,
+    *,
+    bucket: str = "optimizers",
 ) -> tuple[dict[str, Any], list[str]]:
-    """Apply ``migrate`` to every optimizer, dropping the ones it returns ``None`` for."""
+    """Apply ``migrate`` to every optimizer, dropping the ones it returns ``None`` for.
+
+    ``bucket`` names the list to walk: ``optimizers`` up to version 14, then
+    ``appliance_optimizers`` / ``system_optimizers`` after the split.
+    """
     automation = document.get("automation")
     if not isinstance(automation, Mapping):
         return (document, [])
-    optimizers = automation.get("optimizers")
+    optimizers = automation.get(bucket)
     if not isinstance(optimizers, list):
         return (document, [])
 
@@ -104,7 +110,7 @@ def _migrate_optimizers(
         if replacement is not None:
             rebuilt.append(replacement)
         migrated_ids.append(str(raw.get("id", "?")))
-    document["automation"] = {**automation, "optimizers": rebuilt}
+    document["automation"] = {**automation, bucket: rebuilt}
     return (document, migrated_ids)
 
 
@@ -961,6 +967,33 @@ def _without_dropped_params(params: Mapping[str, Any]) -> tuple[dict[str, Any], 
     return (kept, len(kept) != len(params))
 
 
+def _migrate_v16_to_v17(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``appliance_runtime``'s single target becomes an ordered one-member group.
+
+    The mirror image of :func:`_target_controllable_id`: ``target.controllable_id``
+    and ``target.climate_mode`` move into ``target.controllables[0]``, so one
+    optimizer can drive several appliances in priority order. A one-member group
+    plans exactly as the single target did. ``appliance_runtime`` is
+    appliance-bucket only, so only that bucket is walked; the inverter kinds
+    keep their flat ``target.controllable_id``.
+    """
+    return _migrate_optimizers(
+        document, _target_controllables, bucket="appliance_optimizers"
+    )
+
+
+def _target_controllables(optimizer: dict[str, Any]) -> dict[str, Any]:
+    if optimizer.get("kind") != "appliance_runtime":
+        return optimizer
+    target = dict(optimizer.get("target") or {})
+    if "controllables" in target or "controllable_id" not in target:
+        return optimizer
+    member = {"controllable_id": target.pop("controllable_id")}
+    if "climate_mode" in target:
+        member["climate_mode"] = target.pop("climate_mode")
+    return {**optimizer, "target": {**target, "controllables": [member]}}
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -977,6 +1010,7 @@ _MIGRATIONS = {
     13: _migrate_v13_to_v14,
     14: _migrate_v14_to_v15,
     15: _migrate_v15_to_v16,
+    16: _migrate_v16_to_v17,
 }
 
 
