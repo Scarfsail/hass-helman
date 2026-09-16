@@ -74,6 +74,17 @@ const SCHEMA = {
     }],
 };
 
+/** `appliance_runtime`'s target as the backend serves it: an ordered group. */
+const GROUP_TARGET_FIELD = {
+    key: "controllables",
+    type: "object_list",
+    minItems: 1,
+    fields: [
+        { key: "controllable_id", type: "string" },
+        { key: "climate_mode", type: "string", required: false, choices: ["heat", "cool"] },
+    ],
+};
+
 /** A document with more in it than the optimizer, so a clobber would show. */
 const CONFIG = {
     config_version: 4,
@@ -411,7 +422,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                 applianceKinds: ["climate", "ev_charger", "generic"],
                 kinds: [{
                     kind: "appliance_runtime",
-                    target: [{ key: "controllable_id", type: "string" }],
+                    target: [GROUP_TARGET_FIELD],
                     params: [],
                     conditionTypes: [{
                         key: "requires_appliance",
@@ -435,7 +446,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                         id: "heat",
                         kind: "appliance_runtime",
                         enabled: true,
-                        target: { controllable_id: "heatpump" },
+                        target: { controllables: [{ controllable_id: "heatpump" }] },
                         conditions: [{ requires_appliance: requires }],
                     }],
                     system_optimizers: [],
@@ -517,7 +528,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                 applianceKinds: ["climate", "ev_charger", "generic"],
                 kinds: [{
                     kind: "appliance_runtime",
-                    target: [{ key: "controllable_id", type: "string" }],
+                    target: [GROUP_TARGET_FIELD],
                     params: [],
                     conditionTypes: [{
                         key: "requires_appliance",
@@ -545,7 +556,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                         id: "heat",
                         kind: "appliance_runtime",
                         enabled: true,
-                        target: { controllable_id: "heatpump" },
+                        target: { controllables: [{ controllable_id: "heatpump" }] },
                         conditions: [{ requires_appliance: "filtration" }],
                     }],
                     system_optimizers: [],
@@ -561,6 +572,159 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             /Filtration \(filtration\)/,
         ]);
         await expect(picker).toHaveValue("filtration");
+    });
+
+    /** A two-member group with one dependency, for the group editor tests. */
+    const mountGroupPanel = async (
+        page: import("@playwright/test").Page,
+        {
+            members,
+            controllables,
+            requires = null,
+        }: { members: unknown[]; controllables: unknown[]; requires?: string | null },
+    ) =>
+        mountPanel(page, {
+            payload: {
+                ...PAYLOAD,
+                optimizers: [{
+                    ...PAYLOAD.optimizers[0],
+                    optimizerId: "acs",
+                    kind: "appliance_runtime",
+                    controllableId: "heatpump",
+                }],
+            },
+            schema: {
+                version: 2,
+                applianceKinds: ["climate", "ev_charger", "generic"],
+                kinds: [{
+                    kind: "appliance_runtime",
+                    target: [GROUP_TARGET_FIELD],
+                    params: [],
+                    conditionTypes: [{
+                        key: "requires_appliance",
+                        scope: "slot",
+                        field: { key: "requires_appliance", type: "string", required: false },
+                    }],
+                    controllableKinds: ["climate", "generic"],
+                    newDraft: { conditions: [{}] },
+                }],
+            },
+            config: {
+                ...CONFIG,
+                controllables,
+                automation: {
+                    enabled: true,
+                    appliance_optimizers: [{
+                        id: "acs",
+                        kind: "appliance_runtime",
+                        enabled: true,
+                        target: { controllables: members },
+                        conditions: [requires === null ? {} : { requires_appliance: requires }],
+                    }],
+                    system_optimizers: [],
+                },
+            },
+        });
+
+    const GROUP_CONTROLLABLES = [
+        { kind: "generic", id: "heatpump", name: "Heat pump" },
+        { kind: "generic", id: "filtration", name: "Filtration" },
+        { kind: "generic", id: "sweeper", name: "Sweeper" },
+    ];
+
+    const memberRows = (page: import("@playwright/test").Page) =>
+        dialog(page).locator(".controllable-target-row");
+
+    test("a group is edited as a priority-ordered list of members", async ({ page }) => {
+        // The list is the priority order -- the first member takes the surplus
+        // first -- so the editor says so, numbers the rows, and reorders in place.
+        await mountGroupPanel(page, {
+            members: [{ controllable_id: "heatpump" }, { controllable_id: "filtration" }],
+            controllables: GROUP_CONTROLLABLES,
+        });
+        await openDialog(page);
+
+        await expect(dialog(page).locator(".controllable-targets > .field-label-row label"))
+            .toHaveText("Appliances, in priority order");
+        await expect(memberRows(page).locator(".controllable-target-position"))
+            .toHaveText(["#1", "#2"]);
+        const pickers = memberRows(page).locator("select.controllable-target-picker");
+        await expect(pickers.nth(0)).toHaveValue("heatpump");
+        await expect(pickers.nth(1)).toHaveValue("filtration");
+        // The top row cannot move up, the bottom one cannot move down.
+        await expect(memberRows(page).nth(0).getByRole("button", { name: "Up" })).toBeDisabled();
+        await expect(memberRows(page).nth(1).getByRole("button", { name: "Down" })).toBeDisabled();
+
+        await memberRows(page).nth(0).getByRole("button", { name: "Down" }).click();
+        await expect(pickers.nth(0)).toHaveValue("filtration");
+        await expect(pickers.nth(1)).toHaveValue("heatpump");
+
+        await dialog(page).locator(".add-controllable-target").click();
+        await expect(memberRows(page)).toHaveCount(3);
+        await pickers.nth(2).selectOption("sweeper");
+
+        await memberRows(page).nth(1).locator(".remove-controllable-target").click();
+        await expect(memberRows(page)).toHaveCount(2);
+
+        await dialog(page).getByText("Save and reload").click();
+        const saved = (await calls(page)).filter((call) => call.type === "helman/save_config");
+        expect(saved).toHaveLength(1);
+        const sent = saved[0].config as {
+            automation: { appliance_optimizers: { target: unknown }[] };
+        };
+        expect(sent.automation.appliance_optimizers[0].target).toEqual({
+            controllables: [{ controllable_id: "filtration" }, { controllable_id: "sweeper" }],
+        });
+    });
+
+    test("the last member cannot be removed", async ({ page }) => {
+        // An empty group is unsavable, so the UI must not be able to reach it.
+        await mountGroupPanel(page, {
+            members: [{ controllable_id: "heatpump" }],
+            controllables: GROUP_CONTROLLABLES,
+        });
+        await openDialog(page);
+
+        await expect(memberRows(page)).toHaveCount(1);
+        await expect(memberRows(page).locator(".remove-controllable-target")).toBeDisabled();
+    });
+
+    test("each member carries its own climate mode", async ({ page }) => {
+        await mountGroupPanel(page, {
+            members: [
+                { controllable_id: "heatpump" },
+                { controllable_id: "living", climate_mode: "cool" },
+            ],
+            controllables: [
+                { kind: "generic", id: "heatpump", name: "Heat pump" },
+                { kind: "climate", id: "living", name: "Living room" },
+            ],
+        });
+        await openDialog(page);
+
+        // A generic member has no mode; the climate member shows its own.
+        await expect(memberRows(page).nth(0).locator("select")).toHaveCount(1);
+        const livingSelects = memberRows(page).nth(1).locator("select");
+        await expect(livingSelects).toHaveCount(2);
+        await expect(livingSelects.nth(1)).toHaveValue("cool");
+    });
+
+    test("the requires_appliance picker excludes every member of the group", async ({
+        page,
+    }) => {
+        // Every member's lane is stripped every run, so none of them can be a
+        // provider -- not just the first.
+        await mountGroupPanel(page, {
+            members: [{ controllable_id: "heatpump" }, { controllable_id: "filtration" }],
+            controllables: GROUP_CONTROLLABLES,
+            requires: "sweeper",
+        });
+        await openDialog(page);
+
+        // The third select: the two before it are the members' pickers.
+        const picker = dialog(page).locator("helman-optimizer-editor select").nth(2);
+        await expect(picker.locator("option")).toHaveText(["", "Sweeper (sweeper)"]);
+        await expect(picker).toHaveValue("sweeper");
     });
 
     test("save sends the whole document, changed only in that optimizer", async ({ page }) => {

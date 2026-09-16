@@ -207,9 +207,15 @@ def _minutes(hhmm: object) -> int:
 #: what it meant and nothing infers a target from a kind.
 _INVERTER_TARGET = (F.string("controllable_id", default=CONTROLLABLE_ID_INVERTER),)
 
+#: An ordered group: list order is priority order. The pipeline expands it into
+#: one single-target step per member, so member *k* plans against a snapshot
+#: already carrying members *1..k-1* — see ``_run_optimizer_step``.
 _APPLIANCE_TARGET = (
-    F.string("controllable_id"),
-    F.string("climate_mode", required=False, choices=SUPPORTED_CLIMATE_MODES),
+    F.obj_list(
+        "controllables",
+        F.string("controllable_id"),
+        F.string("climate_mode", required=False, choices=SUPPORTED_CLIMATE_MODES),
+    ),
 )
 
 
@@ -289,7 +295,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             param_scope=Scope.DAY,
             validate=_validate_appliance_runtime,
             new_draft={
-                "target": {"controllable_id": ""},
+                "target": {"controllables": [{"controllable_id": ""}]},
                 "params": {
                     "daily_minimum": {
                         "min_hours_per_day": 8,

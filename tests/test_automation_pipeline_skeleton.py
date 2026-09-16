@@ -365,6 +365,7 @@ from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
 from custom_components.helman.automation.spec import OPTIMIZER_BUCKET_APPLIANCE
 from custom_components.helman.automation.explain import (
+    PHASE_FINAL_APPLIANCE_PLACEMENT,
     ExplanationBook,
     OptimizerExplanation,
     RunExplanation,
@@ -3240,3 +3241,153 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charge_hold_house_kwh, 5.0)
         self.assertEqual(boiler_house_kwh, 3.0)
         self.assertNotEqual(charge_hold_house_kwh, boiler_house_kwh)
+
+
+class ApplianceGroupExpansionTests(unittest.TestCase):
+    """#291: one ``appliance_runtime`` config naming an ordered group expands in
+    the pipeline into one single-target step per member, in priority order.
+
+    The optimizer here is a stand-in for the real ranking: a slot carries enough
+    surplus for ``capacity`` appliances, and each member places itself only if
+    the snapshot it received leaves room. That is exactly what the rebuilt
+    snapshot gives the real optimizer — earlier members' placements already
+    consumed the surplus — so the stand-in keeps the test on the pipeline.
+    """
+
+    ACTION = {"on": True, "setBy": "automation"}
+    STALE_SLOT_ID = "2026-03-20T21:15:00+01:00"
+
+    def _group(self) -> OptimizerInstanceConfig:
+        return OptimizerInstanceConfig(
+            id="acs",
+            kind="appliance_runtime",
+            target={
+                "controllables": (
+                    {"controllable_id": "ac-living"},
+                    {"controllable_id": "ac-bedroom"},
+                )
+            },
+            params={"window": {"start": "08:00", "end": "18:00"}},
+        )
+
+    def _run(self, *, capacity: int, schedule_document: ScheduleDocument | None = None):
+        seen: list[tuple[str, OptimizationSnapshot]] = []
+        resolver_calls: list[str | None] = []
+
+        def _build_optimizer(config, **kwargs):
+            def _optimize(snapshot, current_config, trace=None):
+                lane = current_config.target["controllable_id"]
+                seen.append((lane, snapshot))
+                slots = deepcopy(snapshot.schedule.slots)
+                current = slots.setdefault(CURRENT_SLOT_ID, {})
+                if len(current) >= capacity:
+                    return snapshot.schedule
+                current[lane] = dict(self.ACTION)
+                return ScheduleDocument(execution_enabled=True, slots=slots)
+
+            return SimpleNamespace(optimize=Mock(side_effect=_optimize))
+
+        def _resolve_day_contexts(snapshot, *, optimizer_id):
+            resolver_calls.append(optimizer_id)
+            # A fresh object per call, so identity says which call a member saw.
+            return {
+                REFERENCE_TIME.date(): SimpleNamespace(
+                    classification=f"call-{len(resolver_calls)}"
+                )
+            }
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            return _make_snapshot(schedule_document=document)
+
+        document = schedule_document or ScheduleDocument(execution_enabled=True)
+        with patch.object(pipeline_module, "build_optimizer", side_effect=_build_optimizer):
+            result = pipeline_module.run_optimizer_loop_pure(
+                appliance_optimizers=(self._group(),),
+                system_optimizers=(),
+                schedule_document=document,
+                initial_snapshot=build_snapshot(document),
+                reference_time=REFERENCE_TIME,
+                control_config=None,
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=build_snapshot,
+                resolve_day_contexts=_resolve_day_contexts,
+            )
+        return result, seen, resolver_calls
+
+    def test_members_run_in_order_as_one_step_each_on_their_own_lane(self) -> None:
+        result, seen, _calls = self._run(capacity=2)
+
+        # Phase 1 then phase 3, each walking the group in priority order.
+        self.assertEqual(
+            [lane for lane, _snapshot in seen],
+            ["ac-living", "ac-bedroom", "ac-living", "ac-bedroom"],
+        )
+        self.assertEqual(
+            [
+                (step.optimizer_id, step.controllable_id, step.phase)
+                for step in result.trace.optimizer_explanations()
+            ],
+            [
+                ("acs", "ac-living", PHASE_FINAL_APPLIANCE_PLACEMENT),
+                ("acs", "ac-bedroom", PHASE_FINAL_APPLIANCE_PLACEMENT),
+            ],
+        )
+        # One summary per configured optimizer, not per lane.
+        self.assertEqual(
+            [(summary.id, summary.status, summary.slots_written) for summary in result.optimizers],
+            [("acs", "ok", 2)],
+        )
+        slot = schedule_document_to_dict(result.working_schedule_document)["slots"][
+            CURRENT_SLOT_ID
+        ]
+        self.assertEqual(slot, {"ac-living": self.ACTION, "ac-bedroom": self.ACTION})
+
+    def test_the_second_member_plans_against_the_first_members_placements(self) -> None:
+        """Surplus for one unit: only the top-priority member is placed."""
+        result, seen, _calls = self._run(capacity=1)
+
+        phase3_bedroom_snapshot = seen[3][1]
+        self.assertEqual(
+            schedule_document_to_dict(phase3_bedroom_snapshot.schedule)["slots"][
+                CURRENT_SLOT_ID
+            ],
+            {"ac-living": self.ACTION},
+        )
+        slot = schedule_document_to_dict(result.working_schedule_document)["slots"][
+            CURRENT_SLOT_ID
+        ]
+        self.assertEqual(slot, {"ac-living": self.ACTION})
+
+    def test_the_group_shares_one_day_classification(self) -> None:
+        result, seen, resolver_calls = self._run(capacity=2)
+
+        # Once per phase for the group -- not once per member -- plus the
+        # run-wide reading.
+        self.assertEqual(resolver_calls, ["acs", "acs", None])
+        for first, second in ((seen[0], seen[1]), (seen[2], seen[3])):
+            self.assertIs(
+                first[1].context.day_contexts, second[1].context.day_contexts
+            )
+        self.assertEqual(
+            result.emitted_day_bands, {(REFERENCE_TIME.date(), "acs"): "call-2"}
+        )
+
+    def test_every_members_stale_lane_is_stripped_before_the_final_placement(
+        self,
+    ) -> None:
+        stale = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                self.STALE_SLOT_ID: {
+                    "ac-living": dict(self.ACTION),
+                    "ac-bedroom": dict(self.ACTION),
+                }
+            },
+        )
+
+        result, _seen, _calls = self._run(capacity=1, schedule_document=stale)
+
+        slots = schedule_document_to_dict(result.working_schedule_document)["slots"]
+        self.assertNotIn("ac-bedroom", slots.get(self.STALE_SLOT_ID, {}))
+        self.assertNotIn("ac-living", slots.get(self.STALE_SLOT_ID, {}))
+        self.assertEqual(slots[CURRENT_SLOT_ID], {"ac-living": self.ACTION})

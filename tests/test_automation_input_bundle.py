@@ -890,13 +890,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             enabled=True,
             enabled_appliance_optimizers=[
                 # The real config object, not a stand-in: the coordinator reads
-                # the target through `controllable_id`, and a namespace that
+                # the target through `controllable_ids`, and a namespace that
                 # answered `target` alone would pass while the property it
                 # actually calls went untested.
                 OptimizerInstanceConfig(
                     id="pool",
                     kind="appliance_runtime",
-                    target={"controllable_id": "pool-filtration"},
+                    target={"controllables": [{"controllable_id": "pool-filtration"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 2}},
                 ),
             ],
@@ -909,6 +909,35 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
 
         # The skip window plus today, keyed by the appliance that needs it.
         self.assertEqual(requirements, {"pool-filtration": 3})
+
+    def test_every_member_of_a_group_gets_the_optimizers_lookback(self) -> None:
+        # Each member runs its own daily-minimum chain against the one shared
+        # `max_consecutive_skips`, so each needs its own history -- not just
+        # the first member's.
+        coordinator = self._coordinator()
+        config = SimpleNamespace(
+            enabled=True,
+            enabled_appliance_optimizers=[
+                OptimizerInstanceConfig(
+                    id="acs",
+                    kind="appliance_runtime",
+                    target={
+                        "controllables": [
+                            {"controllable_id": "ac-living", "climate_mode": "cool"},
+                            {"controllable_id": "ac-bedroom", "climate_mode": "cool"},
+                        ]
+                    },
+                    params={"daily_minimum": {"max_consecutive_skips": 2}},
+                ),
+            ],
+        )
+
+        with patch.object(
+            coordinator_module, "read_automation_config", return_value=config
+        ):
+            requirements = coordinator._resolve_runtime_history_requirements()
+
+        self.assertEqual(requirements, {"ac-living": 3, "ac-bedroom": 3})
 
     def test_each_appliance_gets_its_own_lookback(self) -> None:
         """One tolerant appliance no longer widens everybody else's window.
@@ -925,13 +954,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
                 OptimizerInstanceConfig(
                     id="pool",
                     kind="appliance_runtime",
-                    target={"controllable_id": "pool-filtration"},
+                    target={"controllables": [{"controllable_id": "pool-filtration"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 13}},
                 ),
                 OptimizerInstanceConfig(
                     id="dishwasher",
                     kind="appliance_runtime",
-                    target={"controllable_id": "dishwasher"},
+                    target={"controllables": [{"controllable_id": "dishwasher"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 1}},
                 ),
                 # A second rule on the same appliance: the widest of the two
@@ -939,14 +968,14 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
                 OptimizerInstanceConfig(
                     id="dishwasher-evening",
                     kind="appliance_runtime",
-                    target={"controllable_id": "dishwasher"},
+                    target={"controllables": [{"controllable_id": "dishwasher"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 3}},
                 ),
                 # No skip block at all: today plus yesterday is the floor.
                 OptimizerInstanceConfig(
                     id="boiler",
                     kind="appliance_runtime",
-                    target={"controllable_id": "boiler"},
+                    target={"controllables": [{"controllable_id": "boiler"}]},
                     params={},
                 ),
             ],
@@ -1040,13 +1069,13 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                 OptimizerInstanceConfig(
                     id="pool",
                     kind="appliance_runtime",
-                    target={"controllable_id": "pool-filtration"},
+                    target={"controllables": [{"controllable_id": "pool-filtration"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 4}},
                 ),
                 OptimizerInstanceConfig(
                     id="dishwasher",
                     kind="appliance_runtime",
-                    target={"controllable_id": "dishwasher"},
+                    target={"controllables": [{"controllable_id": "dishwasher"}]},
                     params={"daily_minimum": {"max_consecutive_skips": 0}},
                 ),
             ],
@@ -1121,7 +1150,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": "pool",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "pool-filtration"},
+                            "target": {"controllables": [{"controllable_id": "pool-filtration"}]},
                             "conditions": [{}],
                             "params": {
                                 "daily_minimum": {

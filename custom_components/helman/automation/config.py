@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..const import (
@@ -45,8 +45,8 @@ RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
     "reserve_floor_soc": "conditions[].reserve_floor_soc",
     "min_hours_per_day": "params.daily_minimum.min_hours_per_day",
     "max_consecutive_skips": "params.daily_minimum.max_consecutive_skips",
-    "appliance_id": "target.controllable_id",
-    "climate_mode": "target.climate_mode",
+    "appliance_id": "target.controllables[].controllable_id",
+    "climate_mode": "target.controllables[].climate_mode",
     "skip": "params.daily_minimum.max_consecutive_skips and conditions[].run_when",
     "action": "nothing — the optimizer kind implies its action",
     "hold_action": "nothing — the optimizer kind implies its action",
@@ -104,24 +104,50 @@ class OptimizerInstanceConfig:
         return OPTIMIZER_SPECS[self.kind]
 
     @property
-    def controllable_id(self) -> str:
-        """What this optimizer acts on, as a plain controllable id.
+    def controllable_ids(self) -> tuple[str, ...]:
+        """What this optimizer acts on, as plain controllable ids, in order.
 
-        Every kind names it the same way now: ``target.controllable_id``, with
-        the reserved ``inverter`` id defaulted in by the spec for the kinds that
-        used to imply their target from their own ``kind``. This is the identity
-        validation resolves and the editor picks — one lookup, no by-kind
-        fallback.
+        ``appliance_runtime`` names an ordered group in ``target.controllables``
+        (list order is priority order); the inverter kinds name one
+        ``target.controllable_id``, with the reserved ``inverter`` id defaulted
+        in by the spec. This is the identity validation resolves and the editor
+        picks.
 
-        It is also the identity of the *schedule lane* this optimizer writes,
+        Each id is also the identity of a *schedule lane* this optimizer writes,
         which is why the trace, the explanation book and the frontend's lane key
         are all the same string. They were not, until the schedule flattened to
         one id-keyed map: a separate ``target_key`` derived ``"appliance:<id>"``
         from this id, because the schedule had two domains to tell apart. With
         one map there is nothing left to disambiguate, so the derived key is
         gone and the id is the whole identity.
+
+        Deliberately no single-id accessor: a group has one lane per member, and
+        a "first member" shortcut would let a caller silently ignore the rest.
         """
-        return str(self.target.get("controllable_id", ""))
+        return tuple(
+            str(member.get("controllable_id", "")) for member in self._member_targets
+        )
+
+    def member_configs(self) -> tuple["OptimizerInstanceConfig", ...]:
+        """One single-target config per member, in priority order.
+
+        Each carries the ``target.controllable_id`` / ``target.climate_mode``
+        shape every single-target reader (``resolve_appliance_target``, the
+        condition masks) already understands, so the group is expanded here and
+        nowhere downstream has to know about it.
+        """
+        if "controllables" not in self.target:
+            return (self,)
+        return tuple(
+            replace(self, target=dict(member)) for member in self._member_targets
+        )
+
+    @property
+    def _member_targets(self) -> tuple[Mapping[str, Any], ...]:
+        controllables = self.target.get("controllables")
+        if controllables is None:
+            return (self.target,)
+        return tuple(controllables)
 
 
 @dataclass(frozen=True)

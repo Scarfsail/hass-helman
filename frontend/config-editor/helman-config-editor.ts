@@ -4986,7 +4986,7 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * Keep `target.climate_mode` consistent with the controllable it names.
+   * Keep each group member's `climate_mode` consistent with the controllable it names.
    *
    * Only `appliance_runtime` has a climate mode to keep, so only it is walked —
    * the other kinds drive the inverter, which has no modes of this sort.
@@ -5005,40 +5005,51 @@ export class HelmanConfigEditorPanel
         return;
       }
 
-      const targetPath: PathSegment[] = ["automation", "appliance_optimizers", index, "target"];
-      const applianceId = this._stringValue(
-        getValueAtPath(config, [...targetPath, "controllable_id"]),
-      );
-      const currentClimateMode = this._stringValue(
-        getValueAtPath(config, [...targetPath, "climate_mode"]),
-      );
-      const selectionState = buildControllableSelectionState(
-        config,
-        this._liveApplianceMetadata,
-        applianceId,
-        this._optimizerSchema?.kinds.find(
-          (entry) => entry.kind === APPLIANCE_RUNTIME_OPTIMIZER_KIND,
-        )?.controllableKinds ?? [],
-      );
-      const climateModeFieldState = buildClimateModeFieldState(
-        selectionState,
-        currentClimateMode,
-      );
+      // One target per group member, in priority order.
+      const listPath: PathSegment[] = [
+        "automation",
+        "appliance_optimizers",
+        index,
+        "target",
+        "controllables",
+      ];
+      const members = asJsonArray(getValueAtPath(config, listPath)) ?? [];
+      members.forEach((_member, memberIndex) => {
+        const targetPath: PathSegment[] = [...listPath, memberIndex];
+        const applianceId = this._stringValue(
+          getValueAtPath(config, [...targetPath, "controllable_id"]),
+        );
+        const currentClimateMode = this._stringValue(
+          getValueAtPath(config, [...targetPath, "climate_mode"]),
+        );
+        const selectionState = buildControllableSelectionState(
+          config,
+          this._liveApplianceMetadata,
+          applianceId,
+          this._optimizerSchema?.kinds.find(
+            (entry) => entry.kind === APPLIANCE_RUNTIME_OPTIMIZER_KIND,
+          )?.controllableKinds ?? [],
+        );
+        const climateModeFieldState = buildClimateModeFieldState(
+          selectionState,
+          currentClimateMode,
+        );
 
-      if (selectionState.selectedOption?.kind === "generic" && currentClimateMode.length > 0) {
-        unsetValueAtPath(config, [...targetPath, "climate_mode"]);
-        changed = true;
-        return;
-      }
-      if (
-        climateModeFieldState.visible &&
-        !climateModeFieldState.unavailable &&
-        currentClimateMode.length === 0 &&
-        climateModeFieldState.value.length > 0
-      ) {
-        setValueAtPath(config, [...targetPath, "climate_mode"], climateModeFieldState.value);
-        changed = true;
-      }
+        if (selectionState.selectedOption?.kind === "generic" && currentClimateMode.length > 0) {
+          unsetValueAtPath(config, [...targetPath, "climate_mode"]);
+          changed = true;
+          return;
+        }
+        if (
+          climateModeFieldState.visible &&
+          !climateModeFieldState.unavailable &&
+          currentClimateMode.length === 0 &&
+          climateModeFieldState.value.length > 0
+        ) {
+          setValueAtPath(config, [...targetPath, "climate_mode"], climateModeFieldState.value);
+          changed = true;
+        }
+      });
     });
     return changed;
   }

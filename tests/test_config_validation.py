@@ -398,7 +398,7 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "appliance_runtime",
-                    "target": {"controllable_id": "dishwasher"},
+                    "target": {"controllables": [{"controllable_id": "dishwasher"}]},
                     "conditions": [{"min_soc_pct": 80}],
                 }
             ],
@@ -418,7 +418,7 @@ class ConfigValidationTests(unittest.TestCase):
                     "id": "run-unknown-on-surplus",
                     "kind": "appliance_runtime",
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
-                    "target": {"controllable_id": "missing-appliance"},
+                    "target": {"controllables": [{"controllable_id": "missing-appliance"}]},
                     "conditions": [{}],
                 }
             ],
@@ -429,7 +429,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.appliance_optimizers[0].target.controllable_id"
+                issue.path
+                == "automation.appliance_optimizers[0].target.controllables[0].controllable_id"
                 for issue in report.errors
             )
         )
@@ -447,8 +448,9 @@ class ConfigValidationTests(unittest.TestCase):
                     "kind": "appliance_runtime",
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "target": {
-                        "controllable_id": "dishwasher",
-                        "climate_mode": "heat",
+                        "controllables": [
+                            {"controllable_id": "dishwasher", "climate_mode": "heat"}
+                        ]
                     },
                     "conditions": [{}],
                 }
@@ -460,7 +462,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.appliance_optimizers[0].target.climate_mode"
+                issue.path
+                == "automation.appliance_optimizers[0].target.controllables[0].climate_mode"
                 for issue in report.errors
             )
         )
@@ -547,7 +550,7 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "charge-the-car",
                     "kind": "appliance_runtime",
-                    "target": {"controllable_id": "garage-ev"},
+                    "target": {"controllables": [{"controllable_id": "garage-ev"}]},
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "conditions": [{}],
                 }
@@ -575,7 +578,7 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "ghost",
                     "kind": "appliance_runtime",
-                    "target": {"controllable_id": "nobody"},
+                    "target": {"controllables": [{"controllable_id": "nobody"}]},
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "conditions": [{}],
                 }
@@ -593,26 +596,30 @@ class ConfigValidationTests(unittest.TestCase):
     # --- requires_appliance ---------------------------------------------
 
     @staticmethod
-    def _pool_optimizer(optimizer_id, appliance_id, *, requires=None, enabled=True):
+    def _pool_optimizer(optimizer_id, *appliance_ids, requires=None, enabled=True):
         group = {} if requires is None else {"requires_appliance": requires}
         return {
             "id": optimizer_id,
             "kind": "appliance_runtime",
             "enabled": enabled,
-            "target": {"controllable_id": appliance_id},
+            "target": {
+                "controllables": [
+                    {"controllable_id": appliance_id} for appliance_id in appliance_ids
+                ]
+            },
             "params": {"window": {"start": "08:00", "end": "18:00"}},
             "conditions": [group],
         }
 
     def _pool_config(self, *optimizers) -> dict:
-        """Two pool appliances, plus whichever optimizers the case needs.
+        """Three pool appliances, plus whichever optimizers the case needs.
 
         The default pair is the correct arrangement — filtration planned first,
         the heat pump depending on it — so a case that wants a fault states only
         the fault.
         """
         config = _valid_config()
-        for appliance_id in ("heatpump", "filtration"):
+        for appliance_id in ("heatpump", "filtration", "sweeper"):
             appliance = _generic_appliance()
             appliance["id"] = appliance_id
             appliance["name"] = appliance_id.title()
@@ -721,6 +728,136 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertFalse(report.valid)
         self.assertEqual(len(findings), 1)
+
+    def test_a_group_cannot_depend_on_any_of_its_own_members(self) -> None:
+        """Every member's lane is stripped every run, not just the first's."""
+        config = self._pool_config(
+            self._pool_optimizer("group", "heatpump", "sweeper", requires="sweeper")
+        )
+
+        findings, report = self._findings(
+            config, "self_referential_required_appliance"
+        )
+
+        self.assertFalse(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    def test_a_provider_planned_by_a_later_groups_second_member_warns(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("heat", "heatpump", requires="filtration"),
+            self._pool_optimizer("group", "sweeper", "filtration"),
+        )
+
+        findings, report = self._findings(config, "required_appliance_planned_later")
+
+        self.assertTrue(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    def test_a_provider_planned_by_an_earlier_groups_second_member_is_silent(
+        self,
+    ) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("group", "sweeper", "filtration"),
+            self._pool_optimizer("heat", "heatpump", requires="filtration"),
+        )
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.warnings, [])
+
+    def test_a_provider_in_a_disabled_groups_second_member_warns(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("group", "sweeper", "filtration", enabled=False),
+            self._pool_optimizer("heat", "heatpump", requires="filtration"),
+        )
+
+        findings, report = self._findings(
+            config, "required_appliance_optimizer_disabled"
+        )
+
+        self.assertTrue(report.valid)
+        self.assertEqual(len(findings), 1)
+
+    # --- appliance groups -------------------------------------------------
+
+    def test_a_group_of_several_members_is_accepted(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("group", "heatpump", "filtration", "sweeper")
+        )
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid, msg=report.to_dict())
+
+    def test_an_empty_group_is_rejected(self) -> None:
+        config = self._pool_config(self._pool_optimizer("group"))
+
+        findings, report = self._findings(config, "required")
+
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            [finding.path for finding in findings],
+            ["automation.appliance_optimizers[0].target.controllables"],
+        )
+
+    def test_a_duplicated_member_is_rejected_at_its_second_occurrence(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("group", "heatpump", "filtration", "heatpump")
+        )
+
+        findings, report = self._findings(config, "duplicate_controllable")
+
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            [finding.path for finding in findings],
+            ["automation.appliance_optimizers[0].target.controllables[2].controllable_id"],
+        )
+
+    def test_an_unknown_member_is_reported_at_its_own_index(self) -> None:
+        config = self._pool_config(
+            self._pool_optimizer("group", "heatpump", "nobody")
+        )
+
+        findings, report = self._findings(config, "unknown_controllable")
+
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            [finding.path for finding in findings],
+            ["automation.appliance_optimizers[0].target.controllables[1].controllable_id"],
+        )
+
+    def test_climate_mode_is_checked_per_member_by_its_kind(self) -> None:
+        config = self._pool_config()
+        config["controllables"].append(_climate_appliance())
+        config["automation"]["appliance_optimizers"] = [
+            {
+                "id": "group",
+                "kind": "appliance_runtime",
+                "target": {
+                    "controllables": [
+                        {"controllable_id": "heatpump"},
+                        # A generic member may not carry a mode...
+                        {"controllable_id": "filtration", "climate_mode": "heat"},
+                        # ...and a climate member must.
+                        {"controllable_id": "living-room-hvac"},
+                    ]
+                },
+                "params": {"window": {"start": "08:00", "end": "18:00"}},
+                "conditions": [{}],
+            }
+        ]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertEqual(
+            sorted(issue.path for issue in report.errors),
+            [
+                "automation.appliance_optimizers[0].target.controllables[1].climate_mode",
+                "automation.appliance_optimizers[0].target.controllables[2].climate_mode",
+            ],
+        )
 
     def test_the_inverter_must_carry_the_reserved_id(self) -> None:
         """Targeting by id is only total if the inverter has the id to target.

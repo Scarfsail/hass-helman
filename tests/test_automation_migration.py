@@ -181,7 +181,8 @@ class PerKindMoveTests(unittest.TestCase):
         # A disabled rule stays disabled, and its target survives verbatim.
         self.assertFalse(migrated["enabled"])
         self.assertEqual(
-            migrated["target"], {"controllable_id": "dhw", "climate_mode": "heat"}
+            migrated["target"],
+            {"controllables": [{"controllable_id": "dhw", "climate_mode": "heat"}]},
         )
         # No `daily_minimum` — uncapped, which is what the old kind did.
         self.assertEqual(migrated["params"], {})
@@ -254,7 +255,9 @@ class PerKindMoveTests(unittest.TestCase):
                 "params": {"appliance_id": "dhw", "min_hours_per_day": 3},
             }
         )
-        self.assertEqual(migrated["target"], {"controllable_id": "dhw"})
+        self.assertEqual(
+            migrated["target"], {"controllables": [{"controllable_id": "dhw"}]}
+        )
         self.assertEqual(
             migrated["params"]["daily_minimum"]["min_hours_per_day"], 3
         )
@@ -557,10 +560,12 @@ class ControllableTargetTests(unittest.TestCase):
             }
         )
 
-        # `climate_mode` stays put: it is the second target field, not a name
-        # the unification touched.
+        # `climate_mode` stays beside it: it is the second target field, not a
+        # name the unification touched. (v16 -> v17 then nests both into the
+        # one-member group.)
         self.assertEqual(
-            optimizer["target"], {"controllable_id": "boiler", "climate_mode": "heat"}
+            optimizer["target"],
+            {"controllables": [{"controllable_id": "boiler", "climate_mode": "heat"}]},
         )
         self.assertEqual(ids, ["dhw"])
 
@@ -583,7 +588,9 @@ class ControllableTargetTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(optimizer["target"], {"controllable_id": "pool"})
+        self.assertEqual(
+            optimizer["target"], {"controllables": [{"controllable_id": "pool"}]}
+        )
 
     def test_an_unknown_kind_is_left_targetless(self) -> None:
         """No target invented for a kind this step never knew about."""
@@ -605,7 +612,7 @@ class ControllableTargetTests(unittest.TestCase):
 
         self.assertEqual(
             _all_optimizers(migrated)[0]["target"],
-            {"controllable_id": "boiler"},
+            {"controllables": [{"controllable_id": "boiler"}]},
         )
 
 
@@ -1420,7 +1427,9 @@ class OptimizerBucketSplitTests(unittest.TestCase):
             [o["id"] for o in automation["system_optimizers"]],
             ["hold", "export", "grid"],
         )
-        self.assertEqual(ids, ["hold", "runtime-a", "export", "runtime-b", "grid"])
+        # The last step that reshapes optimizers names them: v16 -> v17 nests
+        # the appliance targets, so only those are reported.
+        self.assertEqual(ids, ["runtime-a", "runtime-b"])
 
     def test_charge_hold_before_export_price_survives(self) -> None:
         automation, _ids = self._migrate_from_v14(
@@ -1544,6 +1553,86 @@ class ChargeFromGridParamRetirementTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(_document())
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 16)
+
+
+class ApplianceTargetGroupTests(unittest.TestCase):
+    """v16 -> v17: ``appliance_runtime``'s single target becomes a one-member group."""
+
+    @staticmethod
+    def _migrate_from_v16(*, appliance=(), system=()):
+        document = {
+            "config_version": 16,
+            "automation": {
+                "enabled": True,
+                "appliance_optimizers": list(appliance),
+                "system_optimizers": list(system),
+            },
+        }
+        migrated, ids = migrate_config_document(document)
+        return migrated["automation"], ids
+
+    def test_a_single_target_becomes_a_one_member_group(self) -> None:
+        automation, ids = self._migrate_from_v16(
+            appliance=[
+                {
+                    "id": "ac",
+                    "kind": "appliance_runtime",
+                    "target": {"controllable_id": "ac-living", "climate_mode": "cool"},
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
+                    "conditions": [{"run_when": ["surplus"]}],
+                },
+                {
+                    "id": "pool",
+                    "kind": "appliance_runtime",
+                    "target": {"controllable_id": "pool-pump"},
+                    "conditions": [{"run_when": ["surplus"]}],
+                },
+            ]
+        )
+
+        ac, pool = automation["appliance_optimizers"]
+        self.assertEqual(
+            ac["target"],
+            {"controllables": [{"controllable_id": "ac-living", "climate_mode": "cool"}]},
+        )
+        # Nothing but the target moves.
+        self.assertEqual(ac["params"], {"window": {"start": "08:00", "end": "18:00"}})
+        self.assertEqual(ac["conditions"], [{"run_when": ["surplus"]}])
+        self.assertEqual(
+            pool["target"], {"controllables": [{"controllable_id": "pool-pump"}]}
+        )
+        self.assertEqual(ids, ["ac", "pool"])
+
+    def test_the_inverter_kinds_are_untouched(self) -> None:
+        system = [
+            {"id": kind, "kind": kind, "target": {"controllable_id": "inverter"}}
+            for kind in ("charge_hold", "export_price", "charge_from_grid")
+        ]
+        automation, _ids = self._migrate_from_v16(system=[dict(o) for o in system])
+
+        self.assertEqual(automation["system_optimizers"], system)
+
+    def test_the_migrated_document_reads_back(self) -> None:
+        from custom_components.helman.automation.config import AutomationConfig
+
+        automation, _ids = self._migrate_from_v16(
+            appliance=[
+                {
+                    "id": "pool",
+                    "kind": "appliance_runtime",
+                    "target": {"controllable_id": "pool-pump"},
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
+                    "conditions": [{}],
+                }
+            ]
+        )
+
+        (optimizer,) = AutomationConfig.from_dict(automation).appliance_optimizers
+        self.assertEqual(optimizer.controllable_ids, ("pool-pump",))
+        self.assertEqual(
+            [member.target for member in optimizer.member_configs()],
+            [{"controllable_id": "pool-pump"}],
+        )
 
 
 if __name__ == "__main__":

@@ -1394,20 +1394,29 @@ def _validate_automation_config(
             # Building is the validation: the generic reader has already checked
             # the declared schema, so what is left is the runtime resolution
             # (appliance lookups, authorable modes) that only a builder can do.
-            try:
-                build_optimizer(
-                    optimizer,
-                    control_config=None,
-                    appliance_registry=appliance_registry,
-                    path=path,
-                )
-            except AutomationConfigError as err:
-                report.add_error(
-                    section="automation",
-                    path=err.path,
-                    code=err.code,
-                    message=str(err),
-                )
+            # One build per member, as the pipeline runs it; the builder only
+            # knows the single-target shape, so its target paths are re-rooted
+            # onto the member they came from.
+            for member_index, member_config in enumerate(optimizer.member_configs()):
+                try:
+                    build_optimizer(
+                        member_config,
+                        control_config=None,
+                        appliance_registry=appliance_registry,
+                        path=path,
+                    )
+                except AutomationConfigError as err:
+                    error_path = err.path
+                    if error_path.startswith(f"{path}.target."):
+                        error_path = _member_target_path(
+                            optimizer, member_index, path=path
+                        ) + error_path[len(f"{path}.target") :]
+                    report.add_error(
+                        section="automation",
+                        path=error_path,
+                        code=err.code,
+                        message=str(err),
+                    )
 
             if optimizer.kind == "export_price":
                 seen_export_price = True
@@ -1436,7 +1445,8 @@ def _earliest_planner_index_by_controllable(
     """
     earliest: dict[str, int] = {}
     for index, optimizer in enumerate(enabled_appliance_optimizers):
-        earliest.setdefault(optimizer.controllable_id, index)
+        for controllable_id in optimizer.controllable_ids:
+            earliest.setdefault(controllable_id, index)
     return earliest
 
 
@@ -1452,13 +1462,16 @@ def _controllables_planned_by_disabled_optimizer(
     enabled optimizer is not in here — the ordering check owns that case.
     """
     enabled_ids = {
-        optimizer.controllable_id
+        controllable_id
         for optimizer in automation_config.enabled_appliance_optimizers
+        for controllable_id in optimizer.controllable_ids
     }
     return frozenset(
-        optimizer.controllable_id
+        controllable_id
         for optimizer in automation_config.appliance_optimizers
-        if not optimizer.enabled and optimizer.controllable_id not in enabled_ids
+        if not optimizer.enabled
+        for controllable_id in optimizer.controllable_ids
+        if controllable_id not in enabled_ids
     )
 
 
@@ -1489,8 +1502,9 @@ def _validate_requires_appliance(
     that the automation-owned half of the provider's plan is invisible. A config
     that hand-schedules the provider and parks its optimizer is working as
     intended. Naming a controllable that does not exist, is not an appliance, or
-    is this optimizer's own target is an error — none of those can ever plan
-    anything for this mask to read.
+    is one of this optimizer's own targets is an error — none of those can ever
+    plan anything for this mask to read. Any member counts as "own": every
+    member's lane is stripped at the start of the phase, not just the first's.
     """
     appliance_kinds = appliance_controllable_kinds()
     for group in optimizer.conditions:
@@ -1499,15 +1513,15 @@ def _validate_requires_appliance(
             continue
         group_path = f"{path}.conditions[{group.index}].requires_appliance"
 
-        if provider_id == optimizer.controllable_id:
+        if provider_id in optimizer.controllable_ids:
             report.add_error(
                 section="automation",
                 path=group_path,
                 code="self_referential_required_appliance",
                 message=(
                     f"optimizer {optimizer.id!r} requires appliance "
-                    f"{provider_id!r}, which is its own target; an appliance "
-                    "cannot depend on itself"
+                    f"{provider_id!r}, which is one of its own targets; an "
+                    "appliance cannot depend on itself"
                 ),
             )
             continue
@@ -1577,12 +1591,52 @@ def _validate_optimizer_target(
     ``resolve_appliance_target`` already made at build time, moved to where the
     user can see it against the field they typed.
     """
-    controllable_id = optimizer.controllable_id
+    valid = True
+    seen: set[str] = set()
+    for member_index, controllable_id in enumerate(optimizer.controllable_ids):
+        member_path = _member_target_path(optimizer, member_index, path=path)
+        id_path = f"{member_path}.controllable_id"
+        if controllable_id in seen:
+            # The second occurrence would plan against a lane the first already
+            # filled, and read as a phantom extra device.
+            report.add_error(
+                section="automation",
+                path=id_path,
+                code="duplicate_controllable",
+                message=(
+                    f"optimizer {optimizer.id!r} lists controllable "
+                    f"{controllable_id!r} more than once"
+                ),
+            )
+            valid = False
+            continue
+        seen.add(controllable_id)
+        valid = (
+            _validate_target_member(
+                optimizer,
+                controllable_id,
+                controllable_kinds_by_id,
+                path=id_path,
+                report=report,
+            )
+            and valid
+        )
+    return valid
+
+
+def _validate_target_member(
+    optimizer: Any,
+    controllable_id: str,
+    controllable_kinds_by_id: Mapping[str, str],
+    *,
+    path: str,
+    report: ValidationReport,
+) -> bool:
     kind = controllable_kinds_by_id.get(controllable_id)
     if kind is None:
         report.add_error(
             section="automation",
-            path=f"{path}.target.controllable_id",
+            path=path,
             code="unknown_controllable",
             message=(
                 f"optimizer {optimizer.id!r} targets controllable "
@@ -1595,7 +1649,7 @@ def _validate_optimizer_target(
     if kind not in allowed:
         report.add_error(
             section="automation",
-            path=f"{path}.target.controllable_id",
+            path=path,
             code="incompatible_target",
             message=(
                 f"{optimizer.kind} optimizer {optimizer.id!r} cannot drive "
@@ -1609,6 +1663,13 @@ def _validate_optimizer_target(
         )
         return False
     return True
+
+
+def _member_target_path(optimizer: Any, member_index: int, *, path: str) -> str:
+    """Where one member's target lives: indexed for a group, flat otherwise."""
+    if "controllables" in optimizer.target:
+        return f"{path}.target.controllables[{member_index}]"
+    return f"{path}.target"
 
 
 #: Kinds that need a *battery entity* configured. Deliberately not folded into

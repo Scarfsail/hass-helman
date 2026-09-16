@@ -56,6 +56,7 @@ from custom_components.helman.automation.config import (
     AutomationConfigError,
     read_automation_config,
 )
+from custom_components.helman.automation.spec import OPTIMIZER_SPECS
 from custom_components.helman.config_validation import validate_config_document
 from custom_components.helman.const import DAY_CLASSIFICATIONS
 
@@ -145,7 +146,7 @@ class AutomationConfigTests(unittest.TestCase):
                         {
                             "id": "duplicate",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "conditions": [{"run_when": ["surplus"]}],
                         }
                     ],
@@ -211,7 +212,7 @@ class AutomationConfigTests(unittest.TestCase):
                         {
                             "id": "runtime",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "conditions": [{"run_when": ["surplus"]}],
                         }
                     ]
@@ -266,7 +267,7 @@ class ConditionGroupTests(unittest.TestCase):
                     {
                         "id": "runtime",
                         "kind": "appliance_runtime",
-                        "target": {"controllable_id": "boiler"},
+                        "target": {"controllables": [{"controllable_id": "boiler"}]},
                         "params": {
                             "daily_minimum": {
                                 "min_hours_per_day": 4,
@@ -305,7 +306,7 @@ class ConditionGroupTests(unittest.TestCase):
                         {
                             "id": "runtime",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "params": {
                                 "daily_minimum": {
                                     "min_hours_per_day": 4,
@@ -335,7 +336,7 @@ class ConditionGroupTests(unittest.TestCase):
                     {
                         "id": "runtime",
                         "kind": "appliance_runtime",
-                        "target": {"controllable_id": "boiler"},
+                        "target": {"controllables": [{"controllable_id": "boiler"}]},
                         "params": {
                             "daily_minimum": {
                                 "min_hours_per_day": 4,
@@ -511,7 +512,7 @@ class ParamOverrideTests(unittest.TestCase):
                         {
                             "id": "dhw",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "params": {
                                 "daily_minimum": {
                                     "min_hours_per_day": 3,
@@ -570,7 +571,7 @@ class RelocatedKeyTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "unknown_key")
         self.assertEqual(ctx.exception.path, "automation.system_optimizers[0].extra")
 
-    def test_appliance_id_in_params_points_at_target(self) -> None:
+    def test_top_level_appliance_id_points_at_target_member(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
@@ -578,8 +579,9 @@ class RelocatedKeyTests(unittest.TestCase):
                         {
                             "id": "boiler-surplus",
                             "kind": "appliance_runtime",
+                            "appliance_id": "boiler",
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "params": {
-                                "appliance_id": "boiler",
                                 "window": {"start": "08:00", "end": "18:00"},
                             },
                             "conditions": [{}],
@@ -588,7 +590,7 @@ class RelocatedKeyTests(unittest.TestCase):
                 }
             )
 
-        self.assertIn("target.controllable_id", str(ctx.exception))
+        self.assertIn("target.controllables[].controllable_id", str(ctx.exception))
 
 
 class TargetTests(unittest.TestCase):
@@ -609,7 +611,7 @@ class TargetTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "required")
         self.assertEqual(
-            ctx.exception.path, "automation.appliance_optimizers[0].target.controllable_id"
+            ctx.exception.path, "automation.appliance_optimizers[0].target.controllables"
         )
 
     def test_rejects_an_unsupported_climate_mode(self) -> None:
@@ -622,8 +624,12 @@ class TargetTests(unittest.TestCase):
                             "kind": "appliance_runtime",
                             "params": {"window": {"start": "08:00", "end": "18:00"}},
                             "target": {
-                                "controllable_id": "living-room-hvac",
-                                "climate_mode": "fan_only",
+                                "controllables": [
+                                    {
+                                        "controllable_id": "living-room-hvac",
+                                        "climate_mode": "fan_only",
+                                    }
+                                ]
                             },
                             "conditions": [{}],
                         }
@@ -633,7 +639,96 @@ class TargetTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "invalid_value")
         self.assertEqual(
-            ctx.exception.path, "automation.appliance_optimizers[0].target.climate_mode"
+            ctx.exception.path,
+            "automation.appliance_optimizers[0].target.controllables[0].climate_mode",
+        )
+
+    @staticmethod
+    def _read_appliance_target(target):
+        return AutomationConfig.from_dict(
+            {
+                "appliance_optimizers": [
+                    {
+                        "id": "acs",
+                        "kind": "appliance_runtime",
+                        "params": {"window": {"start": "08:00", "end": "18:00"}},
+                        "target": target,
+                        "conditions": [{}],
+                    }
+                ]
+            }
+        ).appliance_optimizers[0]
+
+    def test_a_group_reads_in_priority_order(self) -> None:
+        optimizer = self._read_appliance_target(
+            {
+                "controllables": [
+                    {"controllable_id": "ac-living", "climate_mode": "cool"},
+                    {"controllable_id": "boiler"},
+                ]
+            }
+        )
+
+        self.assertEqual(optimizer.controllable_ids, ("ac-living", "boiler"))
+        self.assertEqual(
+            [member.target for member in optimizer.member_configs()],
+            [
+                {"controllable_id": "ac-living", "climate_mode": "cool"},
+                {"controllable_id": "boiler"},
+            ],
+        )
+
+    def test_a_member_error_carries_its_index(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            self._read_appliance_target(
+                {
+                    "controllables": [
+                        {"controllable_id": "ac-living", "climate_mode": "cool"},
+                        {"controllable_id": "ac-bedroom", "climate_mode": "fan_only"},
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.appliance_optimizers[0].target.controllables[1].climate_mode",
+        )
+
+    def test_an_empty_group_is_rejected(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            self._read_appliance_target({"controllables": []})
+
+        self.assertEqual(ctx.exception.code, "required")
+        self.assertEqual(
+            ctx.exception.path, "automation.appliance_optimizers[0].target.controllables"
+        )
+
+    def test_a_group_must_be_a_list(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            self._read_appliance_target({"controllables": {"controllable_id": "boiler"}})
+
+        self.assertEqual(ctx.exception.code, "invalid_type")
+
+    def test_the_schema_serialises_the_group_element_fields(self) -> None:
+        (field,) = OPTIMIZER_SPECS["appliance_runtime"].target
+
+        self.assertEqual(
+            field.to_dict(),
+            {
+                "key": "controllables",
+                "type": "object_list",
+                "minItems": 1,
+                "fields": [
+                    {"key": "controllable_id", "type": "string"},
+                    {
+                        "key": "climate_mode",
+                        "type": "string",
+                        "required": False,
+                        "choices": list(field.fields[1].choices),
+                    },
+                ],
+            },
         )
 
     def test_rejects_an_out_of_range_soc_threshold(self) -> None:
@@ -644,7 +739,7 @@ class TargetTests(unittest.TestCase):
                         {
                             "id": "boiler-soak",
                             "kind": "appliance_runtime",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "conditions": [{"min_soc_pct": 120}],
                         }
                     ]
@@ -665,7 +760,7 @@ class TargetTests(unittest.TestCase):
                         {
                             "id": "boiler-surplus",
                             "kind": "surplus_appliance",
-                            "target": {"controllable_id": "boiler"},
+                            "target": {"controllables": [{"controllable_id": "boiler"}]},
                             "conditions": [{}],
                         }
                     ]
@@ -781,7 +876,7 @@ class MigrationRoundTripTests(unittest.TestCase):
         self.assertEqual(
             by_id["dhw"].params["daily_minimum"]["max_consecutive_skips"], 2
         )
-        self.assertEqual(by_id["surplus"].target["controllable_id"], "boiler")
+        self.assertEqual(by_id["surplus"].controllable_ids, ("boiler",))
 
 
 class DayContextTests(unittest.TestCase):
