@@ -342,6 +342,9 @@ test.describe("schema-driven optimizer card", () => {
     test("removing a group is enabled once there is more than one", async ({ page }) => {
         const panel = await mountEditor(page);
         const card = await openCard(panel);
+        // Removing now asks first, the same way the editor already asks before
+        // throwing unsaved work away.
+        page.on("dialog", (dialog) => void dialog.accept());
 
         await expect(card.locator(".remove-condition-group").first()).toBeEnabled();
         await card.locator(".remove-condition-group").first().click();
@@ -415,9 +418,17 @@ test.describe("schema-driven optimizer card", () => {
         // Still the fallback, so the group renumbers when it moves rather than
         // freezing "Group 1" into the config.
         await expect(group.locator(".condition-group-name")).toHaveText("Group 1");
-        await card.locator(".condition-group").nth(1).locator("button", {
-            hasText: "Up",
-        }).click();
+        // Groups reorder by dragging now, and `ha-sortable` is undefined in a
+        // bare page -- so the move is the event a real drag would have fired.
+        await card.locator("ha-sortable").first().evaluate((sortable) => {
+            sortable.dispatchEvent(
+                new CustomEvent("item-moved", {
+                    detail: { oldIndex: 1, newIndex: 0 },
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        });
         await expect(
             card.locator(".condition-group").nth(1).locator(".condition-group-name"),
         ).toHaveText("Group 2");

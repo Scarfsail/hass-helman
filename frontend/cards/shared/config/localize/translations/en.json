@@ -32,8 +32,7 @@
       "add_eco_gear": "Add eco gear",
       "remove": "Remove",
       "remove_category": "Remove category",
-      "up": "Up",
-      "down": "Down",
+      "drag_to_reorder": "Drag to reorder",
       "add_condition_group": "+ Condition group",
       "rename_condition_group": "Rename group",
       "add_controllable_target": "+ Appliance"
@@ -351,7 +350,8 @@
       "enter_yaml_failed": "Failed to open the YAML editor for this scope."
     },
     "confirm": {
-      "discard_changes": "Discard unsaved changes and reload the stored config?"
+      "discard_changes": "Discard unsaved changes and reload the stored config?",
+      "remove_item": "Remove this entry?"
     },
     "rename": {
       "target_not_available": "Target object is not available.",

@@ -651,11 +651,21 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         const pickers = memberRows(page).locator("select.controllable-target-picker");
         await expect(pickers.nth(0)).toHaveValue("heatpump");
         await expect(pickers.nth(1)).toHaveValue("filtration");
-        // The top row cannot move up, the bottom one cannot move down.
-        await expect(memberRows(page).nth(0).getByRole("button", { name: "Up" })).toBeDisabled();
-        await expect(memberRows(page).nth(1).getByRole("button", { name: "Down" })).toBeDisabled();
+        // Every row is dragged by its own handle -- there is no "the top one
+        // cannot move" any more, which is half of why the buttons went.
+        await expect(memberRows(page).locator(".sortable-handle")).toHaveCount(2);
 
-        await memberRows(page).nth(0).getByRole("button", { name: "Down" }).click();
+        // `ha-sortable` is HA's own element and undefined in a bare page, so
+        // the reorder is the event a finished drag would have fired.
+        await dialog(page).locator("ha-sortable").first().evaluate((sortable) => {
+            sortable.dispatchEvent(
+                new CustomEvent("item-moved", {
+                    detail: { oldIndex: 0, newIndex: 1 },
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        });
         await expect(pickers.nth(0)).toHaveValue("filtration");
         await expect(pickers.nth(1)).toHaveValue("heatpump");
 
@@ -663,6 +673,8 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await expect(memberRows(page)).toHaveCount(3);
         await pickers.nth(2).selectOption("sweeper");
 
+        // Removing asks first now.
+        page.on("dialog", (confirmation) => void confirmation.accept());
         await memberRows(page).nth(1).locator(".remove-controllable-target").click();
         await expect(memberRows(page)).toHaveCount(2);
 

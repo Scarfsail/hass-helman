@@ -62,6 +62,13 @@ export const optimizerCardStyles = css`
         grid-column: 1 / -1;
     }
 
+    /* ha-sortable drags the children of one wrapper, so the rows get one of
+       their own rather than sitting directly in the field. */
+    .controllable-target-rows {
+        display: grid;
+        gap: 8px;
+    }
+
     .controllable-target-row {
         display: grid;
         gap: 8px;
@@ -75,6 +82,13 @@ export const optimizerCardStyles = css`
         display: grid;
         gap: 10px;
         margin-top: 14px;
+    }
+
+    /* One wrapper for the groups, which is what ha-sortable drags the
+       children of -- the head and the add button are not list items. */
+    .condition-group-list {
+        display: grid;
+        gap: 10px;
     }
 
     .condition-groups-head {

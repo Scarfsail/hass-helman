@@ -32,8 +32,7 @@
       "add_eco_gear": "Přidat eco gear",
       "remove": "Odstranit",
       "remove_category": "Odstranit kategorii",
-      "up": "Nahoru",
-      "down": "Dolů",
+      "drag_to_reorder": "Přetažením změníte pořadí",
       "add_condition_group": "+ Skupina podmínek",
       "rename_condition_group": "Přejmenovat skupinu",
       "add_controllable_target": "+ Spotřebič"
@@ -351,7 +350,8 @@
       "enter_yaml_failed": "Nepodařilo se otevřít YAML editor pro tuto část."
     },
     "confirm": {
-      "discard_changes": "Zahodit neuložené změny a znovu načíst uloženou konfiguraci?"
+      "discard_changes": "Zahodit neuložené změny a znovu načíst uloženou konfiguraci?",
+      "remove_item": "Odstranit tuto položku?"
     },
     "rename": {
       "target_not_available": "Cílový objekt není k dispozici.",
