@@ -3,4 +3,9 @@
  * compile: the schedule card needs the same trick to reach HA's trace renderer.
  * Re-exported from here so the editor's imports keep reading the way they did.
  */
-export { loadHaForm, loadHaTrace, loadHaYamlEditor } from "../cards/shared/load-ha-elements";
+export {
+  loadHaForm,
+  loadHaSortable,
+  loadHaTrace,
+  loadHaYamlEditor,
+} from "../cards/shared/load-ha-elements";

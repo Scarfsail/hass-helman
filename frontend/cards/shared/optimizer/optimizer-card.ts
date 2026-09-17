@@ -30,7 +30,6 @@ export interface OptimizerCardOptions {
     /** Which bucket this optimizer lives in -- roots every path the card builds. */
     bucket: OptimizerConfigBucket;
     index: number;
-    total: number;
     enabled: boolean;
     /** Card heading — kinds with an appliance target show the appliance's name. */
     title: string;
@@ -50,17 +49,13 @@ export interface OptimizerCardOptions {
      */
     open?: boolean;
     renderSvgIcon(path: string, className: string): TemplateResult;
-    renderListActions(
-        basePath: PathSegment[],
-        index: number,
-        total: number,
-        enabled: boolean,
-    ): TemplateResult;
+    /** The card's own pipeline row -- drag, enable, remove -- or nothing. */
+    renderListActions(basePath: PathSegment[]): TemplateResult;
     conditionGroups: Omit<ConditionGroupsOptions, "host" | "schema" | "bucket" | "optimizerIndex">;
 }
 
 export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResult {
-    const { host, schema, bucket, index, total, enabled, title, warning } = options;
+    const { host, schema, bucket, index, enabled, title, warning } = options;
     const basePath: PathSegment[] = ["automation", bucket, index];
 
     return html`
@@ -85,7 +80,7 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
                               >`
                             : nothing}
                     </div>
-                    ${options.renderListActions(basePath, index, total, enabled)}
+                    ${options.renderListActions(basePath)}
                 </div>
             </summary>
             <div class="appliance-body">

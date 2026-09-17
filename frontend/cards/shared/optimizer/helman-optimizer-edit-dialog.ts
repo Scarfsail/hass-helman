@@ -3,7 +3,7 @@ import { property, state } from "lit/decorators.js";
 
 import type { LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
-import { loadHaForm } from "../load-ha-elements";
+import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import {
     asJsonArray,
@@ -78,8 +78,6 @@ type EditViewState =
          * from whichever bucket its own location names.
          */
         indices: readonly OptimizerLocation[];
-        /** How many optimizers each bucket holds, for the cards' list bounds. */
-        totals: Record<OptimizerBucket, number>;
         schema: OptimizerSchemaDocument | null;
         applianceMetadata: ApplianceMetadataResponse | null;
     };
@@ -233,6 +231,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
     connectedCallback(): void {
         super.connectedCallback();
         void loadHaForm().then(() => this.requestUpdate());
+        void loadHaSortable().then(() => this.requestUpdate());
         void this._load();
         const hass = this.hass;
         if (hass) {
@@ -333,7 +332,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
                             .config=${view.config}
                             .bucket=${location.bucket}
                             .index=${location.index}
-                            .total=${view.totals[location.bucket]}
                             .schema=${view.schema}
                             .applianceMetadata=${view.applianceMetadata}
                             .expanded=${true}
@@ -351,10 +349,10 @@ export class HelmanOptimizerEditDialog extends LitElement {
     /**
      * The optimizer's on/off switch, in the card's summary row.
      *
-     * Only the switch -- not the up/down/remove the config panel puts beside
-     * it. Those are *pipeline* operations: they change which optimizers exist
-     * and in what order they run, which is the document's business and not
-     * something to do from a dialog opened by pressing one lane. Turning an
+     * Only the switch -- not the drag handle and remove the config panel puts
+     * beside it. Those are *pipeline* operations: they change which optimizers
+     * exist and in what order they run, which is the document's business and
+     * not something to do from a dialog opened by pressing one lane. Turning an
      * automation off is the opposite: it is about this optimizer alone, and it
      * is the thing a person who just found out a lane is automated most often
      * wants.
@@ -442,7 +440,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
                           kind: "ready",
                           config: cloneJson(document),
                           indices,
-                          totals: optimizerCounts(document),
                           schema,
                           applianceMetadata: appliances,
                       };
@@ -727,14 +724,6 @@ function findOptimizerLocations(
             .filter(([, id]) => id !== undefined && wanted.has(id))
             .map(([index]): OptimizerLocation => ({ bucket, index })),
     );
-}
-
-/** How many optimizers each bucket holds, for the cards' list bounds. */
-function optimizerCounts(config: JsonObject): Record<OptimizerBucket, number> {
-    return {
-        appliance_optimizers: readOptimizers(config, "appliance_optimizers").length,
-        system_optimizers: readOptimizers(config, "system_optimizers").length,
-    };
 }
 
 function readOptimizers(config: JsonObject, bucket: OptimizerBucket) {

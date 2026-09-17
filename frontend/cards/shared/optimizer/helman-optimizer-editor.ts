@@ -28,6 +28,11 @@ import {
     stringValue,
     type FormFieldHost,
 } from "../config/form-fields";
+import {
+    renderDragHandle,
+    renderRemoveButton,
+    renderSortableList,
+} from "../config/sortable-list";
 import type {
     HomeAssistantLike,
     JsonObject,
@@ -112,9 +117,6 @@ export class HelmanOptimizerEditor
     /** Which entry of that bucket this card edits. */
     @property({ type: Number }) index = 0;
 
-    /** How many optimizers there are, for the list actions' bounds. */
-    @property({ type: Number }) total = 1;
-
     @property({ attribute: false }) schema: OptimizerSchemaDocument | null = null;
 
     @property({ attribute: false })
@@ -141,7 +143,7 @@ export class HelmanOptimizerEditor
     @property({ attribute: false }) warning: string | null = null;
 
     /**
-     * The up/down/remove/enabled row in the card's summary, or nothing.
+     * The drag/enable/remove row in the card's summary, or nothing.
      *
      * Supplied by the mounter rather than rendered here, because reordering and
      * deleting are *pipeline* operations: they change which optimizers exist,
@@ -181,7 +183,6 @@ export class HelmanOptimizerEditor
             optimizer,
             bucket: this.bucket,
             index: this.index,
-            total: this.total,
             enabled,
             title: this._cardTitle(schema, optimizer),
             warning: this.warning,
@@ -460,8 +461,8 @@ export class HelmanOptimizerEditor
      *
      * A group target renders one row per member. The list *is* the priority
      * order -- the first member takes the surplus first -- so the rows are
-     * numbered and reordered in place, with the same up/down idiom as the
-     * condition groups.
+     * numbered and dragged into place, by the same shared list helper as every
+     * other ordered list in the editor.
      */
     renderControllableTargetFields(
         _optimizerIndex: number,
@@ -493,32 +494,27 @@ export class HelmanOptimizerEditor
                     ${this.renderHelpIcon("editor.fields.optimizer_targets", "editor.help.optimizer_targets")}
                 </div>
                 <div class="helper">${this.t("editor.helpers.optimizer_targets")}</div>
-                ${targetPaths.map(
-                    (targetPath, memberIndex) => html`
+                ${renderSortableList({
+                    items: targetPaths,
+                    containerClass: "controllable-target-rows",
+                    onMove: (oldIndex, newIndex) => this._moveTarget(oldIndex, newIndex),
+                    renderItem: (targetPath, memberIndex) => html`
                         <div class="controllable-target-row">
                             <div class="appliance-summary-row">
-                                <strong class="controllable-target-position">
-                                    ${this._tFormat("editor.dynamic.priority_position", {
-                                        position: memberIndex + 1,
-                                    })}
-                                </strong>
+                                <div class="appliance-summary-left">
+                                    ${renderDragHandle(this)}
+                                    <strong class="controllable-target-position">
+                                        ${this._tFormat("editor.dynamic.priority_position", {
+                                            position: memberIndex + 1,
+                                        })}
+                                    </strong>
+                                </div>
                                 <div class="list-actions">
-                                    <button
-                                        type="button"
-                                        ?disabled=${memberIndex === 0}
-                                        @click=${() => this._moveTarget(memberIndex, memberIndex - 1)}
-                                    >${this.t("editor.actions.up")}</button>
-                                    <button
-                                        type="button"
-                                        ?disabled=${memberIndex === total - 1}
-                                        @click=${() => this._moveTarget(memberIndex, memberIndex + 1)}
-                                    >${this.t("editor.actions.down")}</button>
-                                    <button
-                                        type="button"
-                                        class="danger remove-controllable-target"
-                                        ?disabled=${total <= 1}
-                                        @click=${() => this._removeTarget(memberIndex)}
-                                    >${this.t("editor.actions.remove")}</button>
+                                    ${renderRemoveButton(this, {
+                                        className: "remove-controllable-target",
+                                        onRemove: () => this._removeTarget(memberIndex),
+                                        disabled: total <= 1,
+                                    })}
                                 </div>
                             </div>
                             <div class="field-grid">
@@ -533,7 +529,7 @@ export class HelmanOptimizerEditor
                             </div>
                         </div>
                     `,
-                )}
+                })}
                 <button
                     type="button"
                     class="add-button add-controllable-target"
