@@ -329,6 +329,88 @@ class ForecastRecorderSlotTests(unittest.TestCase):
 
         self.assertEqual(estimate, 1.3333)
 
+    def test_shared_meter_splits_energy_evenly_among_running_members(self) -> None:
+        # One meter behind two devices: 1 kWh while both run from 10:00 to
+        # 11:00, then another 1 kWh while only A runs until 12:00. The shared
+        # hour is halved; the solo hour is all A's.
+        def _at(hour: int) -> datetime:
+            return datetime(2026, 3, 20, hour, 0, tzinfo=UTC)
+
+        def _switch(*changes: tuple[str, int]) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(state=state, last_updated=_at(hour))
+                for state, hour in changes
+            ]
+
+        energy_states = [
+            SimpleNamespace(
+                state=value,
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=_at(hour),
+            )
+            for value, hour in (("0.0", 10), ("1.0", 11), ("2.0", 12))
+        ]
+
+        estimates = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+            {
+                "a": (_switch(("on", 10), ("off", 12)), ("on",)),
+                "b": (_switch(("on", 10), ("off", 11)), ("on",)),
+                # Never ran: nothing to learn, and it takes no share.
+                "c": (_switch(("off", 10)), ("on",)),
+            },
+            energy_states,
+            _at(10),
+            _at(12),
+            "kWh",
+        )
+
+        self.assertEqual(estimates, {"a": 0.75, "b": 0.5, "c": None})
+
+    def test_shared_meter_with_one_member_is_the_single_device_average(self) -> None:
+        # The lone-device estimator is this split with one member; the fixture
+        # above must give the same answer through either door.
+        entity_states = [
+            SimpleNamespace(state=state, last_updated=datetime(2026, 3, 20, 10, minute, tzinfo=UTC))
+            for state, minute in (("heat", 0), ("off", 30), ("cool", 45))
+        ] + [
+            SimpleNamespace(state="off", last_updated=datetime(2026, 3, 20, 11, 0, tzinfo=UTC))
+        ]
+        energy_states = [
+            SimpleNamespace(
+                state=value,
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=instant,
+            )
+            for value, instant in (
+                ("0.0", datetime(2026, 3, 20, 10, 0, tzinfo=UTC)),
+                ("0.5", datetime(2026, 3, 20, 10, 30, tzinfo=UTC)),
+                ("0.75", datetime(2026, 3, 20, 10, 45, tzinfo=UTC)),
+                ("1.25", datetime(2026, 3, 20, 11, 0, tzinfo=UTC)),
+            )
+        ]
+        window = (
+            datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+        )
+
+        shared = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+            {"only": (entity_states, ("heat", "cool"))},
+            energy_states,
+            *window,
+            "kWh",
+        )
+        single = recorder_hourly_series._estimate_average_hourly_energy_kwh_for_active_intervals(
+            entity_states=entity_states,
+            energy_states=energy_states,
+            window_start=window[0],
+            window_end=window[1],
+            default_unit="kWh",
+            active_states=("heat", "cool"),
+        )
+
+        self.assertEqual(shared, {"only": 1.3333})
+        self.assertEqual(single, 1.3333)
+
 
 class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
     """The attributes join on the cumulative-energy query is conditional.

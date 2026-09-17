@@ -23,7 +23,7 @@ interface FakeNode {
     id: string;
     name: string;
     deferrable?: boolean;
-    controllableId?: string | null;
+    controllableIds?: string[];
     children?: FakeNode[];
 }
 
@@ -228,8 +228,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
     test("a device row opens the editor on that controllable's lane", async ({ page }) => {
         await mount(page, [
-            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
         ]);
 
         await pressBadge(page, "Boiler");
@@ -249,8 +249,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
                 name: "Deferrable consumption",
                 deferrable: true,
                 children: [
-                    { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-                    { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+                    { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+                    { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
                 ],
             },
         ]);
@@ -320,8 +320,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
      */
     test("a refused save says why and keeps the draft on screen", async ({ page }) => {
         await mount(page, [
-            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
         ]);
         await pressBadge(page, "Boiler");
 
@@ -358,8 +358,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
      */
     test("a write that lands is not reported as failed when the reload after it fails", async ({ page }) => {
         await mount(page, [
-            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
         ]);
         await pressBadge(page, "Boiler");
 
@@ -389,8 +389,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
     test("nothing is open until a badge is pressed", async ({ page }) => {
         await mount(page, [
-            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
         ]);
 
         expect(await editorState(page)).toEqual({

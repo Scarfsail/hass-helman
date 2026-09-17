@@ -169,14 +169,14 @@ def read_scheduled_consumers(
 
 def read_deferrable_consumers(
     config: Mapping[str, Any] | None,
-) -> list[dict[str, str]]:
-    """``[{energy_entity_id, label, id}]`` — the devices carved out of house load.
+) -> list[dict[str, Any]]:
+    """``[{energy_entity_id, label, ids}]`` — the devices carved out of house load.
 
-    ``id`` is the controllable's own id, carried so a scheduled appliance's
-    demand — which is keyed by exactly that id — resolves to the same meter and
-    the same name the measured breakdown gives it. It is omitted for an entry
-    that declares none; such an entry can never be scheduled, so nothing keys
-    off it.
+    ``ids`` are the controllable ids behind the meter, carried so a scheduled
+    appliance's demand — which is keyed by exactly that id — resolves to the
+    same meter the measured breakdown gives it, and so the meter's node can name
+    every device it stands for. It is empty for an entry that declares no id;
+    such an entry can never be scheduled, so nothing keys off it.
 
     The house consumption forecast splits the house total into a baseline plus
     the loads that can be moved in time; this is that second list. It used to
@@ -195,31 +195,65 @@ def read_deferrable_consumers(
     validation refuses it a ``consumption`` block at all. An entry with no
     meter contributes nothing either — there would be nothing to subtract.
 
-    Order follows the ``controllables`` list, and a duplicate meter is taken
-    once: counting one sensor twice would eat the baseline twice over.
-    Validation reports the duplicate separately.
+    **A shared meter is one entry.** Several devices can sit behind one meter —
+    four air conditioners on one breaker — and each names it. Counting the
+    sensor once per device would eat the baseline that many times over, so the
+    meter appears once, at the position of its first claimant, with ``ids``
+    listing every claimant in config order. Its ``label`` is the claimant's name
+    when there is exactly one; a shared meter is labelled by its entity id,
+    since no one device's name describes it, and the tree's ``displayName``
+    names the node wherever the tree knows the entity. Validation makes sharers
+    agree on ``deferrable``, so filtering per entry cannot split a meter.
     """
-    consumers: list[dict[str, str]] = []
-    seen: set[str] = set()
+    consumers: dict[str, dict[str, Any]] = {}
     for entry, consumption in _iter_consumption_controllables(config):
         if consumption.get("deferrable") is False:
             continue
-        entity_id = consumption.get("energy_entity_id")
-        if not isinstance(entity_id, str) or not entity_id.strip():
+        entity_id = _read_energy_entity_id(consumption)
+        if entity_id is None:
             continue
-        entity_id = entity_id.strip()
-        if entity_id in seen:
-            continue
-        seen.add(entity_id)
-        consumer = {
-            "energy_entity_id": entity_id,
-            "label": _controllable_label(entry, entity_id),
-        }
+        consumer = consumers.get(entity_id)
+        if consumer is None:
+            consumer = consumers[entity_id] = {
+                "energy_entity_id": entity_id,
+                "label": _controllable_label(entry, entity_id),
+                "ids": [],
+            }
+        else:
+            consumer["label"] = entity_id
         controllable_id = peek_controllable_id(entry)
         if controllable_id is not None:
-            consumer["id"] = controllable_id
-        consumers.append(consumer)
-    return consumers
+            consumer["ids"].append(controllable_id)
+    return list(consumers.values())
+
+
+def read_shared_meters(config: Mapping[str, Any] | None) -> dict[str, list[str]]:
+    """``meter entity id -> controllable ids`` for every meter two or more name.
+
+    The one source of truth for "which devices split this meter". Unlike
+    :func:`read_deferrable_consumers` it ignores ``deferrable``: the split is
+    about what the meter measured, and a device that opted out of the house
+    split still ran and still drew from it. An entry without an id is skipped: it
+    cannot be resolved to a runtime appliance, and validation requires one.
+    """
+    ids_by_meter: dict[str, list[str]] = {}
+    for entry, consumption in _iter_consumption_controllables(config):
+        entity_id = _read_energy_entity_id(consumption)
+        controllable_id = peek_controllable_id(entry)
+        if entity_id is None or controllable_id is None:
+            continue
+        ids_by_meter.setdefault(entity_id, []).append(controllable_id)
+    return {
+        entity_id: ids for entity_id, ids in ids_by_meter.items() if len(ids) >= 2
+    }
+
+
+def _read_energy_entity_id(consumption: Mapping[str, Any]) -> str | None:
+    """The block's meter, stripped — ``None`` when absent or blank."""
+    entity_id = consumption.get("energy_entity_id")
+    if not isinstance(entity_id, str) or not entity_id.strip():
+        return None
+    return entity_id.strip()
 
 
 def find_inverter_controllable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:

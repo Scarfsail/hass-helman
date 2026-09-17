@@ -82,12 +82,17 @@ export class PowerDeviceInfo extends LitElement {
         // descendants and folds their states into one tint — the inspector's
         // "Deferrable consumption" row, not the house total and not every label
         // category that happens to contain a dishwasher.
+        //
+        // A meter shared by several controllables is one box naming all of them,
+        // and folds their states the same way a group does. Only a box that is
+        // exactly one controllable hands the badge a target to open the editor on.
         const deferrable = this.device.deferrable === true;
-        const controllableId = deferrable ? this.device.controllableId ?? null : null;
-        const controllableIds = deferrable && controllableId === null
-            ? _collectControllableIds(this.device)
-            : [];
-        const hasBadge = controllableId !== null || controllableIds.length > 0;
+        const ownIds = deferrable ? this.device.controllableIds ?? [] : [];
+        const controllableId = ownIds.length === 1 ? ownIds[0] : null;
+        const controllableIds = !deferrable
+            ? []
+            : ownIds.length > 0 ? ownIds : _collectControllableIds(this.device);
+        const hasBadge = controllableIds.length > 0;
 
         if (!hasAdditionalInfo && !hasCustomLabels && !hasBadge) {
             return nothing;
@@ -274,9 +279,7 @@ export class PowerDeviceInfo extends LitElement {
 function _collectControllableIds(device: DeviceNode): string[] {
     const ids: string[] = [];
     for (const child of device.children ?? []) {
-        if (child.controllableId) {
-            ids.push(child.controllableId);
-        }
+        ids.push(...(child.controllableIds ?? []));
         ids.push(..._collectControllableIds(child));
     }
     return ids;

@@ -1858,7 +1858,7 @@ class SolarBiasCorrectionService:
     @staticmethod
     def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
         """Coerce a provider's list to
-        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, id}]``.
+        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, ids}]``.
 
         Drops anything without a usable entity id and defaults a missing label to
         the entity id, so callers get a clean, deduplicable list. The switch and
@@ -1867,9 +1867,10 @@ class SolarBiasCorrectionService:
         ``deferrable`` is the caller's answer for the whole list: a provider is one
         roster, so which roster an entry came from is the only thing that decides it.
 
-        ``id`` is the controllable id where the roster carries one — the key the
-        forecast's scheduled demand is reported under, and None for a device the
-        tree alone knows about.
+        ``ids`` are the controllable ids the roster carries for the meter — the
+        keys the forecast's scheduled demand is reported under, several for a
+        meter shared by several devices, and empty for a device the tree alone
+        knows about.
         """
         result: list[dict] = []
         for consumer in raw_consumers or []:
@@ -1881,7 +1882,7 @@ class SolarBiasCorrectionService:
             eid = entity_id.strip()
             switch = consumer.get("switch_entity_id")
             power = consumer.get("power_entity_id")
-            controllable_id = consumer.get("id")
+            raw_ids = consumer.get("ids")
             result.append(
                 {
                     "energy_entity_id": eid,
@@ -1889,11 +1890,13 @@ class SolarBiasCorrectionService:
                     "switch_entity_id": switch if isinstance(switch, str) and switch else None,
                     "power_entity_id": power if isinstance(power, str) and power else None,
                     "deferrable": deferrable,
-                    "id": (
+                    "ids": [
                         controllable_id
+                        for controllable_id in (
+                            raw_ids if isinstance(raw_ids, list) else ()
+                        )
                         if isinstance(controllable_id, str) and controllable_id
-                        else None
-                    ),
+                    ],
                 }
             )
         return result
@@ -1960,6 +1963,11 @@ class SolarBiasCorrectionService:
         is known — otherwise the appliances most likely to have them would lose
         them to the dedup. It also keeps its ``deferrable`` flag: being metered by
         the tree as well does not make a shiftable appliance unshiftable.
+
+        The one label it gives up is a bare entity id. The roster falls back to
+        the meter's id when no single device's name fits — a meter shared by
+        several controllables, or one that declares no name — and the tree's
+        display name for the same sensor is the better name wherever it has one.
         """
         deferrable = self._house_deferrable_consumers()
         device = await self._house_device_consumers()
@@ -1973,11 +1981,20 @@ class SolarBiasCorrectionService:
             for consumer in device
             if consumer["power_entity_id"]
         }
+        label_by_entity = {
+            consumer["energy_entity_id"]: consumer["label"] for consumer in device
+        }
         merged: list[dict] = []
         for consumer in deferrable:
             merged.append(
                 {
                     **consumer,
+                    "label": (
+                        label_by_entity.get(consumer["energy_entity_id"])
+                        if consumer["label"] == consumer["energy_entity_id"]
+                        else None
+                    )
+                    or consumer["label"],
                     "switch_entity_id": (
                         consumer["switch_entity_id"]
                         or switch_by_entity.get(consumer["energy_entity_id"])
@@ -3570,7 +3587,7 @@ def _bucket_house_breakdown(
                 "switchEntityId": consumer.get("switch_entity_id"),
                 "powerEntityId": consumer.get("power_entity_id"),
                 "deferrable": bool(consumer.get("deferrable")),
-                "controllableId": consumer.get("id"),
+                "controllableIds": list(consumer.get("ids") or ()),
             }
         )
     return {
@@ -3618,7 +3635,7 @@ def _build_house_actual_breakdown(
                     switch_entity_id=consumer.get("switch_entity_id"),
                     power_entity_id=consumer.get("power_entity_id"),
                     deferrable=bool(consumer.get("deferrable")),
-                    controllable_id=consumer.get("id"),
+                    controllable_ids=list(consumer.get("ids") or ()),
                 )
             )
         unmeasured_wh = round(max(0.0, float(house_wh) - measured_sum), 4)
@@ -3641,10 +3658,17 @@ def _forecast_appliance_component(
     A controllable the roster does not know at all keeps its id as a last-resort
     label — it is the only name there is — but never as an entity id, and it is
     reported non-deferrable rather than assumed shiftable.
+
+    The switch and power sensor are borrowed from the meter's node only when
+    the meter is this appliance's alone. A meter shared by several controllables
+    is a whole circuit: its power sensor reads every device on it and its switch
+    cuts them all, so neither may stand in for one device's box.
     """
     consumer = consumer or {}
     entity_id = consumer.get("energy_entity_id")
     metered = metered_by_entity_id.get(entity_id) if entity_id else None
+    if metered is not None and len(metered.get("ids") or ()) > 1:
+        metered = None
     return SolarBiasApplianceComponent(
         entity_id=entity_id,
         label=consumer.get("label") or appliance_id,
@@ -3652,7 +3676,7 @@ def _forecast_appliance_component(
         switch_entity_id=(metered or {}).get("switch_entity_id"),
         power_entity_id=(metered or {}).get("power_entity_id"),
         deferrable=bool(consumer.get("deferrable")),
-        controllable_id=appliance_id,
+        controllable_ids=[appliance_id],
     )
 
 

@@ -35,7 +35,7 @@ interface FakeNode {
     id: string;
     name: string;
     deferrable?: boolean;
-    controllableId?: string | null;
+    controllableIds?: string[];
     customLabelTexts?: string[];
     children?: FakeNode[];
 }
@@ -210,14 +210,14 @@ test.describe("deferrable house consumers on the power card", () => {
                 id: "sensor.dishwasher_energy",
                 name: "Dishwasher",
                 deferrable: true,
-                controllableId: "dishwasher",
+                controllableIds: ["dishwasher"],
             },
             { id: "sensor.fridge_energy", name: "Fridge" },
             // Scheduled, but opted out of being shiftable: the forecast
             // breakdown still names its controllable, and it still belongs in
             // the base-load group unbadged — the way it reads on the power card,
             // whose tree hands it no controllable at all.
-            { id: "sensor.pump_energy", name: "Pump", controllableId: "pump" },
+            { id: "sensor.pump_energy", name: "Pump", controllableIds: ["pump"] },
         ]);
 
         expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Fridge", "Pump"]);
@@ -229,11 +229,11 @@ test.describe("deferrable house consumers on the power card", () => {
 
     test("the badge names the current slot's author, and nothing else", async ({ page }) => {
         const rows = await renderedRows(page, [
-            { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-            { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
-            { id: "s3", name: "Pump", deferrable: true, controllableId: "pump" },
-            { id: "s4", name: "Fan", deferrable: true, controllableId: "fan" },
-            { id: "s5", name: "Dryer", deferrable: true, controllableId: "dryer" },
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+            { id: "s3", name: "Pump", deferrable: true, controllableIds: ["pump"] },
+            { id: "s4", name: "Fan", deferrable: true, controllableIds: ["fan"] },
+            { id: "s5", name: "Dryer", deferrable: true, controllableIds: ["dryer"] },
         ]);
 
         expect(rows.map((r) => r.badgeColor)).toEqual([
@@ -254,7 +254,7 @@ test.describe("deferrable house consumers on the power card", () => {
                 id: "sensor.boiler_energy",
                 name: "Boiler",
                 deferrable: true,
-                controllableId: "boiler",
+                controllableIds: ["boiler"],
                 customLabelTexts: ["heating"],
             },
         ]);
@@ -270,13 +270,38 @@ test.describe("deferrable house consumers on the power card", () => {
                 name: "Deferrable consumption",
                 deferrable: true,
                 children: [
-                    { id: "s1", name: "Dishwasher", deferrable: true, controllableId: "dishwasher" },
-                    { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
+                    { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+                    { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
                 ],
             },
         ]);
 
         expect(rows[0].badgeColor).toBe(MIXED_COLOR);
+    });
+
+    test("a shared meter is one box whose badge folds every controllable behind it", async ({ page }) => {
+        // One breaker meter behind two appliances: the tree sends one node
+        // naming both, and the badge covers both rather than picking one.
+        const rows = await renderedRows(page, [
+            {
+                id: "sensor.shared_energy",
+                name: "Shared meter",
+                deferrable: true,
+                controllableIds: ["dishwasher", "boiler"],
+            },
+            {
+                id: "sensor.other_shared_energy",
+                name: "Other shared meter",
+                deferrable: true,
+                controllableIds: ["dishwasher", "dryer"],
+            },
+        ]);
+
+        expect(rows.map((r) => r.label)).toEqual(["Shared meter", "Other shared meter"]);
+        expect(rows.map((r) => r.tint)).toEqual([DEFERRABLE_TINT, DEFERRABLE_TINT]);
+        // Automation beside user disagrees, so neither speaks for the pair;
+        // automation beside a controllable with nothing planned is automation.
+        expect(rows.map((r) => r.badgeColor)).toEqual([MIXED_COLOR, AUTOMATION_COLOR]);
     });
 });
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from bisect import bisect_left, bisect_right
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, TypeVar
@@ -30,6 +30,13 @@ _LOGGER = logging.getLogger(__name__)
 #: silently, which is why every function on this path takes it as an argument.
 _TRANSIENT_REBOUND_WINDOW = timedelta(minutes=30)
 _ENERGY_TOLERANCE_KWH = 1e-6
+
+#: What "running" means for each activity entity the when-active estimators
+#: read: a generic appliance's switch is on, a climate appliance is heating or
+#: cooling. Named once so a shared meter's members are judged exactly as a lone
+#: appliance of the same kind would be.
+SWITCH_ACTIVE_STATES: tuple[str, ...] = ("on",)
+CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
 
 #: How far a reading has to fall below the segment's maximum to be called a
 #: counter reset rather than a dip.
@@ -1138,7 +1145,7 @@ async def estimate_average_hourly_energy_when_switch_on(
         energy_entity_id=energy_entity_id,
         reference_time=reference_time,
         lookback_days=lookback_days,
-        active_states=("on",),
+        active_states=SWITCH_ACTIVE_STATES,
     )
 
 
@@ -1156,7 +1163,53 @@ async def estimate_average_hourly_energy_when_climate_active(
         energy_entity_id=energy_entity_id,
         reference_time=reference_time,
         lookback_days=lookback_days,
-        active_states=("heat", "cool"),
+        active_states=CLIMATE_ACTIVE_STATES,
+    )
+
+
+async def estimate_average_hourly_energy_for_shared_meter(
+    hass: HomeAssistant,
+    *,
+    members: Sequence[tuple[str, str, tuple[str, ...]]],
+    energy_entity_id: str,
+    reference_time: datetime,
+    lookback_days: int,
+) -> dict[str, float | None]:
+    """Each device's when-running estimate from one meter several devices share.
+
+    ``members`` is ``(key, activity entity id, active states)`` per device, and
+    the answer comes back under ``key``. Every member must be listed — including
+    one whose own estimate nobody wants — because each counts toward the divisor
+    whenever it runs; leaving one out would hand its draw to the others.
+
+    One read of the meter and one read per distinct activity entity, all over
+    the same ``lookback_days`` window, which the caller picks for the whole
+    meter. See :func:`_estimate_shared_meter_hourly_energy_kwh` for the split.
+    """
+    utc_start, utc_end = _lookback_window(reference_time, lookback_days)
+    default_unit = _live_energy_unit(hass, energy_entity_id)
+    energy_states = await _async_read_state_changes(
+        hass,
+        energy_entity_id,
+        utc_start,
+        utc_end,
+        no_attributes=default_unit is not None,
+    )
+    states_by_entity: dict[str, list[Any]] = {}
+    for _key, entity_id, _active_states in members:
+        if entity_id not in states_by_entity:
+            states_by_entity[entity_id] = await _async_read_state_changes(
+                hass, entity_id, utc_start, utc_end, no_attributes=True
+            )
+    return _estimate_shared_meter_hourly_energy_kwh(
+        {
+            key: (states_by_entity[entity_id], active_states)
+            for key, entity_id, active_states in members
+        },
+        energy_states,
+        utc_start,
+        utc_end,
+        default_unit,
     )
 
 
@@ -1582,62 +1635,21 @@ async def _estimate_average_hourly_energy_when_entity_active(
     lookback_days: int,
     active_states: tuple[str, ...],
 ) -> float | None:
-    if (
-        isinstance(lookback_days, bool)
-        or not isinstance(lookback_days, int)
-        or lookback_days <= 0
-    ):
-        raise ValueError("lookback_days must be a positive integer")
-
-    local_end = dt_util.as_local(reference_time)
-    local_start = local_end - timedelta(days=lookback_days)
-    utc_start = dt_util.as_utc(local_start)
-    utc_end = dt_util.as_utc(local_end)
-
-    current_energy_state = hass.states.get(energy_entity_id)
-    default_unit = None
-    if current_energy_state is not None:
-        default_unit = current_energy_state.attributes.get("unit_of_measurement")
-
-    # A sensor's unit does not change across its history, so once the live
-    # state has given us one the attributes join buys nothing. Without one the
-    # join is the only source of a unit, and dropping it would normalize every
-    # row to None and hand back an empty history.
-    energy_no_attributes = default_unit is not None
-
-    recorder = get_instance(hass)
-    entity_history = await recorder.async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            utc_start,
-            utc_end,
-            entity_id,
-            True,
-            False,
-            None,
-            True,
-        )
+    utc_start, utc_end = _lookback_window(reference_time, lookback_days)
+    default_unit = _live_energy_unit(hass, energy_entity_id)
+    entity_states = await _async_read_state_changes(
+        hass, entity_id, utc_start, utc_end, no_attributes=True
     )
-    energy_history = await recorder.async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            utc_start,
-            utc_end,
-            energy_entity_id,
-            energy_no_attributes,
-            False,
-            None,
-            True,
-        )
-    )
-
-    entity_states = (
-        entity_history.get(entity_id) or entity_history.get(entity_id.lower()) or []
-    )
-    energy_states = (
-        energy_history.get(energy_entity_id)
-        or energy_history.get(energy_entity_id.lower())
-        or []
+    energy_states = await _async_read_state_changes(
+        hass,
+        energy_entity_id,
+        utc_start,
+        utc_end,
+        # A sensor's unit does not change across its history, so once the live
+        # state has given us one the attributes join buys nothing. Without one
+        # the join is the only source of a unit, and dropping it would normalize
+        # every row to None and hand back an empty history.
+        no_attributes=default_unit is not None,
     )
     return _estimate_average_hourly_energy_kwh_for_active_intervals(
         entity_states=entity_states,
@@ -1647,6 +1659,54 @@ async def _estimate_average_hourly_energy_when_entity_active(
         default_unit=default_unit,
         active_states=active_states,
     )
+
+
+def _lookback_window(
+    reference_time: datetime, lookback_days: int
+) -> tuple[datetime, datetime]:
+    """``lookback_days`` back from ``reference_time``, as a UTC pair."""
+    if (
+        isinstance(lookback_days, bool)
+        or not isinstance(lookback_days, int)
+        or lookback_days <= 0
+    ):
+        raise ValueError("lookback_days must be a positive integer")
+
+    local_end = dt_util.as_local(reference_time)
+    local_start = local_end - timedelta(days=lookback_days)
+    return dt_util.as_utc(local_start), dt_util.as_utc(local_end)
+
+
+def _live_energy_unit(hass: HomeAssistant, energy_entity_id: str) -> Any:
+    """The meter's unit from its live state, or ``None`` when it has none."""
+    current_energy_state = hass.states.get(energy_entity_id)
+    if current_energy_state is None:
+        return None
+    return current_energy_state.attributes.get("unit_of_measurement")
+
+
+async def _async_read_state_changes(
+    hass: HomeAssistant,
+    entity_id: str,
+    utc_start: datetime,
+    utc_end: datetime,
+    *,
+    no_attributes: bool,
+) -> list[Any]:
+    """One entity's state changes over the window, on the recorder executor."""
+    history = await get_instance(hass).async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            utc_start,
+            utc_end,
+            entity_id,
+            no_attributes,
+            False,
+            None,
+            True,
+        )
+    )
+    return history.get(entity_id) or history.get(entity_id.lower()) or []
 
 
 def _build_slot_energy_changes_from_boundaries(
@@ -1990,14 +2050,62 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
     default_unit: Any,
     active_states: tuple[str, ...],
 ) -> float | None:
-    active_intervals = _build_active_state_intervals(
-        states=entity_states,
-        window_start=window_start,
-        window_end=window_end,
-        active_states=active_states,
-    )
-    if not active_intervals:
-        return None
+    """A lone device's meter: the shared split with one member.
+
+    Kept as its own door because most appliances own their meter, but the
+    arithmetic is the shared estimator's. With one member every segment it
+    splits the window into is exactly one of the device's active intervals, so
+    ``delta / 1`` over its own running hours is the plain when-active average.
+    """
+    return _estimate_shared_meter_hourly_energy_kwh(
+        {"": (entity_states, active_states)},
+        energy_states,
+        window_start,
+        window_end,
+        default_unit,
+    )[""]
+
+
+def _estimate_shared_meter_hourly_energy_kwh(
+    members: Mapping[str, tuple[list[Any], tuple[str, ...]]],
+    energy_states: list[Any],
+    window_start: datetime,
+    window_end: datetime,
+    default_unit: Any,
+) -> dict[str, float | None]:
+    """Split one meter evenly among whichever members were running, per segment.
+
+    Several devices behind one meter — four air conditioners on one breaker —
+    each need their own when-running figure, but the meter only knows their
+    total. Each member is ``(activity entity states, active states)``.
+
+    Every member's active-interval boundaries together cut the window into
+    segments, and within one segment the set of running members is constant.
+    A segment where ``k >= 1`` members run hands each of them ``delta / k`` of
+    the meter's energy and the segment's full duration as running hours; each
+    member's estimate is its accumulated energy over its own hours. The split
+    is even on purpose: weighting by nominal power would need a per-device
+    rating nobody configures, and identical devices do not need one.
+
+    Segments where nobody runs are ignored — the meter's draw then is standby
+    or another load, not any member's running energy — as are segments with a
+    missing sample or a negative delta, the same way the single-device average
+    always skipped them. A member's answer is ``None`` when it never ran or
+    what it accumulated rounds to nothing, the same two "history did not
+    answer" cases a lone device has.
+    """
+    intervals_by_member = {
+        key: _build_active_state_intervals(
+            states=states,
+            window_start=window_start,
+            window_end=window_end,
+            active_states=active_states,
+        )
+        for key, (states, active_states) in members.items()
+    }
+    result: dict[str, float | None] = {key: None for key in members}
+    if not any(intervals_by_member.values()):
+        return result
 
     observations = _build_unwrapped_energy_observations(
         _parse_energy_observations(
@@ -2006,10 +2114,15 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
         )
     )
     if not observations:
-        return None
+        return result
 
     boundaries = sorted(
-        {boundary for interval in active_intervals for boundary in interval}
+        {
+            boundary
+            for intervals in intervals_by_member.values()
+            for interval in intervals
+            for boundary in interval
+        }
     )
     # These boundaries are active-state transitions, not a fixed slot grid, so
     # the staleness limit's "multiple of the interval" shape does not apply --
@@ -2020,11 +2133,27 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
         boundaries,
     )
 
-    total_energy_kwh = 0.0
-    total_active_hours = 0.0
-    for interval_start, interval_end in active_intervals:
-        start_sample = boundary_samples.get(interval_start)
-        end_sample = boundary_samples.get(interval_end)
+    energy_kwh = {key: 0.0 for key in members}
+    active_hours = {key: 0.0 for key in members}
+    # Each member's intervals are sorted and disjoint, and every one of their
+    # ends is a boundary, so walking the segments in order only ever advances a
+    # per-member cursor: a segment is running for a member exactly when it lies
+    # inside that member's current interval.
+    cursors = {key: 0 for key in members}
+    for segment_start, segment_end in zip(boundaries, boundaries[1:]):
+        running: list[str] = []
+        for key, intervals in intervals_by_member.items():
+            index = cursors[key]
+            while index < len(intervals) and intervals[index][1] <= segment_start:
+                index += 1
+            cursors[key] = index
+            if index < len(intervals) and intervals[index][0] <= segment_start:
+                running.append(key)
+        if not running:
+            continue
+
+        start_sample = boundary_samples.get(segment_start)
+        end_sample = boundary_samples.get(segment_end)
         if start_sample is None or end_sample is None:
             continue
 
@@ -2032,20 +2161,20 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
         if delta < 0:
             continue
 
-        duration_hours = (interval_end - interval_start).total_seconds() / 3600
+        duration_hours = (segment_end - segment_start).total_seconds() / 3600
         if duration_hours <= 0:
             continue
 
-        total_energy_kwh += delta
-        total_active_hours += duration_hours
+        share = delta / len(running)
+        for key in running:
+            energy_kwh[key] += share
+            active_hours[key] += duration_hours
 
-    if (
-        total_active_hours <= 0
-        or total_energy_kwh <= _ENERGY_TOLERANCE_KWH
-    ):
-        return None
-
-    return round(total_energy_kwh / total_active_hours, 4)
+    for key in members:
+        if active_hours[key] <= 0 or energy_kwh[key] <= _ENERGY_TOLERANCE_KWH:
+            continue
+        result[key] = round(energy_kwh[key] / active_hours[key], 4)
+    return result
 
 
 def _build_active_state_intervals(

@@ -54,12 +54,12 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
     /** A house child whose energy statistic is a deferrable controllable. */
     deferrable: boolean;
     /**
-     * The controllable this device is, where it is one — the key the schedule
-     * stores its assignments under, not the energy statistic in {@link id}.
-     * Null for everything that is not a configured controllable, and for a
-     * controllable that declares no id of its own.
+     * The controllables this device is — the keys the schedule stores their
+     * assignments under, not the energy statistic in {@link id}. Several for a
+     * meter shared by several controllables. Empty for everything that is not a
+     * configured controllable, and for a controllable that declares no id.
      */
-    controllableId: string | null;
+    controllableIds: string[];
 }
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────

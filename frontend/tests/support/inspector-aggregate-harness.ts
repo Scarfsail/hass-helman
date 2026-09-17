@@ -116,7 +116,7 @@ export async function mountInspector(
                         switchEntityId: "switch.washer",
                         powerEntityId: "sensor.washer_power",
                         deferrable: true,
-                        controllableId: "washer",
+                        controllableIds: ["washer"],
                     },
                     {
                         entityId: "sensor.fridge_energy",
@@ -125,7 +125,7 @@ export async function mountInspector(
                         switchEntityId: null,
                         powerEntityId: null,
                         deferrable: false,
-                        controllableId: null,
+                        controllableIds: [],
                     },
                 ],
             });
@@ -222,7 +222,7 @@ export async function mountInspector(
                                 switchEntityId: "switch.washer",
                                 powerEntityId: "sensor.washer_power",
                                 deferrable: true,
-                                controllableId: "washer",
+                                controllableIds: ["washer"],
                             },
                             {
                                 entityId: "sensor.fridge_energy",
@@ -231,7 +231,7 @@ export async function mountInspector(
                                 switchEntityId: null,
                                 powerEntityId: null,
                                 deferrable: false,
-                                controllableId: null,
+                                controllableIds: [],
                             },
                         ],
                     },

@@ -109,7 +109,7 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
             hideChildrenIndicator: false,
             sortChildrenByPower: false,
             deferrable: false,
-            controllableId: null,
+            controllableIds: [],
             children: [],
         });
 

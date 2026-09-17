@@ -618,8 +618,8 @@ class TestInspectorForecastComposition(_InspectorHarness):
         # A forecast row is keyed by the controllable the demand was scheduled
         # for, so the card can look its schedule up either side of now.
         self.assertEqual(
-            [a["controllableId"] for a in breakdown[0]["appliances"]],
-            ["pool", "ev"],
+            [a["controllableIds"] for a in breakdown[0]["appliances"]],
+            [["pool"], ["ev"]],
         )
         # The base is the house before the appliances were added, and the slot
         # with nothing scheduled is all base.
@@ -732,6 +732,33 @@ class TestInspectorForecastComposition(_InspectorHarness):
         )
         # The meterless one has no tree entry to adopt anything from.
         self.assertEqual((ev.switch_entity_id, ev.power_entity_id), (None, None))
+
+    def test_a_forecast_row_on_a_shared_meter_adopts_no_sensors(self):
+        """A shared meter's switch and power belong to the circuit, not one device.
+
+        Borrowing them would show every device on the meter the whole circuit's
+        power, and offer a toggle that cuts all of them at once.
+        """
+        points = service_mod._build_house_forecast_breakdown(
+            {
+                "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+                "demand_points": DEMAND_POINTS,
+            },
+            SCHEDULED_CONSUMERS,
+            date.fromisoformat(TODAY),
+            next_slot=None,
+            metered_by_entity=[
+                {
+                    "energy_entity_id": "sensor.pool_energy",
+                    "switch_entity_id": "switch.pool",
+                    "power_entity_id": "sensor.pool_power",
+                    "ids": ["pool", "pool_heater"],
+                }
+            ],
+        )
+
+        pool, _ev = points[0].appliances
+        self.assertEqual((pool.switch_entity_id, pool.power_entity_id), (None, None))
 
     async def test_the_parts_sum_to_the_house_forecast_they_decompose(self):
         payload = await self._inspect(self._service(), TODAY)

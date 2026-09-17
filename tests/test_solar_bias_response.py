@@ -326,6 +326,11 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
+    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = (
+        _estimate_average_hourly_energy_when_climate_active
+    )
+    recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
+    recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
     class _ApplianceRuntimeHistoryReader:
         def __init__(self, hass):
             self.hass = hass

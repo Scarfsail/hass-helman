@@ -60,6 +60,7 @@ from custom_components.helman.automation.spec import (  # noqa: E402
 from custom_components.helman.controllables.config import (  # noqa: E402
     read_deferrable_consumers,
     read_scheduled_consumers,
+    read_shared_meters,
 )
 from custom_components.helman.controllables.spec import (  # noqa: E402
     CONTROLLABLE_SPECS,
@@ -446,19 +447,18 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
                 {
                     "energy_entity_id": "sensor.pool_energy",
                     "label": "Pool pump",
-                    "id": "pool",
+                    "ids": ["pool"],
                 }
             ],
         )
 
-    def test_the_controllable_id_rides_along_where_one_is_declared(self) -> None:
+    def test_the_controllable_ids_ride_along_where_declared(self) -> None:
         """The key the forecast's scheduled demand is reported under.
 
         Without it a scheduled appliance could not be resolved back to the meter
         and the name the measured breakdown gives it, and the same device would
         read as two different rows either side of now. An entry that declares no
-        id simply omits the key: it can never be scheduled, so nothing keys off
-        it.
+        id contributes no id: it can never be scheduled, so nothing keys off it.
         """
         config = {
             "controllables": [
@@ -472,8 +472,8 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            [c.get("id") for c in read_deferrable_consumers(config)],
-            ["pool", None],
+            [c["ids"] for c in read_deferrable_consumers(config)],
+            [["pool"], []],
         )
 
     def test_only_an_explicit_false_opts_a_device_out(self) -> None:
@@ -508,7 +508,9 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
 
         self.assertEqual(read_deferrable_consumers(config), [])
 
-    def test_order_follows_the_list_and_a_duplicate_meter_is_taken_once(self) -> None:
+    def test_order_follows_the_list_and_a_shared_meter_is_one_entry(self) -> None:
+        """A shared meter is subtracted once, named by the meter, and lists
+        every controllable behind it in config order."""
         config = {
             "controllables": [
                 self._entry("b", meter="sensor.b", name="B"),
@@ -518,8 +520,25 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            [c["label"] for c in read_deferrable_consumers(config)], ["B", "A"]
+            read_deferrable_consumers(config),
+            [
+                {"energy_entity_id": "sensor.b", "label": "sensor.b", "ids": ["b", "b2"]},
+                {"energy_entity_id": "sensor.a", "label": "A", "ids": ["a"]},
+            ],
         )
+
+    def test_read_shared_meters_names_only_meters_with_several_claimants(self) -> None:
+        config = {
+            "controllables": [
+                self._entry("b", meter="sensor.b"),
+                self._entry("a", meter="sensor.a"),
+                # An opt-out still ran and still drew from the meter, so it
+                # still shares it.
+                self._entry("b2", meter="sensor.b", deferrable=False),
+            ]
+        }
+
+        self.assertEqual(read_shared_meters(config), {"sensor.b": ["b", "b2"]})
 
     def test_an_unnamed_device_is_labelled_by_its_meter(self) -> None:
         config = {"controllables": [self._entry("x", meter="sensor.x")]}

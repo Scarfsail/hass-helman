@@ -954,27 +954,76 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_two_controllables_may_not_share_one_meter(self) -> None:
+    def test_four_climate_controllables_may_share_one_meter(self) -> None:
+        # Four air conditioners behind one breaker meter: the house baseline
+        # subtracts the meter once and history_average splits it among them.
+        config = _valid_config()
+        sharers = []
+        for index in range(4):
+            climate = _climate_appliance(strategy="history_average")
+            climate["id"] = f"ac-{index}"
+            climate["name"] = f"AC {index}"
+            climate["controls"]["climate"]["entity_id"] = f"climate.ac_{index}"
+            climate["consumption"]["energy_entity_id"] = (
+                "sensor.jistic_klimatizace_energy"
+            )
+            sharers.append(climate)
+        # A fixed sharer is allowed too: it still counts toward the divisor.
+        sharers[3]["consumption"]["projection"] = {
+            "strategy": "fixed",
+            "hourly_energy_kwh": 1.5,
+        }
+        config["controllables"] = [_inverter_controllable(), *sharers]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.errors, [])
+
+    def test_an_ev_charger_may_not_share_a_meter(self) -> None:
+        config = _valid_config()
+        charger = config["controllables"][1]
+        generic = _generic_appliance(strategy="history_average")
+        charger["consumption"] = {
+            "energy_entity_id": generic["consumption"]["energy_entity_id"],
+        }
+        config["controllables"] = [_inverter_controllable(), charger, generic]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        shared = [
+            issue for issue in report.errors
+            if issue.code == "shared_meter_unsupported_kind"
+        ]
+        self.assertEqual(
+            [issue.path for issue in shared],
+            ["controllables[1].consumption.energy_entity_id"],
+        )
+
+    def test_sharers_of_one_meter_must_agree_on_deferrable(self) -> None:
         config = _valid_config()
         first = _generic_appliance(strategy="history_average")
-        second = {
-            **_climate_appliance(),
-            "consumption": {
-                "energy_entity_id": first["consumption"]["energy_entity_id"],
-                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.5},
-            },
-        }
+        second = _climate_appliance(strategy="history_average")
+        second["consumption"]["energy_entity_id"] = first["consumption"][
+            "energy_entity_id"
+        ]
+        second["consumption"]["deferrable"] = False
         config["controllables"] = [_inverter_controllable(), first, second]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
-        self.assertTrue(
-            any(
-                issue.path == "controllables[2].consumption.energy_entity_id"
-                and issue.code == "duplicate_entity_id"
-                for issue in report.errors
-            )
+        mismatch = [
+            issue.path for issue in report.errors
+            if issue.code == "shared_meter_deferrable_mismatch"
+        ]
+        self.assertEqual(
+            mismatch,
+            [
+                "controllables[1].consumption.deferrable",
+                "controllables[2].consumption.deferrable",
+            ],
         )
 
     def test_the_meter_must_be_a_sensor(self) -> None:
