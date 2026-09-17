@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -12,6 +12,9 @@ from homeassistant.util import dt as dt_util
 from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
 from ..recorder_hourly_series import (
+    CLIMATE_ACTIVE_STATES,
+    SWITCH_ACTIVE_STATES,
+    estimate_average_hourly_energy_for_shared_meter,
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
 )
@@ -20,6 +23,25 @@ from ..storage import TrainingArtifactsStore
 _LOGGER = logging.getLogger(__name__)
 
 HistoryAverageAppliance = GenericApplianceRuntime | ClimateApplianceRuntime
+
+
+@dataclass(frozen=True)
+class SharedMeterMember:
+    """One device behind a shared meter, as the split needs to see it.
+
+    Whatever its projection strategy: a ``fixed`` sharer learns nothing, but it
+    still runs, so it still takes its share of the meter while it does.
+    """
+
+    controllable_id: str
+    entity_id: str
+    active_states: tuple[str, ...]
+
+    @classmethod
+    def for_appliance(cls, appliance: HistoryAverageAppliance) -> SharedMeterMember:
+        if isinstance(appliance, GenericApplianceRuntime):
+            return cls(appliance.id, appliance.switch_entity_id, SWITCH_ACTIVE_STATES)
+        return cls(appliance.id, appliance.climate_entity_id, CLIMATE_ACTIVE_STATES)
 
 
 @dataclass(frozen=True)
@@ -38,6 +60,13 @@ class ApplianceEnergyTrainingRequest:
     """
 
     appliances: Sequence[HistoryAverageAppliance] = field(default_factory=tuple)
+    #: Meter entity id -> every device behind it, for meters two or more
+    #: controllables share. Read from config rather than from ``appliances``:
+    #: a ``fixed`` sharer is not in that list and has no meter on its runtime,
+    #: yet it still counts toward the divisor.
+    shared_meters: Mapping[str, tuple[SharedMeterMember, ...]] = field(
+        default_factory=dict
+    )
 
     @property
     def fingerprint(self) -> str:
@@ -47,6 +76,10 @@ class ApplianceEnergyTrainingRequest:
         one reads, and how far back. Not ``hourly_energy_kwh`` — that is only the
         fallback used when an estimate is missing, so changing it must not
         invalidate a perfectly good estimate.
+
+        Who shares a meter changes the answer too: adding a fourth air
+        conditioner to a breaker shrinks the other three's share, even though
+        none of their own entities moved.
         """
         parts = [
             "|".join((
@@ -57,6 +90,18 @@ class ApplianceEnergyTrainingRequest:
             ))
             for appliance in sorted(self.appliances, key=lambda item: item.id)
         ]
+        parts.extend(
+            "shared|"
+            + energy_entity_id
+            + "|"
+            + ",".join(
+                f"{member.controllable_id}={member.entity_id}"
+                for member in sorted(
+                    members, key=lambda item: (item.controllable_id, item.entity_id)
+                )
+            )
+            for energy_entity_id, members in sorted(self.shared_meters.items())
+        )
         return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
@@ -73,6 +118,10 @@ class ApplianceEnergyTrainingJob:
     path — so a card refresh could block on a 30-day recorder scan. A 30-day
     average does not move between 10:00 and 10:15, so it belongs here, next to
     the house consumption fit, for exactly the reasons #24 moved that one.
+
+    A meter several devices share is read once for all of them and split
+    evenly among whichever were running — see
+    :func:`..recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh`.
 
     Never raises for a resolve failure: it records the outcome itself, and the
     failure record is what keeps the previous estimates alive.
@@ -128,7 +177,13 @@ class ApplianceEnergyTrainingJob:
         estimates: dict[str, float] = {}
         failed_appliance_ids: list[str] = []
 
+        shared_appliances: dict[str, list[HistoryAverageAppliance]] = {}
         for appliance in request.appliances:
+            if appliance.history_energy_entity_id in request.shared_meters:
+                shared_appliances.setdefault(
+                    appliance.history_energy_entity_id, []
+                ).append(appliance)
+                continue
             try:
                 estimate = await self._async_estimate(
                     appliance=appliance,
@@ -153,6 +208,31 @@ class ApplianceEnergyTrainingJob:
             # reader use the appliance's configured hourly energy instead.
             if estimate is not None and estimate > 0:
                 estimates[appliance.id] = estimate
+
+        for energy_entity_id, appliances in shared_appliances.items():
+            try:
+                shared_estimates = await self._async_estimate_shared_meter(
+                    energy_entity_id=energy_entity_id,
+                    members=request.shared_meters[energy_entity_id],
+                    appliances=appliances,
+                    reference_time=reference_time,
+                )
+            except Exception:
+                # One read serves the whole meter, so its failure is every
+                # learning member's failure — but still only this meter's.
+                _LOGGER.exception(
+                    "Error estimating when-active energy for shared meter %r",
+                    energy_entity_id,
+                )
+                failed_appliance_ids.extend(appliance.id for appliance in appliances)
+                continue
+
+            # Only the members that learn are stored; a ``fixed`` sharer was in
+            # the split for its share of the divisor and nothing more.
+            for appliance in appliances:
+                estimate = shared_estimates.get(appliance.id)
+                if estimate is not None and estimate > 0:
+                    estimates[appliance.id] = estimate
 
         if failed_appliance_ids:
             _LOGGER.warning(
@@ -193,6 +273,35 @@ class ApplianceEnergyTrainingJob:
             energy_entity_id=energy_entity_id,
             reference_time=reference_time,
             lookback_days=appliance.history_lookback_days,
+        )
+
+    async def _async_estimate_shared_meter(
+        self,
+        *,
+        energy_entity_id: str,
+        members: Sequence[SharedMeterMember],
+        appliances: Sequence[HistoryAverageAppliance],
+        reference_time: datetime,
+    ) -> dict[str, float | None]:
+        """Every member's share of one meter, from one read of it.
+
+        The window is the longest lookback among the members that learn. Sharers
+        of one meter are expected to agree on it and nothing enforces that, so a
+        member with a shorter lookback is simply split over the longer window —
+        accepted, since a ``fixed`` member has no lookback worth honouring and
+        reading the meter once per window would defeat the single read.
+        """
+        return await estimate_average_hourly_energy_for_shared_meter(
+            self._hass,
+            members=[
+                (member.controllable_id, member.entity_id, member.active_states)
+                for member in members
+            ],
+            energy_entity_id=energy_entity_id,
+            reference_time=reference_time,
+            lookback_days=max(
+                appliance.history_lookback_days for appliance in appliances
+            ),
         )
 
 

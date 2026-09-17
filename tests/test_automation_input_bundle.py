@@ -174,6 +174,11 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
+    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = (
+        _estimate_average_hourly_energy_when_climate_active
+    )
+    recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
+    recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
     class _ApplianceRuntimeHistoryReader:
         def __init__(self, hass):
@@ -1213,8 +1218,10 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         coordinator._training_artifacts_store = SimpleNamespace(
             appliance_energy=section
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"controllables": appliances if appliances is not None else [
+        # The request reads shared meters from the config and the appliances
+        # from the registry built off it, so both see the same document.
+        coordinator._active_config = {
+            "controllables": appliances if appliances is not None else [
                 {
                     "kind": "generic",
                     "id": "dishwasher",
@@ -1229,12 +1236,53 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                         },
                     },
                 },
-            ]}
+            ]
+        }
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            coordinator._active_config
         )
         return coordinator
 
     def _fingerprint_for(self, coordinator):
         return coordinator._read_appliance_energy_training_request().fingerprint
+
+    def test_a_fixed_sharer_of_a_meter_is_in_the_split_but_not_resolved(self) -> None:
+        """The request's shared meters come from config, fixed sharers included.
+
+        A ``fixed`` runtime carries no meter, so only the config can say it sits
+        behind the breaker too — and it has to be counted when it runs.
+        """
+        def _ac(controllable_id, strategy):
+            projection = {"strategy": strategy, "hourly_energy_kwh": 1.5}
+            return {
+                "kind": "climate",
+                "id": controllable_id,
+                "name": controllable_id,
+                "controls": {"climate": {"entity_id": f"climate.{controllable_id}"}},
+                "consumption": {
+                    "energy_entity_id": "sensor.jistic_klimatizace_energy",
+                    "projection": projection,
+                },
+            }
+
+        coordinator = self._make_coordinator(
+            section=None,
+            appliances=[_ac("ac_1", "history_average"), _ac("ac_2", "fixed")],
+        )
+
+        request = coordinator._read_appliance_energy_training_request()
+
+        self.assertEqual([a.id for a in request.appliances], ["ac_1"])
+        self.assertEqual(
+            [
+                (m.controllable_id, m.entity_id, m.active_states)
+                for m in request.shared_meters["sensor.jistic_klimatizace_energy"]
+            ],
+            [
+                ("ac_1", "climate.ac_1", ("heat", "cool")),
+                ("ac_2", "climate.ac_2", ("heat", "cool")),
+            ],
+        )
 
     def test_matching_fingerprint_adopts_without_scheduling_a_refit(self) -> None:
         coordinator = self._make_coordinator(section=None)

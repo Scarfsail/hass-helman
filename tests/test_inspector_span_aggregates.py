@@ -300,7 +300,7 @@ def _make_service_with_consumers():
         ]
 
     service._house_deferrable_consumers_provider = lambda: [
-        {"energy_entity_id": WASHER_METER, "label": "Washer", "id": "washer"}
+        {"energy_entity_id": WASHER_METER, "label": "Washer", "ids": ["washer"]}
     ]
     service._house_device_consumers_provider = _device_consumers
     return service
@@ -655,7 +655,7 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": "switch.washer",
                     "powerEntityId": "sensor.washer_power",
                     "deferrable": True,
-                    "controllableId": "washer",
+                    "controllableIds": ["washer"],
                 },
                 {
                     "entityId": FRIDGE_METER,
@@ -664,7 +664,7 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": None,
                     "powerEntityId": None,
                     "deferrable": False,
-                    "controllableId": None,
+                    "controllableIds": [],
                 },
             ],
         )

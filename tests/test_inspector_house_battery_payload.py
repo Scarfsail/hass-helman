@@ -267,7 +267,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                 {
                     "energy_entity_id": "sensor.dishwasher",
                     "label": "Dishwasher",
-                    "id": "dishwasher",
+                    "ids": ["dishwasher"],
                 },
                 # A roster entry that declares no controllable keys off nothing.
                 {"energy_entity_id": "sensor.ev", "label": "EV charger"},
@@ -294,7 +294,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": None,
                     "powerEntityId": None,
                     "deferrable": True,
-                    "controllableId": "dishwasher",
+                    "controllableIds": ["dishwasher"],
                 },
                 {
                     "entityId": "sensor.ev",
@@ -303,7 +303,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": None,
                     "powerEntityId": None,
                     "deferrable": True,
-                    "controllableId": None,
+                    "controllableIds": [],
                 },
             ],
         )
@@ -355,7 +355,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": "switch.ev",
                     "powerEntityId": "sensor.ev_power",
                     "deferrable": True,
-                    "controllableId": None,
+                    "controllableIds": [],
                 },
                 {
                     "entityId": "sensor.fridge",
@@ -364,7 +364,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": "switch.fridge",
                     "powerEntityId": "sensor.fridge_power",
                     "deferrable": False,
-                    "controllableId": None,
+                    "controllableIds": [],
                 },
             ],
         )

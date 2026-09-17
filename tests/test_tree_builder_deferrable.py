@@ -4,7 +4,7 @@ The power card marks the loads the optimizer may move in time, and it must do so
 from the same roster the house forecast carves out — no second list to keep in
 agreement. A house child's node id *is* its energy statistic, which is exactly
 what ``read_deferrable_consumers`` is keyed by, so the match is a dict lookup —
-which also hands the node the controllable id the schedule is stored under — and
+which also hands the node the controllable ids the schedule is stored under — and
 nothing else on the tree is touched.
 """
 
@@ -106,16 +106,16 @@ class TestHouseChildDeferrability(unittest.TestCase):
 
         payload = kitchen.to_dict()
         self.assertFalse(payload["deferrable"])
-        self.assertIsNone(payload["controllableId"])
+        self.assertEqual(payload["controllableIds"], [])
         self.assertEqual(
             {c["id"]: c["deferrable"] for c in payload["children"]},
             {"sensor.dishwasher_energy": True, "sensor_kitchen_energy_unmeasured": False},
         )
         self.assertEqual(
-            {c["id"]: c["controllableId"] for c in payload["children"]},
+            {c["id"]: c["controllableIds"] for c in payload["children"]},
             {
-                "sensor.dishwasher_energy": "dishwasher",
-                "sensor_kitchen_energy_unmeasured": None,
+                "sensor.dishwasher_energy": ["dishwasher"],
+                "sensor_kitchen_energy_unmeasured": [],
             },
         )
 
@@ -130,10 +130,26 @@ class TestHouseChildControllableId(unittest.TestCase):
         )
 
         self.assertEqual(
-            nodes["sensor.dishwasher_energy"].controllable_id, "dishwasher"
+            nodes["sensor.dishwasher_energy"].controllable_ids, ["dishwasher"]
         )
         # Nothing the roster does not name is given an id to look a schedule up by.
-        self.assertIsNone(nodes["sensor.fridge_energy"].controllable_id)
+        self.assertEqual(nodes["sensor.fridge_energy"].controllable_ids, [])
+
+    def test_a_shared_meter_is_one_node_naming_every_controllable_behind_it(self):
+        # Four air conditioners on one breaker meter: one node, one badge, and
+        # the badge has to cover all four schedules.
+        meter = "sensor.jistic_klimatizace_energy"
+        nodes = _house_children(
+            [_controllable(f"ac-{index}", meter) for index in range(4)],
+            [meter],
+        )
+
+        self.assertEqual(list(nodes), [meter])
+        self.assertTrue(nodes[meter].deferrable)
+        self.assertEqual(
+            nodes[meter].to_dict()["controllableIds"],
+            ["ac-0", "ac-1", "ac-2", "ac-3"],
+        )
 
     def test_a_roster_entry_with_no_id_is_deferrable_with_no_controllable(self):
         # Such an entry can never be scheduled, so there is nothing to key off —
@@ -144,15 +160,15 @@ class TestHouseChildControllableId(unittest.TestCase):
         )
 
         self.assertTrue(nodes["sensor.dryer_energy"].deferrable)
-        self.assertIsNone(nodes["sensor.dryer_energy"].controllable_id)
+        self.assertEqual(nodes["sensor.dryer_energy"].controllable_ids, [])
 
-    def test_a_controllable_that_opted_out_carries_no_controllable_id(self):
+    def test_a_controllable_that_opted_out_carries_no_controllable_ids(self):
         nodes = _house_children(
             [_controllable("boiler", "sensor.boiler_energy", deferrable=False)],
             ["sensor.boiler_energy"],
         )
 
-        self.assertIsNone(nodes["sensor.boiler_energy"].controllable_id)
+        self.assertEqual(nodes["sensor.boiler_energy"].controllable_ids, [])
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
     CONTROLLABLE_SPECS,
     KNOWN_CONTROLLABLE_KINDS,
+    SHARED_METER_KINDS,
     appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
@@ -988,7 +989,7 @@ def _validate_controllables_config(
         return
 
     seen_ids: set[str] = set()
-    seen_energy_entity_ids: set[str] = set()
+    meter_claimants: dict[str, list[tuple[str, str, bool]]] = {}
     seen_inverter = False
     for index, raw_controllable in enumerate(raw_controllables):
         path = f"controllables[{index}]"
@@ -1048,7 +1049,7 @@ def _validate_controllables_config(
             raw_controllable,
             path=path,
             kind=kind,
-            seen_energy_entity_ids=seen_energy_entity_ids,
+            meter_claimants=meter_claimants,
             report=report,
         )
 
@@ -1071,13 +1072,71 @@ def _validate_controllables_config(
                 message=str(err),
             )
 
+    _validate_shared_meters(meter_claimants, report=report)
+
+
+def _validate_shared_meters(
+    meter_claimants: Mapping[str, list[tuple[str, str, bool]]],
+    *,
+    report: ValidationReport,
+) -> None:
+    """Rules for a meter named by more than one controllable.
+
+    Several devices behind one breaker meter are a real setup — four air
+    conditioners on one circuit — so a shared meter is valid. The house baseline
+    subtracts the meter once however many claim it, and ``history_average``
+    splits its energy evenly among the sharers running at the time. Two things
+    make that split impossible, and each is refused here rather than guessed at:
+
+    * a sharer with no way to tell when it runs. Only generic and climate
+      controllables have a switch or HVAC mode to read, and a device that cannot
+      be counted in the divisor would silently inflate everyone else's share;
+    * sharers that disagree on ``deferrable``. The meter is one row in the
+      house split — either carved out of the baseline or not — so one sharer
+      opting out while another opts in has no consistent meaning. A missing
+      value is ``True``, the same rule ``read_deferrable_consumers`` applies.
+
+    A ``fixed`` projection on a sharer is fine: it still runs, so it still counts
+    toward the divisor, it just does not learn from the result.
+    """
+    section = "controllables"
+    for entity_id, claimants in meter_claimants.items():
+        if len(claimants) < 2:
+            continue
+        for path, kind, _deferrable in claimants:
+            if kind in SHARED_METER_KINDS:
+                continue
+            report.add_error(
+                section=section,
+                path=f"{path}.consumption.energy_entity_id",
+                code="shared_meter_unsupported_kind",
+                message=(
+                    f"energy meter {entity_id!r} is shared with another "
+                    "controllable; only generic and climate controllables can "
+                    "share a meter, because splitting it needs a switch or "
+                    "climate entity to tell when each device runs"
+                ),
+            )
+        if len({deferrable for _path, _kind, deferrable in claimants}) > 1:
+            for path, _kind, _deferrable in claimants:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.consumption.deferrable",
+                    code="shared_meter_deferrable_mismatch",
+                    message=(
+                        f"every controllable sharing energy meter {entity_id!r} "
+                        "must agree on 'consumption.deferrable'; the meter is "
+                        "one row in the house split"
+                    ),
+                )
+
 
 def _validate_controllable_consumption(
     raw_controllable: Mapping[str, Any],
     *,
     path: str,
     kind: str,
-    seen_energy_entity_ids: set[str],
+    meter_claimants: dict[str, list[tuple[str, str, bool]]],
     report: ValidationReport,
 ) -> None:
     """The ``consumption`` block: the meter, and who may declare one.
@@ -1086,8 +1145,9 @@ def _validate_controllable_consumption(
     ``consumption.projection``, and the meter itself when a projection needs it.
     What only this function can see is everything *across* entries and outside
     the appliance kinds: a meter on an EV charger (which has no projection to
-    hang validation off), the same meter claimed by two devices, and a
-    ``consumption`` block on the inverter.
+    hang validation off), who claims each meter — collected into
+    ``meter_claimants`` so :func:`_validate_shared_meters` can judge sharing once
+    every entry has been seen — and a ``consumption`` block on the inverter.
 
     The inverter is refused the block outright rather than field by field. It is
     not house consumption — it is what moves energy in and out of the battery —
@@ -1172,18 +1232,9 @@ def _validate_controllable_consumption(
     if not _is_non_empty_string(energy_entity_id):
         return
 
-    entity_id = energy_entity_id.strip()
-    if entity_id in seen_energy_entity_ids:
-        report.add_error(
-            section=section,
-            path=f"{path}.consumption.energy_entity_id",
-            code="duplicate_entity_id",
-            message=(
-                f"energy meter {entity_id!r} is already claimed by another "
-                "controllable; two devices sharing one meter would be counted twice"
-            ),
-        )
-    seen_energy_entity_ids.add(entity_id)
+    meter_claimants.setdefault(energy_entity_id.strip(), []).append(
+        (path, kind, deferrable is not False)
+    )
 
 
 def _validate_controllable_id(

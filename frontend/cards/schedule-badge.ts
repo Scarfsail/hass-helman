@@ -52,14 +52,14 @@ export class ScheduleBadge extends LitElement {
     }
 
     @property({ attribute: false }) public hass?: HomeAssistant;
-    /** The controllable this box is; null for a group row. */
+    /** The controllable this box is; null for a group row or a shared meter. */
     @property({ attribute: false }) public controllableId: string | null = null;
     /**
-     * The controllables a group row stands for.
+     * The controllables a group row — or a meter several of them share — stands for.
      *
-     * Only read when {@link controllableId} is null: a group is not itself a
-     * controllable, so it folds its children's states into one tint rather than
-     * picking one of them to speak for the rest.
+     * Only read when {@link controllableId} is null: neither is itself one
+     * controllable, so it folds their states into one tint rather than picking
+     * one of them to speak for the rest.
      */
     @property({ attribute: false }) public controllableIds: readonly string[] = [];
 

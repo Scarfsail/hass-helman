@@ -327,10 +327,10 @@ def test_appliance_component_defaults_carry_no_controllable():
         value_wh=120.0,
     )
 
-    assert appliance.controllable_id is None
+    assert appliance.controllable_ids == []
 
 
-def test_house_breakdown_payload_carries_the_controllable_id():
+def test_house_breakdown_payload_carries_the_controllable_ids():
     from custom_components.helman.solar_bias_correction.models import (
         SolarBiasApplianceComponent,
         SolarBiasHouseBreakdownPoint,
@@ -346,7 +346,7 @@ def test_house_breakdown_payload_carries_the_controllable_id():
                 label="Dishwasher",
                 value_wh=900.0,
                 deferrable=True,
-                controllable_id="dishwasher",
+                controllable_ids=["dishwasher"],
             ),
             # A consumer the roster names no controllable for stays schedule-less.
             SolarBiasApplianceComponent(
@@ -359,7 +359,7 @@ def test_house_breakdown_payload_carries_the_controllable_id():
 
     payload = _house_breakdown_payload(point)
 
-    assert [a["controllableId"] for a in payload["appliances"]] == ["dishwasher", None]
+    assert [a["controllableIds"] for a in payload["appliances"]] == [["dishwasher"], []]
 
 
 def test_read_bias_config_passes_explicit_aggregation_method():

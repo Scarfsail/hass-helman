@@ -41,11 +41,13 @@ class DeviceNodeDTO:
     # card can mark the load the optimizer is free to move in time. Every other
     # node — sources, unmeasured remainders, virtual groups — is never deferrable.
     deferrable: bool = False
-    # The controllable this node's energy statistic belongs to, where the
-    # deferrable roster names one, so the card can look the node's schedule up.
-    # None for a deferrable entry that declares no controllable, and for every
-    # node that is not a deferrable house child at all.
-    controllable_id: str | None = None
+    # The controllables this node's energy statistic belongs to, as the
+    # deferrable roster names them, so the card can look the node's schedule up.
+    # Several when the statistic is a meter shared by several devices — the node
+    # stays one, and its badge covers all of them. Empty for a deferrable entry
+    # that declares no controllable, and for every node that is not a deferrable
+    # house child at all.
+    controllable_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -71,7 +73,7 @@ class DeviceNodeDTO:
             "ratioSensorId": self.ratio_sensor_id,
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
-            "controllableId": self.controllable_id,
+            "controllableIds": self.controllable_ids,
         }
 
 
@@ -276,8 +278,8 @@ class HelmanTreeBuilder:
         # ``energy_entity_id`` the deferrable roster is keyed by — so the match
         # needs no extra configuration and no second round-trip: the config is
         # already in hand and parsing it is pure in-memory work.
-        deferrable_stats: dict[str, str | None] = {
-            c["energy_entity_id"]: c.get("id")
+        deferrable_stats: dict[str, list[str]] = {
+            c["energy_entity_id"]: c["ids"]
             for c in read_deferrable_consumers(self._config)
         }
 
@@ -390,7 +392,7 @@ class HelmanTreeBuilder:
                 hide_children_indicator=False,
                 sort_children_by_power=False,
                 deferrable=stat_entity_id in deferrable_stats,
-                controllable_id=deferrable_stats.get(stat_entity_id),
+                controllable_ids=list(deferrable_stats.get(stat_entity_id, ())),
             )
             device_map[stat_entity_id] = node
 

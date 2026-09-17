@@ -4,6 +4,7 @@ import importlib
 import sys
 import types
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,12 +33,16 @@ appliance_energy_module = importlib.import_module(
 generic_module = importlib.import_module(
     "custom_components.helman.appliances.generic_appliance"
 )
+recorder_module = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+)
 climate_module = importlib.import_module(
     "custom_components.helman.appliances.climate_appliance"
 )
 
 ApplianceEnergyTrainingJob = appliance_energy_module.ApplianceEnergyTrainingJob
 ApplianceEnergyTrainingRequest = appliance_energy_module.ApplianceEnergyTrainingRequest
+SharedMeterMember = appliance_energy_module.SharedMeterMember
 
 
 def _make_generic(
@@ -138,8 +143,63 @@ class _RecordingEstimator:
         return self._answers.get(appliance_id)
 
 
+class _SharedMeterRecorder:
+    """Stands in for the shared-meter read: the real split over canned history.
+
+    Each member's switch history is canned per activity entity, and the meter's
+    readings are one list, so a test exercises the actual arithmetic while the
+    recorder itself stays out of the picture.
+    """
+
+    def __init__(self, switch_states, energy_states, *, error=False) -> None:
+        self._switch_states = switch_states
+        self._energy_states = energy_states
+        self._error = error
+        self.calls: list[tuple[str, list, int]] = []
+
+    async def __call__(
+        self, _hass, *, members, energy_entity_id, reference_time, lookback_days
+    ):
+        self.calls.append((energy_entity_id, list(members), lookback_days))
+        if self._error:
+            raise RuntimeError("recorder is down")
+        return recorder_module._estimate_shared_meter_hourly_energy_kwh(
+            {
+                key: (self._switch_states.get(entity_id, []), active_states)
+                for key, entity_id, active_states in members
+            },
+            self._energy_states,
+            _at(10),
+            _at(12),
+            "kWh",
+        )
+
+
+def _at(hour: int) -> datetime:
+    return datetime(2026, 3, 20, hour, 0, tzinfo=timezone.utc)
+
+
+def _switch(*changes: tuple[str, int]) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(state=state, last_updated=_at(hour)) for state, hour in changes
+    ]
+
+
+# 1 kWh from 10:00 to 11:00 and another 1 kWh from 11:00 to 12:00.
+_SHARED_METER_READINGS = [
+    SimpleNamespace(
+        state=value, attributes={"unit_of_measurement": "kWh"}, last_updated=_at(hour)
+    )
+    for value, hour in (("0.0", 10), ("1.0", 11), ("2.0", 12))
+]
+_SHARED_METER = "sensor.jistic_klimatizace_energy"
+
+
 class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self._original_shared = (
+            appliance_energy_module.estimate_average_hourly_energy_for_shared_meter
+        )
         self._original_switch = (
             appliance_energy_module.estimate_average_hourly_energy_when_switch_on
         )
@@ -148,6 +208,9 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def tearDown(self) -> None:
+        appliance_energy_module.estimate_average_hourly_energy_for_shared_meter = (
+            self._original_shared
+        )
         appliance_energy_module.estimate_average_hourly_energy_when_switch_on = (
             self._original_switch
         )
@@ -163,15 +226,117 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             estimator.climate
         )
 
-    def _make_job(self, store, appliances, *, on_trained=None):
+    def _make_job(self, store, appliances, *, on_trained=None, shared_meters=None):
         return ApplianceEnergyTrainingJob(
             SimpleNamespace(),
             store,
             read_request=lambda: ApplianceEnergyTrainingRequest(
-                appliances=tuple(appliances)
+                appliances=tuple(appliances),
+                shared_meters=shared_meters or {},
             ),
             on_trained=on_trained,
         )
+
+    def _install_shared(self, recorder: _SharedMeterRecorder) -> None:
+        appliance_energy_module.estimate_average_hourly_energy_for_shared_meter = (
+            recorder
+        )
+
+    async def test_a_shared_meter_is_split_among_the_members_running(self) -> None:
+        """Both run for the first hour, only A for the second.
+
+        The shared hour's kWh is halved; the solo hour is all A's. So A learns
+        (0.5 + 1) / 2 h and B learns 0.5 / 1 h — and the meter is read once for
+        both, never through the lone-device estimator that would hand each of
+        them the whole breaker.
+        """
+        store = _FakeStore()
+        estimator = _RecordingEstimator({})
+        self._install(estimator)
+        recorder = _SharedMeterRecorder(
+            {
+                "switch.ac-a": _switch(("on", 10), ("off", 12)),
+                "switch.ac-b": _switch(("on", 10), ("off", 11)),
+            },
+            _SHARED_METER_READINGS,
+        )
+        self._install_shared(recorder)
+        a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
+        b = _make_generic("ac-b", energy_entity_id=_SHARED_METER, lookback_days=7)
+        job = self._make_job(
+            store,
+            [a, b],
+            shared_meters={
+                _SHARED_METER: (
+                    SharedMeterMember.for_appliance(a),
+                    SharedMeterMember.for_appliance(b),
+                )
+            },
+        )
+
+        outcome = await job.async_train()
+
+        self.assertEqual(outcome, "estimates_trained")
+        self.assertEqual(store.section["data"], {"ac-a": 0.75, "ac-b": 0.5})
+        self.assertEqual(estimator.switch_calls, [])
+        # One read for the meter, over the longest lookback among the members.
+        self.assertEqual(len(recorder.calls), 1)
+        self.assertEqual(recorder.calls[0][2], 30)
+
+    async def test_a_fixed_sharer_takes_its_share_but_stores_nothing(self) -> None:
+        store = _FakeStore()
+        self._install(_RecordingEstimator({}))
+        self._install_shared(
+            _SharedMeterRecorder(
+                {
+                    "switch.ac-a": _switch(("on", 10), ("off", 11)),
+                    "switch.ac-fixed": _switch(("on", 10), ("off", 11)),
+                },
+                _SHARED_METER_READINGS,
+            )
+        )
+        a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
+        # A fixed runtime carries no meter and is not in the request's
+        # appliances, but it ran alongside A for the whole hour.
+        fixed = _make_generic("ac-fixed", strategy="fixed", energy_entity_id=None)
+        job = self._make_job(
+            store,
+            [a],
+            shared_meters={
+                _SHARED_METER: (
+                    SharedMeterMember.for_appliance(a),
+                    SharedMeterMember.for_appliance(fixed),
+                )
+            },
+        )
+
+        await job.async_train()
+
+        self.assertEqual(store.section["data"], {"ac-a": 0.5})
+
+    async def test_a_failed_shared_read_fails_every_learning_member(self) -> None:
+        store = _FakeStore()
+        self._install(_RecordingEstimator({"dishwasher": 0.8}))
+        self._install_shared(_SharedMeterRecorder({}, [], error=True))
+        a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
+        b = _make_generic("ac-b", energy_entity_id=_SHARED_METER)
+        job = self._make_job(
+            store,
+            [_make_generic(), a, b],
+            shared_meters={
+                _SHARED_METER: (
+                    SharedMeterMember.for_appliance(a),
+                    SharedMeterMember.for_appliance(b),
+                )
+            },
+        )
+
+        with self.assertLogs(appliance_energy_module._LOGGER, level="WARNING") as logs:
+            outcome = await job.async_train()
+
+        self.assertEqual(outcome, "estimates_trained")
+        self.assertEqual(store.section["data"], {"dishwasher": 0.8})
+        self.assertTrue(any("ac-a, ac-b" in line for line in logs.output))
 
     async def test_resolves_and_stores_one_estimate_per_appliance(self) -> None:
         store = _FakeStore()
@@ -312,6 +477,25 @@ class ApplianceEnergyFingerprintTests(unittest.TestCase):
         ).fingerprint
 
         self.assertEqual(before, after)
+
+    def test_adding_a_sharer_moves_the_fingerprint(self) -> None:
+        """A new device on the meter shrinks everyone else's share."""
+        a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
+        b = _make_generic("ac-b", energy_entity_id=_SHARED_METER)
+        fixed = _make_generic("ac-c", strategy="fixed", energy_entity_id=None)
+        members = (SharedMeterMember.for_appliance(a), SharedMeterMember.for_appliance(b))
+
+        before = ApplianceEnergyTrainingRequest(
+            (a, b), shared_meters={_SHARED_METER: members}
+        ).fingerprint
+        after = ApplianceEnergyTrainingRequest(
+            (a, b),
+            shared_meters={
+                _SHARED_METER: (*members, SharedMeterMember.for_appliance(fixed))
+            },
+        ).fingerprint
+
+        self.assertNotEqual(before, after)
 
     def test_appliance_order_does_not_move_the_fingerprint(self) -> None:
         one = ApplianceEnergyTrainingRequest(

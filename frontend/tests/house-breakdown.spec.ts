@@ -36,8 +36,8 @@ type Appliance = {
     powerEntityId?: string | null;
     /** A shiftable appliance — a configured deferrable controllable. */
     deferrable?: boolean;
-    /** The controllable id the schedule keys its assignments by, where there is one. */
-    controllableId?: string | null;
+    /** The controllable ids the schedule keys their assignments by. */
+    controllableIds?: string[];
 };
 
 /**
@@ -101,7 +101,7 @@ async function mountInspector(
                 switchEntityId: string | null;
                 powerEntityId: string | null;
                 deferrable: boolean;
-                controllableId: string | null;
+                controllableIds: string[];
             }>;
         }> = [];
         const houseForecast: Array<{ timestamp: string; valueWh: number }> = [];
@@ -140,7 +140,7 @@ async function mountInspector(
                         switchEntityId: a.switchEntityId ?? null,
                         powerEntityId: a.powerEntityId ?? null,
                         deferrable: a.deferrable ?? false,
-                        controllableId: a.controllableId ?? null,
+                        controllableIds: a.controllableIds ?? [],
                     })),
                 });
             }
@@ -163,7 +163,7 @@ async function mountInspector(
                             powerEntityId: a.powerEntityId ?? null,
                             // Everything the planner schedules is shiftable by definition.
                             deferrable: a.deferrable ?? true,
-                            controllableId: a.controllableId ?? null,
+                            controllableIds: a.controllableIds ?? [],
                         })),
                     });
                 }
@@ -904,7 +904,7 @@ const MIXED_APPLIANCES: Appliance[] = [
         label: "Dishwasher",
         wh: 50,
         deferrable: true,
-        controllableId: "dishwasher",
+        controllableIds: ["dishwasher"],
     },
     { entityId: "sensor.fridge", label: "Fridge", wh: 30 },
 ];
@@ -1210,7 +1210,7 @@ test.describe("solar inspector forecast composition", () => {
                 entityId: "sensor.dishwasher",
                 label: "Dishwasher",
                 wh: 40,
-                controllableId: "dishwasher",
+                controllableIds: ["dishwasher"],
             },
         ],
     };
@@ -1307,6 +1307,34 @@ test.describe("solar inspector forecast composition", () => {
         expect((await breakdownBoxes(page, 1)).map((r) => [r.label, r.power])).toEqual([
             ["Base load", "400 Wh"],
             ["Dishwasher", "80 Wh"],
+        ]);
+    });
+
+    test("two scheduled appliances behind one shared meter are two boxes", async ({ page }) => {
+        await loadCardBundle(page);
+        // Two air conditioners on one breaker meter, both scheduled into the
+        // slot. The forecast is per controllable, so they arrive as two rows on
+        // the same entityId — which must stay two boxes, each with its own badge,
+        // rather than merging on the meter they share.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: {
+                baseWh: 80,
+                appliances: [
+                    { entityId: "sensor.ac_energy", label: "AC 1", wh: 40, controllableIds: ["ac_1"] },
+                    { entityId: "sensor.ac_energy", label: "AC 2", wh: 20, controllableIds: ["ac_2"] },
+                ],
+            },
+        });
+        await selectNoonSlot(page);
+
+        const forecastRows = await breakdownBoxes(page, 1);
+        expect(forecastRows.map((r) => [r.label, r.power, r.scheduleBadge])).toEqual([
+            ["Base load", "320 Wh", null],
+            ["AC 1", "160 Wh", "ac_1"],
+            ["AC 2", "80 Wh", "ac_2"],
         ]);
     });
 

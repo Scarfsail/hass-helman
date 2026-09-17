@@ -227,10 +227,12 @@ class SolarBiasApplianceComponent:
     is a property of the device, not of the slot: an appliance nothing scheduled
     still counts as deferrable in the slot it happened to run in.
 
-    ``controllable_id`` is the controllable the row belongs to — the key the
-    schedule stores assignments under — where there is one, so the inspector can
-    resolve what is scheduled for the row right now. It is None for a consumer
-    the roster names no controllable for.
+    ``controllable_ids`` are the controllables the row belongs to — the keys the
+    schedule stores assignments under — so the inspector can resolve what is
+    scheduled for the row right now. A forecast row is one scheduled appliance
+    and names exactly one; a measured row is one meter and names every
+    controllable behind it, several when the meter is shared. Empty for a
+    consumer the roster names no controllable for.
     """
 
     entity_id: str | None
@@ -239,7 +241,7 @@ class SolarBiasApplianceComponent:
     switch_entity_id: str | None = None
     power_entity_id: str | None = None
     deferrable: bool = False
-    controllable_id: str | None = None
+    controllable_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -565,7 +567,7 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
                 "switchEntityId": c.switch_entity_id,
                 "powerEntityId": c.power_entity_id,
                 "deferrable": c.deferrable,
-                "controllableId": c.controllable_id,
+                "controllableIds": c.controllable_ids,
             }
             for c in point.appliances
         ],

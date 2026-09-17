@@ -51,6 +51,11 @@ def _install_import_stubs() -> None:
     recorder_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
+    recorder_mod.estimate_average_hourly_energy_for_shared_meter = (
+        _estimate_average_hourly_energy_when_climate_active
+    )
+    recorder_mod.SWITCH_ACTIVE_STATES = ("on",)
+    recorder_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
     homeassistant_pkg = sys.modules.get("homeassistant")
     if homeassistant_pkg is None:

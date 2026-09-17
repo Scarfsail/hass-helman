@@ -103,7 +103,11 @@ from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_training_window_config,
 )
-from .controllables.config import read_deferrable_consumers, read_scheduled_consumers
+from .controllables.config import (
+    read_deferrable_consumers,
+    read_scheduled_consumers,
+    read_shared_meters,
+)
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
@@ -171,6 +175,7 @@ from .storage import HelmanStorage, TrainingArtifactsStore
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
+    SharedMeterMember,
 )
 from .training.batch import TrainingBatch
 from .training.house_consumption import (
@@ -1498,13 +1503,36 @@ class HelmanCoordinator:
         Every appliance on ``history_average``, not just the ones an enabled
         optimizer references: the same estimates feed the demand projection,
         which runs for anything holding a scheduled action however it got there.
+
+        Shared meters come from config, not from those appliances: a ``fixed``
+        sharer has no meter on its runtime at all, yet it still runs and so
+        still divides the meter. An id the registry cannot resolve to a generic
+        or climate runtime — a broken entry — drops out of the split rather than
+        failing the run; validation has already said what is wrong with it.
         """
+        shared_meters: dict[str, tuple[SharedMeterMember, ...]] = {}
+        for energy_entity_id, controllable_ids in read_shared_meters(
+            self._active_config
+        ).items():
+            members = tuple(
+                SharedMeterMember.for_appliance(appliance)
+                for controllable_id in controllable_ids
+                if isinstance(
+                    appliance := self._appliances_registry.get_appliance(
+                        controllable_id
+                    ),
+                    (GenericApplianceRuntime, ClimateApplianceRuntime),
+                )
+            )
+            if members:
+                shared_meters[energy_entity_id] = members
         return ApplianceEnergyTrainingRequest(
             appliances=tuple(
                 appliance
                 for appliance in self._iter_automation_candidate_appliances()
                 if appliance.uses_history_average
-            )
+            ),
+            shared_meters=shared_meters,
         )
 
     def _adopt_stored_appliance_energy(self) -> str | None:

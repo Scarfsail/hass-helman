@@ -67,6 +67,15 @@ CONTROLLABLE_KIND_CLIMATE = "climate"
 CONTROLLABLE_KIND_EV_CHARGER = "ev_charger"
 CONTROLLABLE_KIND_GENERIC = "generic"
 
+#: The kinds that may share one energy meter. Splitting a meter divides its
+#: energy among the sharers that were running, so every sharer needs an entity
+#: that says when it runs: a switch for ``generic``, an HVAC mode for
+#: ``climate``. Validation refuses any other kind a shared meter, and the
+#: shared-meter reader counts only these, so an entry of some unknown kind --
+#: preserved but not editable, and so never validated -- can neither divide a
+#: meter nor make one read as shared.
+SHARED_METER_KINDS = frozenset({CONTROLLABLE_KIND_GENERIC, CONTROLLABLE_KIND_CLIMATE})
+
 
 @dataclass(frozen=True)
 class ControllableSpec:

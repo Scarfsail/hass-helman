@@ -21,10 +21,12 @@ export type ApplianceComponent = {
    */
   deferrable: boolean;
   /**
-   * The controllable this appliance is, where it is one — the id the schedule
-   * keys its assignments by, which {@link entityId} (a meter) is not.
+   * The controllables this appliance is — the ids the schedule keys their
+   * assignments by, which {@link entityId} (a meter) is not. A forecast row is
+   * one scheduled appliance and names exactly one; a measured row is one meter
+   * and names every controllable behind it.
    */
-  controllableId: string | null;
+  controllableIds: string[];
 };
 export type HouseBreakdownPoint = {
   slot: string;

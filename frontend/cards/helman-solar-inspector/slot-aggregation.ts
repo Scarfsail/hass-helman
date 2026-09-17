@@ -466,11 +466,19 @@ export function splitHouseByDeferrable(
  * as 0 Wh would understate it by exactly what it overstates the other row by.
  */
 /**
- * What merges one appliance's rows across slots: its meter, or its name when it
- * has none — the same identity the panel keys its box on.
+ * What merges one appliance's rows across slots — the same identity the panel
+ * keys its box on.
+ *
+ * A row that is exactly one controllable is keyed by it: forecast rows are per
+ * controllable, so four air conditioners behind one shared meter are four rows
+ * on the same entityId, and keying them by the meter would fold them into one
+ * box with one set of bars. Anything else — a measured shared meter naming
+ * several controllables, a device the roster names none for — is its meter, or
+ * its name when it has none.
  */
-function applianceKey(appliance: ApplianceComponent): string {
-  return appliance.entityId ?? appliance.label;
+export function applianceKey(appliance: ApplianceComponent): string {
+  const ids = appliance.controllableIds ?? [];
+  return ids.length === 1 ? ids[0] : appliance.entityId ?? appliance.label;
 }
 
 export function breakdownCoversSlots(

@@ -34,10 +34,11 @@ export class DeviceNode {
     // box in the shared lighter house shade; a property of the device, not of when
     // it happened to run.
     public deferrable?: boolean;
-    // The controllable this device is, where it is one — the id the schedule
-    // keys its assignments by. It is what lets a box say what is planned for the
-    // appliance right now; `id` is only its energy statistic.
-    public controllableId?: string | null;
+    // The controllables this device is — the ids the schedule keys their
+    // assignments by. It is what lets a box say what is planned for the
+    // appliance right now; `id` is only its energy statistic. Several when the
+    // statistic is a meter shared by several controllables, which stay one box.
+    public controllableIds?: string[];
     public valueType: ValueType;
 
     public sourcePowerHistory?: { [sourceName: string]: { power: number; color: string } }[];

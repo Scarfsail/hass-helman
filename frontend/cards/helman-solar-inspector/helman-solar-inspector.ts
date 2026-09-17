@@ -103,6 +103,7 @@ import {
   actualsCoverUntil,
   aggregateBreakdownOverSlots,
   aggregateBreakdownSeries,
+  applianceKey,
   breakdownCoversSlots,
   consumerBarsOverSlots,
   partBarsOverSlots,
@@ -5268,7 +5269,11 @@ export class HelmanSolarInspector extends LitElement {
         false,
         barsFor(appliance),
         appliance.deferrable,
-        appliance.controllableId ?? null,
+        appliance.controllableIds ?? [],
+        // The identity the rows were merged and the bars drawn by, so four
+        // scheduled air conditioners behind one meter stay four distinct nodes
+        // rather than colliding on the entityId they share.
+        applianceKey(appliance),
       ),
     );
     if (unmeasuredWh > 0) {
@@ -5418,14 +5423,16 @@ export class HelmanSolarInspector extends LitElement {
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
     deferrable: boolean = false,
-    controllableId: string | null = null,
+    controllableIds: string[] = [],
+    nodeId: string | null = null,
   ): DeviceNode {
     // A scheduled appliance with no meter has no entity to key on and none to
     // open: it is named by its controllable, so the label is the only identity
     // there is, and the box gets no sensor rather than a dialog for an entity
-    // that does not exist.
+    // that does not exist. A consumer passes the key its rows were merged by as
+    // `nodeId`, which already folds all of that in.
     const node = new DeviceNode(
-      entityId ?? (isUnmeasured ? "house-unmeasured" : label),
+      nodeId ?? entityId ?? (isUnmeasured ? "house-unmeasured" : label),
       label,
       powerEntityId ?? entityId,
       switchEntityId,
@@ -5441,7 +5448,7 @@ export class HelmanSolarInspector extends LitElement {
     // What the badge on the box asks the schedule about. The energy stat above
     // cannot stand in for it: it is a meter, not the key assignments are stored
     // under, and a scheduled appliance may have no meter at all.
-    node.controllableId = controllableId;
+    node.controllableIds = controllableIds;
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.
