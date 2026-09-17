@@ -540,6 +540,23 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
 
         self.assertEqual(read_shared_meters(config), {"sensor.b": ["b", "b2"]})
 
+    def test_a_kind_that_may_not_share_is_not_counted_as_a_sharer(self) -> None:
+        """Only the kinds validation lets share a meter divide one.
+
+        An entry of an unknown kind is preserved but never validated, so nothing
+        refused it the meter. Counting it would make the meter read as shared
+        while the split had no way to tell when it ran, handing its energy to
+        the one sharer that can be read.
+        """
+        config = {
+            "controllables": [
+                self._entry("ac", meter="sensor.breaker", kind="climate"),
+                self._entry("future", meter="sensor.breaker", kind="something_new"),
+            ]
+        }
+
+        self.assertEqual(read_shared_meters(config), {})
+
     def test_an_unnamed_device_is_labelled_by_its_meter(self) -> None:
         config = {"controllables": [self._entry("x", meter="sensor.x")]}
 

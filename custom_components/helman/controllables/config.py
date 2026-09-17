@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from .spec import CONTROLLABLE_KIND_INVERTER
+from .spec import CONTROLLABLE_KIND_INVERTER, SHARED_METER_KINDS
 
 #: The id the inverter entry is migrated to and the one the UI seeds. Reserved:
 #: config validation refuses it to every other kind, so an optimizer targeting
@@ -235,9 +235,18 @@ def read_shared_meters(config: Mapping[str, Any] | None) -> dict[str, list[str]]
     about what the meter measured, and a device that opted out of the house
     split still ran and still drew from it. An entry without an id is skipped: it
     cannot be resolved to a runtime appliance, and validation requires one.
+
+    Only :data:`~.spec.SHARED_METER_KINDS` count, the same kinds validation lets
+    share a meter. An entry of some unknown kind is preserved but never
+    validated, so nothing would have refused it the meter; counting it would
+    leave the split one member short of the devices actually drawing from that
+    meter, which credits its energy to the sharers that can be read. Ignoring it
+    keeps a meter "shared" only where every sharer can be counted.
     """
     ids_by_meter: dict[str, list[str]] = {}
     for entry, consumption in _iter_consumption_controllables(config):
+        if peek_controllable_kind(entry) not in SHARED_METER_KINDS:
+            continue
         entity_id = _read_energy_entity_id(consumption)
         controllable_id = peek_controllable_id(entry)
         if entity_id is None or controllable_id is None:

@@ -28,11 +28,10 @@ from .controllables.config import (
     read_controllable_kinds_by_id,
 )
 from .controllables.spec import (
-    CONTROLLABLE_KIND_CLIMATE,
-    CONTROLLABLE_KIND_GENERIC,
     CONTROLLABLE_KIND_INVERTER,
     CONTROLLABLE_SPECS,
     KNOWN_CONTROLLABLE_KINDS,
+    SHARED_METER_KINDS,
     appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
@@ -1076,12 +1075,6 @@ def _validate_controllables_config(
     _validate_shared_meters(meter_claimants, report=report)
 
 
-#: The kinds that may share a meter. The split divides a meter's energy among
-#: the sharers that were running, so each sharer needs an entity that says when
-#: it runs: a switch for ``generic``, an HVAC mode for ``climate``.
-_SHARED_METER_KINDS = frozenset({CONTROLLABLE_KIND_GENERIC, CONTROLLABLE_KIND_CLIMATE})
-
-
 def _validate_shared_meters(
     meter_claimants: Mapping[str, list[tuple[str, str, bool]]],
     *,
@@ -1111,7 +1104,7 @@ def _validate_shared_meters(
         if len(claimants) < 2:
             continue
         for path, kind, _deferrable in claimants:
-            if kind in _SHARED_METER_KINDS:
+            if kind in SHARED_METER_KINDS:
                 continue
             report.add_error(
                 section=section,
