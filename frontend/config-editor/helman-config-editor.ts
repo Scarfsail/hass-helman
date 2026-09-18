@@ -94,7 +94,7 @@ import {
   type OptimizerSchema,
   type OptimizerSchemaDocument,
 } from "../cards/shared/optimizer/optimizer-schema";
-import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
+import { loadHaForm, loadHaSortable, loadHaYamlEditor } from "./load-ha-elements";
 import { configFormStyles } from "../cards/shared/config/form-styles";
 import {
   booleanValue,
@@ -113,6 +113,17 @@ import {
   stringValue,
   type FormFieldHost,
 } from "../cards/shared/config/form-fields";
+import {
+  parseItemYaml,
+  renderItemModeToggle,
+  renderItemYamlEditor,
+  type YamlEditorValueChangedDetail,
+} from "../cards/shared/config/item-yaml";
+import {
+  renderDragHandle,
+  renderRemoveButton,
+  renderSortableList,
+} from "../cards/shared/config/sortable-list";
 import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles";
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
@@ -139,7 +150,7 @@ import type {
   ValidationReport,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
-import { normalizeYamlValue } from "./yaml-codec";
+import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
 
 const USE_MODE_BEHAVIORS = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
@@ -235,12 +246,6 @@ const APPLIANCE_ICON_SELECTOR = {
 const OPTIMIZER_CONDITION_SELECTOR = {
   condition: {},
 } as const;
-
-interface YamlEditorValueChangedDetail {
-  value: unknown;
-  isValid: boolean;
-  errorMsg?: string;
-}
 
 /** One row of a training tab depth table -- see `_renderTrainingDepthTable`. */
 interface TrainingDepthRow {
@@ -338,41 +343,6 @@ export class HelmanConfigEditorPanel
       justify-content: flex-end;
     }
 
-    .mode-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 2px;
-      padding: 2px;
-      border: 1px solid var(--divider-color);
-      border-radius: 999px;
-      background: var(--card-background-color);
-    }
-
-    .mode-toggle button {
-      border: none;
-      background: transparent;
-      color: var(--secondary-text-color);
-      padding: 4px 10px;
-      border-radius: 999px;
-      cursor: pointer;
-      font: inherit;
-      font-size: 0.76rem;
-      font-weight: 600;
-    }
-
-    .mode-toggle button:hover {
-      background: rgba(127, 127, 127, 0.08);
-    }
-
-    .mode-toggle button.active {
-      background: rgba(3, 169, 244, 0.12);
-      color: var(--primary-color);
-    }
-
-    .mode-toggle button.active:hover {
-      background: rgba(3, 169, 244, 0.16);
-    }
-
     .status-row {
       display: flex;
       flex-wrap: wrap;
@@ -394,29 +364,6 @@ export class HelmanConfigEditorPanel
 
     .badge.info {
       color: var(--secondary-text-color);
-    }
-
-    .message {
-      border: 1px solid var(--divider-color);
-      border-radius: 16px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      background: var(--card-background-color);
-    }
-
-    .message.success {
-      border-color: #2e7d32;
-      background: rgba(46, 125, 50, 0.08);
-    }
-
-    .message.error {
-      border-color: var(--error-color);
-      background: rgba(244, 67, 54, 0.08);
-    }
-
-    .message.info {
-      border-color: var(--primary-color);
-      background: rgba(3, 169, 244, 0.08);
     }
 
     .tabs {
@@ -602,17 +549,6 @@ export class HelmanConfigEditorPanel
       border: 1px solid var(--divider-color);
       background: var(--secondary-background-color);
       color: var(--primary-text-color);
-    }
-
-    .yaml-surface {
-      display: grid;
-      gap: 12px;
-    }
-
-    .yaml-field ha-yaml-editor {
-      display: block;
-      --code-mirror-height: clamp(320px, 58vh, 720px);
-      --code-mirror-max-height: clamp(320px, 58vh, 720px);
     }
 
     .yaml-field--document ha-yaml-editor {
@@ -1033,6 +969,11 @@ export class HelmanConfigEditorPanel
     this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
     this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     this._restartEntityInspectionTimer();
+    // Not awaited with the form elements: a list that cannot be dragged is a
+    // far smaller loss than a panel whose every form stays unrendered.
+    void loadHaSortable().then(() => {
+      this.requestUpdate();
+    });
     void loadHaForm()
       .then(() => {
         this.requestUpdate();
@@ -1481,37 +1422,13 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderControllableModeToggle(index: number): TemplateResult {
-    const mode = this._getControllableMode(index);
-    return html`
-      <div class="mode-toggle">
-        <button
-          type="button"
-          class=${mode === "visual" ? "active" : ""}
-          aria-pressed=${mode === "visual"}
-          @click=${(event: Event) => this._handleControllableModeChange(index, "visual", event)}
-        >
-          ${this._t("editor.mode.visual")}
-        </button>
-        <button
-          type="button"
-          class=${mode === "yaml" ? "active" : ""}
-          aria-pressed=${mode === "yaml"}
-          @click=${(event: Event) => this._handleControllableModeChange(index, "yaml", event)}
-        >
-          ${this._t("editor.mode.yaml")}
-        </button>
-      </div>
-    `;
-  }
-
-  private _handleControllableModeChange(index: number, mode: EditorMode, event: Event): void {
-    event.preventDefault();
-    event.stopPropagation();
-    if (mode === "yaml") {
-      void this._enterControllableYamlMode(index);
-    } else {
-      this._exitControllableYamlMode(index);
-    }
+    return renderItemModeToggle(this, this._getControllableMode(index), (mode) => {
+      if (mode === "yaml") {
+        void this._enterControllableYamlMode(index);
+      } else {
+        this._exitControllableYamlMode(index);
+      }
+    });
   }
 
   private async _enterControllableYamlMode(index: number): Promise<void> {
@@ -1547,41 +1464,53 @@ export class HelmanConfigEditorPanel
     this._controllableYamlErrors = nextErrors;
   }
 
+  /**
+   * Move a controllable, and return the whole list to visual mode.
+   *
+   * `_controllableModes`, `_controllableYamlValues` and `_controllableYamlErrors`
+   * are keyed by list index, so a move or a remove leaves them describing a
+   * different card than the one they were opened on -- which is what today's
+   * remove already does. Clearing all three is one rule that cannot go stale,
+   * where remapping every key through every move and remove would be a lot more
+   * code for a rare interaction. Nothing is lost but YAML text that does not
+   * parse yet: the draft already holds the last value that did.
+   */
+  private _moveControllable(fromIndex: number, toIndex: number): void {
+    this._resetControllableModes();
+    this._moveListItem(["controllables"], fromIndex, toIndex);
+  }
+
+  private _removeControllable(index: number): void {
+    this._resetControllableModes();
+    this._removeListItem(["controllables"], index);
+  }
+
+  private _resetControllableModes(): void {
+    this._controllableModes = {};
+    this._controllableYamlValues = {};
+    this._controllableYamlErrors = {};
+  }
+
   private _handleControllableYamlChanged(
     index: number,
-    event: CustomEvent<YamlEditorValueChangedDetail>,
+    detail: YamlEditorValueChangedDetail,
   ): void {
-    event.stopPropagation();
-    if (!event.detail.isValid) {
+    const parsed = parseItemYaml(detail);
+    if (!parsed.ok) {
       this._controllableYamlErrors = {
         ...this._controllableYamlErrors,
-        [index]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
-      };
-      return;
-    }
-    const normalizedValue = normalizeYamlValue(event.detail.value);
-    if (!normalizedValue.ok) {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: this._t("editor.yaml.errors.non_json_value"),
-      };
-      return;
-    }
-    if (!Array.isArray(normalizedValue.value) && typeof normalizedValue.value !== "object") {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: this._t("editor.yaml.errors.non_json_value"),
+        [index]: detail.errorMsg ?? this._t(parsed.errorKey),
       };
       return;
     }
     try {
       const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, ["controllables", index], cloneJson(normalizedValue.value));
+      setValueAtPath(nextConfig, ["controllables", index], cloneJson(parsed.value));
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
       this._message = null;
-      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: normalizedValue.value };
+      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: parsed.value };
       const nextErrors = { ...this._controllableYamlErrors };
       delete nextErrors[index];
       this._controllableYamlErrors = nextErrors;
@@ -1594,29 +1523,13 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderControllableYamlEditor(index: number): TemplateResult {
-    const error = this._controllableYamlErrors[index];
-    const editorId = `controllable-${index}`;
-    const helperId = `${editorId}-yaml-helper`;
-    const errorId = `${editorId}-yaml-error`;
-    const describedBy = error ? `${helperId} ${errorId}` : helperId;
-    const editorValue = this._controllableYamlValues[index] ?? this._getValue(["controllables", index]);
-    return html`
-      <div class="yaml-surface">
-        <div class="field yaml-field">
-          <label>${this._t("editor.yaml.field_label")}</label>
-          <div id=${helperId} class="helper">${this._t("editor.yaml.helpers.section")}</div>
-          <ha-yaml-editor
-            .hass=${this.hass}
-            .defaultValue=${editorValue}
-            .showErrors=${false}
-            aria-describedby=${describedBy}
-            @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
-              this._handleControllableYamlChanged(index, event)}
-          ></ha-yaml-editor>
-        </div>
-        ${error ? html`<div id=${errorId} class="message error">${error}</div>` : nothing}
-      </div>
-    `;
+    return renderItemYamlEditor(this, {
+      id: `controllable-${index}`,
+      value: (this._controllableYamlValues[index] ??
+        this._getValue(["controllables", index])) as JsonValue,
+      error: this._controllableYamlErrors[index],
+      onChange: (detail) => this._handleControllableYamlChanged(index, detail),
+    });
   }
 
   private _renderModeToggle(
@@ -1866,11 +1779,17 @@ export class HelmanConfigEditorPanel
                     )}
                   </div>
 
-                  <div class="list-stack">
-                    ${dailyEnergyEntityIds.map((_value, index) =>
-                      this._renderDailyEnergyEntity(index, dailyEnergyEntityIds.length),
-                    )}
-                  </div>
+                  ${renderSortableList({
+                    items: dailyEnergyEntityIds,
+                    containerClass: "list-stack",
+                    renderItem: (_value, index) => this._renderDailyEnergyEntity(index),
+                    onMove: (oldIndex, newIndex) =>
+                      this._moveListItem(
+                        ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+                        oldIndex,
+                        newIndex,
+                      ),
+                  })}
                   <div class="section-footer">
                     <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
                       ${this._t("editor.actions.add_daily_energy_entity")}
@@ -2145,11 +2064,18 @@ export class HelmanConfigEditorPanel
           <p class="inline-note">
             ${this._t("editor.notes.grid_import_windows")}
           </p>
-          <div class="list-stack">
-            ${importPriceWindows.map((windowConfig, index) =>
-              this._renderImportPriceWindow(windowConfig, index, importPriceWindows.length),
-            )}
-          </div>
+          ${renderSortableList({
+            items: importPriceWindows,
+            containerClass: "list-stack",
+            renderItem: (windowConfig, index) =>
+              this._renderImportPriceWindow(windowConfig, index),
+            onMove: (oldIndex, newIndex) =>
+              this._moveListItem(
+                ["power_devices", "grid", "forecast", "import_price_windows"],
+                oldIndex,
+                newIndex,
+              ),
+          })}
           <div class="section-footer">
             <button type="button" class="add-button" @click=${this._handleAddImportPriceWindow}>
               ${this._t("editor.actions.add_import_price_window")}
@@ -2549,11 +2475,13 @@ export class HelmanConfigEditorPanel
         scopeId,
         html`
           <p class="inline-note">${this._t(noteKey)}</p>
-          <div class="list-stack">
-            ${optimizers.map((_optimizer, index) =>
-              this._renderOptimizerEditor(bucket, index, optimizers.length),
-            )}
-          </div>
+          ${renderSortableList({
+            items: optimizers,
+            containerClass: "list-stack",
+            renderItem: (_optimizer, index) => this._renderOptimizerEditor(bucket, index),
+            onMove: (oldIndex, newIndex) =>
+              this._moveListItem(["automation", bucket], oldIndex, newIndex),
+          })}
           ${optimizers.length === 0
             ? html`
                 <div class="message info">${this._t(emptyKey)}</div>
@@ -2606,14 +2534,12 @@ export class HelmanConfigEditorPanel
   private _renderOptimizerEditor(
     bucket: OptimizerBucket,
     index: number,
-    total: number,
   ): TemplateResult {
     return html`
       <helman-optimizer-editor
         .config=${this._config}
         .bucket=${bucket}
         .index=${index}
-        .total=${total}
         .schema=${this._optimizerSchema}
         .applianceMetadata=${this._liveApplianceMetadata}
         .hass=${this.hass}
@@ -2621,7 +2547,7 @@ export class HelmanConfigEditorPanel
         .localize=${(key: string) => this._t(key)}
         .warning=${this._optimizerOrderingWarning(bucket, index)}
         .listActions=${(basePath: PathSegment[], enabled: boolean) =>
-          this._renderOptimizerListActions(bucket, basePath, index, total, enabled)}
+          this._renderOptimizerListActions(bucket, basePath, index, enabled)}
         @optimizer-config-changed=${this._handleOptimizerConfigChanged}
       ></helman-optimizer-editor>
     `;
@@ -2679,31 +2605,27 @@ export class HelmanConfigEditorPanel
     `;
   }
 
+  /**
+   * The pipeline row in an optimizer card's summary: drag, enable, remove.
+   *
+   * The handle rides here rather than beside the card's title because the
+   * summary's left half belongs to the shared card renderer, which the
+   * inspector's dialog also mounts -- and that dialog passes no list actions at
+   * all, so it gets a card with no way to disturb the list it came from.
+   */
   private _renderOptimizerListActions(
     bucket: OptimizerBucket,
     basePath: PathSegment[],
     index: number,
-    total: number,
     enabled: boolean,
   ): TemplateResult {
     return html`
       <div class="list-actions" @click=${this._preventSummaryToggle}>
+        ${renderDragHandle(this)}
         ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
-        <button
-          type="button"
-          ?disabled=${index === 0}
-          @click=${() => this._moveListItem(["automation", bucket], index, index - 1)}
-        >${this._t("editor.actions.up")}</button>
-        <button
-          type="button"
-          ?disabled=${index === total - 1}
-          @click=${() => this._moveListItem(["automation", bucket], index, index + 1)}
-        >${this._t("editor.actions.down")}</button>
-        <button
-          type="button"
-          class="danger"
-          @click=${() => this._removeListItem(["automation", bucket], index)}
-        >${this._t("editor.actions.remove")}</button>
+        ${renderRemoveButton(this, {
+          onRemove: () => this._removeListItem(["automation", bucket], index),
+        })}
       </div>
     `;
   }
@@ -2743,13 +2665,17 @@ export class HelmanConfigEditorPanel
           <p class="inline-note">
             ${this._t("editor.notes.controllables")}
           </p>
-          <div class="list-stack">
-            ${controllables.length === 0
-              ? html`<div class="message info">${this._t("editor.empty.no_controllables")}</div>`
-              : controllables.map((controllable, index) =>
-                  this._renderControllableCard(controllable, index, controllables.length),
-                )}
-          </div>
+          ${controllables.length === 0
+            ? html`<div class="list-stack">
+                <div class="message info">${this._t("editor.empty.no_controllables")}</div>
+              </div>`
+            : renderSortableList({
+                items: controllables,
+                containerClass: "list-stack",
+                renderItem: (controllable, index) =>
+                  this._renderControllableCard(controllable, index),
+                onMove: (oldIndex, newIndex) => this._moveControllable(oldIndex, newIndex),
+              })}
           <div class="section-footer">
             ${hasInverter
               ? nothing
@@ -2801,13 +2727,10 @@ export class HelmanConfigEditorPanel
               <span class="card-subtitle">${this._t("editor.card.category")}</span>
             </div>
             <div class="inline-actions">
-              <button
-                type="button"
-                class="danger"
-                @click=${() => this._removePath(["device_label_text", categoryKey])}
-              >
-                ${this._t("editor.actions.remove_category")}
-              </button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removePath(["device_label_text", categoryKey]),
+                label: this._t("editor.actions.remove_category"),
+              })}
             </div>
           </div>
           <div class="field-grid">
@@ -2834,14 +2757,10 @@ export class HelmanConfigEditorPanel
                     <span class="card-subtitle">${this._t("editor.card.badge_text_entry")}</span>
                   </div>
                   <div class="inline-actions">
-                    <button
-                      type="button"
-                      class="danger"
-                      @click=${() =>
-                        this._removePath(["device_label_text", categoryKey, labelKey])}
-                    >
-                      ${this._t("editor.actions.remove")}
-                    </button>
+                    ${renderRemoveButton(this, {
+                      onRemove: () =>
+                        this._removePath(["device_label_text", categoryKey, labelKey]),
+                    })}
                   </div>
                 </div>
                 <div class="field-grid">
@@ -2895,10 +2814,7 @@ export class HelmanConfigEditorPanel
    * document at its own path, the same way every other group does, and a list
    * index is an ordinary path segment on both sides of the websocket.
    */
-  private _renderDailyEnergyEntity(
-    index: number,
-    total: number,
-  ): TemplateResult {
+  private _renderDailyEnergyEntity(index: number): TemplateResult {
     const path: PathSegment[] = [
       "power_devices",
       "solar",
@@ -2909,45 +2825,20 @@ export class HelmanConfigEditorPanel
     return html`
       <div class="list-card">
         <div class="card-header">
-          <div class="card-title">
-            <strong>${this._tFormat("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
+          <div class="appliance-summary-left">
+            ${renderDragHandle(this)}
+            <div class="card-title">
+              <strong>${this._tFormat("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
+            </div>
           </div>
           <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                  index,
-                  index - 1,
-                )}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                  index,
-                  index + 1,
-                )}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() =>
+            ${renderRemoveButton(this, {
+              onRemove: () =>
                 this._removeListItem(
                   ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
                   index,
-                )}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
+                ),
+            })}
           </div>
         </div>
         ${this._renderEntityGroup(path, "editor.fields.entity_id", {
@@ -2962,7 +2853,6 @@ export class HelmanConfigEditorPanel
   private _renderImportPriceWindow(
     windowConfig: unknown,
     index: number,
-    total: number,
   ): TemplateResult {
     const windowObject = asJsonObject(windowConfig) ?? {};
     const basePath: PathSegment[] = [
@@ -2976,46 +2866,21 @@ export class HelmanConfigEditorPanel
     return html`
       <div class="list-card">
         <div class="card-header">
-          <div class="card-title">
-            <strong>${this._tFormat("editor.dynamic.import_window", { index: index + 1 })}</strong>
-            <span class="card-subtitle">${this._t("editor.card.local_time_window")}</span>
+          <div class="appliance-summary-left">
+            ${renderDragHandle(this)}
+            <div class="card-title">
+              <strong>${this._tFormat("editor.dynamic.import_window", { index: index + 1 })}</strong>
+              <span class="card-subtitle">${this._t("editor.card.local_time_window")}</span>
+            </div>
           </div>
           <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "grid", "forecast", "import_price_windows"],
-                  index,
-                  index - 1,
-                )}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "grid", "forecast", "import_price_windows"],
-                  index,
-                  index + 1,
-                )}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() =>
+            ${renderRemoveButton(this, {
+              onRemove: () =>
                 this._removeListItem(
                   ["power_devices", "grid", "forecast", "import_price_windows"],
                   index,
-                )}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
+                ),
+            })}
           </div>
         </div>
         <div class="field-grid">
@@ -3055,26 +2920,22 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderControllableCard(
-    controllable: unknown,
-    index: number,
-    total: number,
-  ): TemplateResult {
+  private _renderControllableCard(controllable: unknown, index: number): TemplateResult {
     const applianceObject = asJsonObject(controllable) ?? {};
     const kind = this._stringValue(applianceObject.kind);
     if (kind === INVERTER_CONTROLLABLE_KIND) {
-      return this._renderInverterControllable(applianceObject, index, total);
+      return this._renderInverterControllable(applianceObject, index);
     }
     if (kind === "ev_charger") {
-      return this._renderEvChargerAppliance(applianceObject, index, total);
+      return this._renderEvChargerAppliance(applianceObject, index);
     }
     if (kind === "climate") {
-      return this._renderClimateAppliance(applianceObject, index, total);
+      return this._renderClimateAppliance(applianceObject, index);
     }
     if (kind === "generic") {
-      return this._renderGenericAppliance(applianceObject, index, total);
+      return this._renderGenericAppliance(applianceObject, index);
     }
-    return this._renderUnsupportedControllable(applianceObject, index, total);
+    return this._renderUnsupportedControllable(applianceObject, index);
   }
 
   /**
@@ -3093,7 +2954,6 @@ export class HelmanConfigEditorPanel
   private _renderInverterControllable(
     controllable: JsonObject,
     index: number,
-    total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
     const modePath: PathSegment[] = [...basePath, "controls", "mode"];
@@ -3109,6 +2969,7 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${controllableName}</strong>
@@ -3117,15 +2978,9 @@ export class HelmanConfigEditorPanel
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${this._renderControllableModeToggle(index)}
-              <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button type="button" class="danger"
-                @click=${() => this._removeListItem(["controllables"], index)}
-              >${this._t("editor.actions.remove")}</button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeControllable(index),
+              })}
             </div>
           </div>
         </summary>
@@ -3178,7 +3033,6 @@ export class HelmanConfigEditorPanel
   private _renderUnsupportedControllable(
     appliance: JsonObject,
     index: number,
-    total: number,
   ): TemplateResult {
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const applianceName = this._stringValue(appliance.name) || this._tFormat("editor.dynamic.appliance", { index: index + 1 });
@@ -3190,6 +3044,7 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${applianceName}</strong>
@@ -3197,21 +3052,9 @@ export class HelmanConfigEditorPanel
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              <button
-                type="button"
-                ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button
-                type="button"
-                ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button
-                type="button"
-                class="danger"
-                @click=${() => this._removeListItem(["controllables"], index)}
-              >${this._t("editor.actions.remove")}</button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeControllable(index),
+              })}
             </div>
           </div>
         </summary>
@@ -3225,7 +3068,6 @@ export class HelmanConfigEditorPanel
   private _renderEvChargerAppliance(
     appliance: JsonObject,
     index: number,
-    total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
     const useModes = objectEntries(
@@ -3246,6 +3088,7 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${applianceName}</strong>
@@ -3254,15 +3097,9 @@ export class HelmanConfigEditorPanel
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${this._renderControllableModeToggle(index)}
-              <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button type="button" class="danger"
-                @click=${() => this._removeListItem(["controllables"], index)}
-              >${this._t("editor.actions.remove")}</button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeControllable(index),
+              })}
             </div>
           </div>
         </summary>
@@ -3338,9 +3175,14 @@ export class HelmanConfigEditorPanel
               )}
               ${this._renderSimpleSection(
                 this._t("editor.sections.vehicles"),
-                html`<div class="list-stack">
-                  ${vehicles.map((vehicle, vehicleIndex) => this._renderVehicle(basePath, vehicle, vehicleIndex, vehicles.length))}
-                </div>
+                html`${renderSortableList({
+                  items: vehicles,
+                  containerClass: "list-stack",
+                  renderItem: (vehicle, vehicleIndex) =>
+                    this._renderVehicle(basePath, vehicle, vehicleIndex),
+                  onMove: (oldIndex, newIndex) =>
+                    this._moveListItem([...basePath, "vehicles"], oldIndex, newIndex),
+                })}
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(index)}>${this._t("editor.actions.add_vehicle")}</button>
                 </div>`,
@@ -3354,7 +3196,6 @@ export class HelmanConfigEditorPanel
   private _renderGenericAppliance(
     appliance: JsonObject,
     index: number,
-    total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
     const consumptionPath: PathSegment[] = [...basePath, "consumption"];
@@ -3372,6 +3213,7 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${applianceName}</strong>
@@ -3380,15 +3222,9 @@ export class HelmanConfigEditorPanel
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${this._renderControllableModeToggle(index)}
-              <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button type="button" class="danger"
-                @click=${() => this._removeListItem(["controllables"], index)}
-              >${this._t("editor.actions.remove")}</button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeControllable(index),
+              })}
             </div>
           </div>
         </summary>
@@ -3437,7 +3273,6 @@ export class HelmanConfigEditorPanel
   private _renderClimateAppliance(
     appliance: JsonObject,
     index: number,
-    total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
     const consumptionPath: PathSegment[] = [...basePath, "consumption"];
@@ -3455,6 +3290,7 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${applianceName}</strong>
@@ -3463,15 +3299,9 @@ export class HelmanConfigEditorPanel
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${this._renderControllableModeToggle(index)}
-              <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button type="button" class="danger"
-                @click=${() => this._removeListItem(["controllables"], index)}
-              >${this._t("editor.actions.remove")}</button>
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeControllable(index),
+              })}
             </div>
           </div>
         </summary>
@@ -3728,41 +3558,23 @@ export class HelmanConfigEditorPanel
     appliancePath: PathSegment[],
     vehicle: unknown,
     index: number,
-    total: number,
   ): TemplateResult {
     const vehicleObject = asJsonObject(vehicle) ?? {};
     const basePath: PathSegment[] = [...appliancePath, "vehicles", index];
     return html`
       <div class="nested-card">
         <div class="card-header">
-          <div class="card-title">
-            <strong>${this._stringValue(vehicleObject.name) || this._tFormat("editor.dynamic.vehicle", { index: index + 1 })}</strong>
-            <span class="card-subtitle">${this._stringValue(vehicleObject.id) || this._t("editor.values.missing_id")}</span>
+          <div class="appliance-summary-left">
+            ${renderDragHandle(this)}
+            <div class="card-title">
+              <strong>${this._stringValue(vehicleObject.name) || this._tFormat("editor.dynamic.vehicle", { index: index + 1 })}</strong>
+              <span class="card-subtitle">${this._stringValue(vehicleObject.id) || this._t("editor.values.missing_id")}</span>
+            </div>
           </div>
           <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() =>
-                this._moveListItem([...appliancePath, "vehicles"], index, index - 1)}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() =>
-                this._moveListItem([...appliancePath, "vehicles"], index, index + 1)}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removeListItem([...appliancePath, "vehicles"], index)}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
+            ${renderRemoveButton(this, {
+              onRemove: () => this._removeListItem([...appliancePath, "vehicles"], index),
+            })}
           </div>
         </div>
         <div class="field-grid">

@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 
+import { stopSummaryToggle } from "../config/sortable-list";
 import type { JsonObject, PathSegment } from "../config/types";
 import {
     renderConditionGroups,
@@ -30,7 +31,6 @@ export interface OptimizerCardOptions {
     /** Which bucket this optimizer lives in -- roots every path the card builds. */
     bucket: OptimizerConfigBucket;
     index: number;
-    total: number;
     enabled: boolean;
     /** Card heading — kinds with an appliance target show the appliance's name. */
     title: string;
@@ -50,17 +50,21 @@ export interface OptimizerCardOptions {
      */
     open?: boolean;
     renderSvgIcon(path: string, className: string): TemplateResult;
-    renderListActions(
-        basePath: PathSegment[],
-        index: number,
-        total: number,
-        enabled: boolean,
-    ): TemplateResult;
+    /** The card's own pipeline row -- drag, enable, remove -- or nothing. */
+    renderListActions(basePath: PathSegment[]): TemplateResult;
+    /**
+     * The card's Visual / YAML switch, drawn beside the pipeline row.
+     *
+     * Rendered by the editing element rather than by its mounter, because YAML
+     * mode edits this one optimizer and nothing else: both hosts get the switch
+     * without plumbing anything through.
+     */
+    modeToggle: TemplateResult;
     conditionGroups: Omit<ConditionGroupsOptions, "host" | "schema" | "bucket" | "optimizerIndex">;
 }
 
 export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResult {
-    const { host, schema, bucket, index, total, enabled, title, warning } = options;
+    const { host, schema, bucket, index, enabled, title, warning } = options;
     const basePath: PathSegment[] = ["automation", bucket, index];
 
     return html`
@@ -85,33 +89,44 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
                               >`
                             : nothing}
                     </div>
-                    ${options.renderListActions(basePath, index, total, enabled)}
+                    <div class="summary-actions" @click=${stopSummaryToggle}>
+                        ${options.modeToggle} ${options.renderListActions(basePath)}
+                    </div>
                 </div>
             </summary>
-            <div class="appliance-body">
-                <div class="field-grid">
-                    ${host.renderRequiredTextField(
-                        [...basePath, "id"],
-                        "editor.fields.optimizer_id",
-                        undefined,
-                        "editor.help.automation_optimizer_id",
-                    )}
-                    ${host.renderControllableTargetFields(index, schema.kind)}
-                    ${renderSchemaFields(host, schema.params, {
-                        basePath: [...basePath, "params"],
-                        kind: schema.kind,
-                    })}
-                </div>
-                ${schema.conditionTypes.length || schema.params.length
-                    ? renderConditionGroups({
-                          host,
-                          schema,
-                          bucket,
-                          optimizerIndex: index,
-                          ...options.conditionGroups,
-                      })
-                    : nothing}
-            </div>
+            <div class="appliance-body">${renderCardBody(options, basePath)}</div>
         </details>
+    `;
+}
+
+/** Everything below the summary in visual mode. */
+function renderCardBody(
+    options: OptimizerCardOptions,
+    basePath: PathSegment[],
+): TemplateResult {
+    const { host, schema, bucket, index } = options;
+    return html`
+        <div class="field-grid">
+            ${host.renderRequiredTextField(
+                [...basePath, "id"],
+                "editor.fields.optimizer_id",
+                undefined,
+                "editor.help.automation_optimizer_id",
+            )}
+            ${host.renderControllableTargetFields(index, schema.kind)}
+            ${renderSchemaFields(host, schema.params, {
+                basePath: [...basePath, "params"],
+                kind: schema.kind,
+            })}
+        </div>
+        ${schema.conditionTypes.length || schema.params.length
+            ? renderConditionGroups({
+                  host,
+                  schema,
+                  bucket,
+                  optimizerIndex: index,
+                  ...options.conditionGroups,
+              })
+            : nothing}
     `;
 }

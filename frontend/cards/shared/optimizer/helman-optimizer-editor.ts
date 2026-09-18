@@ -1,4 +1,4 @@
-import { LitElement, html, nothing, type TemplateResult } from "lit";
+import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import {
@@ -28,6 +28,19 @@ import {
     stringValue,
     type FormFieldHost,
 } from "../config/form-fields";
+import {
+    parseItemYaml,
+    renderItemModeToggle,
+    renderItemYamlEditor,
+    type YamlEditorValueChangedDetail,
+} from "../config/item-yaml";
+import { loadHaYamlEditor } from "../load-ha-elements";
+import {
+    renderDragHandle,
+    renderRemoveButton,
+    renderSortableList,
+    stopSummaryToggle,
+} from "../config/sortable-list";
 import type {
     HomeAssistantLike,
     JsonObject,
@@ -58,6 +71,55 @@ const OPTIMIZER_CONDITION_SELECTOR = {
 } as const;
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+
+/**
+ * Deep value equality, for "is this still the optimizer I am editing?".
+ *
+ * `JSON.stringify` would answer that by key order too, and a YAML edit is
+ * free to reorder keys.
+ */
+function jsonEquals(a: unknown, b: unknown): boolean {
+    if (a === b) {
+        return true;
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+        return (
+            Array.isArray(a) &&
+            Array.isArray(b) &&
+            a.length === b.length &&
+            a.every((item, index) => jsonEquals(item, b[index]))
+        );
+    }
+    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+        return false;
+    }
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    return (
+        keys.length === Object.keys(right).length &&
+        keys.every((key) => key in right && jsonEquals(left[key], right[key]))
+    );
+}
+
+/**
+ * "Same optimizer, with its Enabled switch flipped."
+ *
+ * The one summary control that rewrites the optimizer while YAML mode is open,
+ * so the one change that must not be mistaken for a different optimizer landing
+ * at this index. Anything else -- a moved neighbour, a remove, a refreshed draft
+ * -- is a replacement, and closes the editor.
+ */
+function differsOnlyByEnabled(current: unknown, snapshot: unknown): boolean {
+    const left = asJsonObject(current);
+    const right = asJsonObject(snapshot);
+    if (!left || !right) {
+        return false;
+    }
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    keys.delete("enabled");
+    return [...keys].every((key) => jsonEquals(left[key], right[key]));
+}
 
 /** What the editor emits when the reader changes something. */
 export interface OptimizerConfigChangedDetail {
@@ -112,9 +174,6 @@ export class HelmanOptimizerEditor
     /** Which entry of that bucket this card edits. */
     @property({ type: Number }) index = 0;
 
-    /** How many optimizers there are, for the list actions' bounds. */
-    @property({ type: Number }) total = 1;
-
     @property({ attribute: false }) schema: OptimizerSchemaDocument | null = null;
 
     @property({ attribute: false })
@@ -141,7 +200,7 @@ export class HelmanOptimizerEditor
     @property({ attribute: false }) warning: string | null = null;
 
     /**
-     * The up/down/remove/enabled row in the card's summary, or nothing.
+     * The drag/enable/remove row in the card's summary, or nothing.
      *
      * Supplied by the mounter rather than rendered here, because reordering and
      * deleting are *pipeline* operations: they change which optimizers exist,
@@ -156,6 +215,61 @@ export class HelmanOptimizerEditor
 
     @state() private _editingGroupName: GroupNameEdit | null = null;
 
+    /**
+     * This card's YAML mode, or `null` for the visual form.
+     *
+     * The mode lives here rather than with whoever mounted the card, because
+     * it edits this one optimizer and nothing else -- so the config panel and
+     * the inspector's edit dialog both get the switch without plumbing.
+     * `value` is what the editor was seeded with and what the last valid edit
+     * produced; `error` is what the last invalid one said.
+     */
+    @state() private _yaml: { value: JsonValue; error: string | null } | null = null;
+
+    /**
+     * YAML mode follows the optimizer, not the position.
+     *
+     * Lit reuses an element by its position in the list, so after a drag or a
+     * remove the element sitting at this index is handed a *different*
+     * optimizer -- and an open YAML editor would go on editing the one that
+     * moved away. One rule covers moves, removes and an auto-refresh swapping
+     * the draft underneath: if what is at `_basePath` is no longer what this
+     * editor is editing, drop back to visual.
+     *
+     * Only when the document itself changed. A valid edit sets `_yaml` and
+     * reports the new document, and this element updates before its mounter
+     * has handed the new one back -- checking then would read the pre-edit
+     * value and close the editor on every keystroke.
+     *
+     * The Enabled switch is the exception, and it has to be. It lives in the
+     * summary, so it stays live while the body is a YAML editor, and flipping it
+     * rewrites `enabled` at this very path -- which looked exactly like a
+     * different optimizer arriving. That closed YAML mode mid-edit and threw the
+     * reader's text away, including the erroring text `_exitYamlMode` refuses to
+     * let them abandon. A change that touches nothing but `enabled` is this same
+     * optimizer being toggled, so the snapshot takes the new value and the editor
+     * stays open. Only the snapshot moves: `ha-yaml-editor` seeds from
+     * `defaultValue` in `firstUpdated` and we leave `autoUpdate` off, so nothing
+     * reseeds the text under the cursor.
+     */
+    protected willUpdate(changed: PropertyValues): void {
+        if (
+            !this._yaml ||
+            !(changed.has("config") || changed.has("bucket") || changed.has("index"))
+        ) {
+            return;
+        }
+        const current = this.getValue(this._basePath);
+        if (jsonEquals(current, this._yaml.value)) {
+            return;
+        }
+        if (differsOnlyByEnabled(current, this._yaml.value)) {
+            this._yaml = { ...this._yaml, value: current };
+            return;
+        }
+        this._yaml = null;
+    }
+
     render(): TemplateResult | typeof nothing {
         const optimizer = asJsonObject(this.getValue(this._basePath));
         if (!optimizer) {
@@ -164,12 +278,62 @@ export class HelmanOptimizerEditor
         const kind = stringValue(optimizer.kind);
         const schema = this.schema?.kinds.find((entry) => entry.kind === kind);
         return html`
-            ${schema
-                ? this._renderCard(schema, optimizer)
-                : this._renderUnsupported(optimizer, kind)}
+            ${this._yaml
+                ? this._renderYamlCard(optimizer)
+                : schema
+                  ? this._renderCard(schema, optimizer)
+                  : this._renderUnsupported(optimizer, kind)}
             ${renderHelpDialog(this, this._help, () => {
                 this._help = null;
             })}
+        `;
+    }
+
+    /**
+     * The card while it is being edited as YAML, whatever its kind.
+     *
+     * One shell for both a known and an unknown kind, deliberately outside the
+     * schema branch. Retyping `kind:` -- the very thing the unsupported card's
+     * YAML exists for -- passes through an unknown kind on nearly every
+     * keystroke (`charge_hol`), and the visual and unsupported cards are two
+     * different Lit templates: crossing between them tore the `<details>` down
+     * and rebuilt it, losing the open state along with the editor's focus,
+     * cursor and formatting, then doing it again once the kind became valid.
+     * Rendered from the same template throughout, the editor survives typing.
+     *
+     * Titled without the schema for the same reason: a title that changed with
+     * the kind would churn mid-edit. Always open, because YAML mode is entered
+     * deliberately and a collapsed card would hide the editor it just opened.
+     */
+    private _renderYamlCard(optimizer: JsonObject): TemplateResult {
+        const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
+        const title =
+            stringValue(optimizer.id) ||
+            this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
+        return html`
+            <details
+                class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
+                open
+            >
+                <summary>
+                    <div class="appliance-summary-row">
+                        <div class="appliance-summary-left">
+                            ${renderSvgIcon(CHEVRON, "appliance-chevron")}
+                            <div class="card-title">
+                                <strong>${title}</strong>
+                                <span class="card-subtitle">
+                                    ${this.t("editor.mode.yaml")}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="summary-actions" @click=${stopSummaryToggle}>
+                            ${this._renderModeToggle()}
+                            ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        </div>
+                    </div>
+                </summary>
+                <div class="appliance-body">${this._renderYamlEditor()}</div>
+            </details>
         `;
     }
 
@@ -181,7 +345,6 @@ export class HelmanOptimizerEditor
             optimizer,
             bucket: this.bucket,
             index: this.index,
-            total: this.total,
             enabled,
             title: this._cardTitle(schema, optimizer),
             warning: this.warning,
@@ -189,6 +352,7 @@ export class HelmanOptimizerEditor
             renderSvgIcon,
             renderListActions: (basePath) =>
                 this.listActions?.(basePath, enabled) ?? html``,
+            modeToggle: this._renderModeToggle(),
             conditionGroups: {
                 addGroup: () => this._addConditionGroup(schema),
                 removeGroup: (groupIndex) => this._removeConditionGroup(groupIndex),
@@ -233,7 +397,10 @@ export class HelmanOptimizerEditor
                                 <span class="card-subtitle">${subtitle}</span>
                             </div>
                         </div>
-                        ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        <div class="summary-actions" @click=${stopSummaryToggle}>
+                            ${this._renderModeToggle()}
+                            ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        </div>
                     </div>
                 </summary>
                 <div class="appliance-body">
@@ -460,8 +627,8 @@ export class HelmanOptimizerEditor
      *
      * A group target renders one row per member. The list *is* the priority
      * order -- the first member takes the surplus first -- so the rows are
-     * numbered and reordered in place, with the same up/down idiom as the
-     * condition groups.
+     * numbered and dragged into place, by the same shared list helper as every
+     * other ordered list in the editor.
      */
     renderControllableTargetFields(
         _optimizerIndex: number,
@@ -493,32 +660,27 @@ export class HelmanOptimizerEditor
                     ${this.renderHelpIcon("editor.fields.optimizer_targets", "editor.help.optimizer_targets")}
                 </div>
                 <div class="helper">${this.t("editor.helpers.optimizer_targets")}</div>
-                ${targetPaths.map(
-                    (targetPath, memberIndex) => html`
+                ${renderSortableList({
+                    items: targetPaths,
+                    containerClass: "controllable-target-rows",
+                    onMove: (oldIndex, newIndex) => this._moveTarget(oldIndex, newIndex),
+                    renderItem: (targetPath, memberIndex) => html`
                         <div class="controllable-target-row">
                             <div class="appliance-summary-row">
-                                <strong class="controllable-target-position">
-                                    ${this._tFormat("editor.dynamic.priority_position", {
-                                        position: memberIndex + 1,
-                                    })}
-                                </strong>
+                                <div class="appliance-summary-left">
+                                    ${renderDragHandle(this)}
+                                    <strong class="controllable-target-position">
+                                        ${this._tFormat("editor.dynamic.priority_position", {
+                                            position: memberIndex + 1,
+                                        })}
+                                    </strong>
+                                </div>
                                 <div class="list-actions">
-                                    <button
-                                        type="button"
-                                        ?disabled=${memberIndex === 0}
-                                        @click=${() => this._moveTarget(memberIndex, memberIndex - 1)}
-                                    >${this.t("editor.actions.up")}</button>
-                                    <button
-                                        type="button"
-                                        ?disabled=${memberIndex === total - 1}
-                                        @click=${() => this._moveTarget(memberIndex, memberIndex + 1)}
-                                    >${this.t("editor.actions.down")}</button>
-                                    <button
-                                        type="button"
-                                        class="danger remove-controllable-target"
-                                        ?disabled=${total <= 1}
-                                        @click=${() => this._removeTarget(memberIndex)}
-                                    >${this.t("editor.actions.remove")}</button>
+                                    ${renderRemoveButton(this, {
+                                        className: "remove-controllable-target",
+                                        onRemove: () => this._removeTarget(memberIndex),
+                                        disabled: total <= 1,
+                                    })}
                                 </div>
                             </div>
                             <div class="field-grid">
@@ -533,7 +695,7 @@ export class HelmanOptimizerEditor
                             </div>
                         </div>
                     `,
-                )}
+                })}
                 <button
                     type="button"
                     class="add-button add-controllable-target"
@@ -665,6 +827,73 @@ export class HelmanOptimizerEditor
             });
         }
         return renderOptionalSelectField(this, path, labelKey, options, helpKey);
+    }
+
+    // --- YAML mode -----------------------------------------------------------
+
+    private _renderModeToggle(): TemplateResult {
+        return renderItemModeToggle(this, this._yaml ? "yaml" : "visual", (mode) => {
+            if (mode === "yaml") {
+                void this._enterYamlMode();
+            } else {
+                this._exitYamlMode();
+            }
+        });
+    }
+
+    private _renderYamlEditor(): TemplateResult | null {
+        if (!this._yaml) {
+            return null;
+        }
+        return renderItemYamlEditor(this, {
+            id: `optimizer-${this.bucket}-${this.index}`,
+            value: this._yaml.value,
+            error: this._yaml.error,
+            onChange: (detail) => this._handleYamlChanged(detail),
+        });
+    }
+
+    /**
+     * `ha-yaml-editor` lives in a chunk a dashboard has not loaded, so the
+     * switch waits for it. A failed load leaves the card visual: there is no
+     * message surface on a card, and showing an empty YAML pane the reader
+     * could not type into would be worse than the button doing nothing.
+     */
+    private async _enterYamlMode(): Promise<void> {
+        if (this._yaml) {
+            return;
+        }
+        try {
+            await loadHaYamlEditor();
+        } catch {
+            return;
+        }
+        const value = this.getValue(this._basePath);
+        if (value === undefined) {
+            return;
+        }
+        this._yaml = { value: value as JsonValue, error: null };
+    }
+
+    /** Blocked while the YAML is broken -- leaving would throw the edit away. */
+    private _exitYamlMode(): void {
+        if (this._yaml?.error) {
+            return;
+        }
+        this._yaml = null;
+    }
+
+    private _handleYamlChanged(detail: YamlEditorValueChangedDetail): void {
+        const parsed = parseItemYaml(detail);
+        if (!parsed.ok) {
+            this._yaml = {
+                value: this._yaml?.value ?? null,
+                error: detail.errorMsg ?? this.t(parsed.errorKey),
+            };
+            return;
+        }
+        this._yaml = { value: parsed.value, error: null };
+        this._mutate((draft) => setValueAtPath(draft, this._basePath, cloneJson(parsed.value)));
     }
 
     // --- Mutation ------------------------------------------------------------

@@ -2,6 +2,11 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 
 import { asJsonArray, asJsonObject } from "../config/config-document";
+import {
+    renderDragHandle,
+    renderRemoveButton,
+    renderSortableList,
+} from "../config/sortable-list";
 import type { PathSegment } from "../config/types";
 import {
     renderInheritedNote,
@@ -64,9 +69,13 @@ export function renderConditionGroups(
                 <strong>${host.t("editor.fields.condition_groups")}</strong>
                 <span class="helper">${host.t("editor.helpers.condition_groups")}</span>
             </div>
-            ${groups.map((_group, groupIndex) =>
-                renderGroup(options, groupsPath, groupIndex, groups.length),
-            )}
+            ${renderSortableList({
+                items: groups,
+                containerClass: "condition-group-list",
+                renderItem: (_group, groupIndex) =>
+                    renderGroup(options, groupsPath, groupIndex, groups.length),
+                onMove: (oldIndex, newIndex) => options.moveGroup(oldIndex, newIndex),
+            })}
             <button type="button" class="add-button" @click=${() => options.addGroup()}>
                 ${host.t("editor.actions.add_condition_group")}
             </button>
@@ -103,29 +112,17 @@ function renderGroup(
             <summary>
                 <div class="appliance-summary-row">
                     <div class="appliance-summary-left">
+                        ${renderDragHandle(host)}
                         ${host.renderSvgIcon(GROUP_CHEVRON, "appliance-chevron")}
                         ${renderGroupName(options, groupPath, groupIndex)}
                     </div>
                     <div class="list-actions" @click=${stopSummaryToggle}>
-                        <button
-                            type="button"
-                            ?disabled=${groupIndex === 0}
-                            @click=${() => options.moveGroup(groupIndex, groupIndex - 1)}
-                        >${host.t("editor.actions.up")}</button>
-                        <button
-                            type="button"
-                            ?disabled=${groupIndex === total - 1}
-                            @click=${() => options.moveGroup(groupIndex, groupIndex + 1)}
-                        >${host.t("editor.actions.down")}</button>
-                        <button
-                            type="button"
-                            class="danger remove-condition-group"
-                            ?disabled=${total <= 1}
-                            title=${total <= 1
-                                ? host.t("editor.helpers.last_condition_group")
-                                : ""}
-                            @click=${() => options.removeGroup(groupIndex)}
-                        >${host.t("editor.actions.remove")}</button>
+                        ${renderRemoveButton(host, {
+                            className: "remove-condition-group",
+                            onRemove: () => options.removeGroup(groupIndex),
+                            disabled: total <= 1,
+                            disabledReason: host.t("editor.helpers.last_condition_group"),
+                        })}
                     </div>
                 </div>
             </summary>

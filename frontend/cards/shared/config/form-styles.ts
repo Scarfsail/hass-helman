@@ -66,6 +66,61 @@ export const configFormStyles = css`
         cursor: not-allowed;
     }
 
+    /* The same pill, shrunk to its glyph. Removing is the one action every list
+       row carries, and a text pill per row crowded the summary lines they sit
+       in -- so the text goes and the label moves to title/aria-label. */
+    .actions button.icon,
+    .inline-actions button.icon,
+    .list-actions button.icon {
+        padding: 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .actions button.icon .icon-button-glyph,
+    .inline-actions button.icon .icon-button-glyph,
+    .list-actions button.icon .icon-button-glyph {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+    }
+
+    /* The grip ha-sortable drags a list item by. touch-action: none is what
+       lets a drag beat the page's own scroll on a touch screen. */
+    .sortable-handle {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
+        cursor: grab;
+        color: var(--secondary-text-color);
+        touch-action: none;
+    }
+
+    .sortable-handle:active {
+        cursor: grabbing;
+    }
+
+    .sortable-handle-glyph {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+    }
+
+    /* SortableJS puts these on the item being dragged and on the gap it will
+       land in. ha-sortable ships its own copy, but into the light DOM of
+       whichever tree it is in -- so a card that adopts these styles is not
+       relying on HA having styled them for us. */
+    .sortable-ghost {
+        opacity: 0.4;
+        border-radius: 12px;
+        box-shadow: 0 0 0 2px var(--primary-color);
+    }
+
+    .sortable-chosen {
+        cursor: grabbing;
+    }
+
     details.section-card,
     .list-card,
     .nested-card {
@@ -132,7 +187,7 @@ export const configFormStyles = css`
     }
 
     /* A borderless glyph button, so renaming sits beside the name without
-       competing with the up/down/remove pills on the other end of the row. */
+       competing with the actions on the other end of the row. */
     .icon-button {
         border: none;
         background: none;
@@ -403,5 +458,76 @@ export const configFormStyles = css`
         line-height: 1.55;
         margin: 0;
         font-size: 0.93rem;
+    }
+
+    /* The per-item Visual / YAML switch and its editor -- see item-yaml.ts. */
+
+    .mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 2px;
+        border: 1px solid var(--divider-color);
+        border-radius: 999px;
+        background: var(--card-background-color);
+    }
+
+    .mode-toggle button {
+        border: none;
+        background: transparent;
+        color: var(--secondary-text-color);
+        padding: 4px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.76rem;
+        font-weight: 600;
+    }
+
+    .mode-toggle button:hover {
+        background: rgba(127, 127, 127, 0.08);
+    }
+
+    .mode-toggle button.active {
+        background: rgba(3, 169, 244, 0.12);
+        color: var(--primary-color);
+    }
+
+    .mode-toggle button.active:hover {
+        background: rgba(3, 169, 244, 0.16);
+    }
+
+    .yaml-surface {
+        display: grid;
+        gap: 12px;
+    }
+
+    .yaml-field ha-yaml-editor {
+        display: block;
+        --code-mirror-height: clamp(320px, 58vh, 720px);
+        --code-mirror-max-height: clamp(320px, 58vh, 720px);
+    }
+
+    .message {
+        border: 1px solid var(--divider-color);
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin-bottom: 16px;
+        background: var(--card-background-color);
+    }
+
+    .message.success {
+        border-color: #2e7d32;
+        background: rgba(46, 125, 50, 0.08);
+    }
+
+    .message.error {
+        border-color: var(--error-color);
+        background: rgba(244, 67, 54, 0.08);
+    }
+
+    .message.info {
+        border-color: var(--primary-color);
+        background: rgba(3, 169, 244, 0.08);
     }
 `;

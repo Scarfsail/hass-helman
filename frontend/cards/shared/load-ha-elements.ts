@@ -17,7 +17,13 @@
 import type { LocalizeFunc } from "../../hass-frontend/src/common/translations/localize";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 
-const REQUIRED_ELEMENTS = ["ha-entity-picker", "ha-form", "ha-formfield", "ha-switch"] as const;
+const REQUIRED_ELEMENTS = [
+  "ha-entity-picker",
+  "ha-form",
+  "ha-formfield",
+  "ha-switch",
+] as const;
+const SORTABLE_TAG = "ha-sortable";
 const YAML_EDITOR_TAG = "ha-yaml-editor";
 const TRACE_ELEMENTS = ["hat-script-graph", "ha-trace-path-details"] as const;
 
@@ -91,6 +97,24 @@ async function loadAutomationPanel(): Promise<void> {
 }
 
 export const loadHaForm = loadOnce(REQUIRED_ELEMENTS, loadAutomationPanel);
+
+/**
+ * `ha-sortable`, which every reorderable list drags by.
+ *
+ * The same walk as the form elements: the `automation` route imports
+ * `ha-automation-editor` statically, and its trigger, condition and action lists
+ * all import `components/ha-sortable`, so the tag registers with the rest.
+ *
+ * Awaited *separately* from `REQUIRED_ELEMENTS` on purpose, even though one walk
+ * registers both. `loadOnce` waits on `customElements.whenDefined`, which never
+ * rejects -- it simply never settles for a tag that does not arrive. Were this
+ * tag in with the others, an HA release breaking that import chain would hang
+ * `loadHaForm` forever, and every `ha-form`, `ha-selector` and `ha-entity-picker`
+ * in the panel would stay silently unrendered. Kept apart, the same break costs
+ * exactly what it should: lists render in their current order and cannot be
+ * dragged.
+ */
+export const loadHaSortable = loadOnce([SORTABLE_TAG], loadAutomationPanel);
 
 const loadTraceChunk = loadOnce(TRACE_ELEMENTS, async () => {
   await loadAutomationPanel();

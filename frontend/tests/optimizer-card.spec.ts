@@ -131,6 +131,14 @@ async function mountEditor(
     );
     await page.evaluate(
         ({ schema, config: initialConfig }) => {
+            // A card enters YAML mode only once `ha-yaml-editor` is defined --
+            // in a real dashboard it walks HA's developer-tools chunk for it,
+            // which does not exist here. A stub short-circuits that walk, and
+            // the YAML tests below drive it with the `value-changed` the real
+            // editor fires.
+            if (!customElements.get("ha-yaml-editor")) {
+                customElements.define("ha-yaml-editor", class extends HTMLElement {});
+            }
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as any;
@@ -342,6 +350,9 @@ test.describe("schema-driven optimizer card", () => {
     test("removing a group is enabled once there is more than one", async ({ page }) => {
         const panel = await mountEditor(page);
         const card = await openCard(panel);
+        // Removing now asks first, the same way the editor already asks before
+        // throwing unsaved work away.
+        page.on("dialog", (dialog) => void dialog.accept());
 
         await expect(card.locator(".remove-condition-group").first()).toBeEnabled();
         await card.locator(".remove-condition-group").first().click();
@@ -415,9 +426,17 @@ test.describe("schema-driven optimizer card", () => {
         // Still the fallback, so the group renumbers when it moves rather than
         // freezing "Group 1" into the config.
         await expect(group.locator(".condition-group-name")).toHaveText("Group 1");
-        await card.locator(".condition-group").nth(1).locator("button", {
-            hasText: "Up",
-        }).click();
+        // Groups reorder by dragging now, and `ha-sortable` is undefined in a
+        // bare page -- so the move is the event a real drag would have fired.
+        await card.locator("ha-sortable").first().evaluate((sortable) => {
+            sortable.dispatchEvent(
+                new CustomEvent("item-moved", {
+                    detail: { oldIndex: 1, newIndex: 0 },
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        });
         await expect(
             card.locator(".condition-group").nth(1).locator(".condition-group-name"),
         ).toHaveText("Group 2");
@@ -466,5 +485,271 @@ test.describe("schema-driven optimizer card", () => {
         const cards = panel.locator(".optimizer-card");
         await expect(cards).toHaveCount(2);
         await expect(cards.nth(1)).toHaveAttribute("data-kind", "export_price");
+    });
+});
+
+/**
+ * The card's own Visual / YAML switch.
+ *
+ * Owned by `helman-optimizer-editor` rather than by whoever mounted it, so it
+ * is the same switch in the config panel and in the inspector's edit dialog.
+ * `ha-yaml-editor` is stubbed here, so these drive it with the `value-changed`
+ * the real one fires.
+ */
+test.describe("an optimizer's YAML mode", () => {
+    const modeButton = (card: Locator, name: "Visual" | "YAML") =>
+        card.locator(".mode-toggle button", { hasText: name });
+
+    /** What `ha-yaml-editor` reports as the reader types. */
+    async function yamlEdit(
+        card: Locator,
+        detail: { value?: unknown; isValid: boolean; errorMsg?: string },
+    ): Promise<void> {
+        await card.locator("ha-yaml-editor").evaluate((editor, payload) => {
+            editor.dispatchEvent(
+                new CustomEvent("value-changed", {
+                    detail: payload,
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        }, detail);
+    }
+
+    /** Two optimizers, so a move has somewhere to move to. */
+    const TWO = {
+        automation: {
+            enabled: true,
+            system_optimizers: [
+                {
+                    id: "morning-hold",
+                    kind: "charge_hold",
+                    enabled: true,
+                    params: { window: { start: "06:00", end: "12:00" } },
+                    conditions: [{ run_when: ["surplus"] }],
+                },
+                {
+                    id: "export",
+                    kind: "export_price",
+                    enabled: true,
+                    conditions: [{ when_price_below: 0 }],
+                },
+            ],
+        },
+    };
+
+    test("the summary switches the card between visual and YAML", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+
+        await modeButton(card, "YAML").click();
+
+        // The YAML editor replaces the form rather than joining it: one editor
+        // of record on screen.
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+        await expect(card.locator(".appliance-body > .field-grid")).toHaveCount(0);
+        // Switching the mode must not collapse the card out from under it.
+        await expect(card).toHaveAttribute("open", "");
+
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(0);
+        await expect(card.locator(".appliance-body > .field-grid")).toHaveCount(1);
+    });
+
+    test("a valid YAML edit lands in the draft and shows in the form", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+
+        await yamlEdit(card, {
+            isValid: true,
+            value: {
+                id: "renamed-hold",
+                kind: "charge_hold",
+                enabled: true,
+                params: { window: { start: "07:00", end: "12:00" } },
+                conditions: [{ run_when: ["surplus"] }],
+            },
+        });
+
+        // The edit went through the same `optimizer-config-changed` a form edit
+        // does, so the panel is dirty and its Save button is live.
+        await expect(panel.getByRole("button", { name: "Save" })).toBeEnabled();
+
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".card-title strong")).toHaveText("renamed-hold");
+        const values = await card
+            .locator(".appliance-body > .field-grid input")
+            .evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value));
+        expect(values.slice(0, 2)).toEqual(["renamed-hold", "07:00"]);
+    });
+
+    test("invalid YAML shows the error and blocks the way back", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+
+        await yamlEdit(card, { isValid: false, errorMsg: "bad indentation" });
+
+        // The editor's own message names the line, so it is preferred over our
+        // generic one.
+        await expect(card.locator(".yaml-surface .message.error")).toHaveText("bad indentation");
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+
+        // And a value YAML parses but the optimizer cannot be is refused too.
+        await yamlEdit(card, { isValid: true, value: "just a string" });
+        await expect(card.locator(".yaml-surface .message.error")).toHaveCount(1);
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+
+        // Fixing it unblocks the switch: the error is a gate, not a trap.
+        await yamlEdit(card, {
+            isValid: true,
+            value: { id: "morning-hold", kind: "charge_hold", enabled: true, conditions: [{}] },
+        });
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(0);
+    });
+
+    test("a list where the optimizer should be is refused, not applied", async ({ page }) => {
+        // Pasting a whole `system_optimizers:` block into one optimizer is the
+        // easy way to do this by accident. Applying it used to be
+        // unrecoverable: the card renders from `asJsonObject(...)` and drew
+        // nothing at all for a list, taking the mode toggle and the YAML
+        // surface down with it and leaving a dirty draft with no way back in.
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+
+        await yamlEdit(card, {
+            isValid: true,
+            value: [{ id: "morning-hold", kind: "charge_hold" }],
+        });
+
+        await expect(card.locator(".yaml-surface .message.error")).toHaveCount(1);
+        await expect(panel.locator(".optimizer-card")).toHaveCount(1);
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+
+        // `null` parses to an object by `typeof`, so it needs saying too.
+        await yamlEdit(card, { isValid: true, value: null });
+        await expect(panel.locator(".optimizer-card")).toHaveCount(1);
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+    });
+
+    test("retyping the kind keeps the editor open through the unknown middle", async ({
+        page,
+    }) => {
+        // Fixing a kind by hand passes through an unknown one on nearly every
+        // keystroke. The visual and unsupported cards are two different
+        // templates, so crossing between them tore the `<details>` down and
+        // rebuilt it closed, losing the editor's focus and formatting with it.
+        // YAML mode renders one shell for both, outside that branch.
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+
+        await yamlEdit(card, {
+            isValid: true,
+            value: { id: "morning-hold", kind: "charge_hol", enabled: true },
+        });
+
+        await expect(card.locator(".yaml-surface")).toBeVisible();
+        await expect(card.locator(".raw-preview")).toHaveCount(0);
+
+        // And once the kind is whole again, still open and still in YAML.
+        await yamlEdit(card, {
+            isValid: true,
+            value: { id: "morning-hold", kind: "charge_hold", enabled: true },
+        });
+        await expect(card.locator(".yaml-surface")).toBeVisible();
+    });
+
+    test("flipping Enabled leaves the open YAML editor alone", async ({ page }) => {
+        // The Enabled switch lives in the summary, so it stays live while the
+        // body is a YAML editor -- and flipping it rewrites `enabled` at this
+        // very path, which used to look like a different optimizer arriving and
+        // closed YAML mode mid-edit. With an error showing, that silently threw
+        // away the very text `_exitYamlMode` refuses to let the reader abandon.
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+        await yamlEdit(card, { isValid: false, errorMsg: "bad indentation" });
+
+        await card
+            .locator(".summary-toggle ha-switch")
+            .evaluate((element: HTMLElement & { checked: boolean }) => {
+                element.checked = false;
+                element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            });
+
+        // Still in YAML, still holding the error, so the unsaved text survives.
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+        await expect(card.locator(".yaml-surface .message.error")).toHaveText("bad indentation");
+
+        // And the toggle did land: this is not the switch being ignored.
+        await expect(card.locator(".summary-toggle ha-switch")).toHaveJSProperty(
+            "checked",
+            false,
+        );
+
+        // A real replacement still closes it -- the rule did not just go away.
+        await yamlEdit(card, {
+            isValid: true,
+            value: { id: "someone-else", kind: "charge_hold", enabled: false },
+        });
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(0);
+    });
+
+    test("a kind the schema does not describe is fixable as YAML", async ({ page }) => {
+        // Raw YAML is the only way to fix an unknown kind -- the form has no
+        // fields to offer for it -- so that card carries the switch too.
+        const panel = await mountEditor(page, {
+            automation: {
+                enabled: true,
+                system_optimizers: [{ id: "mystery", kind: "from_the_future", enabled: true }],
+            },
+        });
+        const card = panel.locator(".optimizer-card");
+        await card.locator("summary").first().click();
+        await expect(card.locator(".raw-preview")).toHaveCount(1);
+
+        await modeButton(card, "YAML").click();
+
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+        await expect(card.locator(".raw-preview")).toHaveCount(0);
+    });
+
+    test("moving the card returns it to visual, still editing its own optimizer", async ({
+        page,
+    }) => {
+        const panel = await mountEditor(page, TWO);
+        const card = panel.locator(".optimizer-card").first();
+        await card.locator("summary").first().click();
+        await modeButton(card, "YAML").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+
+        // Lit reuses the element by list position, so after a drag the element
+        // that was in YAML mode is handed a different optimizer -- and would
+        // otherwise go on editing the one that moved away.
+        await panel
+            .locator("ha-sortable")
+            .filter({ has: page.locator("helman-optimizer-editor") })
+            .first()
+            .evaluate((sortable) => {
+                sortable.dispatchEvent(
+                    new CustomEvent("item-moved", {
+                        detail: { oldIndex: 0, newIndex: 1 },
+                        bubbles: true,
+                        composed: true,
+                    }),
+                );
+            });
+
+        await expect(panel.locator(".optimizer-card .card-title strong").first()).toHaveText(
+            "export",
+        );
+        await expect(panel.locator(".yaml-surface")).toHaveCount(0);
     });
 });
