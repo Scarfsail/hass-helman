@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "../cards/shared/config/types";
+import type { JsonObject, JsonValue } from "./types";
 
 export type YamlNormalizationErrorCode = "non_json_value";
 

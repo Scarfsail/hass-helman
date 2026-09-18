@@ -114,6 +114,12 @@ import {
   type FormFieldHost,
 } from "../cards/shared/config/form-fields";
 import {
+  parseItemYaml,
+  renderItemModeToggle,
+  renderItemYamlEditor,
+  type YamlEditorValueChangedDetail,
+} from "../cards/shared/config/item-yaml";
+import {
   renderDragHandle,
   renderRemoveButton,
   renderSortableList,
@@ -144,7 +150,7 @@ import type {
   ValidationReport,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
-import { normalizeYamlValue } from "./yaml-codec";
+import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
 
 const USE_MODE_BEHAVIORS = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
@@ -240,12 +246,6 @@ const APPLIANCE_ICON_SELECTOR = {
 const OPTIMIZER_CONDITION_SELECTOR = {
   condition: {},
 } as const;
-
-interface YamlEditorValueChangedDetail {
-  value: unknown;
-  isValid: boolean;
-  errorMsg?: string;
-}
 
 /** One row of a training tab depth table -- see `_renderTrainingDepthTable`. */
 interface TrainingDepthRow {
@@ -343,41 +343,6 @@ export class HelmanConfigEditorPanel
       justify-content: flex-end;
     }
 
-    .mode-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 2px;
-      padding: 2px;
-      border: 1px solid var(--divider-color);
-      border-radius: 999px;
-      background: var(--card-background-color);
-    }
-
-    .mode-toggle button {
-      border: none;
-      background: transparent;
-      color: var(--secondary-text-color);
-      padding: 4px 10px;
-      border-radius: 999px;
-      cursor: pointer;
-      font: inherit;
-      font-size: 0.76rem;
-      font-weight: 600;
-    }
-
-    .mode-toggle button:hover {
-      background: rgba(127, 127, 127, 0.08);
-    }
-
-    .mode-toggle button.active {
-      background: rgba(3, 169, 244, 0.12);
-      color: var(--primary-color);
-    }
-
-    .mode-toggle button.active:hover {
-      background: rgba(3, 169, 244, 0.16);
-    }
-
     .status-row {
       display: flex;
       flex-wrap: wrap;
@@ -399,29 +364,6 @@ export class HelmanConfigEditorPanel
 
     .badge.info {
       color: var(--secondary-text-color);
-    }
-
-    .message {
-      border: 1px solid var(--divider-color);
-      border-radius: 16px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      background: var(--card-background-color);
-    }
-
-    .message.success {
-      border-color: #2e7d32;
-      background: rgba(46, 125, 50, 0.08);
-    }
-
-    .message.error {
-      border-color: var(--error-color);
-      background: rgba(244, 67, 54, 0.08);
-    }
-
-    .message.info {
-      border-color: var(--primary-color);
-      background: rgba(3, 169, 244, 0.08);
     }
 
     .tabs {
@@ -607,17 +549,6 @@ export class HelmanConfigEditorPanel
       border: 1px solid var(--divider-color);
       background: var(--secondary-background-color);
       color: var(--primary-text-color);
-    }
-
-    .yaml-surface {
-      display: grid;
-      gap: 12px;
-    }
-
-    .yaml-field ha-yaml-editor {
-      display: block;
-      --code-mirror-height: clamp(320px, 58vh, 720px);
-      --code-mirror-max-height: clamp(320px, 58vh, 720px);
     }
 
     .yaml-field--document ha-yaml-editor {
@@ -1491,37 +1422,13 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderControllableModeToggle(index: number): TemplateResult {
-    const mode = this._getControllableMode(index);
-    return html`
-      <div class="mode-toggle">
-        <button
-          type="button"
-          class=${mode === "visual" ? "active" : ""}
-          aria-pressed=${mode === "visual"}
-          @click=${(event: Event) => this._handleControllableModeChange(index, "visual", event)}
-        >
-          ${this._t("editor.mode.visual")}
-        </button>
-        <button
-          type="button"
-          class=${mode === "yaml" ? "active" : ""}
-          aria-pressed=${mode === "yaml"}
-          @click=${(event: Event) => this._handleControllableModeChange(index, "yaml", event)}
-        >
-          ${this._t("editor.mode.yaml")}
-        </button>
-      </div>
-    `;
-  }
-
-  private _handleControllableModeChange(index: number, mode: EditorMode, event: Event): void {
-    event.preventDefault();
-    event.stopPropagation();
-    if (mode === "yaml") {
-      void this._enterControllableYamlMode(index);
-    } else {
-      this._exitControllableYamlMode(index);
-    }
+    return renderItemModeToggle(this, this._getControllableMode(index), (mode) => {
+      if (mode === "yaml") {
+        void this._enterControllableYamlMode(index);
+      } else {
+        this._exitControllableYamlMode(index);
+      }
+    });
   }
 
   private async _enterControllableYamlMode(index: number): Promise<void> {
@@ -1586,39 +1493,24 @@ export class HelmanConfigEditorPanel
 
   private _handleControllableYamlChanged(
     index: number,
-    event: CustomEvent<YamlEditorValueChangedDetail>,
+    detail: YamlEditorValueChangedDetail,
   ): void {
-    event.stopPropagation();
-    if (!event.detail.isValid) {
+    const parsed = parseItemYaml(detail);
+    if (!parsed.ok) {
       this._controllableYamlErrors = {
         ...this._controllableYamlErrors,
-        [index]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
-      };
-      return;
-    }
-    const normalizedValue = normalizeYamlValue(event.detail.value);
-    if (!normalizedValue.ok) {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: this._t("editor.yaml.errors.non_json_value"),
-      };
-      return;
-    }
-    if (!Array.isArray(normalizedValue.value) && typeof normalizedValue.value !== "object") {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: this._t("editor.yaml.errors.non_json_value"),
+        [index]: detail.errorMsg ?? this._t(parsed.errorKey),
       };
       return;
     }
     try {
       const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, ["controllables", index], cloneJson(normalizedValue.value));
+      setValueAtPath(nextConfig, ["controllables", index], cloneJson(parsed.value));
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
       this._message = null;
-      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: normalizedValue.value };
+      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: parsed.value };
       const nextErrors = { ...this._controllableYamlErrors };
       delete nextErrors[index];
       this._controllableYamlErrors = nextErrors;
@@ -1631,29 +1523,13 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderControllableYamlEditor(index: number): TemplateResult {
-    const error = this._controllableYamlErrors[index];
-    const editorId = `controllable-${index}`;
-    const helperId = `${editorId}-yaml-helper`;
-    const errorId = `${editorId}-yaml-error`;
-    const describedBy = error ? `${helperId} ${errorId}` : helperId;
-    const editorValue = this._controllableYamlValues[index] ?? this._getValue(["controllables", index]);
-    return html`
-      <div class="yaml-surface">
-        <div class="field yaml-field">
-          <label>${this._t("editor.yaml.field_label")}</label>
-          <div id=${helperId} class="helper">${this._t("editor.yaml.helpers.section")}</div>
-          <ha-yaml-editor
-            .hass=${this.hass}
-            .defaultValue=${editorValue}
-            .showErrors=${false}
-            aria-describedby=${describedBy}
-            @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
-              this._handleControllableYamlChanged(index, event)}
-          ></ha-yaml-editor>
-        </div>
-        ${error ? html`<div id=${errorId} class="message error">${error}</div>` : nothing}
-      </div>
-    `;
+    return renderItemYamlEditor(this, {
+      id: `controllable-${index}`,
+      value: (this._controllableYamlValues[index] ??
+        this._getValue(["controllables", index])) as JsonValue,
+      error: this._controllableYamlErrors[index],
+      onChange: (detail) => this._handleControllableYamlChanged(index, detail),
+    });
   }
 
   private _renderModeToggle(

@@ -127,6 +127,9 @@ const STRINGS: Record<string, string> = {
     "scheduling.explanation.diagram.edit.close": "Close",
     "scheduling.explanation.diagram.edit.cancel": "Cancel",
     "scheduling.explanation.diagram.edit.discard": "Discard unsaved changes?",
+    // The card's own switch, which the dialog gets by mounting the editor.
+    "editor.mode.visual": "Visual",
+    "editor.mode.yaml": "YAML",
 };
 
 interface MountOptions {
@@ -163,6 +166,13 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
 
     await page.evaluate(
         ({ fixture, slotId, admin, schema, configs, save, strings, appliance }) => {
+            // The card enters YAML mode only once `ha-yaml-editor` is defined,
+            // and the chunk it walks for does not exist in a bare page. The
+            // stub short-circuits the walk; the YAML tests drive it with the
+            // `value-changed` the real editor fires.
+            if (!customElements.get("ha-yaml-editor")) {
+                customElements.define("ha-yaml-editor", class extends HTMLElement {});
+            }
             const calls: { type: string; config?: unknown }[] = [];
             const globals = window as unknown as Record<string, unknown>;
             globals.__calls = calls;
@@ -986,5 +996,93 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
 
         await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
         await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
+    });
+});
+
+/**
+ * The card's Visual / YAML switch, here in the dialog.
+ *
+ * The same element the config panel mounts, and the switch is its own — so
+ * these pin that the dialog gets it without plumbing anything, and that an
+ * edit made in YAML reaches the save like any other.
+ */
+test.describe("editing an optimizer as YAML from the dialog", () => {
+    const card = (page: Page) => dialog(page).locator(".optimizer-card");
+
+    const modeButton = (page: Page, name: "Visual" | "YAML") =>
+        card(page).locator(".mode-toggle button", { hasText: name });
+
+    /** What `ha-yaml-editor` reports as the reader types. */
+    async function yamlEdit(
+        page: Page,
+        detail: { value?: unknown; isValid: boolean; errorMsg?: string },
+    ): Promise<void> {
+        await card(page).locator("ha-yaml-editor").evaluate((editor, payload) => {
+            editor.dispatchEvent(
+                new CustomEvent("value-changed", {
+                    detail: payload,
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        }, detail);
+    }
+
+    test("the card switches to YAML and back", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+
+        await modeButton(page, "YAML").click();
+        await expect(card(page).locator(".yaml-surface")).toHaveCount(1);
+        await expect(card(page).locator(".appliance-body > .field-grid")).toHaveCount(0);
+
+        await modeButton(page, "Visual").click();
+        await expect(card(page).locator(".yaml-surface")).toHaveCount(0);
+        await expect(card(page).locator(".appliance-body > .field-grid")).toHaveCount(1);
+    });
+
+    test("a YAML edit is saved like any other", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await modeButton(page, "YAML").click();
+
+        await yamlEdit(page, {
+            isValid: true,
+            value: {
+                id: "export_price",
+                kind: "export_price",
+                enabled: true,
+                conditions: [{ when_price_below: 3.5 }],
+            },
+        });
+        await modeButton(page, "Visual").click();
+        // Back in the form, showing what the YAML said.
+        await expect(card(page).locator(".condition-group input[type=number]").first())
+            .toHaveValue("3.5");
+
+        await dialog(page).getByText("Save and reload").click();
+
+        const saved = (await calls(page)).filter((call) => call.type === "helman/save_config");
+        expect(saved).toHaveLength(1);
+        const sent = saved[0].config as typeof CONFIG;
+        expect(sent.automation.system_optimizers[1].conditions)
+            .toEqual([{ when_price_below: 3.5 }]);
+        // The rest of the document is untouched, as with a form edit.
+        expect(sent.power_devices).toEqual(CONFIG.power_devices);
+        expect(sent.automation.system_optimizers[0])
+            .toEqual(CONFIG.automation.system_optimizers[0]);
+    });
+
+    test("broken YAML shows the error and blocks the way back", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await modeButton(page, "YAML").click();
+
+        await yamlEdit(page, { isValid: false, errorMsg: "bad indentation" });
+
+        await expect(card(page).locator(".yaml-surface .message.error"))
+            .toHaveText("bad indentation");
+        await modeButton(page, "Visual").click();
+        await expect(card(page).locator(".yaml-surface")).toHaveCount(1);
     });
 });

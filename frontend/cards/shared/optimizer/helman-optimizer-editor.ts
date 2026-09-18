@@ -1,4 +1,4 @@
-import { LitElement, html, nothing, type TemplateResult } from "lit";
+import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import {
@@ -29,9 +29,17 @@ import {
     type FormFieldHost,
 } from "../config/form-fields";
 import {
+    parseItemYaml,
+    renderItemModeToggle,
+    renderItemYamlEditor,
+    type YamlEditorValueChangedDetail,
+} from "../config/item-yaml";
+import { loadHaYamlEditor } from "../load-ha-elements";
+import {
     renderDragHandle,
     renderRemoveButton,
     renderSortableList,
+    stopSummaryToggle,
 } from "../config/sortable-list";
 import type {
     HomeAssistantLike,
@@ -63,6 +71,36 @@ const OPTIMIZER_CONDITION_SELECTOR = {
 } as const;
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+
+/**
+ * Deep value equality, for "is this still the optimizer I am editing?".
+ *
+ * `JSON.stringify` would answer that by key order too, and a YAML edit is
+ * free to reorder keys.
+ */
+function jsonEquals(a: unknown, b: unknown): boolean {
+    if (a === b) {
+        return true;
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+        return (
+            Array.isArray(a) &&
+            Array.isArray(b) &&
+            a.length === b.length &&
+            a.every((item, index) => jsonEquals(item, b[index]))
+        );
+    }
+    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+        return false;
+    }
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    return (
+        keys.length === Object.keys(right).length &&
+        keys.every((key) => key in right && jsonEquals(left[key], right[key]))
+    );
+}
 
 /** What the editor emits when the reader changes something. */
 export interface OptimizerConfigChangedDetail {
@@ -158,6 +196,42 @@ export class HelmanOptimizerEditor
 
     @state() private _editingGroupName: GroupNameEdit | null = null;
 
+    /**
+     * This card's YAML mode, or `null` for the visual form.
+     *
+     * The mode lives here rather than with whoever mounted the card, because
+     * it edits this one optimizer and nothing else -- so the config panel and
+     * the inspector's edit dialog both get the switch without plumbing.
+     * `value` is what the editor was seeded with and what the last valid edit
+     * produced; `error` is what the last invalid one said.
+     */
+    @state() private _yaml: { value: JsonValue; error: string | null } | null = null;
+
+    /**
+     * YAML mode follows the optimizer, not the position.
+     *
+     * Lit reuses an element by its position in the list, so after a drag or a
+     * remove the element sitting at this index is handed a *different*
+     * optimizer -- and an open YAML editor would go on editing the one that
+     * moved away. One rule covers moves, removes and an auto-refresh swapping
+     * the draft underneath: if what is at `_basePath` is no longer what this
+     * editor is editing, drop back to visual.
+     *
+     * Only when the document itself changed. A valid edit sets `_yaml` and
+     * reports the new document, and this element updates before its mounter
+     * has handed the new one back -- checking then would read the pre-edit
+     * value and close the editor on every keystroke.
+     */
+    protected willUpdate(changed: PropertyValues): void {
+        if (
+            this._yaml &&
+            (changed.has("config") || changed.has("bucket") || changed.has("index")) &&
+            !jsonEquals(this.getValue(this._basePath), this._yaml.value)
+        ) {
+            this._yaml = null;
+        }
+    }
+
     render(): TemplateResult | typeof nothing {
         const optimizer = asJsonObject(this.getValue(this._basePath));
         if (!optimizer) {
@@ -166,12 +240,62 @@ export class HelmanOptimizerEditor
         const kind = stringValue(optimizer.kind);
         const schema = this.schema?.kinds.find((entry) => entry.kind === kind);
         return html`
-            ${schema
-                ? this._renderCard(schema, optimizer)
-                : this._renderUnsupported(optimizer, kind)}
+            ${this._yaml
+                ? this._renderYamlCard(optimizer)
+                : schema
+                  ? this._renderCard(schema, optimizer)
+                  : this._renderUnsupported(optimizer, kind)}
             ${renderHelpDialog(this, this._help, () => {
                 this._help = null;
             })}
+        `;
+    }
+
+    /**
+     * The card while it is being edited as YAML, whatever its kind.
+     *
+     * One shell for both a known and an unknown kind, deliberately outside the
+     * schema branch. Retyping `kind:` -- the very thing the unsupported card's
+     * YAML exists for -- passes through an unknown kind on nearly every
+     * keystroke (`charge_hol`), and the visual and unsupported cards are two
+     * different Lit templates: crossing between them tore the `<details>` down
+     * and rebuilt it, losing the open state along with the editor's focus,
+     * cursor and formatting, then doing it again once the kind became valid.
+     * Rendered from the same template throughout, the editor survives typing.
+     *
+     * Titled without the schema for the same reason: a title that changed with
+     * the kind would churn mid-edit. Always open, because YAML mode is entered
+     * deliberately and a collapsed card would hide the editor it just opened.
+     */
+    private _renderYamlCard(optimizer: JsonObject): TemplateResult {
+        const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
+        const title =
+            stringValue(optimizer.id) ||
+            this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
+        return html`
+            <details
+                class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
+                open
+            >
+                <summary>
+                    <div class="appliance-summary-row">
+                        <div class="appliance-summary-left">
+                            ${renderSvgIcon(CHEVRON, "appliance-chevron")}
+                            <div class="card-title">
+                                <strong>${title}</strong>
+                                <span class="card-subtitle">
+                                    ${this.t("editor.mode.yaml")}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="summary-actions" @click=${stopSummaryToggle}>
+                            ${this._renderModeToggle()}
+                            ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        </div>
+                    </div>
+                </summary>
+                <div class="appliance-body">${this._renderYamlEditor()}</div>
+            </details>
         `;
     }
 
@@ -190,6 +314,7 @@ export class HelmanOptimizerEditor
             renderSvgIcon,
             renderListActions: (basePath) =>
                 this.listActions?.(basePath, enabled) ?? html``,
+            modeToggle: this._renderModeToggle(),
             conditionGroups: {
                 addGroup: () => this._addConditionGroup(schema),
                 removeGroup: (groupIndex) => this._removeConditionGroup(groupIndex),
@@ -234,7 +359,10 @@ export class HelmanOptimizerEditor
                                 <span class="card-subtitle">${subtitle}</span>
                             </div>
                         </div>
-                        ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        <div class="summary-actions" @click=${stopSummaryToggle}>
+                            ${this._renderModeToggle()}
+                            ${this.listActions?.(this._basePath, enabled) ?? nothing}
+                        </div>
                     </div>
                 </summary>
                 <div class="appliance-body">
@@ -661,6 +789,73 @@ export class HelmanOptimizerEditor
             });
         }
         return renderOptionalSelectField(this, path, labelKey, options, helpKey);
+    }
+
+    // --- YAML mode -----------------------------------------------------------
+
+    private _renderModeToggle(): TemplateResult {
+        return renderItemModeToggle(this, this._yaml ? "yaml" : "visual", (mode) => {
+            if (mode === "yaml") {
+                void this._enterYamlMode();
+            } else {
+                this._exitYamlMode();
+            }
+        });
+    }
+
+    private _renderYamlEditor(): TemplateResult | null {
+        if (!this._yaml) {
+            return null;
+        }
+        return renderItemYamlEditor(this, {
+            id: `optimizer-${this.bucket}-${this.index}`,
+            value: this._yaml.value,
+            error: this._yaml.error,
+            onChange: (detail) => this._handleYamlChanged(detail),
+        });
+    }
+
+    /**
+     * `ha-yaml-editor` lives in a chunk a dashboard has not loaded, so the
+     * switch waits for it. A failed load leaves the card visual: there is no
+     * message surface on a card, and showing an empty YAML pane the reader
+     * could not type into would be worse than the button doing nothing.
+     */
+    private async _enterYamlMode(): Promise<void> {
+        if (this._yaml) {
+            return;
+        }
+        try {
+            await loadHaYamlEditor();
+        } catch {
+            return;
+        }
+        const value = this.getValue(this._basePath);
+        if (value === undefined) {
+            return;
+        }
+        this._yaml = { value: value as JsonValue, error: null };
+    }
+
+    /** Blocked while the YAML is broken -- leaving would throw the edit away. */
+    private _exitYamlMode(): void {
+        if (this._yaml?.error) {
+            return;
+        }
+        this._yaml = null;
+    }
+
+    private _handleYamlChanged(detail: YamlEditorValueChangedDetail): void {
+        const parsed = parseItemYaml(detail);
+        if (!parsed.ok) {
+            this._yaml = {
+                value: this._yaml?.value ?? null,
+                error: detail.errorMsg ?? this.t(parsed.errorKey),
+            };
+            return;
+        }
+        this._yaml = { value: parsed.value, error: null };
+        this._mutate((draft) => setValueAtPath(draft, this._basePath, cloneJson(parsed.value)));
     }
 
     // --- Mutation ------------------------------------------------------------
