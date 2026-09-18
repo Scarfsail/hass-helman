@@ -291,6 +291,7 @@ export class HelmanConfigEditorPanel
     _controllableYamlValues: { state: true },
     _controllableYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
+    _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
     _entityInspections: { state: true },
@@ -306,6 +307,66 @@ export class HelmanConfigEditorPanel
       min-height: 100%;
       background: var(--primary-background-color);
       color: var(--primary-text-color);
+    }
+
+    /* One badge text, one line: label, text, remove -- wrapping only when the
+       card is too narrow to hold them. The two columns are named once, in a
+       head row, rather than labelled on every row. */
+    .label-entry-rows {
+      display: grid;
+      gap: 8px;
+      padding: 0 16px 8px;
+    }
+
+    .label-entry-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .label-entry-row > .label-key-cell {
+      flex: 2 1 220px;
+      min-width: 150px;
+    }
+
+    /* The badge text is usually a single emoji, so it takes what is left over
+       rather than half the row. */
+    .label-entry-row > .badge-text-cell {
+      flex: 1 1 120px;
+      min-width: 100px;
+      max-width: 240px;
+    }
+
+    .label-entry-row > .list-actions {
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+
+    .label-entry-head label {
+      font-weight: 600;
+      font-size: 0.93rem;
+      color: var(--secondary-text-color);
+    }
+
+    /* Holds the head row's columns over the ones below it, where the remove
+       button sits. Its width is the button's: 18px glyph plus its padding. */
+    .label-entry-actions-spacer {
+      flex: 0 0 auto;
+      width: 32px;
+    }
+
+    /* The category name is the card's title, so it is edited where it is read
+       rather than in a field below the header. */
+    .category-key-input {
+      font-size: 1rem;
+      font-weight: var(--ha-font-weight-medium, 500);
+      border-radius: 12px;
+      border: 1px solid var(--divider-color);
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+      padding: 8px 12px;
+      max-width: 320px;
     }
 
     .page {
@@ -886,6 +947,10 @@ export class HelmanConfigEditorPanel
   private _controllableYamlValues: Partial<Record<number, JsonValue>> = {};
   private _controllableYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
+  // The names of the labels configured in Home Assistant, for the badge-text
+  // picker. `null` means "not loaded" -- a registry that could not be read
+  // leaves the stored keys editable as free text rather than hiding them.
+  private _haLabelNames: string[] | null = null;
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
@@ -2723,7 +2788,19 @@ export class HelmanConfigEditorPanel
         <div class="list-card">
           <div class="card-header">
             <div class="card-title">
-              <strong>${categoryKey}</strong>
+              <input
+                class="category-key-input"
+                .value=${categoryKey}
+                title=${this._t("editor.fields.category_key")}
+                aria-label=${this._t("editor.fields.category_key")}
+                @change=${(event: Event) => {
+                  this._handleRenameObjectKey(
+                    ["device_label_text"],
+                    categoryKey,
+                    (event.currentTarget as HTMLInputElement).value,
+                  );
+                }}
+              />
               <span class="card-subtitle">${this._t("editor.card.category")}</span>
             </div>
             <div class="inline-actions">
@@ -2733,62 +2810,36 @@ export class HelmanConfigEditorPanel
               })}
             </div>
           </div>
-          <div class="field-grid">
-            <div class="field">
-              <label>${this._t("editor.fields.category_key")}</label>
-              <input
-                .value=${categoryKey}
-                @change=${(event: Event) => {
-                  this._handleRenameObjectKey(
-                    ["device_label_text"],
-                    categoryKey,
-                    (event.currentTarget as HTMLInputElement).value,
-                  );
-                }}
-              />
+          <div class="label-entry-rows">
+            <div class="label-entry-row label-entry-head">
+              <label class="label-key-cell">${this._t("editor.fields.label_key")}</label>
+              <label class="badge-text-cell">${this._t("editor.fields.badge_text")}</label>
+              <span class="label-entry-actions-spacer"></span>
             </div>
-          </div>
-          <div class="list-stack">
             ${labelEntries.map(([labelKey, badgeText]) => html`
-              <div class="nested-card">
-                <div class="card-header">
-                  <div class="card-title">
-                    <strong>${labelKey}</strong>
-                    <span class="card-subtitle">${this._t("editor.card.badge_text_entry")}</span>
-                  </div>
-                  <div class="inline-actions">
-                    ${renderRemoveButton(this, {
-                      onRemove: () =>
-                        this._removePath(["device_label_text", categoryKey, labelKey]),
-                    })}
-                  </div>
+              <div class="label-entry-row">
+                <div class="field field-compact label-key-cell">
+                  ${this._renderLabelKeyPicker(categoryKey, labelKey, labelEntries)}
                 </div>
-                <div class="field-grid">
-                  <div class="field">
-                    <label>${this._t("editor.fields.label_key")}</label>
-                    <input
-                      .value=${labelKey}
-                      @change=${(event: Event) => {
-                        this._handleRenameObjectKey(
-                          ["device_label_text", categoryKey],
-                          labelKey,
-                          (event.currentTarget as HTMLInputElement).value,
-                        );
-                      }}
-                    />
-                  </div>
-                  <div class="field">
-                    <label>${this._t("editor.fields.badge_text")}</label>
-                    <input
-                      .value=${this._stringValue(badgeText)}
-                      @change=${(event: Event) => {
-                        this._setRequiredString(
-                          ["device_label_text", categoryKey, labelKey],
-                          (event.currentTarget as HTMLInputElement).value,
-                        );
-                      }}
-                    />
-                  </div>
+                <div class="field field-compact badge-text-cell">
+                  <input
+                    class="badge-text-input"
+                    .value=${this._stringValue(badgeText)}
+                    aria-label=${this._t("editor.fields.badge_text")}
+                    @change=${(event: Event) => {
+                      this._setRequiredString(
+                        ["device_label_text", categoryKey, labelKey],
+                        (event.currentTarget as HTMLInputElement).value,
+                      );
+                    }}
+                  />
+                </div>
+                <div class="list-actions">
+                  ${renderRemoveButton(this, {
+                    className: "remove-label-entry",
+                    onRemove: () =>
+                      this._removePath(["device_label_text", categoryKey, labelKey]),
+                  })}
                 </div>
               </div>
             `)}
@@ -2805,6 +2856,67 @@ export class HelmanConfigEditorPanel
         </div>
       `;
     });
+  }
+
+  /**
+   * The label a badge text applies to: Home Assistant's own labels, by name.
+   *
+   * `device_label_text` is keyed by label name, so the registry can offer the
+   * keys directly. Two cases keep it honest: a stored key the registry does not
+   * have is offered as its own option rather than silently rewritten, and a
+   * registry that could not be read falls back to the free-text input the
+   * section always had -- an editor that offered nothing would strand the keys.
+   */
+  private _renderLabelKeyPicker(
+    categoryKey: string,
+    labelKey: string,
+    labelEntries: [string, unknown][],
+  ): TemplateResult {
+    const rename = (value: string) =>
+      this._handleRenameObjectKey(["device_label_text", categoryKey], labelKey, value);
+    const title = this._t("editor.fields.label_key");
+    // An empty registry is treated as no registry: a picker whose only entries
+    // are the keys already stored can only take editing away. A Home Assistant
+    // that simply has no labels yet is the common case for that.
+    if (this._haLabelNames === null || this._haLabelNames.length === 0) {
+      return html`
+        <input
+          class="label-key-input"
+          .value=${labelKey}
+          title=${title}
+          aria-label=${title}
+          @change=${(event: Event) => rename((event.currentTarget as HTMLInputElement).value)}
+        />
+      `;
+    }
+    // A name another row in this category already uses would collide on rename,
+    // so it is offered only by the row holding it.
+    const taken = new Set(
+      labelEntries.map(([key]) => key).filter((key) => key !== labelKey),
+    );
+    const options = this._haLabelNames.filter((name) => !taken.has(name));
+    return html`
+      <select
+        class="label-key-picker"
+        title=${title}
+        aria-label=${title}
+        @change=${(event: Event) => rename((event.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value="" ?selected=${labelKey.length === 0}>
+          ${this._t("editor.values.select_label")}
+        </option>
+        ${labelKey.length > 0 && !options.includes(labelKey)
+          ? html`<option value=${labelKey} ?selected=${true}>
+              ${this._tFormat("editor.dynamic.unknown_label", { name: labelKey })}
+            </option>`
+          : nothing}
+        ${options.map(
+          (name) => html`
+            <option value=${name} ?selected=${name === labelKey}>${name}</option>
+          `,
+        )}
+      </select>
+    `;
   }
 
   /**
@@ -4142,11 +4254,12 @@ export class HelmanConfigEditorPanel
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult, schemaResult] =
+      const [loadedResult, liveApplianceMetadataResult, schemaResult, labelNamesResult] =
         await Promise.allSettled([
           this.hass.callWS<unknown>({ type: "helman/get_config" }),
           this._loadLiveApplianceMetadata(),
           fetchOptimizerSchema(this.hass),
+          this._loadHaLabelNames(),
         ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
@@ -4168,6 +4281,8 @@ export class HelmanConfigEditorPanel
           : null;
       this._optimizerSchema =
         schemaResult.status === "fulfilled" ? schemaResult.value : null;
+      this._haLabelNames =
+        labelNamesResult.status === "fulfilled" ? labelNamesResult.value : null;
       this._validation = null;
       this._dirty = this._config
         ? this._normalizeApplianceOptimizerTargets(this._config)
@@ -4503,7 +4618,13 @@ export class HelmanConfigEditorPanel
     const existingKeys = objectEntries(this._getValue(["device_label_text", categoryKey])).map(
       ([key]) => key,
     );
-    const labelKey = createLabelKey(existingKeys);
+    // A new row starts on a label that exists, when the registry is in hand:
+    // the picker's whole point is that a key is a Home Assistant label, and a
+    // placeholder key would open as "not a Home Assistant label".
+    const firstFreeLabel = (this._haLabelNames ?? []).find(
+      (name) => !existingKeys.includes(name),
+    );
+    const labelKey = firstFreeLabel ?? createLabelKey(existingKeys);
     this._applyMutation((draft) => {
       setValueAtPath(draft, ["device_label_text", categoryKey, labelKey], "");
     });
@@ -4944,6 +5065,33 @@ export class HelmanConfigEditorPanel
         type: "helman/get_appliances",
       });
       return Array.isArray(response?.appliances) ? response : { appliances: [] };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The label names Home Assistant has, for the badge-text picker.
+   *
+   * ``device_label_text`` is keyed by label *name* -- that is what
+   * ``_apply_label_badge_texts`` matches a device's labels against -- so the
+   * picker offers names, not ids.
+   */
+  private async _loadHaLabelNames(): Promise<string[] | null> {
+    if (!this.hass) {
+      return null;
+    }
+    try {
+      const labels = await this.hass.callWS<{ name?: unknown }[]>({
+        type: "config/label_registry/list",
+      });
+      if (!Array.isArray(labels)) {
+        return null;
+      }
+      const names = labels
+        .map((label) => (typeof label?.name === "string" ? label.name.trim() : ""))
+        .filter((name) => name.length > 0);
+      return [...new Set(names)].sort((left, right) => left.localeCompare(right));
     } catch {
       return null;
     }
