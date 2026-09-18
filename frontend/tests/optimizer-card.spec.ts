@@ -665,6 +665,43 @@ test.describe("an optimizer's YAML mode", () => {
         await expect(card.locator(".yaml-surface")).toBeVisible();
     });
 
+    test("flipping Enabled leaves the open YAML editor alone", async ({ page }) => {
+        // The Enabled switch lives in the summary, so it stays live while the
+        // body is a YAML editor -- and flipping it rewrites `enabled` at this
+        // very path, which used to look like a different optimizer arriving and
+        // closed YAML mode mid-edit. With an error showing, that silently threw
+        // away the very text `_exitYamlMode` refuses to let the reader abandon.
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        await modeButton(card, "YAML").click();
+        await yamlEdit(card, { isValid: false, errorMsg: "bad indentation" });
+
+        await card
+            .locator(".summary-toggle ha-switch")
+            .evaluate((element: HTMLElement & { checked: boolean }) => {
+                element.checked = false;
+                element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            });
+
+        // Still in YAML, still holding the error, so the unsaved text survives.
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+        await expect(card.locator(".yaml-surface .message.error")).toHaveText("bad indentation");
+
+        // And the toggle did land: this is not the switch being ignored.
+        await expect(card.locator(".summary-toggle ha-switch")).toHaveJSProperty(
+            "checked",
+            false,
+        );
+
+        // A real replacement still closes it -- the rule did not just go away.
+        await yamlEdit(card, {
+            isValid: true,
+            value: { id: "someone-else", kind: "charge_hold", enabled: false },
+        });
+        await modeButton(card, "Visual").click();
+        await expect(card.locator(".yaml-surface")).toHaveCount(0);
+    });
+
     test("a kind the schema does not describe is fixable as YAML", async ({ page }) => {
         // Raw YAML is the only way to fix an unknown kind -- the form has no
         // fields to offer for it -- so that card carries the switch too.

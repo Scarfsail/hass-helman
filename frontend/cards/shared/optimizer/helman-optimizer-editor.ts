@@ -102,6 +102,25 @@ function jsonEquals(a: unknown, b: unknown): boolean {
     );
 }
 
+/**
+ * "Same optimizer, with its Enabled switch flipped."
+ *
+ * The one summary control that rewrites the optimizer while YAML mode is open,
+ * so the one change that must not be mistaken for a different optimizer landing
+ * at this index. Anything else -- a moved neighbour, a remove, a refreshed draft
+ * -- is a replacement, and closes the editor.
+ */
+function differsOnlyByEnabled(current: unknown, snapshot: unknown): boolean {
+    const left = asJsonObject(current);
+    const right = asJsonObject(snapshot);
+    if (!left || !right) {
+        return false;
+    }
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    keys.delete("enabled");
+    return [...keys].every((key) => jsonEquals(left[key], right[key]));
+}
+
 /** What the editor emits when the reader changes something. */
 export interface OptimizerConfigChangedDetail {
     /** The whole document, with this optimizer's subtree rewritten. */
@@ -221,15 +240,34 @@ export class HelmanOptimizerEditor
      * reports the new document, and this element updates before its mounter
      * has handed the new one back -- checking then would read the pre-edit
      * value and close the editor on every keystroke.
+     *
+     * The Enabled switch is the exception, and it has to be. It lives in the
+     * summary, so it stays live while the body is a YAML editor, and flipping it
+     * rewrites `enabled` at this very path -- which looked exactly like a
+     * different optimizer arriving. That closed YAML mode mid-edit and threw the
+     * reader's text away, including the erroring text `_exitYamlMode` refuses to
+     * let them abandon. A change that touches nothing but `enabled` is this same
+     * optimizer being toggled, so the snapshot takes the new value and the editor
+     * stays open. Only the snapshot moves: `ha-yaml-editor` seeds from
+     * `defaultValue` in `firstUpdated` and we leave `autoUpdate` off, so nothing
+     * reseeds the text under the cursor.
      */
     protected willUpdate(changed: PropertyValues): void {
         if (
-            this._yaml &&
-            (changed.has("config") || changed.has("bucket") || changed.has("index")) &&
-            !jsonEquals(this.getValue(this._basePath), this._yaml.value)
+            !this._yaml ||
+            !(changed.has("config") || changed.has("bucket") || changed.has("index"))
         ) {
-            this._yaml = null;
+            return;
         }
+        const current = this.getValue(this._basePath);
+        if (jsonEquals(current, this._yaml.value)) {
+            return;
+        }
+        if (differsOnlyByEnabled(current, this._yaml.value)) {
+            this._yaml = { ...this._yaml, value: current };
+            return;
+        }
+        this._yaml = null;
     }
 
     render(): TemplateResult | typeof nothing {
