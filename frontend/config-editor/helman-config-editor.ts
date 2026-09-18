@@ -878,7 +878,7 @@ export class HelmanConfigEditorPanel
   private _hass?: HomeAssistantLike;
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
-  private _activeTab: TabId = "general";
+  private _activeTab: TabId = "power_devices";
   /**
    * Reduce every tab to nothing but its entity groups.
    *
@@ -1281,8 +1281,11 @@ export class HelmanConfigEditorPanel
 
   private _renderActiveTab(): TemplateResult {
     switch (this._activeTab) {
-      case "general":
-        return this._renderTabScope(TAB_SCOPE_IDS.general, this._renderGeneralTab());
+      case "visualization":
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.visualization,
+          this._renderVisualizationTab(),
+        );
       case "power_devices":
         return this._renderTabScope(
           TAB_SCOPE_IDS.power_devices,
@@ -1693,56 +1696,50 @@ export class HelmanConfigEditorPanel
     event.stopPropagation();
   };
 
-  private _renderGeneralTab(): TemplateResult {
+  private _renderVisualizationTab(): TemplateResult {
     return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.general.core_labels_and_history,
+        SECTION_SCOPE_IDS.visualization.card_labels_and_history,
         html`
           <div class="field-grid">
             ${this._renderOptionalNumberField(
-              ["history_buckets"],
+              ["visualization", "history_buckets"],
               "editor.fields.history_buckets",
               "editor.helpers.history_buckets",
               "editor.help.history_buckets",
             )}
             ${this._renderOptionalNumberField(
-              ["history_bucket_duration"],
+              ["visualization", "history_bucket_duration"],
               "editor.fields.history_bucket_duration",
               "editor.helpers.history_bucket_duration",
               "editor.help.history_bucket_duration",
             )}
-            ${this._renderOptionalTextField(["sources_title"], "editor.fields.sources_title")}
-            ${this._renderOptionalTextField(["consumers_title"], "editor.fields.consumers_title")}
-            ${this._renderOptionalTextField(["groups_title"], "editor.fields.groups_title")}
-            ${this._renderOptionalTextField(["others_group_label"], "editor.fields.others_group_label")}
+            ${this._renderOptionalTextField(["visualization", "sources_title"], "editor.fields.sources_title")}
+            ${this._renderOptionalTextField(["visualization", "consumers_title"], "editor.fields.consumers_title")}
+            ${this._renderOptionalTextField(["visualization", "groups_title"], "editor.fields.groups_title")}
+            ${this._renderOptionalTextField(["visualization", "others_group_label"], "editor.fields.others_group_label")}
             ${this._renderOptionalTextField(
-              ["power_sensor_name_cleaner_regex"],
+              ["visualization", "power_sensor_name_cleaner_regex"],
               "editor.fields.power_sensor_name_cleaner_regex",
               "editor.helpers.power_sensor_name_cleaner_regex",
               "editor.help.power_sensor_name_cleaner_regex",
             )}
             ${this._renderBooleanField(
-              ["show_empty_groups"],
+              ["visualization", "show_empty_groups"],
               "editor.fields.show_empty_groups",
               false,
             )}
             ${this._renderBooleanField(
-              ["show_others_group"],
+              ["visualization", "show_others_group"],
               "editor.fields.show_others_group",
               true,
-            )}
-            ${this._renderOptionalTextField(
-              ["training_time"],
-              "editor.fields.training_time",
-              "editor.helpers.training_time",
-              "editor.help.training_time",
             )}
           </div>
         `,
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.general.device_label_text,
+        SECTION_SCOPE_IDS.visualization.device_label_text,
         html`
           <p class="inline-note">
             ${this._t("editor.notes.device_label_text")}
@@ -2166,6 +2163,20 @@ export class HelmanConfigEditorPanel
    */
   private _renderTrainingTab(): TemplateResult {
     return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.settings,
+        html`
+          <div class="field-grid">
+            ${this._renderOptionalTextField(
+              ["training", "training_time"],
+              "editor.fields.training_time",
+              "editor.helpers.training_time",
+              "editor.help.training_time",
+            )}
+          </div>
+        `,
+      )}
+
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.house_consumption,
         html`
@@ -2777,7 +2788,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderDeviceLabelCategories(): TemplateResult[] {
-    const categories = objectEntries(this._getValue(["device_label_text"]));
+    const categories = objectEntries(this._getValue(["visualization", "device_label_text"]));
     if (categories.length === 0) {
       return [html`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`];
     }
@@ -2795,7 +2806,7 @@ export class HelmanConfigEditorPanel
                 aria-label=${this._t("editor.fields.category_key")}
                 @change=${(event: Event) => {
                   this._handleRenameObjectKey(
-                    ["device_label_text"],
+                    ["visualization", "device_label_text"],
                     categoryKey,
                     (event.currentTarget as HTMLInputElement).value,
                   );
@@ -2805,7 +2816,7 @@ export class HelmanConfigEditorPanel
             </div>
             <div class="inline-actions">
               ${renderRemoveButton(this, {
-                onRemove: () => this._removePath(["device_label_text", categoryKey]),
+                onRemove: () => this._removePath(["visualization", "device_label_text", categoryKey]),
                 label: this._t("editor.actions.remove_category"),
               })}
             </div>
@@ -2828,7 +2839,7 @@ export class HelmanConfigEditorPanel
                     aria-label=${this._t("editor.fields.badge_text")}
                     @change=${(event: Event) => {
                       this._setRequiredString(
-                        ["device_label_text", categoryKey, labelKey],
+                        ["visualization", "device_label_text", categoryKey, labelKey],
                         (event.currentTarget as HTMLInputElement).value,
                       );
                     }}
@@ -2838,7 +2849,7 @@ export class HelmanConfigEditorPanel
                   ${renderRemoveButton(this, {
                     className: "remove-label-entry",
                     onRemove: () =>
-                      this._removePath(["device_label_text", categoryKey, labelKey]),
+                      this._removePath(["visualization", "device_label_text", categoryKey, labelKey]),
                   })}
                 </div>
               </div>
@@ -2873,7 +2884,7 @@ export class HelmanConfigEditorPanel
     labelEntries: [string, unknown][],
   ): TemplateResult {
     const rename = (value: string) =>
-      this._handleRenameObjectKey(["device_label_text", categoryKey], labelKey, value);
+      this._handleRenameObjectKey(["visualization", "device_label_text", categoryKey], labelKey, value);
     const title = this._t("editor.fields.label_key");
     // An empty registry is treated as no registry: a picker whose only entries
     // are the keys already stored can only take editing away. A Home Assistant
@@ -4197,20 +4208,20 @@ export class HelmanConfigEditorPanel
 
   private _buildTabIssueCounts(): Record<TabId, { errors: number; warnings: number }> {
     const counts: Record<TabId, { errors: number; warnings: number }> = {
-      general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
       training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       controllables: { errors: 0, warnings: 0 },
+      visualization: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {
       for (const issue of this._validation.errors) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
         counts[tabId].errors += 1;
       }
       for (const issue of this._validation.warnings) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
         counts[tabId].warnings += 1;
       }
     }
@@ -4605,17 +4616,17 @@ export class HelmanConfigEditorPanel
   }
 
   private _handleAddDeviceLabelCategory = (): void => {
-    const existingKeys = objectEntries(this._getValue(["device_label_text"])).map(
+    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text"])).map(
       ([key]) => key,
     );
     const categoryKey = createCategoryKey(existingKeys);
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["device_label_text", categoryKey], {});
+      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey], {});
     });
   };
 
   private _handleAddDeviceLabel(categoryKey: string): void {
-    const existingKeys = objectEntries(this._getValue(["device_label_text", categoryKey])).map(
+    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text", categoryKey])).map(
       ([key]) => key,
     );
     // A new row starts on a label that exists, when the registry is in hand:
@@ -4626,7 +4637,7 @@ export class HelmanConfigEditorPanel
     );
     const labelKey = firstFreeLabel ?? createLabelKey(existingKeys);
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["device_label_text", categoryKey, labelKey], "");
+      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey, labelKey], "");
     });
   }
 

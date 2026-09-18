@@ -3,11 +3,11 @@
     "title": "Helman config editor",
     "description": "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
     "tabs": {
-      "general": "General",
       "power_devices": "Power devices",
       "training": "Training",
       "automation": "Automation",
-      "controllables": "Controllables"
+      "controllables": "Controllables",
+      "visualization": "Helman card"
     },
     "actions": {
       "reload_config": "Reload stored config",
@@ -51,7 +51,7 @@
       "warnings": "Warnings"
     },
     "sections": {
-      "core_labels_and_history": "Core labels and history",
+      "card_labels_and_history": "Card labels and history",
       "device_label_text": "Device label text",
       "house": "House",
       "solar": "Solar",
@@ -77,6 +77,7 @@
       "solar_forecast_general": "General",
       "bias_correction_config": "Configuration",
       "consumption": "Consumption",
+      "training_settings": "Training settings",
       "house_consumption": "House consumption forecast",
       "solar_bias": "Solar forecast correction"
     },

@@ -454,7 +454,7 @@ test("unmounting every group stops the polling", async ({ page }) => {
     await mountEditor(page);
     await waitForFacts(page);
 
-    await openTab(page, "General");
+    await openTab(page, "Helman card");
     await expect
         .poll(async () =>
             page.evaluate(() => {
@@ -530,7 +530,7 @@ test("a tab with no groups at all never asks", async ({ page }) => {
     // The early return has to survive the widened filter: nothing picked and
     // nothing saved means no call, not a call with an empty target list.
     await mountEditor(page, { config: { config_version: 6 } });
-    await openTab(page, "General");
+    await openTab(page, "Helman card");
     await page.waitForTimeout(2500);
     expect(await requestCount(page)).toBe(0);
 });

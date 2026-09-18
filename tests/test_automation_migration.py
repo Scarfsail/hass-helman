@@ -348,12 +348,13 @@ class TrainingTimePromotionTests(unittest.TestCase):
             }
         }
 
-    def test_training_time_moves_to_the_top_level(self) -> None:
+    def test_training_time_moves_out_of_the_bias_block(self) -> None:
         migrated, ids = self._migrate_from_v5(self._bias_document(training_time="04:30"))
 
         bias = migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
         self.assertNotIn("training_time", bias)
-        self.assertEqual(migrated["training_time"], "04:30")
+        # v6 promoted it to the top level; v18 moved it on under ``training``.
+        self.assertEqual(migrated["training"]["training_time"], "04:30")
         self.assertEqual(bias["enabled"], True)
         self.assertEqual(ids, [])
 
@@ -363,7 +364,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         migrated, _ids = self._migrate_from_v5(document)
 
-        self.assertEqual(migrated["training_time"], "02:15")
+        self.assertEqual(migrated["training"]["training_time"], "02:15")
         self.assertNotIn(
             "training_time",
             migrated["power_devices"]["solar"]["forecast"]["bias_correction"],
@@ -373,6 +374,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
         migrated, _ids = self._migrate_from_v5(self._bias_document())
 
         self.assertNotIn("training_time", migrated)
+        self.assertNotIn("training", migrated)
 
     def test_a_v5_document_without_automation_is_migrated_and_stamped(self) -> None:
         document = self._bias_document(training_time="04:30")
@@ -383,7 +385,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         self.assertNotIn("automation", migrated)
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
-        self.assertEqual(migrated["training_time"], "04:30")
+        self.assertEqual(migrated["training"]["training_time"], "04:30")
 
     def test_a_v1_document_carries_the_key_through_every_step(self) -> None:
         document = {
@@ -393,7 +395,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         migrated, ids = migrate_config_document(document)
 
-        self.assertEqual(migrated["training_time"], "04:30")
+        self.assertEqual(migrated["training"]["training_time"], "04:30")
         # The optimizer ids from the v1 step survive a later step that moves none.
         self.assertEqual(ids, ["e"])
 
@@ -1633,6 +1635,68 @@ class ApplianceTargetGroupTests(unittest.TestCase):
             [member.target for member in optimizer.member_configs()],
             [{"controllable_id": "pool-pump"}],
         )
+
+
+class VisualizationRelocationTests(unittest.TestCase):
+    """v17->v18: card-only keys -> ``visualization``, ``training_time`` -> ``training``."""
+
+    @staticmethod
+    def _migrate_from_v17(document):
+        return migrate_config_document({**document, "config_version": 17})
+
+    def test_every_card_key_moves_under_visualization(self) -> None:
+        document = {
+            "history_buckets": 90,
+            "history_bucket_duration": 10,
+            "sources_title": "Sources",
+            "consumers_title": "Consumers",
+            "groups_title": "Group by:",
+            "others_group_label": "Rest",
+            "power_sensor_name_cleaner_regex": r"\s+",
+            "show_empty_groups": True,
+            "show_others_group": False,
+            "device_label_text": {"rooms": {"Kitchen": "KT"}},
+        }
+
+        migrated, ids = self._migrate_from_v17(dict(document))
+
+        self.assertEqual(migrated["visualization"], document)
+        for key in document:
+            self.assertNotIn(key, migrated)
+        self.assertEqual(ids, [])
+
+    def test_a_relocated_value_beats_a_default_merged_visualization(self) -> None:
+        # ``DEFAULT_CONFIG`` is merged in before migration runs, so anything
+        # already under ``visualization`` is a default, not an authored value.
+        migrated, _ids = self._migrate_from_v17(
+            {"history_buckets": 90, "visualization": {"history_buckets": 60}}
+        )
+
+        self.assertEqual(migrated["visualization"]["history_buckets"], 90)
+
+    def test_training_time_moves_under_training(self) -> None:
+        migrated, _ids = self._migrate_from_v17(
+            {"training_time": "04:30", "training": {"solar_bias": {}}}
+        )
+
+        self.assertNotIn("training_time", migrated)
+        self.assertEqual(
+            migrated["training"], {"solar_bias": {}, "training_time": "04:30"}
+        )
+
+    def test_an_authored_training_time_wins(self) -> None:
+        migrated, _ids = self._migrate_from_v17(
+            {"training_time": "04:30", "training": {"training_time": "02:15"}}
+        )
+
+        self.assertEqual(migrated["training"]["training_time"], "02:15")
+        self.assertNotIn("training_time", migrated)
+
+    def test_a_document_with_none_of_the_keys_grows_neither_section(self) -> None:
+        migrated, _ids = self._migrate_from_v17({"power_devices": {}})
+
+        self.assertNotIn("visualization", migrated)
+        self.assertNotIn("training", migrated)
 
 
 if __name__ == "__main__":

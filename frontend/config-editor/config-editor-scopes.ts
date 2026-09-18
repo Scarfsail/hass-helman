@@ -9,21 +9,21 @@ import type { JsonArray, JsonObject } from "../cards/shared/config/types";
 
 export type EditorMode = "visual" | "yaml";
 export type TabId =
-  | "general"
   | "power_devices"
   | "training"
   | "automation"
-  | "controllables";
+  | "controllables"
+  | "visualization";
 
 export type ScopeId =
   | "document"
-  | "tab:general"
   | "tab:power_devices"
   | "tab:training"
   | "tab:automation"
   | "tab:controllables"
-  | "section:general.core_labels_and_history"
-  | "section:general.device_label_text"
+  | "tab:visualization"
+  | "section:visualization.card_labels_and_history"
+  | "section:visualization.device_label_text"
   | "section:power_devices.house"
   | "section:power_devices.solar"
   | "section:power_devices.solar.bias_correction"
@@ -34,6 +34,7 @@ export type ScopeId =
   | "section:power_devices.solar.bias_correction.config"
   | "section:power_devices.battery"
   | "section:power_devices.grid"
+  | "section:training.settings"
   | "section:training.house_consumption"
   | "section:training.solar_bias"
   | "section:automation.settings"
@@ -52,16 +53,16 @@ export interface EditorScope {
 
 // MDI icon paths for tabs and sections
 export const TAB_ICONS: Record<TabId, string> = {
-  general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   controllables: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
+  visualization: "M21,8V6H3V8H21M3,18H12V16H3V18M3,13H21V11H3V13Z",
 };
 
 export const SECTION_ICONS: Record<string, string> = {
-  "section:general.core_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
-  "section:general.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
+  "section:visualization.card_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
+  "section:visualization.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
   "section:power_devices.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
   "section:power_devices.solar.bias_correction": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
@@ -72,6 +73,7 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:power_devices.solar.bias_correction.config": "M5,14V3H3V14H5M5,21V16H3V21H5M11,21V10H9V21H11M11,8V3H9V8H11M17,21V14H15V21H17M17,12V3H15V12H17Z",
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
+  "section:training.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:training.house_consumption": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
   "section:training.solar_bias": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
@@ -81,36 +83,36 @@ export const SECTION_ICONS: Record<string, string> = {
 };
 
 export const TABS: Array<{ id: TabId; labelKey: string }> = [
-  { id: "general", labelKey: "editor.tabs.general" },
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
-  { id: "training", labelKey: "editor.tabs.training" },
-  { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "controllables", labelKey: "editor.tabs.controllables" },
+  { id: "automation", labelKey: "editor.tabs.automation" },
+  { id: "training", labelKey: "editor.tabs.training" },
+  { id: "visualization", labelKey: "editor.tabs.visualization" },
 ];
 
 export const TAB_SECTIONS: Record<string, TabId> = {
-  general: "general",
+  visualization: "visualization",
   power_devices: "power_devices",
   training: "training",
   automation: "automation",
   controllables: "controllables",
-  root: "general",
+  root: "power_devices",
 };
 
 export const DOCUMENT_SCOPE_ID = "document" as const;
 
 export const TAB_SCOPE_IDS = {
-  general: "tab:general",
   power_devices: "tab:power_devices",
   training: "tab:training",
   automation: "tab:automation",
   controllables: "tab:controllables",
+  visualization: "tab:visualization",
 } as const satisfies Record<TabId, ScopeId>;
 
 export const SECTION_SCOPE_IDS = {
-  general: {
-    core_labels_and_history: "section:general.core_labels_and_history",
-    device_label_text: "section:general.device_label_text",
+  visualization: {
+    card_labels_and_history: "section:visualization.card_labels_and_history",
+    device_label_text: "section:visualization.device_label_text",
   },
   power_devices: {
     house: "section:power_devices.house",
@@ -126,6 +128,7 @@ export const SECTION_SCOPE_IDS = {
     grid: "section:power_devices.grid",
   },
   training: {
+    settings: "section:training.settings",
     house_consumption: "section:training.house_consumption",
     solar_bias: "section:training.solar_bias",
   },
@@ -139,7 +142,7 @@ export const SECTION_SCOPE_IDS = {
   },
 } as const;
 
-const GENERAL_PROJECTION_KEYS = [
+const CARD_LABELS_AND_HISTORY_KEYS = [
   "history_buckets",
   "history_bucket_duration",
   "sources_title",
@@ -149,22 +152,20 @@ const GENERAL_PROJECTION_KEYS = [
   "power_sensor_name_cleaner_regex",
   "show_empty_groups",
   "show_others_group",
-  "training_time",
-  "device_label_text",
 ] as const;
-
-const CORE_LABELS_AND_HISTORY_KEYS = GENERAL_PROJECTION_KEYS.filter(
-  (key) => key !== "device_label_text",
-);
 
 const EMPTY_OBJECT: JsonObject = {};
 const EMPTY_ARRAY: JsonArray = [];
 
-const GENERAL_PROJECTION_MEMBERS =
-  createRootProjectionMembers(GENERAL_PROJECTION_KEYS);
-const CORE_LABELS_AND_HISTORY_MEMBERS = createRootProjectionMembers(
-  CORE_LABELS_AND_HISTORY_KEYS,
-);
+const CARD_LABELS_AND_HISTORY_MEMBERS = CARD_LABELS_AND_HISTORY_KEYS.map(
+  (key) => ({ yamlKey: key, documentPath: ["visualization", key] }),
+) satisfies ScopeProjectionMember[];
+const TRAINING_SETTINGS_MEMBERS = [
+  {
+    yamlKey: "training_time",
+    documentPath: ["training", "training_time"],
+  },
+] satisfies ScopeProjectionMember[];
 const AUTOMATION_SETTINGS_MEMBERS = [
   {
     yamlKey: "enabled",
@@ -198,14 +199,6 @@ export const EDITOR_SCOPES = {
     kind: "document",
     labelKey: "editor.title",
     adapter: createDocumentScopeAdapter(),
-  },
-  [TAB_SCOPE_IDS.general]: {
-    id: TAB_SCOPE_IDS.general,
-    kind: "tab",
-    parentId: DOCUMENT_SCOPE_ID,
-    tabId: "general",
-    labelKey: "editor.tabs.general",
-    adapter: createProjectionScopeAdapter(GENERAL_PROJECTION_MEMBERS),
   },
   [TAB_SCOPE_IDS.power_devices]: {
     id: TAB_SCOPE_IDS.power_devices,
@@ -251,21 +244,32 @@ export const EDITOR_SCOPES = {
       rootKind: "array",
     }),
   },
-  [SECTION_SCOPE_IDS.general.core_labels_and_history]: {
-    id: SECTION_SCOPE_IDS.general.core_labels_and_history,
-    kind: "section",
-    parentId: TAB_SCOPE_IDS.general,
-    tabId: "general",
-    labelKey: "editor.sections.core_labels_and_history",
-    adapter: createProjectionScopeAdapter(CORE_LABELS_AND_HISTORY_MEMBERS),
+  [TAB_SCOPE_IDS.visualization]: {
+    id: TAB_SCOPE_IDS.visualization,
+    kind: "tab",
+    parentId: DOCUMENT_SCOPE_ID,
+    tabId: "visualization",
+    labelKey: "editor.tabs.visualization",
+    adapter: createPathScopeAdapter(["visualization"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
   },
-  [SECTION_SCOPE_IDS.general.device_label_text]: {
-    id: SECTION_SCOPE_IDS.general.device_label_text,
+  [SECTION_SCOPE_IDS.visualization.card_labels_and_history]: {
+    id: SECTION_SCOPE_IDS.visualization.card_labels_and_history,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.general,
-    tabId: "general",
+    parentId: TAB_SCOPE_IDS.visualization,
+    tabId: "visualization",
+    labelKey: "editor.sections.card_labels_and_history",
+    adapter: createProjectionScopeAdapter(CARD_LABELS_AND_HISTORY_MEMBERS),
+  },
+  [SECTION_SCOPE_IDS.visualization.device_label_text]: {
+    id: SECTION_SCOPE_IDS.visualization.device_label_text,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.visualization,
+    tabId: "visualization",
     labelKey: "editor.sections.device_label_text",
-    adapter: createPathScopeAdapter(["device_label_text"], {
+    adapter: createPathScopeAdapter(["visualization", "device_label_text"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
@@ -385,6 +389,14 @@ export const EDITOR_SCOPES = {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
+  },
+  [SECTION_SCOPE_IDS.training.settings]: {
+    id: SECTION_SCOPE_IDS.training.settings,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.training,
+    tabId: "training",
+    labelKey: "editor.sections.training_settings",
+    adapter: createProjectionScopeAdapter(TRAINING_SETTINGS_MEMBERS),
   },
   [SECTION_SCOPE_IDS.training.house_consumption]: {
     id: SECTION_SCOPE_IDS.training.house_consumption,

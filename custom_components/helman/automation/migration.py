@@ -994,6 +994,57 @@ def _target_controllables(optimizer: dict[str, Any]) -> dict[str, Any]:
     return {**optimizer, "target": {**target, "controllables": [member]}}
 
 
+#: The top-level keys v18 moves under ``visualization``. Every one of them is
+#: read only by the Helman card's ``uiConfig`` (or by the history buckets that
+#: feed it), which is what makes them a group.
+_VISUALIZATION_KEYS = (
+    "history_buckets",
+    "history_bucket_duration",
+    "sources_title",
+    "consumers_title",
+    "groups_title",
+    "others_group_label",
+    "power_sensor_name_cleaner_regex",
+    "show_empty_groups",
+    "show_others_group",
+    "device_label_text",
+)
+
+
+def _migrate_v17_to_v18(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Card-only keys -> ``visualization``; ``training_time`` -> ``training``.
+
+    The top level had become the place where two unrelated things lived: how
+    the Helman card renders, and when the nightly training batch runs. Both get
+    the section they belong to, and the top level keeps only ``config_version``
+    and the real sections.
+
+    The relocated values overwrite whatever sits under ``visualization``
+    already: a document at version 17 cannot have authored that key, so
+    anything found there came from ``DEFAULT_CONFIG`` being merged in ahead of
+    this step, and the user's own value has to win. ``training_time`` merges
+    the other way -- an existing ``training.training_time`` was authored, so it
+    is kept.
+    """
+    visualization = document.get("visualization")
+    visualization = dict(visualization) if isinstance(visualization, Mapping) else {}
+    moved = False
+    for key in _VISUALIZATION_KEYS:
+        if key in document:
+            visualization[key] = document.pop(key)
+            moved = True
+    if moved or visualization:
+        document["visualization"] = visualization
+
+    if "training_time" in document:
+        training = document.get("training")
+        training = dict(training) if isinstance(training, Mapping) else {}
+        training.setdefault("training_time", document.pop("training_time"))
+        document["training"] = training
+
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1011,6 +1062,7 @@ _MIGRATIONS = {
     14: _migrate_v14_to_v15,
     15: _migrate_v15_to_v16,
     16: _migrate_v16_to_v17,
+    17: _migrate_v17_to_v18,
 }
 
 

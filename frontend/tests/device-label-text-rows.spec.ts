@@ -80,11 +80,17 @@ async function mountEditor(
             document.body.appendChild(element);
         },
         {
-            config: { config_version: 7, device_label_text: options.deviceLabelText },
+            config: {
+                config_version: 18,
+                visualization: { device_label_text: options.deviceLabelText },
+            },
             labels: options.labels === undefined ? LABELS : options.labels,
         },
     );
 
+    // Badge texts live on the Helman card tab, which is not the one the editor
+    // opens on.
+    await shadow(page).locator(".tabs button", { hasText: "Helman card" }).click();
     await expect.poll(() => rowCount(page)).toBeGreaterThan(0);
 }
 
@@ -151,7 +157,7 @@ test("the label is picked from Home Assistant's labels", async ({ page }) => {
 
     await shadow(page).locator("select.label-key-picker").selectOption("Garage");
     expect(await page.evaluate(() => window.__editorConfig())).toMatchObject({
-        device_label_text: { Room: { Garage: "🍳" } },
+        visualization: { device_label_text: { Room: { Garage: "🍳" } } },
     });
 });
 
@@ -202,7 +208,9 @@ test("an added row starts on a label that exists", async ({ page }) => {
 
     await expect.poll(() => rowCount(page)).toBe(2);
     expect(await page.evaluate(() => window.__editorConfig())).toMatchObject({
-        device_label_text: { Room: { Kitchen: "🍳", Bathroom: "" } },
+        visualization: {
+            device_label_text: { Room: { Kitchen: "🍳", Bathroom: "" } },
+        },
     });
 });
 

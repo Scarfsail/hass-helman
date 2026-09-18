@@ -82,10 +82,16 @@ class HelmanTreeBuilder:
         self._hass = hass
         self._config = config
 
+    def _visualization(self) -> dict:
+        """The card-facing settings, under ``visualization`` since config v18."""
+        visualization = self._config.get("visualization")
+        return visualization if isinstance(visualization, dict) else {}
+
     async def build(self) -> dict:
         """Build and return the full device tree as a serializable dict."""
         power_devices = self._config.get("power_devices", {})
-        device_label_text = self._config.get("device_label_text", {})
+        visualization = self._visualization()
+        device_label_text = visualization.get("device_label_text", {})
 
         solar_config = power_devices.get("solar")
         battery_config = power_devices.get("battery")
@@ -186,15 +192,19 @@ class HelmanTreeBuilder:
             "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
             "productionTotalSensorId": PRODUCTION_TOTAL_ENTITY_ID,
             "uiConfig": {
-                "sources_title": self._config.get("sources_title", "Energy Sources"),
-                "consumers_title": self._config.get("consumers_title", "Energy Consumers"),
-                "groups_title": self._config.get("groups_title", "Group by:"),
-                "others_group_label": self._config.get("others_group_label", "Others"),
-                "show_empty_groups": self._config.get("show_empty_groups", False),
-                "show_others_group": self._config.get("show_others_group", True),
-                "device_label_text": self._config.get("device_label_text", {}),
-                "history_buckets": self._config.get("history_buckets", 60),
-                "history_bucket_duration": self._config.get("history_bucket_duration", 1),
+                "sources_title": visualization.get("sources_title", "Energy Sources"),
+                "consumers_title": visualization.get(
+                    "consumers_title", "Energy Consumers"
+                ),
+                "groups_title": visualization.get("groups_title", "Group by:"),
+                "others_group_label": visualization.get("others_group_label", "Others"),
+                "show_empty_groups": visualization.get("show_empty_groups", False),
+                "show_others_group": visualization.get("show_others_group", True),
+                "device_label_text": device_label_text,
+                "history_buckets": visualization.get("history_buckets", 60),
+                "history_bucket_duration": visualization.get(
+                    "history_bucket_duration", 1
+                ),
             },
         }
 
@@ -452,7 +462,7 @@ class HelmanTreeBuilder:
         return label.label_id if label else None
 
     def _clean_name(self, name: str) -> str:
-        pattern = self._config.get("power_sensor_name_cleaner_regex", "")
+        pattern = self._visualization().get("power_sensor_name_cleaner_regex", "")
         if pattern:
             try:
                 return re.sub(pattern, "", name).strip()

@@ -5104,9 +5104,14 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
+    def _visualization_config(self) -> dict[str, Any]:
+        """The card-facing settings, under ``visualization`` since config v18."""
+        visualization = self._active_config.get("visualization")
+        return visualization if isinstance(visualization, dict) else {}
+
     def _init_buffers(self, tree: dict) -> None:
         """Initialize empty rolling deques for all tracked sensors."""
-        history_buckets: int = self._active_config.get("history_buckets", 60)
+        history_buckets: int = self._visualization_config().get("history_buckets", 60)
 
         self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
         self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
@@ -5140,7 +5145,9 @@ class HelmanCoordinator:
         """Start the periodic tick using HA's time-interval tracker."""
         if self._unsub_tick is not None:
             return
-        bucket_duration: int = self._active_config.get("history_bucket_duration", 5)
+        bucket_duration: int = self._visualization_config().get(
+            "history_bucket_duration", 5
+        )
         self._unsub_tick = async_track_time_interval(
             self._hass,
             self._tick,
@@ -5255,8 +5262,9 @@ class HelmanCoordinator:
 
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
-        buckets: int = self._active_config.get("history_buckets", 60)
-        bucket_duration: int = self._active_config.get("history_bucket_duration", 1)
+        visualization = self._visualization_config()
+        buckets: int = visualization.get("history_buckets", 60)
+        bucket_duration: int = visualization.get("history_bucket_duration", 1)
         return {
             "buckets": buckets,
             "bucket_duration": bucket_duration,
@@ -5416,7 +5424,7 @@ class HelmanCoordinator:
         Taking the median first lets the symmetric skew cancel out; a house
         whose circuits genuinely account for everything still settles on 0.
         """
-        bucket_duration = self._active_config.get("history_bucket_duration", 5) or 1
+        bucket_duration = self._visualization_config().get("history_bucket_duration", 5) or 1
         maxlen = max(1, round(_UNMEASURED_SMOOTHING_WINDOW_S / bucket_duration))
         window = self._unmeasured_raw_history.get(node_id)
         if window is None or window.maxlen != maxlen:

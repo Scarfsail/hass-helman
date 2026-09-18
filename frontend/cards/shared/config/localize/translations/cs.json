@@ -7,7 +7,8 @@
       "power_devices": "Výkonová zařízení",
       "training": "Trénování",
       "automation": "Automatizace",
-      "controllables": "Ovládané prvky"
+      "controllables": "Ovládané prvky",
+      "visualization": "Karta Helman"
     },
     "actions": {
       "reload_config": "Načíst uloženou konfiguraci znovu",
@@ -51,7 +52,7 @@
       "warnings": "Varování"
     },
     "sections": {
-      "core_labels_and_history": "Základní popisky a historie",
+      "card_labels_and_history": "Popisky a historie karty",
       "device_label_text": "Texty štítků zařízení",
       "house": "Dům",
       "solar": "Solár",
@@ -77,6 +78,7 @@
       "solar_forecast_general": "Obecné",
       "bias_correction_config": "Konfigurace",
       "consumption": "Spotřeba",
+      "training_settings": "Nastavení trénování",
       "house_consumption": "Predikce spotřeby domácnosti",
       "solar_bias": "Korekce solární prognózy"
     },

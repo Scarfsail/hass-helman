@@ -27,14 +27,16 @@ TRAINING_ARTIFACTS_STORAGE_KEY = f"{DOMAIN}.training_artifacts"
 TRAINING_ARTIFACTS_STORAGE_VERSION = 1
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "history_buckets": 60,
-    "history_bucket_duration": 5,
-    "sources_title": "Energy Sources",
-    "consumers_title": "Energy Consumers",
-    "others_group_label": "Others",
-    "groups_title": "Group by:",
-    "show_others_group": True,
-    "device_label_text": {},
+    "visualization": {
+        "history_buckets": 60,
+        "history_bucket_duration": 5,
+        "sources_title": "Energy Sources",
+        "consumers_title": "Energy Consumers",
+        "others_group_label": "Others",
+        "groups_title": "Group by:",
+        "show_others_group": True,
+        "device_label_text": {},
+    },
     "power_devices": {},
 }
 
