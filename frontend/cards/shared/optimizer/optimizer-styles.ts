@@ -170,4 +170,15 @@ export const optimizerCardStyles = css`
         display: grid;
         gap: 12px;
     }
+
+    /* The summary's right half: the card's own mode switch, then the
+       mounter's pipeline row. One container so the pair stays together
+       against the title rather than being spread across the row. */
+    .summary-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 12px;
+    }
 `;

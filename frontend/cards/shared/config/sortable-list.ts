@@ -158,9 +158,11 @@ export function renderRemoveButton(
  * A click inside a `<summary>` is the browser's own "collapse this card".
  *
  * Both the handle and the remove button live in summary rows, so both guard
- * against it the way every other control in one already does.
+ * against it the way every other control in one already does. Exported because
+ * a container of summary controls needs the same guard: a click landing on the
+ * row's own padding, gap or border reaches the `<summary>` without it.
  */
-function stopSummaryToggle(event: Event): void {
+export function stopSummaryToggle(event: Event): void {
     event.preventDefault();
     event.stopPropagation();
 }

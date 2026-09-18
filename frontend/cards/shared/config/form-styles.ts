@@ -459,4 +459,75 @@ export const configFormStyles = css`
         margin: 0;
         font-size: 0.93rem;
     }
+
+    /* The per-item Visual / YAML switch and its editor -- see item-yaml.ts. */
+
+    .mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 2px;
+        border: 1px solid var(--divider-color);
+        border-radius: 999px;
+        background: var(--card-background-color);
+    }
+
+    .mode-toggle button {
+        border: none;
+        background: transparent;
+        color: var(--secondary-text-color);
+        padding: 4px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.76rem;
+        font-weight: 600;
+    }
+
+    .mode-toggle button:hover {
+        background: rgba(127, 127, 127, 0.08);
+    }
+
+    .mode-toggle button.active {
+        background: rgba(3, 169, 244, 0.12);
+        color: var(--primary-color);
+    }
+
+    .mode-toggle button.active:hover {
+        background: rgba(3, 169, 244, 0.16);
+    }
+
+    .yaml-surface {
+        display: grid;
+        gap: 12px;
+    }
+
+    .yaml-field ha-yaml-editor {
+        display: block;
+        --code-mirror-height: clamp(320px, 58vh, 720px);
+        --code-mirror-max-height: clamp(320px, 58vh, 720px);
+    }
+
+    .message {
+        border: 1px solid var(--divider-color);
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin-bottom: 16px;
+        background: var(--card-background-color);
+    }
+
+    .message.success {
+        border-color: #2e7d32;
+        background: rgba(46, 125, 50, 0.08);
+    }
+
+    .message.error {
+        border-color: var(--error-color);
+        background: rgba(244, 67, 54, 0.08);
+    }
+
+    .message.info {
+        border-color: var(--primary-color);
+        background: rgba(3, 169, 244, 0.08);
+    }
 `;
