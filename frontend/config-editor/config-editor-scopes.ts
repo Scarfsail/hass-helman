@@ -35,7 +35,6 @@ export type ScopeId =
   | "section:training.house_consumption"
   | "section:training.solar_bias"
   | "section:training.solar_bias.slot_invalidation"
-  | "section:training.appliance_energy"
   | "section:automation.settings"
   | "section:automation.appliance_optimizer_pipeline"
   | "section:automation.system_optimizer_pipeline"
@@ -51,6 +50,15 @@ export interface EditorScope {
 }
 
 // MDI icon paths for tabs and sections
+const CONFIGURATION_ICON = "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z";
+
+/** The Training tab's job panels; their Configuration scopes carry the cog. */
+export const TRAINING_JOB_ICONS: Record<"solar_bias" | "house_consumption" | "appliance_energy", string> = {
+  solar_bias: "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
+  house_consumption: "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
+  appliance_energy: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
+};
+
 export const TAB_ICONS: Record<TabId, string> = {
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
@@ -69,11 +77,10 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:power_devices.solar.forecast.general": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
-  "section:training.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
-  "section:training.house_consumption": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
+  "section:training.settings": CONFIGURATION_ICON,
+  "section:training.house_consumption": CONFIGURATION_ICON,
   "section:training.solar_bias.slot_invalidation": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
-  "section:training.solar_bias": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
-  "section:training.appliance_energy": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
+  "section:training.solar_bias": CONFIGURATION_ICON,
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.appliance_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
@@ -126,7 +133,6 @@ export const SECTION_SCOPE_IDS = {
     house_consumption: "section:training.house_consumption",
     solar_bias: "section:training.solar_bias",
     solar_bias_slot_invalidation: "section:training.solar_bias.slot_invalidation",
-    appliance_energy: "section:training.appliance_energy",
   },
   automation: {
     settings: "section:automation.settings",
@@ -340,7 +346,7 @@ export const EDITOR_SCOPES = {
     kind: "section",
     parentId: TAB_SCOPE_IDS.training,
     tabId: "training",
-    labelKey: "editor.sections.training_settings",
+    labelKey: "editor.sections.config",
     adapter: createProjectionScopeAdapter(TRAINING_SETTINGS_MEMBERS),
   },
   [SECTION_SCOPE_IDS.training.house_consumption]: {
@@ -348,7 +354,7 @@ export const EDITOR_SCOPES = {
     kind: "section",
     parentId: TAB_SCOPE_IDS.training,
     tabId: "training",
-    labelKey: "editor.sections.house_consumption",
+    labelKey: "editor.sections.config",
     adapter: createPathScopeAdapter(["training", "house_consumption"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
@@ -359,7 +365,7 @@ export const EDITOR_SCOPES = {
     kind: "section",
     parentId: TAB_SCOPE_IDS.training,
     tabId: "training",
-    labelKey: "editor.sections.solar_bias",
+    labelKey: "editor.sections.config",
     adapter: createPathScopeAdapter(["training", "solar_bias"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
@@ -375,16 +381,6 @@ export const EDITOR_SCOPES = {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
-  },
-  // Status chrome only: every appliance energy setting lives on its own
-  // controllable, so this section has nothing to project.
-  [SECTION_SCOPE_IDS.training.appliance_energy]: {
-    id: SECTION_SCOPE_IDS.training.appliance_energy,
-    kind: "section",
-    parentId: TAB_SCOPE_IDS.training,
-    tabId: "training",
-    labelKey: "editor.sections.appliance_energy",
-    adapter: createProjectionScopeAdapter([]),
   },
   [SECTION_SCOPE_IDS.automation.settings]: {
     id: SECTION_SCOPE_IDS.automation.settings,
