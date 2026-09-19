@@ -57,23 +57,21 @@ def test_read_nested_config():
         "power_devices": {
             "solar": {
                 "forecast": {
-                    "bias_correction": {
-                        "enabled": False,
-                        "training_time": "04:00",
-                        "clamp_min": 0.5,
-                        "clamp_max": 1.5,
-                    },
                     "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
                     "total_energy_entity_id": "sensor.total",
                 }
             }
         },
         "training": {
+            "training_time": "04:00",
             "solar_bias": {
+                "enabled": False,
+                "clamp_min": 0.5,
+                "clamp_max": 1.5,
                 "min_history_days": 5,
                 "max_training_window_days": 45,
                 "min_valid_slot_days": 7,
-            }
+            },
         },
     }
 
@@ -89,18 +87,19 @@ def test_read_nested_config():
     assert bias.total_energy_entity_id == "sensor.total"
 
 
-def test_reads_total_energy_entity_from_bias_correction_config():
+def test_reads_total_energy_entity_from_the_solar_bias_training_config():
     config = {
         "power_devices": {
             "solar": {
                 "forecast": {
-                    "bias_correction": {
-                        "total_energy_entity_id": "sensor.bias_total",
-                    },
+                    "total_energy_entity_id": "sensor.forecast_total",
                     "daily_energy_entity_ids": ["sensor.daily1"],
                 }
             }
-        }
+        },
+        "training": {
+            "solar_bias": {"total_energy_entity_id": "sensor.bias_total"},
+        },
     }
 
     bias = read_bias_config(config)
@@ -114,18 +113,19 @@ def test_training_time_is_read_from_the_training_block():
     assert bias.training_time == "05:15"
 
 
-def test_the_retired_bias_training_time_still_wins_when_present():
-    # A document the v5->v6 migration has not touched yet keeps its time.
+def test_a_training_time_under_solar_bias_means_nothing():
+    # Every document is migrated on load, so ``training.solar_bias`` never
+    # carries a schedule; the key is not read there.
     config = {
-        "training": {"training_time": "05:15"},
-        "power_devices": {
-            "solar": {"forecast": {"bias_correction": {"training_time": "04:00"}}}
+        "training": {
+            "training_time": "05:15",
+            "solar_bias": {"training_time": "04:00"},
         },
     }
 
     bias = read_bias_config(config)
 
-    assert bias.training_time == "04:00"
+    assert bias.training_time == "05:15"
 
 
 def test_max_training_window_days_is_read_from_the_training_section():
@@ -168,15 +168,7 @@ def test_a_non_mapping_solar_bias_subsection_falls_back_to_the_defaults():
 
 
 def test_slot_invalidation_fields_default_when_absent():
-    config = {
-        "power_devices": {
-            "solar": {
-                "forecast": {
-                    "bias_correction": {},
-                }
-            }
-        }
-    }
+    config = {"training": {"solar_bias": {}}}
 
     bias = read_bias_config(config)
 
@@ -187,16 +179,12 @@ def test_slot_invalidation_fields_default_when_absent():
 
 def test_slot_invalidation_fields_are_parsed_when_present():
     config = {
-        "power_devices": {
-            "solar": {
-                "forecast": {
-                    "bias_correction": {
-                        "slot_invalidation": {
-                            "max_battery_soc_percent": 87,
-                            "curtailment_max_export_w": 120,
-                            "curtailment_max_actual_forecast_ratio": 0.6,
-                        }
-                    },
+        "training": {
+            "solar_bias": {
+                "slot_invalidation": {
+                    "max_battery_soc_percent": 87,
+                    "curtailment_max_export_w": 120,
+                    "curtailment_max_actual_forecast_ratio": 0.6,
                 }
             }
         }
@@ -363,17 +351,7 @@ def test_house_breakdown_payload_carries_the_controllable_ids():
 
 
 def test_read_bias_config_passes_explicit_aggregation_method():
-    config = {
-        "power_devices": {
-            "solar": {
-                "forecast": {
-                    "bias_correction": {
-                        "aggregation_method": "trimmed_mean",
-                    },
-                }
-            }
-        }
-    }
+    config = {"training": {"solar_bias": {"aggregation_method": "trimmed_mean"}}}
 
     bias = read_bias_config(config)
 

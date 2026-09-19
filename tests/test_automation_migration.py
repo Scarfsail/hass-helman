@@ -351,7 +351,8 @@ class TrainingTimePromotionTests(unittest.TestCase):
     def test_training_time_moves_out_of_the_bias_block(self) -> None:
         migrated, ids = self._migrate_from_v5(self._bias_document(training_time="04:30"))
 
-        bias = migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
+        # v19 flattened the rest of the block into ``training.solar_bias``.
+        bias = migrated["training"]["solar_bias"]
         self.assertNotIn("training_time", bias)
         # v6 promoted it to the top level; v18 moved it on under ``training``.
         self.assertEqual(migrated["training"]["training_time"], "04:30")
@@ -365,16 +366,14 @@ class TrainingTimePromotionTests(unittest.TestCase):
         migrated, _ids = self._migrate_from_v5(document)
 
         self.assertEqual(migrated["training"]["training_time"], "02:15")
-        self.assertNotIn(
-            "training_time",
-            migrated["power_devices"]["solar"]["forecast"]["bias_correction"],
-        )
+        self.assertNotIn("training_time", migrated["training"]["solar_bias"])
 
     def test_a_document_without_the_bias_key_is_untouched(self) -> None:
         migrated, _ids = self._migrate_from_v5(self._bias_document())
 
         self.assertNotIn("training_time", migrated)
-        self.assertNotIn("training", migrated)
+        # Only v19's flattened bias block lands under ``training``.
+        self.assertEqual(migrated["training"], {"solar_bias": {"enabled": True}})
 
     def test_a_v5_document_without_automation_is_migrated_and_stamped(self) -> None:
         document = self._bias_document(training_time="04:30")
@@ -1156,7 +1155,8 @@ class ExportEnabledEntityRetirementTests(unittest.TestCase):
             },
         }
         migrated, _ids = migrate_config_document(document)
-        return migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
+        # v19 flattened the block into ``training.solar_bias``.
+        return migrated["training"]["solar_bias"]
 
     @staticmethod
     def _migrate_from_v11_document(slot_invalidation):
@@ -1324,14 +1324,20 @@ class TrainingSectionRelocationTests(unittest.TestCase):
             }
         )
 
+        # v19 then flattens the rest of the block in beside them.
         self.assertEqual(
             migrated["training"]["solar_bias"],
-            {"min_history_days": 12, "max_training_window_days": 80, "min_valid_slot_days": 6},
+            {
+                "min_history_days": 12,
+                "max_training_window_days": 80,
+                "min_valid_slot_days": 6,
+                "enabled": True,
+                "clamp_min": 0.0,
+                "clamp_max": 3.0,
+            },
         )
-        bias = migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
-        self.assertEqual(
-            bias,
-            {"enabled": True, "clamp_min": 0.0, "clamp_max": 3.0},
+        self.assertNotIn(
+            "bias_correction", migrated["power_devices"]["solar"]["forecast"]
         )
 
     def test_the_legacy_training_window_days_alias_collapses(self) -> None:
@@ -1347,10 +1353,6 @@ class TrainingSectionRelocationTests(unittest.TestCase):
 
         self.assertEqual(
             migrated["training"]["solar_bias"], {"max_training_window_days": 45}
-        )
-        self.assertNotIn(
-            "training_window_days",
-            migrated["power_devices"]["solar"]["forecast"]["bias_correction"],
         )
 
     def test_max_training_window_days_wins_over_the_legacy_alias(self) -> None:
@@ -1697,6 +1699,120 @@ class VisualizationRelocationTests(unittest.TestCase):
 
         self.assertNotIn("visualization", migrated)
         self.assertNotIn("training", migrated)
+
+
+class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
+    """v18 -> v19: ``bias_correction`` flattens into ``training.solar_bias``."""
+
+    _FULL_BLOCK = {
+        "enabled": True,
+        "clamp_min": 0.3,
+        "clamp_max": 2.5,
+        "aggregation_method": "trimmed_mean",
+        "max_interpolated_consecutive_slots": 2,
+        "total_energy_entity_id": "sensor.solar_total",
+        "slot_invalidation": {"max_battery_soc_percent": 97},
+    }
+
+    @staticmethod
+    def _migrate_from_v18(forecast, training=None):
+        document = {
+            "config_version": 18,
+            "power_devices": {"solar": {"forecast": forecast}},
+        }
+        if training is not None:
+            document["training"] = training
+        migrated, _ids = migrate_config_document(document)
+        return migrated
+
+    def test_the_full_block_moves_flat(self) -> None:
+        migrated = self._migrate_from_v18(
+            {
+                "daily_energy_entity_ids": ["sensor.solar_day_0"],
+                "bias_correction": dict(self._FULL_BLOCK),
+            },
+            training={"solar_bias": {"min_history_days": 12}},
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(
+            migrated["training"]["solar_bias"],
+            {**self._FULL_BLOCK, "min_history_days": 12},
+        )
+        self.assertEqual(
+            migrated["power_devices"]["solar"]["forecast"],
+            {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
+        )
+
+    def test_an_existing_training_value_wins(self) -> None:
+        migrated = self._migrate_from_v18(
+            {"bias_correction": {"enabled": True, "clamp_max": 2.5}},
+            training={"solar_bias": {"enabled": False}, "training_time": "04:30"},
+        )
+
+        self.assertEqual(
+            migrated["training"],
+            {
+                "solar_bias": {"enabled": False, "clamp_max": 2.5},
+                "training_time": "04:30",
+            },
+        )
+
+    def test_a_document_without_the_block_is_untouched(self) -> None:
+        forecast = {"daily_energy_entity_ids": ["sensor.solar_day_0"]}
+        training = {"solar_bias": {"min_history_days": 12}}
+
+        migrated = self._migrate_from_v18(dict(forecast), training=dict(training))
+
+        self.assertEqual(
+            migrated,
+            {
+                "config_version": CONFIG_DOCUMENT_VERSION,
+                "power_devices": {"solar": {"forecast": forecast}},
+                "training": training,
+            },
+        )
+
+    def test_a_null_block_is_dropped(self) -> None:
+        migrated = self._migrate_from_v18(
+            {"daily_energy_entity_ids": ["sensor.solar_day_0"], "bias_correction": None}
+        )
+
+        self.assertEqual(
+            migrated["power_devices"]["solar"]["forecast"],
+            {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
+        )
+        self.assertNotIn("training", migrated)
+
+    def test_a_v13_document_runs_through_v14_and_v19(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 13,
+                "power_devices": {
+                    "solar": {
+                        "forecast": {
+                            "bias_correction": {
+                                "min_history_days": 12,
+                                "training_window_days": 45,
+                                "enabled": True,
+                                "clamp_min": 0.3,
+                            }
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            migrated["training"]["solar_bias"],
+            {
+                "min_history_days": 12,
+                "max_training_window_days": 45,
+                "enabled": True,
+                "clamp_min": 0.3,
+            },
+        )
+        self.assertEqual(migrated["power_devices"]["solar"]["forecast"], {})
 
 
 if __name__ == "__main__":

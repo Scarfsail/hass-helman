@@ -640,34 +640,25 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = (
         config.get("power_devices", {}).get("solar", {}).get("forecast", {})
     )
-    bias = forecast.get("bias_correction") or {}
-    # The three day-count settings live under ``training.solar_bias`` since the
-    # v14 relocation -- read on load, so what arrives here has already been
-    # migrated; no legacy alias handling is needed at this layer.
+    # Every solar bias setting lives under ``training.solar_bias`` since the
+    # v19 relocation -- read on load, so what arrives here has already been
+    # migrated; no legacy path or alias handling is needed at this layer.
     raw_training = config.get("training")
     training = raw_training if isinstance(raw_training, dict) else {}
-    raw_solar_bias_training = training.get("solar_bias")
-    solar_bias_training = (
-        raw_solar_bias_training if isinstance(raw_solar_bias_training, dict) else {}
-    )
+    raw_bias = training.get("solar_bias")
+    bias = raw_bias if isinstance(raw_bias, dict) else {}
 
     enabled = bias.get("enabled", SOLAR_BIAS_DEFAULT_ENABLED)
-    min_history_days = solar_bias_training.get(
-        "min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
-    )
-    max_training_window_days = solar_bias_training.get(
+    min_history_days = bias.get("min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS)
+    max_training_window_days = bias.get(
         "max_training_window_days", SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
     )
     # Under ``training`` since v18 — the schedule drives the whole nightly
-    # training batch. The retired bias key still wins when present so a
-    # document the migration has not touched yet keeps its authored time.
-    training_time = bias.get(
-        "training_time",
-        training.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME),
-    )
+    # training batch.
+    training_time = training.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
-    raw_min_valid_slot_days = solar_bias_training.get(
+    raw_min_valid_slot_days = bias.get(
         "min_valid_slot_days", SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     )
     min_valid_slot_days = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS

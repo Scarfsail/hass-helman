@@ -82,17 +82,7 @@ def test_read_bias_config_parses_max_interpolated_consecutive_slots():
     from custom_components.helman.solar_bias_correction.models import read_bias_config
 
     cfg = read_bias_config(
-        {
-            "power_devices": {
-                "solar": {
-                    "forecast": {
-                        "bias_correction": {
-                            "max_interpolated_consecutive_slots": 4,
-                        }
-                    }
-                }
-            }
-        }
+        {"training": {"solar_bias": {"max_interpolated_consecutive_slots": 4}}}
     )
     assert cfg.max_interpolated_consecutive_slots == 4
 

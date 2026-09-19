@@ -44,11 +44,6 @@ const CONFIG = {
             forecast: {
                 total_energy_entity_id: "sensor.solar_energy",
                 daily_energy_entity_ids: ["sensor.solar_day_0", "sensor.solar_day_1"],
-                bias_correction: {
-                    enabled: true,
-                    total_energy_entity_id: "sensor.solar_bias_energy",
-                    slot_invalidation: { max_battery_soc_percent: 95 },
-                },
             },
         },
         battery: {
@@ -64,6 +59,13 @@ const CONFIG = {
         grid: {
             entities: { power: "sensor.grid_power" },
             forecast: { sell_price_entity_id: "sensor.sell_price", import_price_unit: "CZK" },
+        },
+    },
+    training: {
+        solar_bias: {
+            enabled: true,
+            total_energy_entity_id: "sensor.solar_bias_energy",
+            slot_invalidation: { max_battery_soc_percent: 95 },
         },
     },
     controllables: [
@@ -408,10 +410,9 @@ test.describe("entities-only toggle", () => {
         );
 
         // Slot invalidation configures six thresholds and no entity at all. It
-        // sits on the Training tab since #306, beside the bias meter it shares
-        // a parent with -- so the same rule has to drop the one and keep the
-        // section that holds the other, two levels down. The Solar bias panel
-        // beside them holds no picker of its own, so it goes too.
+        // sits inside the Solar bias panel (#312), beside the bias meter it
+        // shares a parent with -- so the same rule has to drop the one and keep
+        // the section that holds the other.
         await openTab(page, "Training");
         const trainingSections = await page.evaluate(() => {
             const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -426,10 +427,7 @@ test.describe("entities-only toggle", () => {
                 );
         });
         expect(trainingSections).not.toContain("Invalidate training slot data");
-        expect(trainingSections).not.toContain("Solar forecast correction");
-        expect(trainingSections).toEqual(
-            expect.arrayContaining(["Bias Correction", "Configuration"]),
-        );
+        expect(trainingSections).toContain("Solar forecast correction");
     });
 
     test("restores the sections' open state when it is switched off", async ({ page }) => {

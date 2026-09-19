@@ -2,13 +2,11 @@ import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
 /**
- * Solar bias correction is edited on the Training tab (issue #306).
- *
- * The whole block moved from Power devices -> Solar -> Forecast to the
- * Training tab's Solar bias panel, but only its sections moved: the fields
- * still write `power_devices.solar.forecast.bias_correction`, and no config
- * migration exists. So the round trip is the claim -- edit on Training, save,
- * and the document the backend receives has the values where they always were.
+ * Solar bias correction is edited on the Training tab (issue #306), and its
+ * data lives there too (issue #312): the v19 migration flattened
+ * `power_devices.solar.forecast.bias_correction` into `training.solar_bias`.
+ * So the round trip is the claim -- edit on Training, save, and the document
+ * the backend receives holds every solar bias setting in that one block.
  */
 
 const BUNDLE = resolve(
@@ -17,24 +15,26 @@ const BUNDLE = resolve(
 );
 
 const CONFIG = {
-    config_version: 14,
+    config_version: 19,
     power_devices: {
         solar: {
             entities: { power: "sensor.solar_power" },
             forecast: {
                 total_energy_entity_id: "sensor.solar_energy",
                 daily_energy_entity_ids: ["sensor.solar_day_0"],
-                bias_correction: {
-                    enabled: false,
-                    clamp_min: 0.5,
-                    total_energy_entity_id: "sensor.solar_bias_energy",
-                    slot_invalidation: { max_battery_soc_percent: 90 },
-                },
             },
         },
     },
     controllables: [],
-    training: { solar_bias: { min_history_days: 10 } },
+    training: {
+        solar_bias: {
+            min_history_days: 10,
+            enabled: false,
+            clamp_min: 0.5,
+            total_energy_entity_id: "sensor.solar_bias_energy",
+            slot_invalidation: { max_battery_soc_percent: 90 },
+        },
+    },
 };
 
 function job(id: string): Record<string, unknown> {
@@ -102,8 +102,8 @@ async function mountEditor(page: Page): Promise<void> {
                             valid: false,
                             errors: [
                                 {
-                                    section: "power_devices",
-                                    path: "power_devices.solar.forecast.bias_correction.clamp_min",
+                                    section: "training",
+                                    path: "training.solar_bias.clamp_min",
                                     code: "out_of_range",
                                     message: "clamp_min is out of range",
                                 },
@@ -166,28 +166,19 @@ async function setNumber(page: Page, label: string, value: string): Promise<void
     }, value);
 }
 
-test("bias correction edited on Training saves under power_devices", async ({ page }) => {
+test("bias correction edited on Training saves under training.solar_bias", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Training");
 
-    // The card right after the Solar bias panel, not inside it: that panel's
-    // YAML view covers training.solar_bias only, so nesting would hide these
-    // fields whenever it is switched to YAML.
+    // One panel owns the whole solar bias config: no separate correction card.
+    await expect(section(page, "Bias Correction")).toHaveCount(0);
+    await expect(section(page, "Configuration")).toHaveCount(0);
     const solarBias = section(page, "Solar forecast correction");
-    await expect(solarBias.locator("details.section-card", { hasText: "Bias Correction" })).toHaveCount(
-        0,
-    );
-    await expect(section(page, "Bias Correction")).toHaveCount(1);
-    await openSection(page, "Bias Correction");
-    await openSection(page, "Configuration");
+    await openSection(page, "Solar forecast correction");
     await openSection(page, "Invalidate training slot data");
+    await expect(solarBias).not.toContainText("power_devices.solar.forecast.bias_correction");
 
-    // The note that says where these fields live in YAML.
-    await expect(section(page, "Bias Correction")).toContainText(
-        "power_devices.solar.forecast.bias_correction",
-    );
-
-    const enabled = section(page, "Configuration").locator(".toggle-field", {
+    const enabled = solarBias.locator(".toggle-field", {
         has: page.locator("ha-formfield"),
     });
     await expect(enabled).toHaveCount(1);
@@ -204,14 +195,15 @@ test("bias correction edited on Training saves under power_devices", async ({ pa
     await expect.poll(() => page.evaluate(() => (window as any).__saved.length)).toBe(1);
 
     const saved = await page.evaluate(() => (window as any).__saved[0]);
-    expect(saved.power_devices.solar.forecast.bias_correction).toEqual({
+    expect(saved.training.solar_bias).toEqual({
+        min_history_days: 10,
         enabled: true,
         clamp_min: 0.2,
         total_energy_entity_id: "sensor.solar_bias_energy",
         slot_invalidation: { max_battery_soc_percent: 95 },
     });
-    // Nothing leaked into the subtree the Training tab otherwise owns.
-    expect(saved.training).toEqual(CONFIG.training);
+    expect(saved.power_devices.solar.forecast).not.toHaveProperty("bias_correction");
+    expect(saved.power_devices.solar.forecast).toEqual(CONFIG.power_devices.solar.forecast);
 });
 
 test("Power devices -> Solar holds only its entities and forecast sources", async ({ page }) => {
@@ -243,46 +235,33 @@ async function setMode(page: Page, label: string, mode: "YAML" | "Visual"): Prom
         .click();
 }
 
-test("bias correction is not editable on Training while Power devices holds it as YAML", async ({
+/** The value handed to the one YAML editor inside `root`. */
+async function yamlValue(root: ReturnType<Page["locator"]>): Promise<unknown> {
+    const editor = root.locator("ha-yaml-editor");
+    await expect(editor).toHaveCount(1);
+    return editor.evaluate((element) => (element as any).defaultValue);
+}
+
+test("the Solar bias panel's YAML view holds day counts and correction together", async ({
     page,
 }) => {
-    await mountEditor(page);
-    await openTab(page, "Power devices");
-    await openSection(page, "Solar");
-    await openSection(page, "Forecast");
-    await setMode(page, "Forecast", "YAML");
-
-    // The Forecast YAML editor holds a snapshot of bias_correction; an edit
-    // made on Training now would be written away by its next keystroke.
-    await openTab(page, "Training");
-    const bias = section(page, "Bias Correction");
-    await openSection(page, "Bias Correction");
-    await expect(bias).toContainText("Open as YAML in Forecast");
-    await expect(bias.locator("input, ha-switch")).toHaveCount(0);
-    await expect(bias.locator(".mode-toggle")).toHaveCount(0);
-
-    await openTab(page, "Power devices");
-    await openSection(page, "Solar");
-    await openSection(page, "Forecast");
-    await setMode(page, "Forecast", "Visual");
-    await openTab(page, "Training");
-    await openSection(page, "Bias Correction");
-    await openSection(page, "Configuration");
-    await expect(section(page, "Bias Correction")).not.toContainText("Open as YAML in");
-    await expect(section(page, "Configuration").locator("ha-switch")).toHaveCount(1);
-});
-
-test("switching the Solar bias panel to YAML leaves bias correction editable", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Training");
     await openSection(page, "Solar forecast correction");
     await setMode(page, "Solar forecast correction", "YAML");
 
-    await openSection(page, "Bias Correction");
-    await openSection(page, "Configuration");
-    await expect(
-        page.locator(".field", { has: page.locator("label", { hasText: "Min forecast clamp" }) }),
-    ).toHaveCount(1);
+    expect(await yamlValue(section(page, "Solar forecast correction"))).toEqual(
+        CONFIG.training.solar_bias,
+    );
+});
+
+test("the Training tab's YAML view holds the correction settings", async ({ page }) => {
+    await mountEditor(page);
+    await openTab(page, "Training");
+    await page.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
+
+    const value = (await yamlValue(page.locator(".tab-scope"))) as Record<string, any>;
+    expect(value.solar_bias).toEqual(CONFIG.training.solar_bias);
 });
 
 test("a validation issue on a bias field counts on the Training tab", async ({ page }) => {
