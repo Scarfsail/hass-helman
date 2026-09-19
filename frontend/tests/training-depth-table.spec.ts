@@ -201,6 +201,23 @@ async function mountEditor(page: Page, configOverride?: unknown): Promise<void> 
             }),
         )
         .toBe(true);
+
+    // The editor opens on Power devices, whose groups poll as they mount, so
+    // the tab switch lands inside that poll's debounce and its targets arrive
+    // on the trailing call. Wait for the poll that actually carries the
+    // table's own targets -- `helman.solar_forecast_current` is published by
+    // Helman rather than configured, so no picker can be asking for it.
+    await expect
+        .poll(async () =>
+            page.evaluate(
+                (key) =>
+                    ((window as any).__inspectRequests.at(-1)?.targets ?? []).some(
+                        (target: any) => target.key === key,
+                    ),
+                FORECAST_RECORDED_KEY,
+            ),
+        )
+        .toBe(true);
 }
 
 /** Every training-depth table on screen, as rows of cell text. */

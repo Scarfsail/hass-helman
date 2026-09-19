@@ -63,7 +63,9 @@ class _FakeStates:
 
 def _make_coordinator(states: dict[str, str]):
     c = object.__new__(coordinator_module.HelmanCoordinator)
-    c._active_config = {"history_buckets": 60, "history_bucket_duration": 1}
+    c._active_config = {
+        "visualization": {"history_buckets": 60, "history_bucket_duration": 1}
+    }
     c._hass = SimpleNamespace(states=_FakeStates(states))
     c._cached_tree = TREE
     c._unmeasured_raw_history = {}

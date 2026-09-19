@@ -468,7 +468,7 @@ test.describe("entities-only toggle", () => {
 
         // The toggle goes on somewhere else, so this tab is not the one that
         // was on screen when the snapshot would have been taken.
-        await openTab(page, "General");
+        await openTab(page, "Helman card");
         await setEntitiesOnly(page, true);
         await openTab(page, "Controllables");
         expect((await readCardOpenState(page)).every(([, open]) => open)).toBe(true);

@@ -56,20 +56,22 @@ from custom_components.helman.config_validation import validate_config_document
 
 def _valid_config() -> dict:
     return {
-        "sources_title": "Energy Sources",
-        "consumers_title": "Energy Consumers",
-        "groups_title": "Group by:",
-        "others_group_label": "Others",
-        "show_empty_groups": False,
-        "show_others_group": True,
-        "history_buckets": 60,
-        "history_bucket_duration": 5,
-        "device_label_text": {
-            "rooms": {
-                "Kitchen": "KT",
-            }
+        "visualization": {
+            "sources_title": "Energy Sources",
+            "consumers_title": "Energy Consumers",
+            "groups_title": "Group by:",
+            "others_group_label": "Others",
+            "show_empty_groups": False,
+            "show_others_group": True,
+            "history_buckets": 60,
+            "history_bucket_duration": 5,
+            "device_label_text": {
+                "rooms": {
+                    "Kitchen": "KT",
+                }
+            },
+            "power_sensor_name_cleaner_regex": r"\s+",
         },
-        "power_sensor_name_cleaner_regex": r"\s+",
         "power_devices": {
             "house": {
                 "entities": {
@@ -1242,16 +1244,49 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_device_label_text_shape_is_reported(self) -> None:
         config = _valid_config()
-        config["device_label_text"] = {"rooms": {"Kitchen": 123}}
+        config["visualization"]["device_label_text"] = {"rooms": {"Kitchen": 123}}
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
-        self.assertEqual(report.errors[0].path, "device_label_text.rooms.Kitchen")
+        self.assertEqual(
+            report.errors[0].path,
+            "visualization.device_label_text.rooms.Kitchen",
+        )
+
+    def test_top_level_card_key_is_refused_by_name(self) -> None:
+        config = _valid_config()
+        config["history_buckets"] = 60
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "history_buckets"
+                and issue.code == "relocated_config_key"
+                for issue in report.errors
+            )
+        )
+
+    def test_top_level_training_time_is_refused_by_name(self) -> None:
+        config = _valid_config()
+        config["training_time"] = "03:00"
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training_time"
+                and issue.code == "relocated_config_key"
+                for issue in report.errors
+            )
+        )
 
     def test_training_time_valid_for_hhmm(self) -> None:
         config = _valid_config()
-        config["training_time"] = "03:00"
+        config.setdefault("training", {})["training_time"] = "03:00"
 
         report = validate_config_document(config)
 
@@ -1259,25 +1294,26 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_training_time_invalid_for_bad_string(self) -> None:
         config = _valid_config()
-        config["training_time"] = "3am"
+        config.setdefault("training", {})["training_time"] = "3am"
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
-            any(issue.path == "training_time" for issue in report.errors)
+            any(issue.path == "training.training_time" for issue in report.errors)
         )
 
     def test_training_time_invalid_for_out_of_range_time(self) -> None:
         config = _valid_config()
-        config["training_time"] = "25:00"
+        config.setdefault("training", {})["training_time"] = "25:00"
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training_time" and issue.code == "invalid_value"
+                issue.path == "training.training_time"
+                and issue.code == "invalid_value"
                 for issue in report.errors
             )
         )

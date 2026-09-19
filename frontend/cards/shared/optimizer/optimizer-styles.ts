@@ -69,13 +69,38 @@ export const optimizerCardStyles = css`
         gap: 8px;
     }
 
+    /* One member, one line: handle, position, target, mode, remove. The fields
+       wrap onto a second line only when the card is too narrow to hold them,
+       which is why they are flex items with a minimum rather than a grid. */
     .controllable-target-row {
-        display: grid;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
         gap: 8px;
-        padding: 10px 14px;
+        padding: 6px 10px;
         border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
         border-radius: 8px;
         background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
+    }
+
+    .controllable-target-row > .field-compact {
+        flex: 1 1 200px;
+        min-width: 150px;
+    }
+
+    .field-compact {
+        gap: 4px;
+    }
+
+    .controllable-target-row .controllable-target-position {
+        flex: 0 0 auto;
+        color: var(--secondary-text-color);
+        font-size: 0.9em;
+    }
+
+    .controllable-target-row > .list-actions {
+        margin-left: auto;
+        flex: 0 0 auto;
     }
 
     .condition-groups {

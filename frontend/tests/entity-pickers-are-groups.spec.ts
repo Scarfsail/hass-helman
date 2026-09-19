@@ -27,7 +27,7 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const TABS = ["General", "Power devices", "Training", "Automation", "Controllables"];
+const TABS = ["Power devices", "Controllables", "Automation", "Training", "Helman card"];
 
 /**
  * Enough optimizer schema for the Automation tab to render something.
@@ -376,7 +376,7 @@ test("a group in a nested shadow root is seen by the collector and the guard", a
     // future bare picker would pass the check above in silence -- and #165 is
     // about to claim its view shows every entity.
     await mountEditor(page);
-    await openTab(page, "General");
+    await openTab(page, "Helman card");
 
     await page.evaluate((path) => {
         const panel = document.querySelector("helman-config-editor-panel") as any;

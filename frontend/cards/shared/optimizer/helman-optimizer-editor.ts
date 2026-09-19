@@ -653,6 +653,11 @@ export class HelmanOptimizerEditor
         }
         const targetPaths = this._targetPaths(schema);
         const total = targetPaths.length;
+        // True of the whole list, not of any one row, so it is said once here
+        // rather than repeated under every member's picker.
+        const pendingReload = this._selectionState(schema, targetPaths[0] ?? []).options.some(
+            (option) => option.selectionDisabled,
+        );
         return html`
             <div class="field controllable-targets">
                 <div class="field-label-row">
@@ -660,38 +665,31 @@ export class HelmanOptimizerEditor
                     ${this.renderHelpIcon("editor.fields.optimizer_targets", "editor.help.optimizer_targets")}
                 </div>
                 <div class="helper">${this.t("editor.helpers.optimizer_targets")}</div>
+                ${pendingReload
+                    ? html`<div class="helper">
+                          ${this.t("editor.helpers.optimizer_target_pending_reload")}
+                      </div>`
+                    : nothing}
                 ${renderSortableList({
                     items: targetPaths,
                     containerClass: "controllable-target-rows",
                     onMove: (oldIndex, newIndex) => this._moveTarget(oldIndex, newIndex),
                     renderItem: (targetPath, memberIndex) => html`
                         <div class="controllable-target-row">
-                            <div class="appliance-summary-row">
-                                <div class="appliance-summary-left">
-                                    ${renderDragHandle(this)}
-                                    <strong class="controllable-target-position">
-                                        ${this._tFormat("editor.dynamic.priority_position", {
-                                            position: memberIndex + 1,
-                                        })}
-                                    </strong>
-                                </div>
-                                <div class="list-actions">
-                                    ${renderRemoveButton(this, {
-                                        className: "remove-controllable-target",
-                                        onRemove: () => this._removeTarget(memberIndex),
-                                        disabled: total <= 1,
-                                    })}
-                                </div>
-                            </div>
-                            <div class="field-grid">
-                                <div class="field">
-                                    <div class="field-label-row">
-                                        <label>${this.t("editor.fields.optimizer_target")}</label>
-                                        ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
-                                    </div>
-                                    ${this._renderTargetPicker(schema, targetPath)}
-                                </div>
-                                ${this._renderTargetClimateMode(schema, targetPath)}
+                            ${renderDragHandle(this)}
+                            <strong class="controllable-target-position">
+                                ${this._tFormat("editor.dynamic.priority_position", {
+                                    position: memberIndex + 1,
+                                })}
+                            </strong>
+                            ${this._renderTargetPicker(schema, targetPath, true)}
+                            ${this._renderTargetClimateMode(schema, targetPath, true)}
+                            <div class="list-actions">
+                                ${renderRemoveButton(this, {
+                                    className: "remove-controllable-target",
+                                    onRemove: () => this._removeTarget(memberIndex),
+                                    disabled: total <= 1,
+                                })}
                             </div>
                         </div>
                     `,
@@ -707,11 +705,28 @@ export class HelmanOptimizerEditor
         `;
     }
 
-    private _renderTargetPicker(schema: OptimizerSchema, targetPath: PathSegment[]): TemplateResult {
+    /**
+     * `compact` is the group-member row: one line per member, so the label and
+     * the standing description drop out (the list's own label and help icon
+     * already say what the column is) and only an *exceptional* helper -- a
+     * stale id, modes still loading -- is worth a second line.
+     */
+    private _renderTargetPicker(
+        schema: OptimizerSchema,
+        targetPath: PathSegment[],
+        compact = false,
+    ): TemplateResult {
         const selectionState = this._selectionState(schema, targetPath);
-        return html`
+        // A row says only what is true of *its own* target: "save and reload"
+        // is true of the whole list, so it is said once, above the rows.
+        const notice = compact
+            ? this._staleTargetNotice(selectionState)
+            : this._targetHelper(selectionState);
+        const picker = html`
             <select
                 class="controllable-target-picker"
+                title=${this.t("editor.fields.optimizer_target")}
+                aria-label=${this.t("editor.fields.optimizer_target")}
                 @change=${(event: Event) =>
                     this._applyControllableIdChange(
                         schema,
@@ -743,20 +758,22 @@ export class HelmanOptimizerEditor
                     `,
                 )}
             </select>
-            <div class="helper">${this._targetHelper(selectionState)}</div>
+            ${notice ? html`<div class="helper">${notice}</div>` : nothing}
         `;
+        return compact ? html`<div class="field field-compact">${picker}</div>` : picker;
     }
 
     private _renderTargetClimateMode(
         schema: OptimizerSchema,
         targetPath: PathSegment[],
+        compact = false,
     ): TemplateResult | typeof nothing {
         const climateModeFieldState = buildClimateModeFieldState(
             this._selectionState(schema, targetPath),
             stringValue(this.getValue([...targetPath, "climate_mode"])),
         );
         return climateModeFieldState.visible
-            ? this._renderClimateModeField(targetPath, climateModeFieldState)
+            ? this._renderClimateModeField(targetPath, climateModeFieldState, compact)
             : nothing;
     }
 
@@ -1018,21 +1035,31 @@ export class HelmanOptimizerEditor
     private _renderClimateModeField(
         targetPath: PathSegment[],
         climateModeFieldState: SurplusClimateModeFieldState,
+        compact = false,
     ): TemplateResult {
         const selectedValue =
             climateModeFieldState.value.length > 0
                 ? climateModeFieldState.value
                 : "__live_modes_unavailable__";
+        const notice = compact
+            ? this._climateModeNotice(climateModeFieldState)
+            : this._climateModeHelper(climateModeFieldState);
         return html`
-            <div class="field">
-                <div class="field-label-row">
-                    <label>${this.t("editor.fields.climate_mode")}</label>
-                    ${this.renderHelpIcon(
-                        "editor.fields.climate_mode",
-                        "editor.help.appliance_runtime_climate_mode",
-                    )}
-                </div>
+            <div class=${compact ? "field field-compact" : "field"}>
+                ${compact
+                    ? nothing
+                    : html`
+                          <div class="field-label-row">
+                              <label>${this.t("editor.fields.climate_mode")}</label>
+                              ${this.renderHelpIcon(
+                                  "editor.fields.climate_mode",
+                                  "editor.help.appliance_runtime_climate_mode",
+                              )}
+                          </div>
+                      `}
                 <select
+                    title=${this.t("editor.fields.climate_mode")}
+                    aria-label=${this.t("editor.fields.climate_mode")}
                     ?disabled=${climateModeFieldState.disabled}
                     @change=${(event: Event) =>
                         setRequiredString(
@@ -1058,22 +1085,35 @@ export class HelmanOptimizerEditor
                               </option>
                           `}
                 </select>
-                <div class="helper">${this._climateModeHelper(climateModeFieldState)}</div>
+                ${notice ? html`<div class="helper">${notice}</div>` : nothing}
             </div>
         `;
     }
 
     private _targetHelper(selectionState: ControllableSelectionState): string {
-        if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-            return this.t("editor.helpers.optimizer_target_missing_from_draft");
-        }
         if (selectionState.options.some((option) => option.selectionDisabled)) {
             return this.t("editor.helpers.optimizer_target_pending_reload");
         }
-        return this.t("editor.helpers.optimizer_target");
+        return (
+            this._staleTargetNotice(selectionState) ?? this.t("editor.helpers.optimizer_target")
+        );
+    }
+
+    /** The one thing only this row can say: it points at an id the draft lost. */
+    private _staleTargetNotice(selectionState: ControllableSelectionState): string | null {
+        return selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
+            ? this.t("editor.helpers.optimizer_target_missing_from_draft")
+            : null;
     }
 
     private _climateModeHelper(state: SurplusClimateModeFieldState): string {
+        return (
+            this._climateModeNotice(state) ??
+            this.t("editor.helpers.appliance_runtime_climate_mode")
+        );
+    }
+
+    private _climateModeNotice(state: SurplusClimateModeFieldState): string | null {
         if (state.unavailable) {
             return this.t("editor.helpers.appliance_runtime_climate_mode_unavailable");
         }
@@ -1083,7 +1123,7 @@ export class HelmanOptimizerEditor
         if (state.disabled) {
             return this.t("editor.helpers.appliance_runtime_climate_mode_single");
         }
-        return this.t("editor.helpers.appliance_runtime_climate_mode");
+        return null;
     }
 
     /** "Name (id)", or the bare id when the two are the same. */

@@ -79,13 +79,17 @@ Top-level schema is `HelmanCardConfig`. Only `power_devices` is required; everyt
 
 **Top-level options**
 - `type`: string — Must be `custom:helman-card`.
-- `sources_title` / `consumers_title` / `groups_title`: panel titles. Defaults: "Energy Sources",
-  "Energy Consumers", "Group by".
 - `max_power`: number — Scaling reference (W) for animated flow arrows. Defaults to a 3-phase 25A
   system: `25 * 230 * 3`.
+
+**`visualization`**
+Everything the Helman card renders with. Under `visualization` since config version 18; the same
+keys used to sit at the top level, and a stored config is migrated on load.
+- `sources_title` / `consumers_title` / `groups_title`: panel titles. Defaults: "Energy Sources",
+  "Energy Consumers", "Group by".
 - `history_buckets`: number — Number of history samples to keep/render. Default: 60.
 - `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
-  interval). Default: 1.
+  interval). Default: 5.
 - `power_sensor_name_cleaner_regex`: string — JavaScript regex (no slashes, global flag applied) used
   to clean device names derived from sensors, e.g. `" - [Pp]ower$"`.
 - `device_label_text`: object — Mapping to enable label grouping and per-device badges. See
@@ -123,16 +127,17 @@ Group house devices into virtual groups based on HA Labels. Top-level keys are c
 (rendered as chips); each category maps label names to an emoji/text badge.
 
 ```yaml
-device_label_text:
-  Location:
-    Kitchen: "🍳"
-    Living room: "🛋️"
-  Type:
-    Heating: "🔥"
-    Entertainment: "🎮"
-show_empty_groups: false
-show_others_group: true
-others_group_label: "Other devices"
+visualization:
+  device_label_text:
+    Location:
+      Kitchen: "🍳"
+      Living room: "🛋️"
+    Type:
+      Heating: "🔥"
+      Entertainment: "🎮"
+  show_empty_groups: false
+  show_others_group: true
+  others_group_label: "Other devices"
 ```
 
 Devices inherit all labels assigned to any of their entities; the first matching label in a category
@@ -245,12 +250,12 @@ cost — useful if you are wondering what the integration is doing when you are 
 
 | # | Job | Runs on a timer | Also triggered by | Cost |
 |---|---|---|---|---|
-| 1 | **Power tick** | every `history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity/device registry updates, an Energy prefs change); a config save | Cheap |
+| 1 | **Power tick** | every `visualization.history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity/device registry updates, an Energy prefs change); a config save | Cheap |
 | 2 | **Schedule executor reconcile** | every **30 s** | startup; any schedule write; execution enable/disable; restore-normal-state; a config save | Cheap |
 | 3 | **Pre-execution reality check** | inside #2, so in practice every **30 s** | — | Cheap |
 | 4 | **Forecast rebuild** | **:00, :15, :30, :45** | startup; a config save; solar-bias trained/status events; a completed house-consumption fit from #6 | Moderate |
 | 5 | **Automation re-plan** | — | a successful #4 (0.5 s debounce, only when automation has enabled optimizers); a day-editor edit; execution enable; condition drift seen by #3; "run now" | Moderate |
-| 6 | **Nightly training batch** | daily at `training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
+| 6 | **Nightly training batch** | daily at `training.training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
 | 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
 
 **Opening or refreshing a card never rebuilds the house or solar forecast.** Those are served from
@@ -310,9 +315,9 @@ question you are now asking; that resolves as soon as the rebuild finishes.
 
 ### The knobs that scale the cost
 
-- `history_bucket_duration` (default 5 s) — how often job #1 samples. Lower means smoother bars and
+- `visualization.history_bucket_duration` (default 5 s) — how often job #1 samples. Lower means smoother bars and
   more work; it is the only job on a seconds-level cadence.
-- `training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
+- `training.training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
   read a lot of Recorder history and you do not want them competing with anything.
 - `training.house_consumption.training_window_days` (default 56) — how much history the house
   consumption fit reads. This is the single biggest driver of job #6's cost. It has no effect on the
@@ -333,11 +338,11 @@ Recorder and statistics work on those same boundaries.
 
 Things worth checking, roughly in order:
 
-- **Is it 03:00 (or your `training_time`)?** That is job #6, and it is meant to be heavy. If it is
+- **Is it 03:00 (or your `training.training_time`)?** That is job #6, and it is meant to be heavy. If it is
   landing at an awkward time, move it.
 - **A very large `training.house_consumption.training_window_days`** makes job #6 proportionally
   more expensive.
-- **A very low `history_bucket_duration`** makes job #1 run more often. It does no I/O, so this
+- **A very low `visualization.history_bucket_duration`** makes job #1 run more often. It does no I/O, so this
   costs CPU rather than Recorder time.
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
   nightly cost scales with how many you configure.

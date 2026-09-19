@@ -2,10 +2,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
 from .automation.migration import migrate_config_document, needs_migration
+from .visualization import read_visualization
 from .const import (
     CONFIG_DOCUMENT_VERSION,
     DOMAIN,
@@ -27,14 +29,6 @@ TRAINING_ARTIFACTS_STORAGE_KEY = f"{DOMAIN}.training_artifacts"
 TRAINING_ARTIFACTS_STORAGE_VERSION = 1
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "history_buckets": 60,
-    "history_bucket_duration": 5,
-    "sources_title": "Energy Sources",
-    "consumers_title": "Energy Consumers",
-    "others_group_label": "Others",
-    "groups_title": "Group by:",
-    "show_others_group": True,
-    "device_label_text": {},
     "power_devices": {},
 }
 
@@ -54,8 +48,16 @@ class HelmanStorage:
         self._schedule_document: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
-        stored = await self._store.async_load()
-        self._config = {**DEFAULT_CONFIG, **(stored or {})}
+        stored = await self._store.async_load() or {}
+        self._config = {
+            **DEFAULT_CONFIG,
+            **stored,
+            # Merged per key, not replaced: a partial ``visualization`` object
+            # must keep the defaults for everything it omits. Ahead of
+            # migration, which is what ``_migrate_v17_to_v18`` relies on when
+            # it lets a relocated value beat a default.
+            "visualization": deepcopy(read_visualization(stored)),
+        }
         await self._async_migrate_config()
         snapshot_document = await self._snapshot_store.async_load()
         if isinstance(snapshot_document, dict) and "house" in snapshot_document:

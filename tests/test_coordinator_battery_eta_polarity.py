@@ -63,8 +63,7 @@ def _make_coordinator(battery_power: str, polarity: str | None):
 
     c = object.__new__(coordinator_module.HelmanCoordinator)
     c._active_config = {
-        "history_buckets": 5,
-        "history_bucket_duration": 1,
+        "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
         "power_devices": {"battery": {"entities": entities}},
     }
     c._hass = SimpleNamespace(states=_FakeStates({BATTERY: battery_power, HOUSE: "1000"}))

@@ -291,6 +291,7 @@ export class HelmanConfigEditorPanel
     _controllableYamlValues: { state: true },
     _controllableYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
+    _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
     _entityInspections: { state: true },
@@ -306,6 +307,66 @@ export class HelmanConfigEditorPanel
       min-height: 100%;
       background: var(--primary-background-color);
       color: var(--primary-text-color);
+    }
+
+    /* One badge text, one line: label, text, remove -- wrapping only when the
+       card is too narrow to hold them. The two columns are named once, in a
+       head row, rather than labelled on every row. */
+    .label-entry-rows {
+      display: grid;
+      gap: 8px;
+      padding: 0 16px 8px;
+    }
+
+    .label-entry-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .label-entry-row > .label-key-cell {
+      flex: 2 1 220px;
+      min-width: 150px;
+    }
+
+    /* The badge text is usually a single emoji, so it takes what is left over
+       rather than half the row. */
+    .label-entry-row > .badge-text-cell {
+      flex: 1 1 120px;
+      min-width: 100px;
+      max-width: 240px;
+    }
+
+    .label-entry-row > .list-actions {
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+
+    .label-entry-head label {
+      font-weight: 600;
+      font-size: 0.93rem;
+      color: var(--secondary-text-color);
+    }
+
+    /* Holds the head row's columns over the ones below it, where the remove
+       button sits. Its width is the button's: 18px glyph plus its padding. */
+    .label-entry-actions-spacer {
+      flex: 0 0 auto;
+      width: 32px;
+    }
+
+    /* The category name is the card's title, so it is edited where it is read
+       rather than in a field below the header. */
+    .category-key-input {
+      font-size: 1rem;
+      font-weight: var(--ha-font-weight-medium, 500);
+      border-radius: 12px;
+      border: 1px solid var(--divider-color);
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+      padding: 8px 12px;
+      max-width: 320px;
     }
 
     .page {
@@ -817,7 +878,7 @@ export class HelmanConfigEditorPanel
   private _hass?: HomeAssistantLike;
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
-  private _activeTab: TabId = "general";
+  private _activeTab: TabId = "power_devices";
   /**
    * Reduce every tab to nothing but its entity groups.
    *
@@ -886,6 +947,10 @@ export class HelmanConfigEditorPanel
   private _controllableYamlValues: Partial<Record<number, JsonValue>> = {};
   private _controllableYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
+  // The names of the labels configured in Home Assistant, for the badge-text
+  // picker. `null` means "not loaded" -- a registry that could not be read
+  // leaves the stored keys editable as free text rather than hiding them.
+  private _haLabelNames: string[] | null = null;
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
@@ -1216,8 +1281,11 @@ export class HelmanConfigEditorPanel
 
   private _renderActiveTab(): TemplateResult {
     switch (this._activeTab) {
-      case "general":
-        return this._renderTabScope(TAB_SCOPE_IDS.general, this._renderGeneralTab());
+      case "visualization":
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.visualization,
+          this._renderVisualizationTab(),
+        );
       case "power_devices":
         return this._renderTabScope(
           TAB_SCOPE_IDS.power_devices,
@@ -1628,56 +1696,50 @@ export class HelmanConfigEditorPanel
     event.stopPropagation();
   };
 
-  private _renderGeneralTab(): TemplateResult {
+  private _renderVisualizationTab(): TemplateResult {
     return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.general.core_labels_and_history,
+        SECTION_SCOPE_IDS.visualization.card_labels_and_history,
         html`
           <div class="field-grid">
             ${this._renderOptionalNumberField(
-              ["history_buckets"],
+              ["visualization", "history_buckets"],
               "editor.fields.history_buckets",
               "editor.helpers.history_buckets",
               "editor.help.history_buckets",
             )}
             ${this._renderOptionalNumberField(
-              ["history_bucket_duration"],
+              ["visualization", "history_bucket_duration"],
               "editor.fields.history_bucket_duration",
               "editor.helpers.history_bucket_duration",
               "editor.help.history_bucket_duration",
             )}
-            ${this._renderOptionalTextField(["sources_title"], "editor.fields.sources_title")}
-            ${this._renderOptionalTextField(["consumers_title"], "editor.fields.consumers_title")}
-            ${this._renderOptionalTextField(["groups_title"], "editor.fields.groups_title")}
-            ${this._renderOptionalTextField(["others_group_label"], "editor.fields.others_group_label")}
+            ${this._renderOptionalTextField(["visualization", "sources_title"], "editor.fields.sources_title")}
+            ${this._renderOptionalTextField(["visualization", "consumers_title"], "editor.fields.consumers_title")}
+            ${this._renderOptionalTextField(["visualization", "groups_title"], "editor.fields.groups_title")}
+            ${this._renderOptionalTextField(["visualization", "others_group_label"], "editor.fields.others_group_label")}
             ${this._renderOptionalTextField(
-              ["power_sensor_name_cleaner_regex"],
+              ["visualization", "power_sensor_name_cleaner_regex"],
               "editor.fields.power_sensor_name_cleaner_regex",
               "editor.helpers.power_sensor_name_cleaner_regex",
               "editor.help.power_sensor_name_cleaner_regex",
             )}
             ${this._renderBooleanField(
-              ["show_empty_groups"],
+              ["visualization", "show_empty_groups"],
               "editor.fields.show_empty_groups",
               false,
             )}
             ${this._renderBooleanField(
-              ["show_others_group"],
+              ["visualization", "show_others_group"],
               "editor.fields.show_others_group",
               true,
-            )}
-            ${this._renderOptionalTextField(
-              ["training_time"],
-              "editor.fields.training_time",
-              "editor.helpers.training_time",
-              "editor.help.training_time",
             )}
           </div>
         `,
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.general.device_label_text,
+        SECTION_SCOPE_IDS.visualization.device_label_text,
         html`
           <p class="inline-note">
             ${this._t("editor.notes.device_label_text")}
@@ -2101,6 +2163,20 @@ export class HelmanConfigEditorPanel
    */
   private _renderTrainingTab(): TemplateResult {
     return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.settings,
+        html`
+          <div class="field-grid">
+            ${this._renderOptionalTextField(
+              ["training", "training_time"],
+              "editor.fields.training_time",
+              "editor.helpers.training_time",
+              "editor.help.training_time",
+            )}
+          </div>
+        `,
+      )}
+
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.house_consumption,
         html`
@@ -2712,7 +2788,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderDeviceLabelCategories(): TemplateResult[] {
-    const categories = objectEntries(this._getValue(["device_label_text"]));
+    const categories = objectEntries(this._getValue(["visualization", "device_label_text"]));
     if (categories.length === 0) {
       return [html`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`];
     }
@@ -2723,72 +2799,58 @@ export class HelmanConfigEditorPanel
         <div class="list-card">
           <div class="card-header">
             <div class="card-title">
-              <strong>${categoryKey}</strong>
-              <span class="card-subtitle">${this._t("editor.card.category")}</span>
-            </div>
-            <div class="inline-actions">
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removePath(["device_label_text", categoryKey]),
-                label: this._t("editor.actions.remove_category"),
-              })}
-            </div>
-          </div>
-          <div class="field-grid">
-            <div class="field">
-              <label>${this._t("editor.fields.category_key")}</label>
               <input
+                class="category-key-input"
                 .value=${categoryKey}
+                title=${this._t("editor.fields.category_key")}
+                aria-label=${this._t("editor.fields.category_key")}
                 @change=${(event: Event) => {
                   this._handleRenameObjectKey(
-                    ["device_label_text"],
+                    ["visualization", "device_label_text"],
                     categoryKey,
                     (event.currentTarget as HTMLInputElement).value,
                   );
                 }}
               />
+              <span class="card-subtitle">${this._t("editor.card.category")}</span>
+            </div>
+            <div class="inline-actions">
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removePath(["visualization", "device_label_text", categoryKey]),
+                label: this._t("editor.actions.remove_category"),
+              })}
             </div>
           </div>
-          <div class="list-stack">
+          <div class="label-entry-rows">
+            <div class="label-entry-row label-entry-head">
+              <label class="label-key-cell">${this._t("editor.fields.label_key")}</label>
+              <label class="badge-text-cell">${this._t("editor.fields.badge_text")}</label>
+              <span class="label-entry-actions-spacer"></span>
+            </div>
             ${labelEntries.map(([labelKey, badgeText]) => html`
-              <div class="nested-card">
-                <div class="card-header">
-                  <div class="card-title">
-                    <strong>${labelKey}</strong>
-                    <span class="card-subtitle">${this._t("editor.card.badge_text_entry")}</span>
-                  </div>
-                  <div class="inline-actions">
-                    ${renderRemoveButton(this, {
-                      onRemove: () =>
-                        this._removePath(["device_label_text", categoryKey, labelKey]),
-                    })}
-                  </div>
+              <div class="label-entry-row">
+                <div class="field field-compact label-key-cell">
+                  ${this._renderLabelKeyPicker(categoryKey, labelKey, labelEntries)}
                 </div>
-                <div class="field-grid">
-                  <div class="field">
-                    <label>${this._t("editor.fields.label_key")}</label>
-                    <input
-                      .value=${labelKey}
-                      @change=${(event: Event) => {
-                        this._handleRenameObjectKey(
-                          ["device_label_text", categoryKey],
-                          labelKey,
-                          (event.currentTarget as HTMLInputElement).value,
-                        );
-                      }}
-                    />
-                  </div>
-                  <div class="field">
-                    <label>${this._t("editor.fields.badge_text")}</label>
-                    <input
-                      .value=${this._stringValue(badgeText)}
-                      @change=${(event: Event) => {
-                        this._setRequiredString(
-                          ["device_label_text", categoryKey, labelKey],
-                          (event.currentTarget as HTMLInputElement).value,
-                        );
-                      }}
-                    />
-                  </div>
+                <div class="field field-compact badge-text-cell">
+                  <input
+                    class="badge-text-input"
+                    .value=${this._stringValue(badgeText)}
+                    aria-label=${this._t("editor.fields.badge_text")}
+                    @change=${(event: Event) => {
+                      this._setRequiredString(
+                        ["visualization", "device_label_text", categoryKey, labelKey],
+                        (event.currentTarget as HTMLInputElement).value,
+                      );
+                    }}
+                  />
+                </div>
+                <div class="list-actions">
+                  ${renderRemoveButton(this, {
+                    className: "remove-label-entry",
+                    onRemove: () =>
+                      this._removePath(["visualization", "device_label_text", categoryKey, labelKey]),
+                  })}
                 </div>
               </div>
             `)}
@@ -2805,6 +2867,67 @@ export class HelmanConfigEditorPanel
         </div>
       `;
     });
+  }
+
+  /**
+   * The label a badge text applies to: Home Assistant's own labels, by name.
+   *
+   * `device_label_text` is keyed by label name, so the registry can offer the
+   * keys directly. Two cases keep it honest: a stored key the registry does not
+   * have is offered as its own option rather than silently rewritten, and a
+   * registry that could not be read falls back to the free-text input the
+   * section always had -- an editor that offered nothing would strand the keys.
+   */
+  private _renderLabelKeyPicker(
+    categoryKey: string,
+    labelKey: string,
+    labelEntries: [string, unknown][],
+  ): TemplateResult {
+    const rename = (value: string) =>
+      this._handleRenameObjectKey(["visualization", "device_label_text", categoryKey], labelKey, value);
+    const title = this._t("editor.fields.label_key");
+    // An empty registry is treated as no registry: a picker whose only entries
+    // are the keys already stored can only take editing away. A Home Assistant
+    // that simply has no labels yet is the common case for that.
+    if (this._haLabelNames === null || this._haLabelNames.length === 0) {
+      return html`
+        <input
+          class="label-key-input"
+          .value=${labelKey}
+          title=${title}
+          aria-label=${title}
+          @change=${(event: Event) => rename((event.currentTarget as HTMLInputElement).value)}
+        />
+      `;
+    }
+    // A name another row in this category already uses would collide on rename,
+    // so it is offered only by the row holding it.
+    const taken = new Set(
+      labelEntries.map(([key]) => key).filter((key) => key !== labelKey),
+    );
+    const options = this._haLabelNames.filter((name) => !taken.has(name));
+    return html`
+      <select
+        class="label-key-picker"
+        title=${title}
+        aria-label=${title}
+        @change=${(event: Event) => rename((event.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value="" ?selected=${labelKey.length === 0}>
+          ${this._t("editor.values.select_label")}
+        </option>
+        ${labelKey.length > 0 && !options.includes(labelKey)
+          ? html`<option value=${labelKey} ?selected=${true}>
+              ${this._tFormat("editor.dynamic.unknown_label", { name: labelKey })}
+            </option>`
+          : nothing}
+        ${options.map(
+          (name) => html`
+            <option value=${name} ?selected=${name === labelKey}>${name}</option>
+          `,
+        )}
+      </select>
+    `;
   }
 
   /**
@@ -4085,20 +4208,20 @@ export class HelmanConfigEditorPanel
 
   private _buildTabIssueCounts(): Record<TabId, { errors: number; warnings: number }> {
     const counts: Record<TabId, { errors: number; warnings: number }> = {
-      general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
       training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       controllables: { errors: 0, warnings: 0 },
+      visualization: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {
       for (const issue of this._validation.errors) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
         counts[tabId].errors += 1;
       }
       for (const issue of this._validation.warnings) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
         counts[tabId].warnings += 1;
       }
     }
@@ -4142,11 +4265,12 @@ export class HelmanConfigEditorPanel
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult, schemaResult] =
+      const [loadedResult, liveApplianceMetadataResult, schemaResult, labelNamesResult] =
         await Promise.allSettled([
           this.hass.callWS<unknown>({ type: "helman/get_config" }),
           this._loadLiveApplianceMetadata(),
           fetchOptimizerSchema(this.hass),
+          this._loadHaLabelNames(),
         ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
@@ -4168,6 +4292,8 @@ export class HelmanConfigEditorPanel
           : null;
       this._optimizerSchema =
         schemaResult.status === "fulfilled" ? schemaResult.value : null;
+      this._haLabelNames =
+        labelNamesResult.status === "fulfilled" ? labelNamesResult.value : null;
       this._validation = null;
       this._dirty = this._config
         ? this._normalizeApplianceOptimizerTargets(this._config)
@@ -4490,22 +4616,28 @@ export class HelmanConfigEditorPanel
   }
 
   private _handleAddDeviceLabelCategory = (): void => {
-    const existingKeys = objectEntries(this._getValue(["device_label_text"])).map(
+    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text"])).map(
       ([key]) => key,
     );
     const categoryKey = createCategoryKey(existingKeys);
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["device_label_text", categoryKey], {});
+      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey], {});
     });
   };
 
   private _handleAddDeviceLabel(categoryKey: string): void {
-    const existingKeys = objectEntries(this._getValue(["device_label_text", categoryKey])).map(
+    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text", categoryKey])).map(
       ([key]) => key,
     );
-    const labelKey = createLabelKey(existingKeys);
+    // A new row starts on a label that exists, when the registry is in hand:
+    // the picker's whole point is that a key is a Home Assistant label, and a
+    // placeholder key would open as "not a Home Assistant label".
+    const firstFreeLabel = (this._haLabelNames ?? []).find(
+      (name) => !existingKeys.includes(name),
+    );
+    const labelKey = firstFreeLabel ?? createLabelKey(existingKeys);
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["device_label_text", categoryKey, labelKey], "");
+      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey, labelKey], "");
     });
   }
 
@@ -4944,6 +5076,33 @@ export class HelmanConfigEditorPanel
         type: "helman/get_appliances",
       });
       return Array.isArray(response?.appliances) ? response : { appliances: [] };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The label names Home Assistant has, for the badge-text picker.
+   *
+   * ``device_label_text`` is keyed by label *name* -- that is what
+   * ``_apply_label_badge_texts`` matches a device's labels against -- so the
+   * picker offers names, not ids.
+   */
+  private async _loadHaLabelNames(): Promise<string[] | null> {
+    if (!this.hass) {
+      return null;
+    }
+    try {
+      const labels = await this.hass.callWS<{ name?: unknown }[]>({
+        type: "config/label_registry/list",
+      });
+      if (!Array.isArray(labels)) {
+        return null;
+      }
+      const names = labels
+        .map((label) => (typeof label?.name === "string" ? label.name.trim() : ""))
+        .filter((name) => name.length > 0);
+      return [...new Set(names)].sort((left, right) => left.localeCompare(right));
     } catch {
       return null;
     }

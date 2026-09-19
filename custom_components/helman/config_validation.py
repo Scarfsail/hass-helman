@@ -44,6 +44,23 @@ from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
 #: worse than telling them what it is called now.
 _RETIRED_CONFIG_KEYS = ("appliances", "scheduler")
 
+#: The top-level keys config version 18 moved under ``visualization``, plus
+#: ``training_time``, which moved under ``training``. Same reasoning as
+#: ``_RETIRED_CONFIG_KEYS``: migration runs on load only, so the save path has
+#: to name the old spellings rather than ignore them.
+_RELOCATED_VISUALIZATION_KEYS = (
+    "history_buckets",
+    "history_bucket_duration",
+    "sources_title",
+    "consumers_title",
+    "groups_title",
+    "others_group_label",
+    "power_sensor_name_cleaner_regex",
+    "show_empty_groups",
+    "show_others_group",
+    "device_label_text",
+)
+
 #: The action options an inverter's ``controls.mode.options`` may carry, in the
 #: order the editor lays them out. Read off the registry so a kind's declared
 #: actions and the fields validated for it cannot drift.
@@ -108,7 +125,7 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
         )
         return report
 
-    _validate_general_config(config, report)
+    _validate_visualization_config(config, report)
     _validate_power_devices_config(config, report)
     _validate_training_config(config, report)
     _validate_controllables_config(config, report)
@@ -116,46 +133,93 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
     return report
 
 
-def _validate_general_config(
+def _validate_visualization_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    section = "general"
-    _validate_optional_string(report, section, "sources_title", config.get("sources_title"))
-    _validate_optional_string(
-        report, section, "consumers_title", config.get("consumers_title")
+    """Everything the Helman card renders with, under ``visualization`` since v18.
+
+    The save-side half of "load migrates, save refuses": the keys used to sit
+    at the top level, so a hand-edited document that still has them there is
+    named rather than silently ignored.
+    """
+    section = "visualization"
+
+    for retired_key in _RELOCATED_VISUALIZATION_KEYS:
+        if retired_key in config:
+            report.add_error(
+                section=section,
+                path=retired_key,
+                code="relocated_config_key",
+                message=(
+                    f"{retired_key!r} moved under 'visualization'; write it as "
+                    f"visualization.{retired_key}"
+                ),
+            )
+
+    raw_visualization = config.get("visualization")
+    if raw_visualization is None:
+        return
+    visualization = _require_mapping(
+        raw_visualization, "visualization", section, report
     )
-    _validate_optional_string(report, section, "groups_title", config.get("groups_title"))
+    if visualization is None:
+        return
+
+    _validate_optional_string(
+        report, section, "visualization.sources_title", visualization.get("sources_title")
+    )
     _validate_optional_string(
         report,
         section,
-        "others_group_label",
-        config.get("others_group_label"),
+        "visualization.consumers_title",
+        visualization.get("consumers_title"),
     )
-    _validate_optional_positive_int(
-        report, section, "history_buckets", config.get("history_buckets")
+    _validate_optional_string(
+        report, section, "visualization.groups_title", visualization.get("groups_title")
+    )
+    _validate_optional_string(
+        report,
+        section,
+        "visualization.others_group_label",
+        visualization.get("others_group_label"),
     )
     _validate_optional_positive_int(
         report,
         section,
-        "history_bucket_duration",
-        config.get("history_bucket_duration"),
+        "visualization.history_buckets",
+        visualization.get("history_buckets"),
+    )
+    _validate_optional_positive_int(
+        report,
+        section,
+        "visualization.history_bucket_duration",
+        visualization.get("history_bucket_duration"),
     )
     _validate_optional_bool(
-        report, section, "show_empty_groups", config.get("show_empty_groups")
+        report,
+        section,
+        "visualization.show_empty_groups",
+        visualization.get("show_empty_groups"),
     )
     _validate_optional_bool(
-        report, section, "show_others_group", config.get("show_others_group")
+        report,
+        section,
+        "visualization.show_others_group",
+        visualization.get("show_others_group"),
     )
 
-    regex_value = config.get("power_sensor_name_cleaner_regex")
+    regex_value = visualization.get("power_sensor_name_cleaner_regex")
     if regex_value is not None:
         if not _is_non_empty_string(regex_value):
             report.add_error(
                 section=section,
-                path="power_sensor_name_cleaner_regex",
+                path="visualization.power_sensor_name_cleaner_regex",
                 code="invalid_type",
-                message="power_sensor_name_cleaner_regex must be a non-empty string",
+                message=(
+                    "visualization.power_sensor_name_cleaner_regex must be a "
+                    "non-empty string"
+                ),
             )
         else:
             try:
@@ -163,40 +227,15 @@ def _validate_general_config(
             except re.error as err:
                 report.add_error(
                     section=section,
-                    path="power_sensor_name_cleaner_regex",
+                    path="visualization.power_sensor_name_cleaner_regex",
                     code="invalid_regex",
-                    message=f"power_sensor_name_cleaner_regex is invalid: {err}",
+                    message=(
+                        "visualization.power_sensor_name_cleaner_regex is "
+                        f"invalid: {err}"
+                    ),
                 )
 
-    # training_time: HH:MM local-time string. Top-level since v6 — it schedules
-    # the whole nightly training batch, not just solar bias training.
-    training_time = config.get("training_time")
-    if training_time is not None:
-        if not _is_non_empty_string(training_time):
-            report.add_error(
-                section=section,
-                path="training_time",
-                code="invalid_type",
-                message="training_time must be an HH:MM string",
-            )
-        else:
-            match = re.match(r"^(\d{2}):(\d{2})$", training_time.strip())
-            if not match:
-                report.add_error(
-                    section=section,
-                    path="training_time",
-                    code="invalid_format",
-                    message="training_time must be an HH:MM string",
-                )
-            elif not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 59):
-                report.add_error(
-                    section=section,
-                    path="training_time",
-                    code="invalid_value",
-                    message="training_time must be a valid time",
-                )
-
-    device_label_text = config.get("device_label_text")
+    device_label_text = visualization.get("device_label_text")
     if device_label_text is not None:
         _validate_device_label_text(device_label_text, report)
 
@@ -236,12 +275,25 @@ def _validate_training_config(
     for their old paths.
     """
     section = "training"
+    if "training_time" in config:
+        report.add_error(
+            section=section,
+            path="training_time",
+            code="relocated_config_key",
+            message=(
+                "'training_time' moved under 'training'; write it as "
+                "training.training_time"
+            ),
+        )
+
     raw_training = config.get("training")
     if raw_training is None:
         return
     training = _require_mapping(raw_training, "training", section, report)
     if training is None:
         return
+
+    _validate_training_time(training.get("training_time"), report)
 
     house_consumption = training.get("house_consumption")
     if house_consumption is not None:
@@ -1746,17 +1798,52 @@ def _read_supported_appliance(
     raise ValueError(f"Unsupported editable appliance kind {kind!r}")
 
 
+def _validate_training_time(value: object, report: ValidationReport) -> None:
+    """``training.training_time``: an HH:MM local-time string.
+
+    Under ``training`` since v18 — it schedules the whole nightly training
+    batch, not just solar bias training.
+    """
+    if value is None:
+        return
+    section = "training"
+    path = "training.training_time"
+    if not _is_non_empty_string(value):
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be an HH:MM string",
+        )
+        return
+    match = re.match(r"^(\d{2}):(\d{2})$", value.strip())
+    if not match:
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_format",
+            message=f"{path} must be an HH:MM string",
+        )
+    elif not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 59):
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_value",
+            message=f"{path} must be a valid time",
+        )
+
+
 def _validate_device_label_text(
     value: object,
     report: ValidationReport,
 ) -> None:
-    section = "general"
+    section = "visualization"
     if not isinstance(value, Mapping):
         report.add_error(
             section=section,
-            path="device_label_text",
+            path="visualization.device_label_text",
             code="invalid_type",
-            message="device_label_text must be an object",
+            message="visualization.device_label_text must be an object",
         )
         return
 
@@ -1764,36 +1851,36 @@ def _validate_device_label_text(
         if not _is_non_empty_string(category_key):
             report.add_error(
                 section=section,
-                path="device_label_text",
+                path="visualization.device_label_text",
                 code="invalid_key",
-                message="device_label_text keys must be non-empty strings",
+                message="visualization.device_label_text keys must be non-empty strings",
             )
             continue
         if not isinstance(category_value, Mapping):
             report.add_error(
                 section=section,
-                path=f"device_label_text.{category_key}",
+                path=f"visualization.device_label_text.{category_key}",
                 code="invalid_type",
-                message=f"device_label_text.{category_key} must be an object",
+                message=f"visualization.device_label_text.{category_key} must be an object",
             )
             continue
         for label_name, badge_text in category_value.items():
             if not _is_non_empty_string(label_name):
                 report.add_error(
                     section=section,
-                    path=f"device_label_text.{category_key}",
+                    path=f"visualization.device_label_text.{category_key}",
                     code="invalid_key",
                     message=(
-                        f"device_label_text.{category_key} keys must be non-empty strings"
+                        f"visualization.device_label_text.{category_key} keys must be non-empty strings"
                     ),
                 )
             if not _is_non_empty_string(badge_text):
                 report.add_error(
                     section=section,
-                    path=f"device_label_text.{category_key}.{label_name}",
+                    path=f"visualization.device_label_text.{category_key}.{label_name}",
                     code="invalid_type",
                     message=(
-                        f"device_label_text.{category_key}.{label_name} must be a "
+                        f"visualization.device_label_text.{category_key}.{label_name} must be a "
                         "non-empty string"
                     ),
                 )

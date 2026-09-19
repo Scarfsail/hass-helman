@@ -3,11 +3,11 @@
     "title": "Helman config editor",
     "description": "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
     "tabs": {
-      "general": "General",
       "power_devices": "Power devices",
       "training": "Training",
       "automation": "Automation",
-      "controllables": "Controllables"
+      "controllables": "Controllables",
+      "visualization": "Helman card"
     },
     "actions": {
       "reload_config": "Reload stored config",
@@ -51,7 +51,7 @@
       "warnings": "Warnings"
     },
     "sections": {
-      "core_labels_and_history": "Core labels and history",
+      "card_labels_and_history": "Card labels and history",
       "device_label_text": "Device label text",
       "house": "House",
       "solar": "Solar",
@@ -77,6 +77,7 @@
       "solar_forecast_general": "General",
       "bias_correction_config": "Configuration",
       "consumption": "Consumption",
+      "training_settings": "Training settings",
       "house_consumption": "House consumption forecast",
       "solar_bias": "Solar forecast correction"
     },
@@ -150,8 +151,8 @@
       "show_others_group": "Show others group",
       "training_time": "Training time (HH:MM)",
       "category_key": "Category key",
-      "label_key": "Label key",
-      "badge_text": "Badge text",
+      "label_key": "Label",
+      "badge_text": "Text",
       "house_power_entity": "House power entity",
       "power_sensor_label": "Power sensor label",
       "power_switch_label": "Power switch label",
@@ -376,6 +377,7 @@
       "cool": "Cool",
       "stop_export": "Stop export",
       "select_controllable": "Select controllable",
+      "select_label": "Select label",
       "live_modes_unavailable": "Live modes unavailable",
       "unknown": "unknown",
       "missing_id": "missing id"
@@ -418,6 +420,7 @@
       "generic_appliance": "Generic appliance {index}",
       "vehicle": "Vehicle {index}",
       "stale_appliance": "{id} (no longer in current config)",
+      "unknown_label": "{name} (not a Home Assistant label)",
       "self_dependency": "{id} (this optimizer's own appliance — pick another)",
       "stale_climate_mode": "{mode} (no longer supported)",
       "unsupported_optimizer_kind": "Unsupported optimizer kind: {kind}",
