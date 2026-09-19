@@ -54,6 +54,11 @@ class FakeConnection:
 
 
 class _MemoryBackend:
+    data = None
+
+    async def async_load(self):
+        return self.data
+
     async def async_save(self, data) -> None:
         self.data = data
 
@@ -200,6 +205,15 @@ async def _train_now(coordinator, *, job=None, is_admin: bool = True):
     if job is not None:
         msg["job"] = job
     await training_ws.ws_train_now.__wrapped__(_hass(coordinator), connection, msg)
+    return connection
+
+
+async def _train_now_with_hass(hass, *, job=None):
+    connection = FakeConnection()
+    msg = {"id": 1, "type": "helman/training/train_now"}
+    if job is not None:
+        msg["job"] = job
+    await training_ws.ws_train_now.__wrapped__(hass, connection, msg)
     return connection
 
 
@@ -588,6 +602,80 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((house_job.calls, appliance_job.calls), (1, 0))
         service.async_train.assert_not_awaited()
+
+    async def test_legacy_solar_run_in_flight_rejects_every_unified_run(self) -> None:
+        for job in (None, "solar_bias", "house_consumption", "appliance_energy"):
+            with self.subTest(job=job):
+                service = _make_bias_service()
+                service._training_in_progress = True
+                house_job = _StubJob("profile_trained")
+                appliance_job = _StubJob("estimates_trained")
+                coordinator = _make_coordinator(
+                    bias_service=service,
+                    house_job=house_job,
+                    appliance_job=appliance_job,
+                )
+
+                connection = await _train_now(coordinator, job=job)
+
+                self.assertEqual(connection.results, [])
+                self.assertEqual(
+                    connection.errors,
+                    [
+                        (
+                            1,
+                            "training_in_progress",
+                            "Training is already running: solar_bias",
+                        )
+                    ],
+                )
+                self.assertEqual((house_job.calls, appliance_job.calls), (0, 0))
+
+    async def test_reload_mid_run_refreshes_and_adopts_persisted_artifacts(self) -> None:
+        old_store = _make_store()
+        new_store = _make_store()
+        new_store._store = old_store._store
+        new_coordinator = _make_coordinator(store=new_store)
+        new_coordinator._read_house_forecast_config = lambda: (
+            None,
+            56,
+            14,
+            HOUSE_FP,
+        )
+        new_coordinator._async_refresh_forecast = AsyncMock()
+        hass = _hass(None)
+
+        class _ReloadingApplianceJob:
+            async def async_train(self_inner):
+                # The new coordinator has already loaded the old empty document
+                # when the superseded coordinator completes its write.
+                hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+                await old_store.async_record_appliance_energy(
+                    data={"dishwasher": 0.8},
+                    fingerprint=APPLIANCE_FP,
+                    trained_at=TRAINED_AT,
+                    last_outcome="estimates_trained",
+                    failed_appliances={},
+                )
+                return "estimates_trained"
+
+        old_coordinator = _make_coordinator(
+            store=old_store,
+            appliance_job=_ReloadingApplianceJob(),
+        )
+        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+
+        connection = await _train_now_with_hass(hass, job="appliance_energy")
+
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(new_coordinator._appliance_energy_estimates, {"dishwasher": 0.8})
+        self.assertEqual(
+            _job(connection.results[0][1]["status"], "appliance_energy")["health"],
+            "ok",
+        )
+        new_coordinator._async_refresh_forecast.assert_awaited_once_with(
+            reason="training_artifacts_reloaded"
+        )
 
     async def test_an_unload_mid_run_is_reported_not_crashed(self) -> None:
         coordinator = _make_coordinator()

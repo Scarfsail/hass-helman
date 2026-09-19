@@ -398,6 +398,66 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(outcome, "no_history")
         self.assertEqual(store.section["data"], {})
+        self.assertEqual(
+            store.section["failed_appliances"],
+            {
+                "dishwasher": "no usable history",
+                "living-room-hvac": "non-positive estimate: 0.0",
+            },
+        )
+        self.assertEqual(appliance_energy_module.health_for(store.section), "degraded")
+
+    async def test_unusable_shared_estimates_are_recorded_as_failures(self) -> None:
+        store = _FakeStore()
+        self._install(_RecordingEstimator({"dishwasher": 0.8}))
+        self._install_shared(
+            _SharedMeterRecorder(
+                {
+                    "switch.ac-a": [],
+                    "switch.ac-b": [],
+                },
+                [],
+            )
+        )
+        a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
+        b = _make_generic("ac-b", energy_entity_id=_SHARED_METER)
+        job = self._make_job(
+            store,
+            [_make_generic(), a, b],
+            shared_meters={
+                _SHARED_METER: (
+                    SharedMeterMember.for_appliance(a),
+                    SharedMeterMember.for_appliance(b),
+                )
+            },
+        )
+
+        outcome = await job.async_train()
+
+        self.assertEqual(outcome, "estimates_trained")
+        self.assertEqual(store.section["data"], {"dishwasher": 0.8})
+        self.assertEqual(
+            store.section["failed_appliances"],
+            {"ac-a": "no usable history", "ac-b": "no usable history"},
+        )
+        self.assertEqual(appliance_energy_module.health_for(store.section), "degraded")
+
+    async def test_unusable_estimate_degrades_an_otherwise_successful_run(self) -> None:
+        store = _FakeStore()
+        self._install(
+            _RecordingEstimator({"dishwasher": None, "living-room-hvac": 1.1})
+        )
+        job = self._make_job(store, [_make_generic(), _make_climate()])
+
+        outcome = await job.async_train()
+
+        self.assertEqual(outcome, "estimates_trained")
+        self.assertEqual(store.section["data"], {"living-room-hvac": 1.1})
+        self.assertEqual(
+            store.section["failed_appliances"],
+            {"dishwasher": "no usable history"},
+        )
+        self.assertEqual(appliance_energy_module.health_for(store.section), "degraded")
 
     async def test_one_failing_appliance_does_not_cost_the_others(self) -> None:
         store = _FakeStore()

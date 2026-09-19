@@ -52,24 +52,28 @@ async def ws_train_now(
     """
     if not _require_admin(connection, msg):
         return
-    coordinator = _get_training_coordinator(hass, connection, msg)
-    if coordinator is None:
+    run_coordinator = _get_training_coordinator(hass, connection, msg)
+    if run_coordinator is None:
         return
 
-    batch = coordinator._training_batch
+    batch = run_coordinator._training_batch
     job = msg.get("job")
     # No await from here until the run is dispatched: the busy check and the
     # dispatch are atomic on the event loop.
-    if batch.is_running:
+    solar_service = run_coordinator._solar_bias_service
+    if batch.is_running or solar_service.is_training:
+        current_job = batch.current_job
+        if current_job is None and solar_service.is_training:
+            current_job = "solar_bias"
         connection.send_error(
             msg["id"],
             "training_in_progress",
-            f"Training is already running: {batch.current_job or 'starting'}",
+            f"Training is already running: {current_job or 'starting'}",
         )
         return
     if (
         job == "solar_bias"
-        and not coordinator._solar_bias_service.get_status_payload()["enabled"]
+        and not solar_service.get_status_payload()["enabled"]
     ):
         connection.send_error(
             msg["id"], "job_disabled", "Solar bias correction is disabled"
@@ -90,6 +94,8 @@ async def ws_train_now(
     coordinator = _get_training_coordinator(hass, connection, msg)
     if coordinator is None:
         return
+    if coordinator is not run_coordinator:
+        await coordinator.async_reload_training_artifacts()
 
     connection.send_result(
         msg["id"],

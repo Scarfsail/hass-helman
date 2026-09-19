@@ -1786,6 +1786,26 @@ class HelmanCoordinator:
         self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
         await self._async_refresh_forecast(reason="house_profile_trained")
 
+    async def async_reload_training_artifacts(self) -> None:
+        """Reload and adopt artifacts written by a superseded coordinator.
+
+        A manual training request can outlive the coordinator that started it
+        when a config-entry reload lands during its recorder reads. The newly
+        live coordinator loaded its own store before that old run wrote, so it
+        must explicitly re-read persistence once the awaited run completes.
+        """
+        store = self._training_artifacts_store
+        if store is None:
+            return
+
+        await store.async_load()
+        (_entity_id, _window, _min_days, config_fingerprint) = (
+            self._read_house_forecast_config()
+        )
+        self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
+        self._adopt_stored_appliance_energy()
+        await self._async_refresh_forecast(reason="training_artifacts_reloaded")
+
     def _has_matching_forecast_snapshot(
         self,
         *,

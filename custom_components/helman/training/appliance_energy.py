@@ -214,6 +214,8 @@ class ApplianceEnergyTrainingJob:
             # reader use the appliance's configured hourly energy instead.
             if estimate is not None and estimate > 0:
                 estimates[appliance.id] = estimate
+            else:
+                failed_appliances[appliance.id] = _unusable_estimate_reason(estimate)
 
         for energy_entity_id, appliances in shared_appliances.items():
             try:
@@ -242,6 +244,10 @@ class ApplianceEnergyTrainingJob:
                 estimate = shared_estimates.get(appliance.id)
                 if estimate is not None and estimate > 0:
                     estimates[appliance.id] = estimate
+                else:
+                    failed_appliances[appliance.id] = _unusable_estimate_reason(
+                        estimate
+                    )
 
         if failed_appliances:
             _LOGGER.warning(
@@ -317,6 +323,13 @@ class ApplianceEnergyTrainingJob:
 
 def _failure_reason(err: Exception) -> str:
     return str(err) or err.__class__.__name__
+
+
+def _unusable_estimate_reason(estimate: float | None) -> str:
+    """Explain why history did not produce a usable positive estimate."""
+    if estimate is None:
+        return "no usable history"
+    return f"non-positive estimate: {estimate}"
 
 
 def health_for(section: Mapping[str, Any] | None) -> str:

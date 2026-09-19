@@ -186,6 +186,11 @@ class SolarBiasCorrectionService:
         #: and span commands together, and both ask for the floor.
         self._history_floor_lock = asyncio.Lock()
 
+    @property
+    def is_training(self) -> bool:
+        """Whether a solar-bias training run currently owns the service."""
+        return self._training_in_progress
+
     async def async_setup(self) -> None:
         stored = self._store.profile
         current_fingerprint = self._current_fingerprint
