@@ -244,13 +244,15 @@ test("every governed entity in #172's table gets a row, fed by the shared poll",
     await mountEditor(page);
     // House meter + one controllable, then the solar comparison -- whose
     // forecast side is two rows, the source and what Helman records from it --
-    // plus grid and battery.
-    const tables = await waitForRows(page, 7);
+    // plus grid and battery. The appliance energy panel (#305) lists the same
+    // controllable once more, being on history_average: a second row over the
+    // same meter, so still seven targets.
+    const tables = await waitForRows(page, 8);
 
     const allRows = tables.flat();
-    // Seven rows, seven entities -- one target sent, one row rendered, no more
-    // and no fewer.
-    expect(allRows.length).toBe(7);
+    // Eight rows over seven entities -- one target sent per entity, one row
+    // per table that reads it, no more and no fewer.
+    expect(allRows.length).toBe(8);
 
     const request = await page.evaluate(() => (window as any).__inspectRequests.at(-1));
     const requestedKeys = request.targets.map((target: any) => target.key).sort();
@@ -375,7 +377,7 @@ test("clicking an entity asks Home Assistant for its more-info dialog", async ({
             seen.push((event as CustomEvent).detail);
         });
         const button = panel.shadowRoot!.querySelector(
-            ".training-depth-entity-button",
+            '.training-depth-entity-button[title="sensor.house_energy"]',
         ) as HTMLButtonElement;
         button.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -397,11 +399,11 @@ test("a row with no entity configured is not clickable", async ({ page }) => {
         return root?.querySelectorAll(".training-depth-entity-button").length ?? -1;
     });
 
-    // Six of the seven rows have an entity and are clickable; only the unset
+    // Seven of the eight rows have an entity and are clickable; only the unset
     // battery one renders plain text. The recorded-forecast row counts here
     // even though no config path points at it -- the inspection resolves its
     // id, which is exactly what makes it clickable.
-    expect(buttonCount).toBe(6);
+    expect(buttonCount).toBe(7);
 });
 
 test("the entity column keeps its width on a wide screen", async ({ page }) => {
@@ -462,8 +464,8 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     const tables = await waitForRows(page, 7);
     const allRows = tables.flat();
 
-    // The seven of the base config, and neither of the two just added.
-    expect(allRows.length).toBe(7);
+    // The eight of the base config, and neither of the two just added.
+    expect(allRows.length).toBe(8);
     expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
 });
