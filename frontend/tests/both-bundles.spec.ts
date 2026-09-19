@@ -35,7 +35,7 @@ const CARD_TAGS = [
 ];
 const EDITOR_TAGS = [
     "helman-config-editor-panel",
-    "helman-bias-correction-status",
+    "helman-training-job-status",
     "helman-entity-group",
 ];
 const SHARED_TAGS = ["helman-optimizer-editor"];
