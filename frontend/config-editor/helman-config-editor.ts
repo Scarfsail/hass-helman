@@ -2474,6 +2474,87 @@ export class HelmanConfigEditorPanel
   }
 
   /**
+   * Every entity the appliance energy job reads, with the lookback it reads.
+   *
+   * A `history_average` appliance reads its meter and its switch or climate
+   * entity -- the second is how training knows when it ran, so a deep meter
+   * over a shallow switch still yields no estimate. A meter shared by generic
+   * and climate appliances is read once over the longest lookback among the
+   * sharers that learn, and every sharer's activity divides it, a `fixed` one
+   * included. Mirrors `ApplianceEnergyTrainingRequest` and `read_shared_meters`.
+   *
+   * A second, read-only view of settings that live on each controllable --
+   * the same kind of view `_houseConsumptionDepthRows` gives those meters.
+   */
+  private _applianceEnergyDepthRows(): TrainingDepthRow[] {
+    const controllables = (asJsonArray(this._getValue(["controllables"])) ?? []).map(
+      (controllable, index) => {
+        const entry = asJsonObject(controllable) ?? {};
+        const consumption = asJsonObject(entry.consumption) ?? {};
+        const projection = asJsonObject(consumption.projection) ?? {};
+        const kind = this._stringValue(entry.kind);
+        const lookback = projection.lookback_days;
+        return {
+          index,
+          name:
+            this._stringValue(entry.name) ||
+            this._stringValue(entry.id) ||
+            `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
+          meter: this._stringValue(consumption.energy_entity_id),
+          // Only these two kinds share a meter or learn from history.
+          activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
+          learns: projection.strategy === "history_average",
+          // The backend trains on 30 days when the key is absent.
+          lookback: typeof lookback === "number" ? lookback : 30,
+        };
+      },
+    );
+    const sharers = new Map<string, typeof controllables>();
+    for (const item of controllables) {
+      if (!item.meter || !item.activity) continue;
+      sharers.set(item.meter, [...(sharers.get(item.meter) ?? []), item]);
+    }
+    const sharedLookback = (meter: string): number | null => {
+      const members = sharers.get(meter) ?? [];
+      const learners = members.filter((member) => member.learns);
+      if (members.length < 2 || learners.length === 0) return null;
+      return Math.max(...learners.map((member) => member.lookback));
+    };
+    return controllables.flatMap((item): TrainingDepthRow[] => {
+      const shared = item.meter ? sharedLookback(item.meter) : null;
+      const activityRow = (roleKey: string, days: number): TrainingDepthRow[] =>
+        item.activity
+          ? [
+              {
+                label: item.name,
+                path: ["controllables", item.index, "controls", item.activity, "entity_id"],
+                roleKey,
+                roleParams: { days },
+                requiredDays: days,
+              },
+            ]
+          : [];
+      if (!item.learns) {
+        // A fixed sharer learns nothing, but when it ran still splits the meter.
+        return shared === null
+          ? []
+          : activityRow("editor.training_depth.role_appliance_sharer_activity", shared);
+      }
+      const days = shared ?? item.lookback;
+      return [
+        {
+          label: item.name,
+          path: ["controllables", item.index, "consumption", "energy_entity_id"],
+          roleKey: "editor.training_depth.role_appliance_meter",
+          roleParams: { days },
+          requiredDays: days,
+        },
+        ...activityRow("editor.training_depth.role_appliance_activity", days),
+      ];
+    });
+  }
+
+  /**
    * Every target the training tab's depth tables need, for the shared poll.
    *
    * Computed only while the training tab is active: the tables render
@@ -2482,39 +2563,6 @@ export class HelmanConfigEditorPanel
    * list with the mounted `helman-entity-group` paths and de-duplicates by
    * key, so this is not a second call and not a second cache.
    */
-  /**
-   * Every controllable the appliance energy job trains: those on
-   * `history_average`, with the meter it reads and its own lookback.
-   *
-   * A second, read-only view of settings that live on each controllable --
-   * the same kind of view `_houseConsumptionDepthRows` gives those meters.
-   */
-  private _applianceEnergyDepthRows(): TrainingDepthRow[] {
-    const controllables = asJsonArray(this._getValue(["controllables"])) ?? [];
-    return controllables.flatMap((controllable, index): TrainingDepthRow[] => {
-      const entry = asJsonObject(controllable) ?? {};
-      const projection = asJsonObject(asJsonObject(entry.consumption)?.projection) ?? {};
-      if (projection.strategy !== "history_average") return [];
-      const name =
-        this._stringValue(entry.name) ||
-        this._stringValue(entry.id) ||
-        `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`;
-      // The backend trains on 30 days when the key is absent.
-      const lookback = projection.lookback_days;
-      return [
-        {
-          label: name,
-          path: ["controllables", index, "consumption", "energy_entity_id"],
-          roleKey: "editor.training_depth.role_appliance_meter",
-          roleParams: {
-            days: typeof lookback === "number" ? lookback : 30,
-          },
-          requiredDays: typeof lookback === "number" ? lookback : 30,
-        },
-      ];
-    });
-  }
-
   private _trainingDepthTargets(): {
     key: string;
     path: PathSegment[];

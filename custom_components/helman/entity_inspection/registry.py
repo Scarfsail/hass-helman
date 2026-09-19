@@ -119,6 +119,16 @@ EVALUATORS: dict[str, Evaluator] = {
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
     ),
+    # When an appliance ran: the appliance energy trainer reads this history
+    # alongside its meter, for a history_average appliance and for any sharer
+    # of a meter one of those learns from. Measured, never judged here -- the
+    # requirement is each appliance's own lookback, which the Training tab's
+    # depth table applies. Wrapped rather than replaced so the Controllables
+    # tab keeps showing the switch or climate state it always has.
+    "controllables.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
+    "controllables.*.controls.climate.entity_id": history_aware(
+        evaluate_entity_value
+    ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "power_devices.solar.forecast.bias_correction.total_energy_entity_id": (
         history_evaluator(

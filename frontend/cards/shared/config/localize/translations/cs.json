@@ -141,7 +141,9 @@
       "role_forecast_source": "Prognostická strana porovnání. Helman si predikci každého slotu ukládá ještě před jeho začátkem, takže trénink čte vlastní archiv, ne historii této entity -- jak daleko zpět ji recorder drží, tady nic neurčuje.",
       "forecast_recorded": "Zaznamenaná prognóza",
       "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo.",
-      "role_appliance_meter": "Průměrováno na hodinu provozu za vlastní období tohoto spotřebiče, {days} dní. Upravuje se u spotřebiče na kartě Řízené spotřebiče."
+      "role_appliance_meter": "Průměrováno na hodinu provozu za období {days} dní: vlastní období tohoto spotřebiče, u sdíleného měřiče nejdelší ze spotřebičů, které se učí. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
+      "role_appliance_activity": "Kdy spotřebič běžel, za stejných {days} dní: trénink průměruje měřič jen přes hodiny, kdy tato entita ukazuje chod, takže bez dostatečné historie zde nevznikne odhad, ať je historie měřiče jakkoli dlouhá. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
+      "role_appliance_sharer_activity": "Sdílí měřič se spotřebičem, který se učí z historie, takže kdy tento běžel, rozhoduje o jeho podílu na rozdělení za {days} dní. Upravuje se u spotřebiče na kartě Řízené spotřebiče."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",

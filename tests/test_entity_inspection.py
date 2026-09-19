@@ -808,6 +808,27 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             inspection["dependsOn"],
         )
 
+    def test_an_appliance_activity_entity_keeps_its_state_and_gains_a_history_fact(self):
+        """The appliance trainer reads when it ran; the requirement is the
+        appliance's own lookback, applied by the editor, so none is set here."""
+        for kind, entity, state in (
+            ("switch", "switch.dishwasher", "off"),
+            ("climate", "climate.living_room", "heat"),
+        ):
+            with self.subTest(kind=kind):
+                hass = _ProbingHass({entity: _State(state)})
+                first, second = self.inspect_twice(
+                    hass,
+                    {"controllables": [{"controls": {kind: {"entity_id": entity}}}]},
+                    ["controllables", 0, "controls", kind, "entity_id"],
+                )
+                self.assertEqual(
+                    [fact["token"] for fact in first["facts"]], ["value"]
+                )
+                fact = _fact(second, "history")
+                self.assertIsNotNone(fact)
+                self.assertIsNone(fact["params"].get("required"))
+
     def test_the_recorded_forecast_entity_resolves_and_is_judged(self):
         # Helman publishes this one, so no config path points at it and the
         # generic fallback would answer "unset". The registry key has to match

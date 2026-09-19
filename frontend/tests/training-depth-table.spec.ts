@@ -102,7 +102,11 @@ const DEPTHS: Record<string, { raw_states: number; statistics: number }> = {
     [FORECAST_RECORDED_KEY]: { raw_states: 6, statistics: 210 },
 };
 
-async function mountEditor(page: Page, configOverride?: unknown): Promise<void> {
+async function mountEditor(
+    page: Page,
+    configOverride?: unknown,
+    depthsOverride?: Record<string, { raw_states: number; statistics: number }>,
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
@@ -185,7 +189,11 @@ async function mountEditor(page: Page, configOverride?: unknown): Promise<void> 
             };
             document.body.appendChild(element);
         },
-        { config: configOverride ?? CONFIG, depths: DEPTHS, requiredByKey: REQUIRED_BY_KEY },
+        {
+            config: configOverride ?? CONFIG,
+            depths: depthsOverride ?? DEPTHS,
+            requiredByKey: REQUIRED_BY_KEY,
+        },
     );
 
     await expect
@@ -530,4 +538,87 @@ test("an appliance row judges depth against its own lookback", async ({ page }) 
     expect(matchingRows).toHaveLength(2);
     expect(matchingRows.find((row) => row.text.includes("40 days"))?.warning).toBe(true);
     expect(matchingRows.find((row) => !row.text.includes("40 days"))?.warning).toBe(false);
+});
+
+test("an appliance's activity entity is judged against the lookback training reads", async ({
+    page,
+}) => {
+    // Training reads when the appliance ran as well as its meter, so a deep
+    // meter over a shallow switch still yields no estimate. A shared meter is
+    // read over the longest learning sharer's lookback, and a fixed sharer's
+    // activity still divides it; a fixed appliance on its own meter reads nothing.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.controllables = [
+        {
+            id: "dishwasher",
+            name: "Dishwasher",
+            kind: "generic",
+            controls: { switch: { entity_id: "switch.dishwasher" } },
+            consumption: {
+                energy_entity_id: "sensor.dishwasher_energy",
+                projection: { strategy: "history_average", lookback_days: 21 },
+            },
+        },
+        {
+            id: "ac_living",
+            name: "Living AC",
+            kind: "climate",
+            controls: { climate: { entity_id: "climate.living" } },
+            consumption: {
+                energy_entity_id: "sensor.ac_breaker",
+                projection: { strategy: "history_average", lookback_days: 14 },
+            },
+        },
+        {
+            id: "ac_bedroom",
+            name: "Bedroom AC",
+            kind: "climate",
+            controls: { climate: { entity_id: "climate.bedroom" } },
+            consumption: {
+                energy_entity_id: "sensor.ac_breaker",
+                projection: { strategy: "fixed", hourly_energy_kwh: 1 },
+            },
+        },
+        {
+            id: "pool",
+            name: "Pool",
+            kind: "generic",
+            controls: { switch: { entity_id: "switch.pool" } },
+            consumption: {
+                energy_entity_id: "sensor.pool_energy",
+                projection: { strategy: "fixed", hourly_energy_kwh: 1 },
+            },
+        },
+    ];
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "controllables.0.consumption.energy_entity_id": { raw_states: 33, statistics: 33 },
+        "controllables.0.controls.switch.entity_id": { raw_states: 5, statistics: 0 },
+        "controllables.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "controllables.1.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
+        "controllables.2.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
+    });
+
+    const appliancePanel = page.locator("details.section-card", {
+        has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
+    });
+    const rows = appliancePanel.locator(".training-depth-table tbody tr");
+    await expect(rows).toHaveCount(5);
+    await expect
+        .poll(async () =>
+            rows.evaluateAll((trs) =>
+                trs.map((tr) => ({
+                    entity: tr.querySelector(".training-depth-entity-id")?.textContent?.trim(),
+                    warning: tr.classList.contains("training-depth-warn"),
+                })),
+            ),
+        )
+        .toEqual([
+            { entity: "sensor.dishwasher_energy", warning: false },
+            { entity: "switch.dishwasher", warning: true },
+            { entity: "sensor.ac_breaker", warning: false },
+            { entity: "climate.living", warning: false },
+            { entity: "climate.bedroom", warning: true },
+        ]);
+    await expect(rows.nth(4)).toContainText("14 days");
 });
