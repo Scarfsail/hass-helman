@@ -78,6 +78,7 @@ def test_profile_survives_a_round_trip_through_the_store():
             "data": {"schema_version": 1, "history_days": 42},
             "fingerprint": "fp-1",
             "trained_at": "2026-08-01T03:00:00+02:00",
+            "last_attempt_at": "2026-08-01T03:00:00+02:00",
             "last_outcome": "profile_trained",
             "error_reason": None,
         }
@@ -105,6 +106,7 @@ def test_failed_refit_preserves_the_previous_profile():
         await store.async_record_house_consumption_failure(
             last_outcome="training_failed",
             error_reason="recorder exploded",
+            attempted_at="2026-08-02T03:00:00+02:00",
         )
 
         section = store.house_consumption
@@ -144,6 +146,7 @@ def test_first_ever_failure_records_an_outcome_without_data():
         await store.async_record_house_consumption_failure(
             last_outcome="entity_missing",
             error_reason="sensor.gone",
+            attempted_at="2026-08-02T03:00:00+02:00",
         )
 
         section = store.house_consumption
@@ -175,6 +178,7 @@ def test_appliance_energy_round_trips_alongside_house_consumption():
             fingerprint="appliance-fp",
             trained_at="2026-08-01T03:01:00+02:00",
             last_outcome="estimates_trained",
+            failed_appliances={"boiler": "sensor.boiler_energy is gone"},
         )
 
         reloaded = storage_mod.TrainingArtifactsStore(object())
@@ -183,8 +187,10 @@ def test_appliance_energy_round_trips_alongside_house_consumption():
             "data": {"dishwasher": 0.83},
             "fingerprint": "appliance-fp",
             "trained_at": "2026-08-01T03:01:00+02:00",
+            "last_attempt_at": "2026-08-01T03:01:00+02:00",
             "last_outcome": "estimates_trained",
             "error_reason": None,
+            "failed_appliances": {"boiler": "sensor.boiler_energy is gone"},
         }
         assert reloaded.house_consumption["fingerprint"] == "house-fp"
 
@@ -203,11 +209,13 @@ def test_failed_appliance_energy_run_preserves_the_previous_estimates():
             fingerprint="appliance-fp",
             trained_at="2026-08-01T03:01:00+02:00",
             last_outcome="estimates_trained",
+            failed_appliances={"boiler": "recorder is down"},
         )
 
         await store.async_record_appliance_energy_failure(
             last_outcome="training_failed",
             error_reason="recorder exploded",
+            attempted_at="2026-08-02T03:00:00+02:00",
         )
 
         section = store.appliance_energy
@@ -215,6 +223,86 @@ def test_failed_appliance_energy_run_preserves_the_previous_estimates():
         assert section["fingerprint"] == "appliance-fp"
         assert section["last_outcome"] == "training_failed"
         assert section["error_reason"] == "recorder exploded"
+        # A wholesale failure produced no per-appliance results, so the last
+        # partly failed run's list must not survive into it.
+        assert "failed_appliances" not in section
+
+    asyncio.run(_inner())
+
+
+def test_success_records_the_attempt_at_its_trained_at():
+    async def _inner():
+        _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+        await store.async_record_house_consumption(
+            data={"schema_version": 1},
+            fingerprint="fp-1",
+            trained_at="2026-08-01T03:00:00+02:00",
+            last_outcome="profile_trained",
+        )
+
+        section = store.house_consumption
+        assert section["last_attempt_at"] == section["trained_at"]
+
+    asyncio.run(_inner())
+
+
+def test_failure_records_its_own_attempt_and_keeps_what_it_preserves():
+    """A week of failed nights must not read as one success a week ago."""
+
+    async def _inner():
+        _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+        await store.async_record_house_consumption(
+            data={"schema_version": 1},
+            fingerprint="fp-1",
+            trained_at="2026-08-01T03:00:00+02:00",
+            last_outcome="profile_trained",
+        )
+
+        await store.async_record_house_consumption_failure(
+            last_outcome="training_failed",
+            error_reason="recorder exploded",
+            attempted_at="2026-08-02T03:00:00+02:00",
+        )
+
+        section = store.house_consumption
+        assert section["trained_at"] == "2026-08-01T03:00:00+02:00"
+        assert section["data"] == {"schema_version": 1}
+        assert section["fingerprint"] == "fp-1"
+        assert section["last_attempt_at"] == "2026-08-02T03:00:00+02:00"
+
+    asyncio.run(_inner())
+
+
+def test_a_section_written_before_attempts_were_recorded_has_none():
+    """No store version bump: ``None`` means *not recorded*."""
+
+    async def _inner():
+        documents = _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+        documents[storage_mod.TRAINING_ARTIFACTS_STORAGE_KEY] = {
+            "version": storage_mod.TRAINING_ARTIFACTS_STORAGE_VERSION,
+            "house_consumption": {
+                "data": {"schema_version": 1},
+                "fingerprint": "house-fp",
+                "trained_at": "2026-08-01T03:00:00+02:00",
+                "last_outcome": "profile_trained",
+                "error_reason": None,
+            },
+        }
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+
+        assert store.house_consumption.get("last_attempt_at") is None
+        assert store.house_consumption["trained_at"] == "2026-08-01T03:00:00+02:00"
 
     asyncio.run(_inner())
 

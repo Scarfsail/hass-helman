@@ -168,16 +168,26 @@ class TrainingArtifactsStore:
 
         {"version": 1,
          "house_consumption": {"data": {...}, "fingerprint": str,
-                               "trained_at": str, "last_outcome": str,
+                               "trained_at": str, "last_attempt_at": str,
+                               "last_outcome": str,
                                "error_reason": str | None},
          "appliance_energy":  {"data": {appliance_id: kwh_per_hour},
                                "fingerprint": str, "trained_at": str,
-                               "last_outcome": str, "error_reason": str | None}}
+                               "last_attempt_at": str, "last_outcome": str,
+                               "error_reason": str | None,
+                               "failed_appliances": {appliance_id: reason}}}
 
     Every section is the same shape, so they share the read/write helpers below.
     No store version bump for ``appliance_energy``: a document written before it
     existed simply has no such key, and a missing section already means "nothing
     trained yet" to every reader.
+
+    Nor for ``last_attempt_at`` and ``failed_appliances``, on the same argument:
+    a section written before them simply lacks the key. ``trained_at`` is when
+    the served ``data`` was produced; ``last_attempt_at`` is when training last
+    ran at all, and moves on a failure while ``trained_at`` stays pinned.
+    ``failed_appliances`` is written by a successful appliance run only and is
+    dropped by a wholesale failure, which produced no per-appliance results.
 
     Solar bias keeps its own store: the bias service already owns its
     fingerprint, ``trained_at`` and ``last_outcome`` there, and a second copy
@@ -235,10 +245,12 @@ class TrainingArtifactsStore:
         *,
         last_outcome: str,
         error_reason: str | None,
+        attempted_at: str,
     ) -> None:
         """Record a failed refit **without** dropping the previous profile."""
         await self._async_record_failure(
             self.HOUSE_CONSUMPTION,
+            attempted_at=attempted_at,
             last_outcome=last_outcome,
             error_reason=error_reason,
         )
@@ -250,14 +262,20 @@ class TrainingArtifactsStore:
         fingerprint: str,
         trained_at: str,
         last_outcome: str,
+        failed_appliances: dict[str, str],
     ) -> None:
-        """Store freshly resolved per-appliance when-active hourly energy."""
+        """Store freshly resolved per-appliance when-active hourly energy.
+
+        ``failed_appliances`` maps each appliance whose estimate could not be
+        resolved to why; those fall back to their configured hourly energy.
+        """
         await self._async_record(
             self.APPLIANCE_ENERGY,
             data=data,
             fingerprint=fingerprint,
             trained_at=trained_at,
             last_outcome=last_outcome,
+            failed_appliances=failed_appliances,
         )
 
     async def async_record_appliance_energy_failure(
@@ -265,10 +283,12 @@ class TrainingArtifactsStore:
         *,
         last_outcome: str,
         error_reason: str | None,
+        attempted_at: str,
     ) -> None:
         """Record a failed resolve without dropping the previous estimates."""
         await self._async_record_failure(
             self.APPLIANCE_ENERGY,
+            attempted_at=attempted_at,
             last_outcome=last_outcome,
             error_reason=error_reason,
         )
@@ -285,13 +305,16 @@ class TrainingArtifactsStore:
         fingerprint: str,
         trained_at: str,
         last_outcome: str,
+        **extra: Any,
     ) -> None:
         await self._async_write_section(name, {
             "data": data,
             "fingerprint": fingerprint,
             "trained_at": trained_at,
+            "last_attempt_at": trained_at,
             "last_outcome": last_outcome,
             "error_reason": None,
+            **extra,
         })
 
     async def _async_record_failure(
@@ -300,6 +323,7 @@ class TrainingArtifactsStore:
         *,
         last_outcome: str,
         error_reason: str | None,
+        attempted_at: str,
     ) -> None:
         """Record a failure while preserving whatever was last trained.
 
@@ -307,6 +331,9 @@ class TrainingArtifactsStore:
         a fit that could not run does not make the last one wrong. This is what
         makes "older than 48 h, refit fails" keep serving with a banner instead
         of blanking the card.
+
+        The failing run's own time goes into ``last_attempt_at``; ``trained_at``
+        stays with the preserved ``data`` it describes.
         """
         previous = self._read_section(name) or {}
         await self._async_write_section(name, {
@@ -314,6 +341,7 @@ class TrainingArtifactsStore:
                 key: previous.get(key)
                 for key in ("data", "fingerprint", "trained_at")
             },
+            "last_attempt_at": attempted_at,
             "last_outcome": last_outcome,
             "error_reason": error_reason,
         })

@@ -100,6 +100,11 @@ class SolarBiasMetadata:
     invalidated_slot_count: int = 0
     error_reason: str | None = None
     interpolated_slot_count: int = 0
+    #: When training was last attempted, success or failure. ``trained_at``
+    #: stays pinned to the served profile when a failure preserves it; this
+    #: does not. ``None`` on a document written before it existed -- *not
+    #: recorded*, never *never attempted*.
+    last_attempt_at: str | None = None
 
 
 @dataclass

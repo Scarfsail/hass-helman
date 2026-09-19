@@ -14,6 +14,7 @@ from ..solar_bias_correction.service import (
 )
 from .appliance_energy import ApplianceEnergyTrainingJob
 from .house_consumption import HouseConsumptionTrainingJob
+from .schedule import next_scheduled_training_at, parse_training_time
 
 if TYPE_CHECKING:
     from ..solar_bias_correction.service import SolarBiasCorrectionService
@@ -49,11 +50,28 @@ class TrainingBatch:
         self._run_task: asyncio.Task[Any] | None = None
         #: What each sub-job last reported, for the log line and for tests.
         self.last_outcomes: dict[str, str] = {}
+        #: The sub-job running right now. ``None`` between sub-jobs and while a
+        #: run is still starting, so it can be ``None`` while ``is_running``.
+        self.current_job: str | None = None
+        #: The daily time the batch was last scheduled for, ``HH:MM``.
+        self.training_time: str | None = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._run_task is not None and not self._run_task.done()
+
+    @property
+    def next_scheduled_at(self) -> str | None:
+        """When the daily trigger fires next, or ``None`` when unscheduled."""
+        if self._unsub is None or self.training_time is None:
+            return None
+        return next_scheduled_training_at(self.training_time)
 
     def schedule(self, training_time: str) -> None:
         """(Re)register the daily trigger. Raises ValueError on a bad time."""
         self.cancel()
-        hour, minute = self._parse_training_time(training_time)
+        hour, minute = parse_training_time(training_time)
+        self.training_time = training_time
 
         def _run_batch(*_args) -> None:
             self._create_task(self.async_run(reason="scheduled"))
@@ -96,6 +114,10 @@ class TrainingBatch:
         """
         await self._async_single_flight(reason, self._async_run_appliance_energy)
 
+    async def async_run_solar_bias(self, *, reason: str) -> None:
+        """Run only the solar bias fit, under the batch's single flight."""
+        await self._async_single_flight(reason, self._async_run_solar_bias)
+
     async def _async_single_flight(
         self,
         reason: str,
@@ -131,6 +153,10 @@ class TrainingBatch:
         )
         _LOGGER.info("Training batch finished (%s): %s", reason, self.last_outcomes)
 
+    async def _async_run_solar_bias(self, reason: str) -> None:
+        _LOGGER.debug("Solar bias training starting (%s)", reason)
+        await self._run_subjob("solar_bias", self._async_train_solar_bias())
+
     async def _async_run_house_consumption(self, reason: str) -> None:
         _LOGGER.debug("House consumption training starting (%s)", reason)
         await self._run_subjob(
@@ -151,15 +177,18 @@ class TrainingBatch:
         rather than at the end, so a crash midway cannot lose a section that
         already succeeded.
         """
+        self.current_job = name
         try:
             self.last_outcomes[name] = await coro
         except Exception:
             _LOGGER.exception("Training sub-job %s failed", name)
             self.last_outcomes[name] = "training_failed"
+        finally:
+            self.current_job = None
 
     async def _async_train_solar_bias(self) -> str:
         try:
-            await self._solar_bias_service.async_train()
+            payload = await self._solar_bias_service.async_train()
         except BiasNotConfiguredError:
             return "skipped_disabled"
         except TrainingInProgressError:
@@ -167,13 +196,7 @@ class TrainingBatch:
             # manual train can be under way. That is a skip, not a failure.
             _LOGGER.debug("Solar bias training already in progress; skipping")
             return "skipped_in_progress"
-        return "profile_trained"
-
-    @staticmethod
-    def _parse_training_time(training_time: str) -> tuple[int, int]:
-        hour_text, minute_text = training_time.split(":", maxsplit=1)
-        hour = int(hour_text)
-        minute = int(minute_text)
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            raise ValueError(f"Invalid training time: {training_time}")
-        return hour, minute
+        # The service catches an ordinary training failure itself and reports
+        # it in the payload rather than raising, so the outcome is read from
+        # there -- never assumed.
+        return payload["lastOutcome"]

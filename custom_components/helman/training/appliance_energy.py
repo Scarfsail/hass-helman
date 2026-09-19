@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -142,28 +143,32 @@ class ApplianceEnergyTrainingJob:
 
     async def async_train(self) -> str:
         """Resolve and store every estimate. Returns the ``last_outcome``."""
-        request = self._read_request()
-        if not request.appliances:
-            # Recorded rather than skipped silently: the stored fingerprint is
-            # what tells startup that "no appliances" is the current answer and
-            # not a resolve that never ran.
-            outcome = "not_configured"
-            await self._store.async_record_appliance_energy(
-                data={},
-                fingerprint=request.fingerprint,
-                trained_at=dt_util.now().isoformat(),
-                last_outcome=outcome,
-            )
-        else:
-            try:
-                outcome = await self._async_resolve_and_store(request)
-            except Exception as err:  # noqa: BLE001 - recorded, not propagated
-                _LOGGER.exception("Appliance energy estimate training failed")
-                outcome = "training_failed"
-                await self._store.async_record_appliance_energy_failure(
+        # Inside the guard: building the request reads live config and can
+        # raise, and a failure there is as much a failed run as a failed read.
+        try:
+            request = self._read_request()
+            if not request.appliances:
+                # Recorded rather than skipped silently: the stored fingerprint
+                # is what tells startup that "no appliances" is the current
+                # answer and not a resolve that never ran.
+                outcome = "not_configured"
+                await self._store.async_record_appliance_energy(
+                    data={},
+                    fingerprint=request.fingerprint,
+                    trained_at=dt_util.now().isoformat(),
                     last_outcome=outcome,
-                    error_reason=str(err) or err.__class__.__name__,
+                    failed_appliances={},
                 )
+            else:
+                outcome = await self._async_resolve_and_store(request)
+        except Exception as err:  # noqa: BLE001 - recorded, not propagated
+            _LOGGER.exception("Appliance energy estimate training failed")
+            outcome = "training_failed"
+            await self._store.async_record_appliance_energy_failure(
+                last_outcome=outcome,
+                error_reason=str(err) or err.__class__.__name__,
+                attempted_at=dt_util.now().isoformat(),
+            )
 
         if self._on_trained is not None:
             await self._on_trained()
@@ -175,7 +180,8 @@ class ApplianceEnergyTrainingJob:
     ) -> str:
         reference_time = dt_util.now()
         estimates: dict[str, float] = {}
-        failed_appliance_ids: list[str] = []
+        #: Appliance id -> why its estimate could not be resolved.
+        failed_appliances: dict[str, str] = {}
 
         shared_appliances: dict[str, list[HistoryAverageAppliance]] = {}
         for appliance in request.appliances:
@@ -189,7 +195,7 @@ class ApplianceEnergyTrainingJob:
                     appliance=appliance,
                     reference_time=reference_time,
                 )
-            except Exception:
+            except Exception as err:
                 # One appliance's bad entity must not cost every other appliance
                 # its estimate, so this is swallowed per appliance rather than
                 # failing the run. The id is dropped from the stored map, which
@@ -199,7 +205,7 @@ class ApplianceEnergyTrainingJob:
                     appliance.kind,
                     appliance.id,
                 )
-                failed_appliance_ids.append(appliance.id)
+                failed_appliances[appliance.id] = _failure_reason(err)
                 continue
 
             # ``None`` and non-positive both mean "the history did not answer"
@@ -208,6 +214,8 @@ class ApplianceEnergyTrainingJob:
             # reader use the appliance's configured hourly energy instead.
             if estimate is not None and estimate > 0:
                 estimates[appliance.id] = estimate
+            else:
+                failed_appliances[appliance.id] = _unusable_estimate_reason(estimate)
 
         for energy_entity_id, appliances in shared_appliances.items():
             try:
@@ -217,14 +225,17 @@ class ApplianceEnergyTrainingJob:
                     appliances=appliances,
                     reference_time=reference_time,
                 )
-            except Exception:
+            except Exception as err:
                 # One read serves the whole meter, so its failure is every
                 # learning member's failure — but still only this meter's.
                 _LOGGER.exception(
                     "Error estimating when-active energy for shared meter %r",
                     energy_entity_id,
                 )
-                failed_appliance_ids.extend(appliance.id for appliance in appliances)
+                reason = _failure_reason(err)
+                failed_appliances.update(
+                    (appliance.id, reason) for appliance in appliances
+                )
                 continue
 
             # Only the members that learn are stored; a ``fixed`` sharer was in
@@ -233,12 +244,16 @@ class ApplianceEnergyTrainingJob:
                 estimate = shared_estimates.get(appliance.id)
                 if estimate is not None and estimate > 0:
                     estimates[appliance.id] = estimate
+                else:
+                    failed_appliances[appliance.id] = _unusable_estimate_reason(
+                        estimate
+                    )
 
-        if failed_appliance_ids:
+        if failed_appliances:
             _LOGGER.warning(
                 "Appliance energy estimates unresolved for %s; they fall back to "
                 "their configured hourly energy",
-                ", ".join(sorted(failed_appliance_ids)),
+                ", ".join(sorted(failed_appliances)),
             )
 
         outcome = "estimates_trained" if estimates else "no_history"
@@ -247,6 +262,7 @@ class ApplianceEnergyTrainingJob:
             fingerprint=request.fingerprint,
             trained_at=dt_util.now().isoformat(),
             last_outcome=outcome,
+            failed_appliances=failed_appliances,
         )
         return outcome
 
@@ -303,6 +319,34 @@ class ApplianceEnergyTrainingJob:
                 appliance.history_lookback_days for appliance in appliances
             ),
         )
+
+
+def _failure_reason(err: Exception) -> str:
+    return str(err) or err.__class__.__name__
+
+
+def _unusable_estimate_reason(estimate: float | None) -> str:
+    """Explain why history did not produce a usable positive estimate."""
+    if estimate is None:
+        return "no usable history"
+    return f"non-positive estimate: {estimate}"
+
+
+def health_for(section: Mapping[str, Any] | None) -> str:
+    """This job's stored outcome as ``ok | degraded | failed | idle``.
+
+    ``not_configured`` is ``idle``: it is a freshly written, valid empty
+    result, not a failure. A run that resolved some appliances but not others
+    is ``degraded`` -- those appliances are on their fixed fallback.
+    """
+    outcome = section.get("last_outcome") if section is not None else None
+    if outcome == "estimates_trained":
+        return "degraded" if section.get("failed_appliances") else "ok"
+    if outcome == "no_history":
+        return "degraded"
+    if outcome == "training_failed":
+        return "failed"
+    return "idle"
 
 
 def _resolve_activity_entity_id(appliance: HistoryAverageAppliance) -> str | None:
