@@ -112,7 +112,6 @@ const POWER_DEVICE_ENTITY_PATHS = [
     ...DAILY_ENERGY_ENTITIES.map(
         (_value, index) => `power_devices.solar.forecast.daily_energy_entity_ids.${index}`,
     ),
-    "power_devices.solar.forecast.bias_correction.total_energy_entity_id",
     "power_devices.battery.entities.power",
     "power_devices.battery.entities.remaining_energy",
     "power_devices.battery.entities.capacity",
@@ -401,13 +400,35 @@ test.describe("entities-only toggle", () => {
                             ?.textContent?.trim() ?? "",
                 );
         });
-        // Slot invalidation configures six thresholds and no entity at all.
-        expect(sections).not.toContain("Invalidate training slot data");
-        // The sections that do hold one are still there, including the two
-        // that only hold one further down: `:has()` has to look all the way
+        // The sections that do hold one are still there, including the one
+        // that only holds one further down: `:has()` has to look all the way
         // through the nesting, not one level.
         expect(sections).toEqual(
-            expect.arrayContaining(["House", "Solar", "Forecast", "Configuration", "Battery", "Grid"]),
+            expect.arrayContaining(["House", "Solar", "Forecast", "Battery", "Grid"]),
+        );
+
+        // Slot invalidation configures six thresholds and no entity at all. It
+        // sits on the Training tab since #306, beside the bias meter it shares
+        // a parent with -- so the same rule has to drop the one and keep the
+        // section that holds the other, two levels down. The Solar bias panel
+        // beside them holds no picker of its own, so it goes too.
+        await openTab(page, "Training");
+        const trainingSections = await page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            return (window as any)
+                .deepQuery(root, "details.section-card")
+                .filter((section: Element) => (window as any).isShown(section))
+                .map(
+                    (section: Element) =>
+                        section
+                            .querySelector(".section-summary-label")
+                            ?.textContent?.trim() ?? "",
+                );
+        });
+        expect(trainingSections).not.toContain("Invalidate training slot data");
+        expect(trainingSections).not.toContain("Solar forecast correction");
+        expect(trainingSections).toEqual(
+            expect.arrayContaining(["Bias Correction", "Configuration"]),
         );
     });
 
