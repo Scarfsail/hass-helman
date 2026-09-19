@@ -617,6 +617,7 @@
     "disabled": "Disabled",
     "badge_failed": "Failed training jobs: {count}",
     "completed": "Training finished.",
+    "outcome_failed": "{job} failed: {reason}.",
     "did_not_run": "{job} did not run: {reason}.",
     "request_failed": "Training could not be run: {error}",
     "all_jobs": "Training",

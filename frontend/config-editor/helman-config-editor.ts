@@ -270,6 +270,8 @@ interface TrainingDepthRow {
   roleKey: string;
   /** Substituted into the role text, e.g. an appliance's own lookback. */
   roleParams?: Record<string, string | number>;
+  /** Override shared inspection severity with this consumer's own minimum. */
+  requiredDays?: number;
   /**
    * True for an entity Helman publishes rather than one the config points at.
    *
@@ -2262,6 +2264,7 @@ export class HelmanConfigEditorPanel
           <helman-training-status
             .hass=${this.hass}
             .status=${this._trainingStatus}
+            .disabled=${this._dirty}
             @helman-training-status-changed=${this._handleTrainingStatusChanged}
           ></helman-training-status>
           <div class="field-grid">
@@ -2357,6 +2360,7 @@ export class HelmanConfigEditorPanel
         .hass=${this.hass}
         .job=${this._trainingJob(id)}
         .running=${this._trainingStatus?.isRunning === true}
+        .disabled=${this._dirty}
         @helman-training-status-changed=${this._handleTrainingStatusChanged}
       ></helman-training-job-status>
     `;
@@ -2505,6 +2509,7 @@ export class HelmanConfigEditorPanel
           roleParams: {
             days: typeof lookback === "number" ? lookback : 30,
           },
+          requiredDays: typeof lookback === "number" ? lookback : 30,
         },
       ];
     });
@@ -2534,11 +2539,9 @@ export class HelmanConfigEditorPanel
    * Deliberately *not* here: the configured window and minimum. Both are the
    * same for every row -- they are this section's own settings, edited in the
    * fields directly above -- so a column of them repeated down the table said
-   * nothing a reader could not already see. Nor is a controllable's own
-   * `consumption.projection.lookback_days`: that is a different trainer's
-   * setting, configured per appliance and not on this page, and putting it
-   * here invited the reading that the house window and the appliance lookback
-   * are alternatives rather than two unrelated reads of one sensor.
+   * nothing a reader could not already see. The appliance-energy table is the
+   * exception: each row names its own lookback in the role text because that
+   * per-appliance value is also the requirement used to highlight that row.
    *
    * What is left is what a reader cannot get anywhere else: which entities
    * this trainer reads, what it takes from each, and how deep the recorder
@@ -2590,7 +2593,16 @@ export class HelmanConfigEditorPanel
     // Severity is a property of the pair now that `available` is the spliced
     // effective depth (issue #186) -- the raw-states cell alone no longer
     // says whether the row is short, so the highlight moves to the row.
-    const rowClass = historyFact?.severity === "warn" ? "training-depth-warn" : "";
+    const available = historyFact?.params?.["available"];
+    const warnsForOwnRequirement =
+      row.requiredDays !== undefined &&
+      typeof available === "number" &&
+      available < row.requiredDays;
+    const rowClass =
+      warnsForOwnRequirement ||
+      (row.requiredDays === undefined && historyFact?.severity === "warn")
+        ? "training-depth-warn"
+        : "";
     return html`
       <tr class=${rowClass}>
         <td>

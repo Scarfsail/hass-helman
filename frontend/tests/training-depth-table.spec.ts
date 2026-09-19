@@ -510,3 +510,24 @@ test("shallow raw states behind deep statistics no longer marks the row", async 
     });
     expect(warnRowTexts.some((text) => text.includes("sensor.solar_bias_meter"))).toBe(false);
 });
+
+test("an appliance row judges depth against its own lookback", async ({ page }) => {
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.controllables[0].consumption.projection.lookback_days = 40;
+    await mountEditor(page, config);
+    await waitForRows(page, 8);
+
+    const matchingRows = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll(".training-depth-table tbody tr") ?? [])
+            .filter((row) => row.textContent?.includes("Dishwasher"))
+            .map((row) => ({
+                text: row.textContent ?? "",
+                warning: row.classList.contains("training-depth-warn"),
+            }));
+    });
+
+    expect(matchingRows).toHaveLength(2);
+    expect(matchingRows.find((row) => row.text.includes("40 days"))?.warning).toBe(true);
+    expect(matchingRows.find((row) => !row.text.includes("40 days"))?.warning).toBe(false);
+});

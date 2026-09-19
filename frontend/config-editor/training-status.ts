@@ -224,6 +224,8 @@ type MessageKind = "success" | "warning" | "error";
 /** What the overview and the job panels share: localizing, dates, Train now. */
 class TrainingStatusBase extends LitElement {
   @property({ attribute: false }) hass: any;
+  /** The editor has a draft the backend training command cannot see. */
+  @property({ type: Boolean }) disabled = false;
 
   @state() protected _requesting = false;
   @state() protected _message = "";
@@ -239,7 +241,7 @@ class TrainingStatusBase extends LitElement {
    * "did not run", never success.
    */
   protected async _trainNow(job?: string): Promise<void> {
-    if (this._requesting || !this.hass) return;
+    if (this.disabled || this._requesting || !this.hass) return;
     this._requesting = true;
     this._message = "";
     let status: TrainingStatus | null = null;
@@ -249,10 +251,32 @@ class TrainingStatusBase extends LitElement {
         ...(job ? { job } : {}),
       });
       status = asTrainingStatus(result?.status);
-      const skipped = Object.entries(result?.outcomes ?? {}).filter(
+      const outcomes = Object.entries(result?.outcomes ?? {});
+      const failed = outcomes.filter(
+        ([failedJob, outcome]) =>
+          outcome === "training_failed" ||
+          outcome === "entity_missing" ||
+          status?.jobs.find((candidate) => candidate.id === failedJob)?.health === "failed",
+      );
+      const skipped = outcomes.filter(
         ([, outcome]) => typeof outcome === "string" && outcome.startsWith("skipped_"),
       );
-      if (skipped.length > 0) {
+      if (failed.length > 0) {
+        this._setMessage(
+          "error",
+          failed
+            .map(([failedJob, outcome]) =>
+              this._tFormat("training.outcome_failed", {
+                job: this._jobLabel(failedJob),
+                reason: this._tValue(
+                  `training.outcomes.${failedJob}.${String(outcome)}`,
+                  String(outcome),
+                ),
+              }),
+            )
+            .join(" "),
+        );
+      } else if (skipped.length > 0) {
         this._setMessage(
           "warning",
           skipped
@@ -394,7 +418,7 @@ export class HelmanTrainingStatus extends TrainingStatusBase {
           <button
             type="button"
             class="train-all"
-            ?disabled=${status.isRunning || this._requesting}
+            ?disabled=${this.disabled || status.isRunning || this._requesting}
             @click=${() => this._trainNow()}
           >
             ${this._requesting ? this._t("training.training") : this._t("training.train_all_now")}
@@ -483,7 +507,7 @@ export class HelmanTrainingJobStatus extends TrainingStatusBase {
           <button
             type="button"
             class="train-job"
-            ?disabled=${this.running || this._requesting}
+            ?disabled=${this.disabled || this.running || this._requesting}
             @click=${() => this._trainNow(job.id)}
           >
             ${this._requesting ? this._t("training.training") : this._t("training.train_now")}

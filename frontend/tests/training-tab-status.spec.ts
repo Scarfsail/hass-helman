@@ -322,6 +322,21 @@ test("Train all now sends no job, a panel button sends its own", async ({ page }
     expect(requests[1]).toEqual({ type: "helman/training/train_now", job: "house_consumption" });
 });
 
+test("unsaved changes disable every training command", async ({ page }) => {
+    await mountEditor(page, status());
+    await openTrainingTab(page);
+
+    await page.locator("helman-config-editor-panel").evaluate((element: any) => {
+        element._dirty = true;
+    });
+
+    await expect(page.locator("helman-training-status button.train-all")).toBeDisabled();
+    const jobButtons = page.locator("helman-training-job-status button.train-job");
+    await expect(jobButtons).toHaveCount(3);
+    for (const button of await jobButtons.all()) await expect(button).toBeDisabled();
+    await expect.poll(() => page.evaluate(() => (window as any).__trainRequests.length)).toBe(0);
+});
+
 test("the status train_now returns replaces the displayed one", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);
@@ -402,6 +417,27 @@ test("a skipped_in_progress outcome is shown as did not run, not success", async
     const message = solar.locator(".message");
     await expect(message).toContainText("Solar bias did not run");
     await expect(message).not.toHaveClass(/success/);
+    await expect(message).not.toContainText("Training finished");
+});
+
+test("a resolved request with a failed outcome is shown as an error", async ({ page }) => {
+    await mountEditor(page, status());
+    await openTrainingTab(page);
+
+    await page.evaluate((next) => {
+        (window as any).__trainNow = {
+            result: {
+                outcomes: { house_consumption: "entity_missing" },
+                status: next,
+            },
+        };
+    }, status({ house_consumption: { health: "failed", lastOutcome: "entity_missing" } }));
+    const house = page.locator('helman-training-job-status[data-job="house_consumption"]');
+    await house.locator("button.train-job").click();
+
+    const message = house.locator(".message");
+    await expect(message).toHaveClass(/error/);
+    await expect(message).toContainText("House consumption failed: Meter missing");
     await expect(message).not.toContainText("Training finished");
 });
 

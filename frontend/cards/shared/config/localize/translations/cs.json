@@ -618,6 +618,7 @@
     "disabled": "Vypnuto",
     "badge_failed": "Neúspěšné trénovací úlohy: {count}",
     "completed": "Trénování dokončeno.",
+    "outcome_failed": "{job} selhalo: {reason}.",
     "did_not_run": "{job}: neproběhlo, protože {reason}.",
     "request_failed": "Trénování nešlo spustit: {error}",
     "all_jobs": "Trénování",
