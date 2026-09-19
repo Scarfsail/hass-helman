@@ -89,7 +89,7 @@ keys used to sit at the top level, and a stored config is migrated on load.
   "Energy Consumers", "Group by".
 - `history_buckets`: number — Number of history samples to keep/render. Default: 60.
 - `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
-  interval). Default: 1.
+  interval). Default: 5.
 - `power_sensor_name_cleaner_regex`: string — JavaScript regex (no slashes, global flag applied) used
   to clean device names derived from sensors, e.g. `" - [Pp]ower$"`.
 - `device_label_text`: object — Mapping to enable label grouping and per-device badges. See

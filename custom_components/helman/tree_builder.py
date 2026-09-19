@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .visualization import read_visualization
 from .controllables.config import read_deferrable_consumers
 from .power_polarity import consumer_value_type, source_value_type
 
@@ -83,15 +84,13 @@ class HelmanTreeBuilder:
         self._config = config
 
     def _visualization(self) -> dict:
-        """The card-facing settings, under ``visualization`` since config v18."""
-        visualization = self._config.get("visualization")
-        return visualization if isinstance(visualization, dict) else {}
+        return read_visualization(self._config)
 
     async def build(self) -> dict:
         """Build and return the full device tree as a serializable dict."""
         power_devices = self._config.get("power_devices", {})
         visualization = self._visualization()
-        device_label_text = visualization.get("device_label_text", {})
+        device_label_text = visualization["device_label_text"]
 
         solar_config = power_devices.get("solar")
         battery_config = power_devices.get("battery")
@@ -192,19 +191,15 @@ class HelmanTreeBuilder:
             "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
             "productionTotalSensorId": PRODUCTION_TOTAL_ENTITY_ID,
             "uiConfig": {
-                "sources_title": visualization.get("sources_title", "Energy Sources"),
-                "consumers_title": visualization.get(
-                    "consumers_title", "Energy Consumers"
-                ),
-                "groups_title": visualization.get("groups_title", "Group by:"),
-                "others_group_label": visualization.get("others_group_label", "Others"),
-                "show_empty_groups": visualization.get("show_empty_groups", False),
-                "show_others_group": visualization.get("show_others_group", True),
+                "sources_title": visualization["sources_title"],
+                "consumers_title": visualization["consumers_title"],
+                "groups_title": visualization["groups_title"],
+                "others_group_label": visualization["others_group_label"],
+                "show_empty_groups": visualization["show_empty_groups"],
+                "show_others_group": visualization["show_others_group"],
                 "device_label_text": device_label_text,
-                "history_buckets": visualization.get("history_buckets", 60),
-                "history_bucket_duration": visualization.get(
-                    "history_bucket_duration", 1
-                ),
+                "history_buckets": visualization["history_buckets"],
+                "history_bucket_duration": visualization["history_bucket_duration"],
             },
         }
 
