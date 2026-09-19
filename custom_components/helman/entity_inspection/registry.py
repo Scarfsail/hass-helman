@@ -130,7 +130,7 @@ EVALUATORS: dict[str, Evaluator] = {
         evaluate_entity_value
     ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
-    "power_devices.solar.forecast.bias_correction.total_energy_entity_id": (
+    "training.solar_bias.total_energy_entity_id": (
         history_evaluator(
             ("training", "solar_bias", "min_history_days"),
             SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,

@@ -1045,6 +1045,38 @@ def _migrate_v17_to_v18(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v18_to_v19(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``power_devices.solar.forecast.bias_correction`` flattens into ``training.solar_bias``.
+
+    Solar bias config had two owners: the training-window settings moved to
+    ``training.solar_bias`` in v14, the correction settings stayed under the
+    solar forecast. Every key of the block now sits directly beside the
+    day-count settings -- no nested ``correction`` key, since none collide.
+    An existing ``training.solar_bias`` value wins over a moved one, as in
+    :func:`_migrate_v13_to_v14`. The ``bias_correction`` key is removed from
+    ``forecast``; a document without the block is unchanged. A non-mapping
+    value (e.g. ``null``) holds no settings and is dropped.
+    """
+    bias = _bias_correction_block(document)
+    if bias is None:
+        forecast: Any = document
+        for key in ("power_devices", "solar", "forecast"):
+            forecast = forecast.get(key) if isinstance(forecast, dict) else None
+        if isinstance(forecast, dict):
+            forecast.pop("bias_correction", None)
+        return (document, [])
+    forecast = document["power_devices"]["solar"]["forecast"]
+    del forecast["bias_correction"]
+
+    training = document.get("training")
+    training = dict(training) if isinstance(training, Mapping) else {}
+    existing = training.get("solar_bias")
+    existing = dict(existing) if isinstance(existing, Mapping) else {}
+    training["solar_bias"] = {**bias, **existing}
+    document["training"] = training
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1063,6 +1095,7 @@ _MIGRATIONS = {
     15: _migrate_v15_to_v16,
     16: _migrate_v16_to_v17,
     17: _migrate_v17_to_v18,
+    18: _migrate_v18_to_v19,
 }
 
 

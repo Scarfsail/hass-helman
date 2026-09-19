@@ -19,7 +19,7 @@ const BUNDLE = resolve(
 );
 
 const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_id"];
-const BIAS_PATH = ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"];
+const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
 const GRID_PATH = ["power_devices", "grid", "entities", "power"];
 const BATTERY_PATH = ["power_devices", "battery", "entities", "capacity"];
 const CONTROLLABLE_PATH = ["controllables", 0, "consumption", "energy_entity_id"];
@@ -59,7 +59,6 @@ const CONFIG = {
         solar: {
             forecast: {
                 daily_energy_entity_ids: ["sensor.solcast_today"],
-                bias_correction: { total_energy_entity_id: "sensor.solar_bias_meter" },
             },
         },
         grid: { entities: { power: "sensor.grid_power" } },
@@ -77,7 +76,11 @@ const CONFIG = {
     ],
     training: {
         house_consumption: { min_history_days: 14, training_window_days: 56 },
-        solar_bias: { min_history_days: 10, max_training_window_days: 90 },
+        solar_bias: {
+            min_history_days: 10,
+            max_training_window_days: 90,
+            total_energy_entity_id: "sensor.solar_bias_meter",
+        },
     },
 };
 
