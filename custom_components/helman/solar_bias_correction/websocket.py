@@ -216,7 +216,7 @@ def _is_dashed_date(raw_value) -> bool:
     return True
 
 
-def _get_solar_bias_service(
+def _get_coordinator(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
@@ -224,6 +224,16 @@ def _get_solar_bias_service(
     coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if coordinator is None:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    return coordinator
+
+
+def _get_solar_bias_service(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+):
+    coordinator = _get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return None
 
     service = getattr(coordinator, "_solar_bias_service", None)

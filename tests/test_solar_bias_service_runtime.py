@@ -551,8 +551,118 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
         assert payload["trainedAt"] == "2026-04-20T03:00:00+02:00"
         assert service.get_profile_payload()["trainedAt"] == "2026-04-20T03:00:00+02:00"
         assert store.saved_payloads[-1]["metadata"]["trained_at"] == "2026-04-20T03:00:00+02:00"
+        # The attempt is recorded on its own: keeping the profile's trained_at
+        # must not make a failing night look like no attempt at all.
+        assert payload["lastAttemptAt"] == "2026-04-25T03:00:00+02:00"
+        assert (
+            store.saved_payloads[-1]["metadata"]["last_attempt_at"]
+            == "2026-04-25T03:00:00+02:00"
+        )
+        reloaded = service_mod.SolarBiasCorrectionService(
+            _make_hass(), store, _make_cfg()
+        )
+        await reloaded.async_setup()
+        reloaded_status = _status_payload(reloaded)
+        assert reloaded_status["lastAttemptAt"] == "2026-04-25T03:00:00+02:00"
+        assert reloaded_status["trainedAt"] == "2026-04-20T03:00:00+02:00"
 
     asyncio.run(_inner())
+
+
+def _status_payload(service):
+    """The status payload under a real clock; the stubbed one returns None."""
+    from datetime import datetime
+
+    old_now = service_mod.dt_util.now
+    service_mod.dt_util.now = lambda: datetime.fromisoformat(
+        "2026-04-25T12:00:00+02:00"
+    )
+    try:
+        return service.get_status_payload()
+    finally:
+        service_mod.dt_util.now = old_now
+
+
+def test_a_legacy_metadata_document_loads_without_an_attempt_time():
+    async def _inner():
+        store = _DummyStore()
+        store.profile = {
+            "version": 2,
+            "profile": {"factors": {"12:00": 1.1}, "omitted_slots": []},
+            "metadata": {
+                "trained_at": "2026-04-20T03:00:00+02:00",
+                "training_config_fingerprint": service_mod.compute_fingerprint(
+                    _make_cfg()
+                ),
+                "usable_days": 12,
+                "dropped_days": [],
+                "omitted_slot_count": 0,
+                "last_outcome": "profile_trained",
+            },
+        }
+        service = service_mod.SolarBiasCorrectionService(
+            _make_hass(), store, _make_cfg()
+        )
+        await service.async_setup()
+
+        status = _status_payload(service)
+        assert status["lastAttemptAt"] is None
+        assert status["trainedAt"] == "2026-04-20T03:00:00+02:00"
+
+    asyncio.run(_inner())
+
+
+def _cfg_with_inputs(*, total="sensor.pv_total", daily=("sensor.pv_today", "sensor.pv_tomorrow")):
+    cfg = _make_cfg()
+    cfg.total_energy_entity_id = total
+    cfg.daily_energy_entity_ids = list(daily)
+    return cfg
+
+
+def test_the_fingerprint_covers_the_input_entities_in_configured_order():
+    base = service_mod.compute_fingerprint(_cfg_with_inputs())
+    changes = {
+        "total": _cfg_with_inputs(total="sensor.pv_other"),
+        "daily entry": _cfg_with_inputs(daily=("sensor.pv_today", "sensor.pv_d2")),
+        # Position is the forecast horizon: swapping two sources changes which
+        # one feeds which day, so it must never be sorted away.
+        "swap": _cfg_with_inputs(daily=("sensor.pv_tomorrow", "sensor.pv_today")),
+    }
+    for label, cfg in changes.items():
+        assert service_mod.compute_fingerprint(cfg) != base, label
+
+
+def test_changing_an_input_entity_makes_the_profile_stale():
+    for changed in (
+        _cfg_with_inputs(total="sensor.pv_other"),
+        _cfg_with_inputs(daily=("sensor.pv_today", "sensor.pv_d2")),
+        _cfg_with_inputs(daily=("sensor.pv_tomorrow", "sensor.pv_today")),
+    ):
+        service = service_mod.SolarBiasCorrectionService(
+            _make_hass(), _DummyStore(), _cfg_with_inputs()
+        )
+        service._profile = models.SolarBiasProfile(
+            factors={"12:00": 1.1}, omitted_slots=[]
+        )
+        service._metadata = models.SolarBiasMetadata(
+            trained_at="2026-04-20T03:00:00+02:00",
+            training_config_fingerprint=service_mod.compute_fingerprint(
+                _cfg_with_inputs()
+            ),
+            usable_days=12,
+            dropped_days=[],
+            factor_min=1.1,
+            factor_max=1.1,
+            factor_median=1.1,
+            omitted_slot_count=0,
+            last_outcome="profile_trained",
+        )
+        service.update_config(_cfg_with_inputs())
+        assert _status_payload(service)["isStale"] is False
+
+        service.update_config(changed)
+
+        assert _status_payload(service)["isStale"] is True
 
 
 def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():

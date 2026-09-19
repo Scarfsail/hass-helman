@@ -26,6 +26,7 @@ from .solar_bias_correction.websocket import (
     ws_train_solar_bias_now,
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
+from .training.websocket import ws_get_training_status, ws_train_now
 from .storage import HelmanStorage
 
 if TYPE_CHECKING:
@@ -131,6 +132,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_solar_bias_profile)
     async_register_command(hass, ws_get_solar_bias_inspector)
     async_register_command(hass, ws_get_solar_bias_day_aggregates)
+    async_register_command(hass, ws_get_training_status)
+    async_register_command(hass, ws_train_now)
     async_register_command(hass, ws_get_history)
     async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_schedule_explanation)

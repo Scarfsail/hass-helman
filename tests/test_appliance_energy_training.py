@@ -86,7 +86,7 @@ class _FakeStore:
         return self.section
 
     async def async_record_appliance_energy(
-        self, *, data, fingerprint, trained_at, last_outcome
+        self, *, data, fingerprint, trained_at, last_outcome, failed_appliances
     ) -> None:
         self.section = {
             "data": data,
@@ -94,11 +94,12 @@ class _FakeStore:
             "trained_at": trained_at,
             "last_outcome": last_outcome,
             "error_reason": None,
+            "failed_appliances": failed_appliances,
         }
         self.writes.append(last_outcome)
 
     async def async_record_appliance_energy_failure(
-        self, *, last_outcome, error_reason
+        self, *, last_outcome, error_reason, attempted_at
     ) -> None:
         previous = self.section or {}
         self.section = {
@@ -337,6 +338,10 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome, "estimates_trained")
         self.assertEqual(store.section["data"], {"dishwasher": 0.8})
         self.assertTrue(any("ac-a, ac-b" in line for line in logs.output))
+        self.assertEqual(
+            store.section["failed_appliances"],
+            {"ac-a": "recorder is down", "ac-b": "recorder is down"},
+        )
 
     async def test_resolves_and_stores_one_estimate_per_appliance(self) -> None:
         store = _FakeStore()
@@ -409,6 +414,57 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(outcome, "estimates_trained")
         self.assertEqual(store.section["data"], {"living-room-hvac": 1.1})
+        # Persisted, not only logged: the status read lists it as an issue.
+        self.assertEqual(
+            store.section["failed_appliances"], {"dishwasher": "recorder is down"}
+        )
+        self.assertEqual(appliance_energy_module.health_for(store.section), "degraded")
+
+    async def test_a_clean_run_records_no_failed_appliances(self) -> None:
+        store = _FakeStore()
+        self._install(_RecordingEstimator({"dishwasher": 0.8}))
+        job = self._make_job(store, [_make_generic()])
+
+        await job.async_train()
+
+        self.assertEqual(store.section["failed_appliances"], {})
+        self.assertEqual(appliance_energy_module.health_for(store.section), "ok")
+
+    async def test_a_request_that_cannot_be_built_is_recorded_as_a_failure(
+        self,
+    ) -> None:
+        """Building the request reads live config; its failure is a failed run,
+        persisted like any other rather than escaping to the batch."""
+        store = _FakeStore()
+        store.section = {
+            "data": {"dishwasher": 0.8},
+            "fingerprint": "old",
+            "trained_at": "2026-08-01T03:00:00+02:00",
+            "last_outcome": "estimates_trained",
+            "error_reason": None,
+            "failed_appliances": {"boiler": "gone"},
+        }
+
+        def _raise():
+            raise RuntimeError("registry is broken")
+
+        calls: list[int] = []
+
+        async def _on_trained() -> None:
+            calls.append(1)
+
+        job = ApplianceEnergyTrainingJob(
+            SimpleNamespace(), store, read_request=_raise, on_trained=_on_trained
+        )
+
+        with self.assertLogs(appliance_energy_module._LOGGER, level="ERROR"):
+            outcome = await job.async_train()
+
+        self.assertEqual(outcome, "training_failed")
+        self.assertEqual(store.writes, ["training_failed"])
+        self.assertEqual(store.section["error_reason"], "registry is broken")
+        self.assertEqual(store.section["data"], {"dishwasher": 0.8})
+        self.assertEqual(len(calls), 1)
 
     async def test_store_failure_preserves_the_previous_estimates(self) -> None:
         store = _FakeStore()

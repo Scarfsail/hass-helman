@@ -38,6 +38,12 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
 
     Includes the algorithm version so training changes force a re-train. training_time
     and enabled must NOT affect the fingerprint.
+
+    Covers both input entities as well: the measured actuals the profile is
+    fitted against, and the forecast sources it corrects. The sources go in
+    their configured order, never sorted -- position is the forecast horizon
+    (``[0]`` is today's), so swapping two of them changes which one feeds which
+    day.
     """
     payload = (
         f"algo={_ALGORITHM_VERSION};"
@@ -59,7 +65,9 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         "slot_invalidation_data_glitch_backfill_max_minutes="
         f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
         "max_interpolated_consecutive_slots="
-        f"{cfg.max_interpolated_consecutive_slots}"
+        f"{cfg.max_interpolated_consecutive_slots};"
+        f"total_energy_entity_id={cfg.total_energy_entity_id};"
+        f"daily_energy_entity_ids={','.join(cfg.daily_energy_entity_ids)}"
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"
@@ -643,6 +651,7 @@ def train(
             invalidated_slots_by_date={},
             invalidated_slot_count=0,
             error_reason=None,
+            last_attempt_at=trained_at,
         )
         return TrainingOutcome(profile=profile, metadata=metadata)
 
@@ -762,6 +771,7 @@ def train(
         invalidated_slot_count=invalidated_slot_count,
         error_reason=None,
         interpolated_slot_count=interpolated_slot_count,
+        last_attempt_at=trained_at,
     )
 
     explainability = _build_training_explainability(

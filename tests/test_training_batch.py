@@ -65,7 +65,7 @@ class _FakeStore:
         self.writes.append(last_outcome)
 
     async def async_record_house_consumption_failure(
-        self, *, last_outcome, error_reason
+        self, *, last_outcome, error_reason, attempted_at
     ) -> None:
         previous = self.section or {}
         self.section = {
@@ -202,6 +202,35 @@ class HouseConsumptionTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         # Still announced: the coordinator has to pick the failure up to put
         # the banner on the card.
         self.assertEqual(self.trained_calls, 1)
+
+
+class HouseConsumptionRequestFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_request_that_cannot_be_built_is_recorded_as_a_failure(
+        self,
+    ) -> None:
+        """Building the request reads live config; its failure is a failed run,
+        persisted with its reason rather than escaping to the batch."""
+        store = _FakeStore()
+
+        def _raise():
+            raise RuntimeError("config is broken")
+
+        trained: list[int] = []
+
+        async def _on_trained() -> None:
+            trained.append(1)
+
+        job = house_module.HouseConsumptionTrainingJob(
+            _make_hass(), store, read_request=_raise, on_trained=_on_trained
+        )
+
+        with self.assertLogs(house_module._LOGGER, level="ERROR"):
+            outcome = await job.async_train()
+
+        self.assertEqual(outcome, "training_failed")
+        self.assertEqual(store.section["last_outcome"], "training_failed")
+        self.assertEqual(store.section["error_reason"], "config is broken")
+        self.assertEqual(trained, [1])
 
 
 class _FakeBiasService:
@@ -372,6 +401,97 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(order, ["house_start", "house_end"])
         self.assertEqual(bias_service.calls, 0)
+
+    async def test_a_bias_failure_caught_inside_the_service_is_a_failure(
+        self,
+    ) -> None:
+        """The service catches an ordinary training failure and returns it in
+        its payload rather than raising; the batch must report what it says."""
+
+        class _FailingBiasService:
+            async def async_train(self_inner):
+                return {"lastOutcome": "training_failed"}
+
+        batch = self._make_batch(
+            bias_service=_FailingBiasService(),
+            house_job=self._make_recording_house_job([]),
+        )
+
+        await batch.async_run_solar_bias(reason="test")
+
+        self.assertEqual(batch.last_outcomes, {"solar_bias": "training_failed"})
+
+    async def test_a_bias_only_run_shares_the_single_flight(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class _SlowBiasService:
+            calls = 0
+
+            async def async_train(self_inner):
+                self_inner.calls += 1
+                started.set()
+                await release.wait()
+                return {"lastOutcome": "profile_trained"}
+
+        bias_service = _SlowBiasService()
+        house_job = self._make_recording_house_job([])
+        batch = self._make_batch(bias_service=bias_service, house_job=house_job)
+
+        first = asyncio.ensure_future(batch.async_run_solar_bias(reason="manual"))
+        await started.wait()
+        self.assertTrue(batch.is_running)
+        second = asyncio.ensure_future(batch.async_run(reason="scheduled"))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+
+        self.assertEqual(bias_service.calls, 1)
+        self.assertEqual(batch.last_outcomes, {"solar_bias": "profile_trained"})
+        self.assertFalse(batch.is_running)
+
+    async def test_current_job_names_the_running_subjob_and_clears_after(
+        self,
+    ) -> None:
+        seen: list[str | None] = []
+        batch: batch_module.TrainingBatch
+
+        class _ObservingJob:
+            async def async_train(self_inner):
+                seen.append(batch.current_job)
+                return "profile_trained"
+
+        batch = self._make_batch(
+            bias_service=_FakeBiasService(), house_job=_ObservingJob()
+        )
+        self.assertIsNone(batch.current_job)
+
+        await batch.async_run_house_consumption(reason="test")
+
+        self.assertEqual(seen, ["house_consumption"])
+        self.assertIsNone(batch.current_job)
+
+    def test_next_scheduled_at_follows_the_schedule(self) -> None:
+        batch = self._make_batch(
+            bias_service=_FakeBiasService(),
+            house_job=self._make_recording_house_job([]),
+        )
+        self.assertIsNone(batch.next_scheduled_at)
+
+        original = batch_module.async_track_time_change
+        batch_module.async_track_time_change = lambda *_a, **_k: lambda: None
+        try:
+            batch.schedule("03:15")
+        finally:
+            batch_module.async_track_time_change = original
+
+        self.assertEqual(
+            batch.next_scheduled_at,
+            batch_module.next_scheduled_training_at("03:15"),
+        )
+        self.assertIn("T03:15:00", batch.next_scheduled_at)
+        batch.cancel()
+        self.assertIsNone(batch.next_scheduled_at)
 
     def test_schedule_rejects_an_impossible_time(self) -> None:
         batch = self._make_batch(

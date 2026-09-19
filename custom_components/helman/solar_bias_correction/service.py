@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
+from ..training.schedule import next_scheduled_training_at
 from .actuals import (
     load_actuals_for_day,
     load_actuals_window,
@@ -283,14 +284,16 @@ class SolarBiasCorrectionService:
                 previous_profile,
                 previous_metadata,
             )
+            attempted_at = dt_util.now().isoformat()
             failure_metadata = self._build_failure_metadata(
                 previous_metadata=previous_metadata,
                 error_reason=str(err) or err.__class__.__name__,
                 trained_at=(
                     previous_metadata.trained_at
                     if preserve_profile
-                    else dt_util.now().isoformat()
+                    else attempted_at
                 ),
+                last_attempt_at=attempted_at,
                 training_config_fingerprint=(
                     previous_metadata.training_config_fingerprint
                     if preserve_profile
@@ -349,6 +352,7 @@ class SolarBiasCorrectionService:
             "status": status,
             "effectiveVariant": effective_variant,
             "trainedAt": self._trained_at,
+            "lastAttemptAt": self._metadata.last_attempt_at,
             "nextScheduledTrainingAt": self._next_scheduled_training_at(),
             "trainingConfigFingerprint": self._current_fingerprint,
             "isStale": self._is_stale,
@@ -2371,11 +2375,13 @@ class SolarBiasCorrectionService:
         previous_metadata: SolarBiasMetadata,
         error_reason: str,
         trained_at: str,
+        last_attempt_at: str,
         training_config_fingerprint: str,
     ) -> SolarBiasMetadata:
         previous = previous_metadata
         return SolarBiasMetadata(
             trained_at=trained_at,
+            last_attempt_at=last_attempt_at,
             training_config_fingerprint=training_config_fingerprint,
             usable_days=previous.usable_days,
             dropped_days=deepcopy(previous.dropped_days),
@@ -2410,23 +2416,7 @@ class SolarBiasCorrectionService:
     def _next_scheduled_training_at(self) -> str | None:
         if not self._cfg.enabled:
             return None
-        try:
-            hour_text, minute_text = self._cfg.training_time.split(":", maxsplit=1)
-            hour = int(hour_text)
-            minute = int(minute_text)
-        except (AttributeError, ValueError):
-            return None
-
-        local_now = dt_util.as_local(dt_util.now())
-        next_run = local_now.replace(
-            hour=hour,
-            minute=minute,
-            second=0,
-            microsecond=0,
-        )
-        if next_run <= local_now:
-            next_run += timedelta(days=1)
-        return next_run.isoformat()
+        return next_scheduled_training_at(self._cfg.training_time)
 
     def _serialize_state(self) -> dict[str, Any]:
         return {
@@ -2435,6 +2425,25 @@ class SolarBiasCorrectionService:
             "metadata": asdict(self._metadata),
             "trainingExplainability": training_explainability_to_payload(self._explainability),
         }
+
+
+def health_for(status: dict[str, Any]) -> str:
+    """This job's outcome as ``ok | degraded | failed | idle``.
+
+    Read from :meth:`SolarBiasCorrectionService.get_status_payload`, the one
+    place bias status is assembled. Disabled is ``idle`` whatever the last run
+    said: nothing is being trained or served.
+    """
+    if not status["enabled"]:
+        return "idle"
+    outcome = status["lastOutcome"]
+    if outcome == "profile_trained":
+        return "ok"
+    if outcome == "insufficient_history":
+        return "degraded"
+    if outcome == "training_failed":
+        return "failed"
+    return "idle"
 
 
 def _profile_from_dict(raw_value: Any) -> SolarBiasProfile | None:
@@ -2513,6 +2522,11 @@ def _metadata_from_dict(raw_value: Any) -> SolarBiasMetadata | None:
         invalidated_slots_by_date=invalidated_slots_by_date,
         invalidated_slot_count=invalidated_slot_count,
         error_reason=raw_value.get("error_reason") if isinstance(raw_value.get("error_reason"), str) else None,
+        last_attempt_at=(
+            raw_value.get("last_attempt_at")
+            if isinstance(raw_value.get("last_attempt_at"), str)
+            else None
+        ),
     )
 
 
