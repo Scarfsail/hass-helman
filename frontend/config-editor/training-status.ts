@@ -510,9 +510,12 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
    * fallback reason without any attempt.
    */
   @property({ attribute: false }) job: TrainingJobStatus | null = null;
+  /** Canonical saved-config revision; diagnostics are computed from that config. */
+  @property({ attribute: false }) configRevision: string | null = null;
 
   @state() private _diagnostics: any = null;
   private _loadedFor: string | null = null;
+  private _loadingFor: string | null = null;
 
   protected updated(changed: PropertyValues<this>): void {
     super.updated(changed);
@@ -523,18 +526,30 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
       job?.enabled,
       job?.isStale,
       job?.artifactInUse,
+      this.configRevision,
     ].join("|");
-    if (this.hass && key !== this._loadedFor) {
-      this._loadedFor = key;
-      void this._load();
+    if (
+      this.hass &&
+      this.configRevision !== null &&
+      key !== this._loadedFor &&
+      key !== this._loadingFor
+    ) {
+      this._loadingFor = key;
+      void this._load(key);
     }
   }
 
-  private async _load(): Promise<void> {
+  private async _load(key: string): Promise<void> {
     try {
-      this._diagnostics = await this.hass.callWS({ type: "helman/solar_bias/status" });
+      const diagnostics = await this.hass.callWS({ type: "helman/solar_bias/status" });
+      if (this._loadingFor === key) {
+        this._diagnostics = diagnostics;
+        this._loadedFor = key;
+      }
     } catch {
       // Diagnostics are secondary to the shared status above; keep the last.
+    } finally {
+      if (this._loadingFor === key) this._loadingFor = null;
     }
   }
 

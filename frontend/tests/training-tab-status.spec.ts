@@ -97,6 +97,9 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
             const w = window as any;
             w.__trainingStatus = trainingStatus;
             w.__trainRequests = [];
+            w.__solarDiagnosticsRequests = 0;
+            w.__solarDiagnosticsFailures = 0;
+            w.__solarMinHistoryDays = 10;
             w.__trainNow = { result: { outcomes: {}, status: trainingStatus } };
             const element = document.createElement(
                 "helman-config-editor-panel",
@@ -124,9 +127,14 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                         return JSON.parse(JSON.stringify(w.__trainNow.result));
                     }
                     if (request.type === "helman/solar_bias/status") {
+                        w.__solarDiagnosticsRequests += 1;
+                        if (w.__solarDiagnosticsFailures > 0) {
+                            w.__solarDiagnosticsFailures -= 1;
+                            throw new Error("temporary websocket interruption");
+                        }
                         return {
                             enabled: true,
-                            minHistoryDays: 10,
+                            minHistoryDays: w.__solarMinHistoryDays,
                             usableDays: 7,
                             omittedSlotCount: 3,
                             invalidatedSlotCount: 2,
@@ -461,4 +469,45 @@ test("the solar panel shows its diagnostics under a neutral heading", async ({ p
     await expect(diagnostics).toContainText("7 / 10 required");
     // Dropped days arrive as the job's issues, never repeated here.
     await expect(diagnostics).not.toContainText("2026-09-15");
+});
+
+test("the solar diagnostics refresh when the saved config revision changes", async ({ page }) => {
+    await mountEditor(page, status());
+    await openTrainingTab(page);
+
+    const diagnostics = page.locator("helman-solar-bias-diagnostics .container");
+    await expect(diagnostics).toContainText("7 / 10 required");
+
+    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
+        const w = window as any;
+        w.__solarMinHistoryDays = 14;
+        (element as any).configRevision = '{"config_version":15}';
+    });
+
+    await expect(diagnostics).toContainText("7 / 14 required");
+});
+
+test("the solar diagnostics retry the same key after a transient failure", async ({ page }) => {
+    await mountEditor(page, status());
+    await openTrainingTab(page);
+    const requestsBeforeFailure = await page.evaluate(
+        () => (window as any).__solarDiagnosticsRequests,
+    );
+
+    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
+        const w = window as any;
+        w.__solarMinHistoryDays = 12;
+        w.__solarDiagnosticsFailures = 1;
+        (element as any).configRevision = '{"config_version":15}';
+    });
+    await expect.poll(() => page.evaluate(() => (window as any).__solarDiagnosticsRequests))
+        .toBe(requestsBeforeFailure + 1);
+
+    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
+        (element as any).job = { ...(element as any).job };
+    });
+
+    await expect(page.locator("helman-solar-bias-diagnostics .container")).toContainText("7 / 12 required");
+    await expect.poll(() => page.evaluate(() => (window as any).__solarDiagnosticsRequests))
+        .toBe(requestsBeforeFailure + 2);
 });

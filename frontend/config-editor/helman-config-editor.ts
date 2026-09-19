@@ -2282,6 +2282,7 @@ export class HelmanConfigEditorPanel
           <helman-solar-bias-diagnostics
             .hass=${this.hass}
             .job=${this._trainingJob("solar_bias")}
+            .configRevision=${this._configBaseline}
           ></helman-solar-bias-diagnostics>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias_what")}</p>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
