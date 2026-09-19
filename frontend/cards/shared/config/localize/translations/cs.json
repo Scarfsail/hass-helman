@@ -80,7 +80,8 @@
       "consumption": "Spotřeba",
       "training_settings": "Nastavení trénování",
       "house_consumption": "Predikce spotřeby domácnosti",
-      "solar_bias": "Korekce solární prognózy"
+      "solar_bias": "Korekce solární prognózy",
+      "appliance_energy": "Energie spotřebičů"
     },
     "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
@@ -97,7 +98,8 @@
       "training_solar_bias": "Následující nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou se korekce přeskočí; maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá.",
       "training_solar_bias_min_valid_slot_days": "Třetí nastavení je podmínkou pro každý slot zvlášť, ne pro celé sestavení. Den je rozkrájen na 15minutové sloty a každý se koriguje z vlastních podkladů: při výchozí hodnotě 5 se slot 09:15 koriguje až tehdy, když alespoň 5 dní v okně mělo v 09:15 použitelná data. Dny s nulovou prognózou nebo s oříznutou výrobou se nepočítají -- proto se noční sloty nikdy nekorigují. Protože posuzuje každý slot zvlášť, a ne historii konkrétní entity, neodpovídá mu žádný řádek v tabulce níže.",
       "training_house_consumption_what": "Helman se učí, kolik domácnost spotřebuje v kterou denní dobu, aby plánovač věděl, kolik dům odebere zítra ve 14:00, aniž byste mu to museli říct. Tuto spotřebu zároveň dělí na dvě části: základní spotřebu, která běží pořád, a spotřebu ovládaných spotřebičů, kterou lze v čase přesouvat. Kvůli tomuto rozdělení se zde vedle měřiče domácnosti čte i vlastní měřič energie každého ovládaného spotřebiče -- každý se od celkové spotřeby domu odečte a to, co zbude, je základní spotřeba.",
-      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce níže -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná."
+      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce níže -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná.",
+      "training_appliance_energy": "Energie spotřebičů se učí, kolik každý řízený spotřebič se strategií historického průměru spotřebuje za hodinu provozu, a to z jeho vlastního elektroměru za jeho vlastní období zpětného pohledu. Nemá žádná globální nastavení: elektroměr i období se nastavují u každého spotřebiče na kartě Řízené spotřebiče a tabulka níže je jen jejich přehled pro čtení."
     },
     "empty": {
       "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
@@ -138,7 +140,10 @@
       "forecast_source": "Zveřejněná solární prognóza",
       "role_forecast_source": "Prognostická strana porovnání. Helman si predikci každého slotu ukládá ještě před jeho začátkem, takže trénink čte vlastní archiv, ne historii této entity -- jak daleko zpět ji recorder drží, tady nic neurčuje.",
       "forecast_recorded": "Zaznamenaná prognóza",
-      "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo."
+      "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo.",
+      "role_appliance_meter": "Průměrováno na hodinu provozu za období {days} dní: vlastní období tohoto spotřebiče, u sdíleného měřiče nejdelší ze spotřebičů, které se učí. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
+      "role_appliance_activity": "Kdy spotřebič běžel, za stejných {days} dní: trénink průměruje měřič jen přes hodiny, kdy tato entita ukazuje chod, takže bez dostatečné historie zde nevznikne odhad, ať je historie měřiče jakkoli dlouhá. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
+      "role_appliance_sharer_activity": "Sdílí měřič se spotřebičem, který se učí z historie, takže kdy tento běžel, rozhoduje o jeho podílu na rozdělení za {days} dní. Upravuje se u spotřebiče na kartě Řízené spotřebiče."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",
@@ -572,7 +577,8 @@
       "config_changed_pending_retrain": "Konfigurace změněna, čeká na přetrénování",
       "training_failed": "Trénování selhalo",
       "not_configured": "Nenakonfigurováno",
-      "no_training_yet": "Zatím netrénováno"
+      "no_training_yet": "Zatím netrénováno",
+      "disabled": "Vypnuto"
     },
     "effective_variants": {
       "raw": "Surová",
@@ -589,6 +595,80 @@
       "no_profile": "Profil solární korekce není k dispozici.",
       "not_loaded": "Služba korekce solární prognózy Helman není k dispozici.",
       "unauthorized": "Je vyžadován administrátorský přístup."
+    }
+  },
+  "training": {
+    "training_time": "Čas trénování",
+    "next_training": "Příští plánované trénování",
+    "running": "Právě běží",
+    "not_running": "Nic neběží",
+    "starting": "Spouští se",
+    "train_all_now": "Natrénovat vše nyní",
+    "train_now": "Natrénovat nyní",
+    "training": "Trénuje se...",
+    "status_unavailable": "Stav trénování zatím není k dispozici.",
+    "health_label": "Stav",
+    "result_in_use": "Používaný výsledek",
+    "last_attempt": "Poslední pokus",
+    "not_recorded": "Nezaznamenáno",
+    "reason": "Důvod",
+    "issues": "Problémy posledního pokusu",
+    "stale": "Konfigurace se od natrénování tohoto výsledku změnila.",
+    "staleness_unknown": "Aktuálnost neznámá",
+    "using_older_artifact": "Poslední pokus selhal. Stále se používá starší výsledek.",
+    "failed_nothing_served": "Poslední pokus selhal a žádný natrénovaný výsledek se nepoužívá.",
+    "disabled": "Vypnuto",
+    "badge_failed": "Neúspěšné trénovací úlohy: {count}",
+    "completed": "Trénování dokončeno.",
+    "outcome_failed": "{job} selhalo: {reason}.",
+    "did_not_run": "{job}: neproběhlo, protože {reason}.",
+    "request_failed": "Trénování nešlo spustit: {error}",
+    "all_jobs": "Trénování",
+    "health": {
+      "ok": "V pořádku",
+      "degraded": "Omezeno",
+      "failed": "Selhalo",
+      "idle": "Nečinné"
+    },
+    "jobs": {
+      "solar_bias": "Korekce solární prognózy",
+      "house_consumption": "Spotřeba domácnosti",
+      "appliance_energy": "Energie spotřebičů"
+    },
+    "did_not_run_reasons": {
+      "training_in_progress": "už probíhá jiné trénování",
+      "job_disabled": "úloha je vypnutá",
+      "skipped_in_progress": "už probíhalo jiné trénování",
+      "skipped_disabled": "úloha je vypnutá"
+    },
+    "outcomes": {
+      "solar_bias": {
+        "profile_trained": "Profil natrénován",
+        "insufficient_history": "Nedostatek historie",
+        "training_failed": "Trénování selhalo",
+        "no_training_yet": "Zatím netrénováno",
+        "not_configured": "Nenakonfigurováno"
+      },
+      "house_consumption": {
+        "profile_trained": "Profil natrénován",
+        "insufficient_history": "Nedostatek historie",
+        "entity_missing": "Chybí elektroměr",
+        "training_failed": "Trénování selhalo",
+        "not_configured": "Není nastaven elektroměr domu"
+      },
+      "appliance_energy": {
+        "estimates_trained": "Odhady natrénovány",
+        "no_history": "Žádná použitelná historie",
+        "training_failed": "Trénování selhalo",
+        "not_configured": "Žádný spotřebič k trénování"
+      }
+    },
+    "diagnostics": {
+      "title": "Diagnostika korekce solární prognózy",
+      "omitted_slots": "Vynechané sloty",
+      "factor_summary": "Korekční faktory",
+      "factor_summary_value": "min {min} / medián {median} / max {max}",
+      "fallback_reason": "Proč se používá nekorigovaná prognóza"
     }
   }
 }

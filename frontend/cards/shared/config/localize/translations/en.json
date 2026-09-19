@@ -79,7 +79,8 @@
       "consumption": "Consumption",
       "training_settings": "Training settings",
       "house_consumption": "House consumption forecast",
-      "solar_bias": "Solar forecast correction"
+      "solar_bias": "Solar forecast correction",
+      "appliance_energy": "Appliance energy"
     },
     "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
@@ -96,7 +97,8 @@
       "training_solar_bias": "The settings below decide how that fit is made. The minimum history is the floor under which correction is skipped; the maximum training window is how far back the fit looks.",
       "training_solar_bias_min_valid_slot_days": "The third setting is a condition on each slot rather than on the fit as a whole. The day is cut into 15-minute slots and each is corrected on its own evidence: with the default of 5, the 09:15 slot is corrected only once at least 5 days in the window have had usable data at 09:15. Days where the forecast was zero, or where production was capped, do not count -- which is why night slots are never corrected. Because it judges each slot separately rather than any one entity's history, no row in the table below answers to it.",
       "training_house_consumption_what": "Helman learns what your household consumes at each time of day, so the planner can tell what the house will draw tomorrow at 14:00 without being told. It also splits that total in two: the baseline that runs whatever you do, and the consumption of the controllable appliances, which can be moved in time. That split is why every controllable's own energy meter is read here alongside the house meter -- each one is subtracted from the house total, and what remains is the baseline.",
-      "training_solar_bias_what": "The solar forecast comes from an outside provider, and it is wrong in ways that repeat: a given array is shaded at the same hour each morning, or the provider is optimistic about haze. Helman learns that repeating error by comparing the forecast published for each slot against what the array actually produced, and applies the correction to future forecasts. Both sides of that comparison are in the table below -- the published forecast is recovered from the recorded attributes of the first daily forecast entity. Grid power and battery state of charge are read for one purpose only: to recognise the slots where production was capped rather than genuinely low. With a full battery and nothing being exported, the inverter throttles, and a slot like that would otherwise teach the correction that the forecast was too optimistic when it was right."
+      "training_solar_bias_what": "The solar forecast comes from an outside provider, and it is wrong in ways that repeat: a given array is shaded at the same hour each morning, or the provider is optimistic about haze. Helman learns that repeating error by comparing the forecast published for each slot against what the array actually produced, and applies the correction to future forecasts. Both sides of that comparison are in the table below -- the published forecast is recovered from the recorded attributes of the first daily forecast entity. Grid power and battery state of charge are read for one purpose only: to recognise the slots where production was capped rather than genuinely low. With a full battery and nothing being exported, the inverter throttles, and a slot like that would otherwise teach the correction that the forecast was too optimistic when it was right.",
+      "training_appliance_energy": "Appliance energy learns how much each controllable on the history average strategy uses per hour it runs, from its own energy meter over its own lookback. It has no global settings: the meter and the lookback are set on each appliance in the Controllables tab, and the table below is a read-only view of them."
     },
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
@@ -137,7 +139,10 @@
       "forecast_source": "Published solar forecast",
       "role_forecast_source": "The forecast side of the comparison. Helman archives each slot's prediction before that slot begins, so training reads its own archive rather than this entity's history -- how far back the recorder holds it does not govern anything here.",
       "forecast_recorded": "Recorded forecast",
-      "role_forecast_recorded": "What the fit is actually built from: Helman republishes each slot's prediction before that slot runs, and reads its own recorded history back. Raw states are the 15-minute detail and stop at the recorder's retention; statistics are hourly and kept for good."
+      "role_forecast_recorded": "What the fit is actually built from: Helman republishes each slot's prediction before that slot runs, and reads its own recorded history back. Raw states are the 15-minute detail and stop at the recorder's retention; statistics are hourly and kept for good.",
+      "role_appliance_meter": "Averaged per running hour over a lookback of {days} days: this appliance's own, or on a shared meter the longest among the sharers that learn. Edited on the appliance in the Controllables tab.",
+      "role_appliance_activity": "When the appliance was running, over the same {days} days: training averages the meter only over hours this entity shows it on, so short history here means no estimate however deep the meter goes. Edited on the appliance in the Controllables tab.",
+      "role_appliance_sharer_activity": "Shares its meter with an appliance that learns from history, so when this one ran decides its share of the split over {days} days. Edited on the appliance in the Controllables tab."
     },
     "fields": {
       "history_buckets": "History buckets",
@@ -571,7 +576,8 @@
       "config_changed_pending_retrain": "Config changed, retrain pending",
       "training_failed": "Training failed",
       "not_configured": "Not configured",
-      "no_training_yet": "No training yet"
+      "no_training_yet": "No training yet",
+      "disabled": "Disabled"
     },
     "effective_variants": {
       "raw": "Raw",
@@ -588,6 +594,80 @@
       "no_profile": "No solar bias profile is available.",
       "not_loaded": "The Helman solar bias correction service is not available.",
       "unauthorized": "Admin access is required."
+    }
+  },
+  "training": {
+    "training_time": "Training time",
+    "next_training": "Next scheduled training",
+    "running": "Running now",
+    "not_running": "Nothing is running",
+    "starting": "Starting",
+    "train_all_now": "Train all now",
+    "train_now": "Train now",
+    "training": "Training...",
+    "status_unavailable": "Training status is not available yet.",
+    "health_label": "Health",
+    "result_in_use": "Result in use",
+    "last_attempt": "Last attempt",
+    "not_recorded": "Not recorded",
+    "reason": "Reason",
+    "issues": "Issues in the last attempt",
+    "stale": "The configuration has changed since this result was trained.",
+    "staleness_unknown": "Staleness unknown",
+    "using_older_artifact": "The last attempt failed. The older result is still being served.",
+    "failed_nothing_served": "The last attempt failed and no trained result is being served.",
+    "disabled": "Disabled",
+    "badge_failed": "Failed training jobs: {count}",
+    "completed": "Training finished.",
+    "outcome_failed": "{job} failed: {reason}.",
+    "did_not_run": "{job} did not run: {reason}.",
+    "request_failed": "Training could not be run: {error}",
+    "all_jobs": "Training",
+    "health": {
+      "ok": "OK",
+      "degraded": "Degraded",
+      "failed": "Failed",
+      "idle": "Idle"
+    },
+    "jobs": {
+      "solar_bias": "Solar bias",
+      "house_consumption": "House consumption",
+      "appliance_energy": "Appliance energy"
+    },
+    "did_not_run_reasons": {
+      "training_in_progress": "another training run is already in progress",
+      "job_disabled": "the job is disabled",
+      "skipped_in_progress": "another training run was already in progress",
+      "skipped_disabled": "the job is disabled"
+    },
+    "outcomes": {
+      "solar_bias": {
+        "profile_trained": "Profile trained",
+        "insufficient_history": "Insufficient history",
+        "training_failed": "Training failed",
+        "no_training_yet": "No training yet",
+        "not_configured": "Not configured"
+      },
+      "house_consumption": {
+        "profile_trained": "Profile trained",
+        "insufficient_history": "Insufficient history",
+        "entity_missing": "Meter missing",
+        "training_failed": "Training failed",
+        "not_configured": "No house meter configured"
+      },
+      "appliance_energy": {
+        "estimates_trained": "Estimates trained",
+        "no_history": "No usable history",
+        "training_failed": "Training failed",
+        "not_configured": "No appliance to train"
+      }
+    },
+    "diagnostics": {
+      "title": "Solar bias diagnostics",
+      "omitted_slots": "Omitted slots",
+      "factor_summary": "Correction factors",
+      "factor_summary_value": "min {min} / median {median} / max {max}",
+      "fallback_reason": "Why the raw forecast is served"
     }
   }
 }

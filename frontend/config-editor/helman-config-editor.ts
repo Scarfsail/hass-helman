@@ -128,6 +128,12 @@ import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles"
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "./bias-correction-status";
+import {
+  TRAINING_STATUS_CHANGED,
+  asTrainingStatus,
+  type TrainingStatus,
+  type TrainingStatusChangedDetail,
+} from "./training-status";
 import "./entity-group";
 import {
   ENTITY_GROUP_CONNECTED,
@@ -198,6 +204,13 @@ const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 const ENTITY_INSPECTION_INTERVAL_MS = 2000;
 
 /**
+ * How often the editor asks `helman/training/status`, for the Training tab's
+ * panels and its tab-bar badge alike. Slower than the entity poll: a training
+ * run takes minutes, and the answer is read from memory on every tick.
+ */
+const TRAINING_STATUS_INTERVAL_MS = 5000;
+
+/**
  * Every match under `root`, including the ones inside nested shadow roots.
  *
  * `querySelectorAll` does not cross a shadow boundary, and the editor renders
@@ -255,6 +268,10 @@ interface TrainingDepthRow {
   path: PathSegment[];
   /** i18n key for what the trainer takes from this entity. */
   roleKey: string;
+  /** Substituted into the role text, e.g. an appliance's own lookback. */
+  roleParams?: Record<string, string | number>;
+  /** Override shared inspection severity with this consumer's own minimum. */
+  requiredDays?: number;
   /**
    * True for an entity Helman publishes rather than one the config points at.
    *
@@ -296,6 +313,7 @@ export class HelmanConfigEditorPanel
     _helpDialog: { state: true },
     _entityInspections: { state: true },
     _entitiesOnly: { state: true },
+    _trainingStatus: { state: true },
   };
 
   static styles = [
@@ -474,6 +492,14 @@ export class HelmanConfigEditorPanel
     .tab-count.warnings {
       background: rgba(255, 152, 0, 0.12);
       color: #ef6c00;
+    }
+
+    .tab-warning-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--error-color, #db4437);
     }
 
     .issue-board {
@@ -1005,6 +1031,16 @@ export class HelmanConfigEditorPanel
    */
   private _inspectionInFlight = 0;
 
+  // --- Training status -------------------------------------------------------
+  //
+  // One poll feeds both the Training tab's panels and its tab-bar badge, so the
+  // badge shows a failure without the tab being open. `null` until the first
+  // answer, and kept on a failed tick like the entity poll's last reading.
+  private _trainingStatus: TrainingStatus | null = null;
+  private _trainingStatusTimer?: ReturnType<typeof setInterval>;
+  private _trainingStatusSequence = 0;
+  private _trainingStatusApplied = 0;
+
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
   }
@@ -1034,6 +1070,10 @@ export class HelmanConfigEditorPanel
     this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
     this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
     this._restartEntityInspectionTimer();
+    this._trainingStatusTimer = setInterval(
+      () => void this._pollTrainingStatus(),
+      TRAINING_STATUS_INTERVAL_MS,
+    );
     // Not awaited with the form elements: a list that cannot be dragged is a
     // far smaller loss than a panel whose every form stays unrendered.
     void loadHaSortable().then(() => {
@@ -1069,6 +1109,10 @@ export class HelmanConfigEditorPanel
       this._inspectionDebounce = undefined;
     }
     this._inspectionTrailing = false;
+    if (this._trainingStatusTimer !== undefined) {
+      clearInterval(this._trainingStatusTimer);
+      this._trainingStatusTimer = undefined;
+    }
   }
 
   protected updated(changedProperties: PropertyValues<this>): void {
@@ -1076,6 +1120,7 @@ export class HelmanConfigEditorPanel
     if (!this._hasLoadedOnce && this.hass) {
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
+      void this._pollTrainingStatus();
     }
     if (this.hass && !this._unsubscribeDataChanged) {
       this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
@@ -1265,6 +1310,7 @@ export class HelmanConfigEditorPanel
             >
               ${this._renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
               <span>${this._t(tab.labelKey)}</span>
+              ${tab.id === "training" ? this._renderTrainingBadge() : nothing}
               ${counts.errors > 0
                 ? html`<span class="tab-count errors">${counts.errors}</span>`
                 : counts.warnings > 0
@@ -1278,6 +1324,51 @@ export class HelmanConfigEditorPanel
       ${cache(this._renderActiveTab())}
     `;
   }
+
+  /**
+   * A dot on the Training tab while any job's health is `failed`.
+   *
+   * Not for `degraded`: `insufficient_history` is the normal state of a fresh
+   * install for weeks, and a badge that is always on says nothing.
+   */
+  private _renderTrainingBadge(): TemplateResult | typeof nothing {
+    if (!this._trainingStatus?.anyFailed) return nothing;
+    const failed = this._trainingStatus.jobs.filter((job) => job.health === "failed").length;
+    return html`<span
+      class="tab-warning-dot"
+      role="img"
+      aria-label=${this._tFormat("training.badge_failed", { count: failed })}
+    ></span>`;
+  }
+
+  private async _pollTrainingStatus(): Promise<void> {
+    if (!this.hass) return;
+    const sequence = ++this._trainingStatusSequence;
+    try {
+      const status = asTrainingStatus(
+        await this.hass.callWS<unknown>({ type: "helman/training/status" }),
+      );
+      // A slower earlier answer must not repaint over a newer one.
+      if (sequence < this._trainingStatusApplied) return;
+      this._trainingStatusApplied = sequence;
+      if (status) this._trainingStatus = status;
+    } catch {
+      // Polled: a dropped tick keeps the last status on screen.
+    }
+  }
+
+  /** A Train now finished: take the status it returned, or ask for one. */
+  private _handleTrainingStatusChanged = (
+    event: CustomEvent<TrainingStatusChangedDetail>,
+  ): void => {
+    const status = event.detail.status;
+    if (status) {
+      this._trainingStatusApplied = ++this._trainingStatusSequence;
+      this._trainingStatus = status;
+    } else {
+      void this._pollTrainingStatus();
+    }
+  };
 
   private _renderActiveTab(): TemplateResult {
     switch (this._activeTab) {
@@ -2160,12 +2251,22 @@ export class HelmanConfigEditorPanel
    * depth in both recorder tables. The table is fed by the same
    * `helman/inspect_entities` poll the pickers elsewhere in the editor use —
    * see `_trainingDepthTargets` — so it costs no second measurement path.
+   *
+   * Issue #305 puts each job's status on top of its section: an overview of
+   * the batch with Train all now, then one panel per job in batch order, each
+   * read from the one `helman/training/status` poll the tab badge reads too.
    */
   private _renderTrainingTab(): TemplateResult {
     return html`
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.settings,
         html`
+          <helman-training-status
+            .hass=${this.hass}
+            .status=${this._trainingStatus}
+            .disabled=${this._dirty}
+            @helman-training-status-changed=${this._handleTrainingStatusChanged}
+          ></helman-training-status>
           <div class="field-grid">
             ${this._renderOptionalTextField(
               ["training", "training_time"],
@@ -2178,31 +2279,14 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.house_consumption,
-        html`
-          <p class="inline-note">${this._t("editor.notes.training_house_consumption_what")}</p>
-          <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
-          <div class="field-grid">
-            ${this._renderOptionalNumberField(
-              ["training", "house_consumption", "min_history_days"],
-              "editor.fields.house_consumption_min_history_days",
-              "editor.helpers.house_consumption_min_history_days",
-              "editor.help.house_consumption_min_history_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["training", "house_consumption", "training_window_days"],
-              "editor.fields.house_consumption_training_window_days",
-              "editor.helpers.house_consumption_training_window_days",
-              "editor.help.house_consumption_training_window_days",
-            )}
-          </div>
-          ${this._renderTrainingDepthTable(this._houseConsumptionDepthRows())}
-        `,
-      )}
-
-      ${this._renderSectionScope(
         SECTION_SCOPE_IDS.training.solar_bias,
         html`
+          ${this._renderTrainingJobStatus("solar_bias")}
+          <helman-solar-bias-diagnostics
+            .hass=${this.hass}
+            .job=${this._trainingJob("solar_bias")}
+            .configRevision=${this._configBaseline}
+          ></helman-solar-bias-diagnostics>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias_what")}</p>
           <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
           <div class="field-grid">
@@ -2229,6 +2313,56 @@ export class HelmanConfigEditorPanel
           ${this._renderTrainingDepthTable(this._solarBiasDepthRows())}
         `,
       )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.house_consumption,
+        html`
+          ${this._renderTrainingJobStatus("house_consumption")}
+          <p class="inline-note">${this._t("editor.notes.training_house_consumption_what")}</p>
+          <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
+          <div class="field-grid">
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "min_history_days"],
+              "editor.fields.house_consumption_min_history_days",
+              "editor.helpers.house_consumption_min_history_days",
+              "editor.help.house_consumption_min_history_days",
+            )}
+            ${this._renderOptionalNumberField(
+              ["training", "house_consumption", "training_window_days"],
+              "editor.fields.house_consumption_training_window_days",
+              "editor.helpers.house_consumption_training_window_days",
+              "editor.help.house_consumption_training_window_days",
+            )}
+          </div>
+          ${this._renderTrainingDepthTable(this._houseConsumptionDepthRows())}
+        `,
+      )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.training.appliance_energy,
+        html`
+          ${this._renderTrainingJobStatus("appliance_energy")}
+          <p class="inline-note">${this._t("editor.notes.training_appliance_energy")}</p>
+          ${this._renderTrainingDepthTable(this._applianceEnergyDepthRows())}
+        `,
+      )}
+    `;
+  }
+
+  private _trainingJob(id: string) {
+    return this._trainingStatus?.jobs.find((job) => job.id === id) ?? null;
+  }
+
+  private _renderTrainingJobStatus(id: string): TemplateResult {
+    return html`
+      <helman-training-job-status
+        data-job=${id}
+        .hass=${this.hass}
+        .job=${this._trainingJob(id)}
+        .running=${this._trainingStatus?.isRunning === true}
+        .disabled=${this._dirty}
+        @helman-training-status-changed=${this._handleTrainingStatusChanged}
+      ></helman-training-job-status>
     `;
   }
 
@@ -2340,6 +2474,87 @@ export class HelmanConfigEditorPanel
   }
 
   /**
+   * Every entity the appliance energy job reads, with the lookback it reads.
+   *
+   * A `history_average` appliance reads its meter and its switch or climate
+   * entity -- the second is how training knows when it ran, so a deep meter
+   * over a shallow switch still yields no estimate. A meter shared by generic
+   * and climate appliances is read once over the longest lookback among the
+   * sharers that learn, and every sharer's activity divides it, a `fixed` one
+   * included. Mirrors `ApplianceEnergyTrainingRequest` and `read_shared_meters`.
+   *
+   * A second, read-only view of settings that live on each controllable --
+   * the same kind of view `_houseConsumptionDepthRows` gives those meters.
+   */
+  private _applianceEnergyDepthRows(): TrainingDepthRow[] {
+    const controllables = (asJsonArray(this._getValue(["controllables"])) ?? []).map(
+      (controllable, index) => {
+        const entry = asJsonObject(controllable) ?? {};
+        const consumption = asJsonObject(entry.consumption) ?? {};
+        const projection = asJsonObject(consumption.projection) ?? {};
+        const kind = this._stringValue(entry.kind);
+        const lookback = projection.lookback_days;
+        return {
+          index,
+          name:
+            this._stringValue(entry.name) ||
+            this._stringValue(entry.id) ||
+            `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
+          meter: this._stringValue(consumption.energy_entity_id),
+          // Only these two kinds share a meter or learn from history.
+          activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
+          learns: projection.strategy === "history_average",
+          // The backend trains on 30 days when the key is absent.
+          lookback: typeof lookback === "number" ? lookback : 30,
+        };
+      },
+    );
+    const sharers = new Map<string, typeof controllables>();
+    for (const item of controllables) {
+      if (!item.meter || !item.activity) continue;
+      sharers.set(item.meter, [...(sharers.get(item.meter) ?? []), item]);
+    }
+    const sharedLookback = (meter: string): number | null => {
+      const members = sharers.get(meter) ?? [];
+      const learners = members.filter((member) => member.learns);
+      if (members.length < 2 || learners.length === 0) return null;
+      return Math.max(...learners.map((member) => member.lookback));
+    };
+    return controllables.flatMap((item): TrainingDepthRow[] => {
+      const shared = item.meter ? sharedLookback(item.meter) : null;
+      const activityRow = (roleKey: string, days: number): TrainingDepthRow[] =>
+        item.activity
+          ? [
+              {
+                label: item.name,
+                path: ["controllables", item.index, "controls", item.activity, "entity_id"],
+                roleKey,
+                roleParams: { days },
+                requiredDays: days,
+              },
+            ]
+          : [];
+      if (!item.learns) {
+        // A fixed sharer learns nothing, but when it ran still splits the meter.
+        return shared === null
+          ? []
+          : activityRow("editor.training_depth.role_appliance_sharer_activity", shared);
+      }
+      const days = shared ?? item.lookback;
+      return [
+        {
+          label: item.name,
+          path: ["controllables", item.index, "consumption", "energy_entity_id"],
+          roleKey: "editor.training_depth.role_appliance_meter",
+          roleParams: { days },
+          requiredDays: days,
+        },
+        ...activityRow("editor.training_depth.role_appliance_activity", days),
+      ];
+    });
+  }
+
+  /**
    * Every target the training tab's depth tables need, for the shared poll.
    *
    * Computed only while the training tab is active: the tables render
@@ -2354,7 +2569,11 @@ export class HelmanConfigEditorPanel
     ownEntity: boolean;
   }[] {
     if (this._activeTab !== "training") return [];
-    const rows = [...this._houseConsumptionDepthRows(), ...this._solarBiasDepthRows()];
+    const rows = [
+      ...this._houseConsumptionDepthRows(),
+      ...this._solarBiasDepthRows(),
+      ...this._applianceEnergyDepthRows(),
+    ];
     return rows.map((row) => ({
       key: entityGroupKey(row.path),
       path: row.path,
@@ -2368,11 +2587,9 @@ export class HelmanConfigEditorPanel
    * Deliberately *not* here: the configured window and minimum. Both are the
    * same for every row -- they are this section's own settings, edited in the
    * fields directly above -- so a column of them repeated down the table said
-   * nothing a reader could not already see. Nor is a controllable's own
-   * `consumption.projection.lookback_days`: that is a different trainer's
-   * setting, configured per appliance and not on this page, and putting it
-   * here invited the reading that the house window and the appliance lookback
-   * are alternatives rather than two unrelated reads of one sensor.
+   * nothing a reader could not already see. The appliance-energy table is the
+   * exception: each row names its own lookback in the role text because that
+   * per-appliance value is also the requirement used to highlight that row.
    *
    * What is left is what a reader cannot get anywhere else: which entities
    * this trainer reads, what it takes from each, and how deep the recorder
@@ -2424,7 +2641,16 @@ export class HelmanConfigEditorPanel
     // Severity is a property of the pair now that `available` is the spliced
     // effective depth (issue #186) -- the raw-states cell alone no longer
     // says whether the row is short, so the highlight moves to the row.
-    const rowClass = historyFact?.severity === "warn" ? "training-depth-warn" : "";
+    const available = historyFact?.params?.["available"];
+    const warnsForOwnRequirement =
+      row.requiredDays !== undefined &&
+      typeof available === "number" &&
+      available < row.requiredDays;
+    const rowClass =
+      warnsForOwnRequirement ||
+      (row.requiredDays === undefined && historyFact?.severity === "warn")
+        ? "training-depth-warn"
+        : "";
     return html`
       <tr class=${rowClass}>
         <td>
@@ -2444,7 +2670,9 @@ export class HelmanConfigEditorPanel
                   ${this._t("editor.training_depth.no_entity")}
                 </div>`}
         </td>
-        <td class="training-depth-role">${this._t(row.roleKey)}</td>
+        <td class="training-depth-role">
+          ${row.roleParams ? this._tFormat(row.roleKey, row.roleParams) : this._t(row.roleKey)}
+        </td>
         <td class="training-depth-number">${this._trainingDepthCell(rawStates)}</td>
         <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
       </tr>
