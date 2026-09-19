@@ -428,6 +428,16 @@ test.describe("entities-only toggle", () => {
         });
         expect(trainingSections).not.toContain("Invalidate training slot data");
         expect(trainingSections).toContain("Solar forecast correction");
+
+        // The kept panel's explanation is prose like any inline note, so the
+        // view drops it with them (#313).
+        const callouts = await page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            return (window as any)
+                .deepQuery(root, "helman-info-callout")
+                .filter((callout: Element) => (window as any).isShown(callout)).length;
+        });
+        expect(callouts).toBe(0);
     });
 
     test("restores the sections' open state when it is switched off", async ({ page }) => {

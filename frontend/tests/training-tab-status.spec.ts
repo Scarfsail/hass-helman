@@ -166,6 +166,18 @@ function panel(page: Page, id: string) {
     return page.locator(`helman-training-job-status[data-job="${id}"] .container`);
 }
 
+/** A job's parent panel on the tab (#313), holding its status element. */
+function jobSection(page: Page, id: string) {
+    return page.locator("details.section-card", {
+        has: page.locator(`:scope > .section-content > helman-training-job-status[data-job="${id}"]`),
+    });
+}
+
+/** The health chip in a job panel's header -- the one place health shows. */
+function healthBadge(page: Page, id: string) {
+    return jobSection(page, id).locator(":scope > summary helman-training-health-badge .badge");
+}
+
 function formatted(page: Page, iso: string): Promise<string> {
     return page.evaluate((value) => new Date(value).toLocaleString("en"), iso);
 }
@@ -179,7 +191,7 @@ test("one panel per job, in batch order", async ({ page }) => {
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-job")));
     expect(ids).toEqual(["solar_bias", "house_consumption", "appliance_energy"]);
     // And the panels read the fixture, not a loading placeholder.
-    await expect(panel(page, "solar_bias").locator(".badge.health-ok")).toBeVisible();
+    await expect(healthBadge(page, "solar_bias")).toHaveClass(/health-ok/);
 });
 
 test("an older result still served shows both timestamps, the warning and the reason", async ({
@@ -204,7 +216,7 @@ test("an older result still served shows both timestamps, the warning and the re
     const house = panel(page, "house_consumption");
     await expect(house.locator(".notice.warning")).toContainText("older result is still being served");
     await expect(house.locator(".notice.error")).toHaveCount(0);
-    await expect(house.locator(".badge.health-failed")).toBeVisible();
+    await expect(healthBadge(page, "house_consumption")).toHaveClass(/health-failed/);
     await expect(house.locator(".result-in-use")).toContainText(
         await formatted(page, HOUSE_TRAINED_AT),
     );
@@ -268,17 +280,19 @@ test("issues render as a list for solar and appliance", async ({ page }) => {
     );
     await openTrainingTab(page);
 
-    const solarIssues = panel(page, "solar_bias").locator("ul.issues li");
+    // Under each job's Diagnostics now (#313), not in its status block.
+    const issues = (id: string) => jobSection(page, id).locator("helman-training-issues ul.issues");
+    const solarIssues = issues("solar_bias").locator("li");
     await expect(solarIssues).toHaveCount(2);
     await expect(solarIssues.first()).toContainText("2026-09-15");
     await expect(solarIssues.first()).toContainText("day_ratio_out_of_band");
 
-    const applianceIssues = panel(page, "appliance_energy").locator("ul.issues li");
+    const applianceIssues = issues("appliance_energy").locator("li");
     await expect(applianceIssues).toHaveCount(1);
     await expect(applianceIssues).toContainText("washer");
     await expect(applianceIssues).toContainText("no recorder history");
 
-    await expect(panel(page, "house_consumption").locator("ul.issues")).toHaveCount(0);
+    await expect(issues("house_consumption")).toHaveCount(0);
 });
 
 test("stale shows the marker, unknown staleness a quiet note, fresh nothing", async ({
@@ -357,7 +371,7 @@ test("the status train_now returns replaces the displayed one", async ({ page })
     await page.locator("helman-training-status button.train-all").click();
 
     await expect(page.locator("helman-training-status .container")).toContainText("04:30");
-    await expect(panel(page, "house_consumption").locator(".badge.health-degraded")).toBeVisible();
+    await expect(healthBadge(page, "house_consumption")).toHaveClass(/health-degraded/);
 });
 
 test("while running every button is disabled and the running job is named", async ({ page }) => {
@@ -484,9 +498,7 @@ test("the appliance panel lists only history_average controllables", async ({ pa
     await mountEditor(page, status());
     await openTrainingTab(page);
 
-    const section = page.locator("details.section-card", {
-        has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
-    });
+    const section = jobSection(page, "appliance_energy");
     const rows = section.locator(".training-depth-table tbody tr");
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText("Dishwasher");

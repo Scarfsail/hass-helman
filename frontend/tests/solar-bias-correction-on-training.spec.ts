@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
 /**
@@ -145,8 +145,26 @@ function section(page: Page, label: string) {
     });
 }
 
+/**
+ * The Solar bias panel's Configuration scope (#313): a sub-panel labelled
+ * generically, so it is found inside its named parent.
+ */
+function solarBiasConfig(page: Page): Locator {
+    return section(page, "Solar forecast correction").locator(
+        ":scope > .section-content > details.section-card",
+        {
+            has: page.locator(":scope > summary .section-summary-label", {
+                hasText: /^Configuration$/,
+            }),
+        },
+    );
+}
+
 async function openSection(page: Page, label: string): Promise<void> {
-    const card = section(page, label);
+    await openCard(section(page, label));
+}
+
+async function openCard(card: Locator): Promise<void> {
     await expect(card).toHaveCount(1);
     if (!(await card.evaluate((element) => (element as HTMLDetailsElement).open))) {
         await card.locator(":scope > summary .section-summary-label").click();
@@ -170,11 +188,10 @@ test("bias correction edited on Training saves under training.solar_bias", async
     await mountEditor(page);
     await openTab(page, "Training");
 
-    // One panel owns the whole solar bias config: no separate correction card.
+    // One scope owns the whole solar bias config: no separate correction card.
     await expect(section(page, "Bias Correction")).toHaveCount(0);
-    await expect(section(page, "Configuration")).toHaveCount(0);
-    const solarBias = section(page, "Solar forecast correction");
-    await openSection(page, "Solar forecast correction");
+    const solarBias = solarBiasConfig(page);
+    await openCard(solarBias);
     await openSection(page, "Invalidate training slot data");
     await expect(solarBias).not.toContainText("power_devices.solar.forecast.bias_correction");
 
@@ -229,10 +246,8 @@ test("Power devices -> Solar holds only its entities and forecast sources", asyn
 });
 
 /** Switch a section card to YAML or back, with its own summary toggle. */
-async function setMode(page: Page, label: string, mode: "YAML" | "Visual"): Promise<void> {
-    await section(page, label)
-        .locator(":scope > summary .mode-toggle button", { hasText: mode })
-        .click();
+async function setMode(card: Locator, mode: "YAML" | "Visual"): Promise<void> {
+    await card.locator(":scope > summary .mode-toggle button", { hasText: mode }).click();
 }
 
 /** The value handed to the one YAML editor inside `root`. */
@@ -247,10 +262,10 @@ test("the Solar bias panel's YAML view holds day counts and correction together"
 }) => {
     await mountEditor(page);
     await openTab(page, "Training");
-    await openSection(page, "Solar forecast correction");
-    await setMode(page, "Solar forecast correction", "YAML");
+    await openCard(solarBiasConfig(page));
+    await setMode(solarBiasConfig(page), "YAML");
 
-    expect(await yamlValue(section(page, "Solar forecast correction"))).toEqual(
+    expect(await yamlValue(solarBiasConfig(page))).toEqual(
         CONFIG.training.solar_bias,
     );
 });
