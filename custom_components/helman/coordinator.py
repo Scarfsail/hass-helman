@@ -172,17 +172,20 @@ from .scheduling.schedule_executor import (
 from .solar_bias_correction.models import read_bias_config
 from .visualization import read_visualization
 from .solar_bias_correction.service import SolarBiasCorrectionService
+from .solar_bias_correction.service import health_for as solar_bias_health_for
 from .storage import HelmanStorage, TrainingArtifactsStore
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
     SharedMeterMember,
 )
+from .training.appliance_energy import health_for as appliance_energy_health_for
 from .training.batch import TrainingBatch
 from .training.house_consumption import (
     HouseConsumptionTrainingJob,
     HouseTrainingRequest,
 )
+from .training.house_consumption import health_for as house_consumption_health_for
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
@@ -246,6 +249,79 @@ if TYPE_CHECKING:
 
 #: kWh -> Wh for the battery forecast series. See _battery_forecast_slot_values.
 _BATTERY_FORECAST_KWH_TO_WH = 1000.0
+
+
+def _training_job_status(
+    job_id: str,
+    *,
+    enabled: bool,
+    health: str,
+    last_outcome: str | None,
+    error_reason: str | None,
+    trained_at: str | None,
+    last_attempt_at: str | None,
+    artifact_in_use: bool,
+    is_stale: bool | None,
+    issues: list[dict[str, str]],
+) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "enabled": enabled,
+        "health": health,
+        "lastOutcome": last_outcome,
+        "errorReason": error_reason,
+        "trainedAt": trained_at,
+        # ``None`` on a document written before attempts were recorded: *not
+        # recorded*, never *never attempted*.
+        "lastAttemptAt": last_attempt_at,
+        "artifactInUse": artifact_in_use,
+        # Every ``failed`` outcome is written through a preserve-on-failure
+        # path, so a failed job still serving something is serving an older
+        # result. No timestamps involved, so pre-upgrade documents read right.
+        "usingOlderArtifact": health == "failed" and artifact_in_use,
+        "isStale": is_stale,
+        "issues": issues,
+    }
+
+
+def _stored_training_job_status(
+    job_id: str,
+    section: dict[str, Any] | None,
+    *,
+    health: str,
+    artifact_in_use: bool,
+    read_live_fingerprint: Callable[[], str],
+    issues: list[dict[str, str]],
+) -> dict[str, Any]:
+    """One ``TrainingArtifactsStore`` job's status entry."""
+    section = section or {}
+    stored_fingerprint = section.get("fingerprint")
+    is_stale: bool | None
+    try:
+        live_fingerprint = read_live_fingerprint()
+    except Exception:  # noqa: BLE001 - the status must survive a broken job
+        _LOGGER.debug(
+            "Could not read the live %s fingerprint", job_id, exc_info=True
+        )
+        is_stale = None
+    else:
+        # Nothing trained against any configuration cannot be stale.
+        is_stale = (
+            stored_fingerprint is not None and stored_fingerprint != live_fingerprint
+        )
+    return _training_job_status(
+        job_id,
+        # Neither job has a switch of its own: it always runs.
+        enabled=True,
+        health=health,
+        last_outcome=section.get("last_outcome"),
+        error_reason=section.get("error_reason"),
+        trained_at=section.get("trained_at"),
+        last_attempt_at=section.get("last_attempt_at"),
+        artifact_in_use=artifact_in_use,
+        is_stale=is_stale,
+        issues=issues,
+    )
 
 
 def _series_timestamp_at(series: list[Any], index: int) -> str:
@@ -1407,6 +1483,78 @@ class HelmanCoordinator:
             min_history_days,
             config_fingerprint,
         )
+
+    def build_training_status(self) -> dict[str, Any]:
+        """Every training job's status, for the config editor's Training tab.
+
+        Total by design: a live fingerprint read that raises costs that one job
+        its ``isStale`` (``None`` -- unknown, never a manufactured ``False``)
+        and nothing else. Everything else comes from persistence, and showing
+        that a job is broken is exactly what this is for.
+        """
+        batch = self._training_batch
+        solar = self._solar_bias_service.get_status_payload()
+        solar_health = solar_bias_health_for(solar)
+        store = self._training_artifacts_store
+        house = store.house_consumption
+        appliance = store.appliance_energy
+        jobs = [
+            _training_job_status(
+                "solar_bias",
+                enabled=solar["enabled"],
+                health=solar_health,
+                last_outcome=solar["lastOutcome"],
+                error_reason=solar["errorReason"],
+                trained_at=solar["trainedAt"],
+                last_attempt_at=solar["lastAttemptAt"],
+                artifact_in_use=solar["effectiveVariant"] == "adjusted",
+                is_stale=solar["isStale"],
+                # A wholesale failure carries the previous run's dropped days
+                # forward, because they still explain the preserved profile.
+                # They are not this attempt's, so they are not its issues.
+                issues=(
+                    []
+                    if solar_health == "failed"
+                    else [
+                        {"subject": day["date"], "reason": day["reason"]}
+                        for day in solar["droppedDays"]
+                    ]
+                ),
+            ),
+            _stored_training_job_status(
+                "house_consumption",
+                house,
+                health=house_consumption_health_for(house),
+                artifact_in_use=self._house_profile is not None,
+                read_live_fingerprint=lambda: (
+                    self._read_house_training_request().config_fingerprint
+                ),
+                issues=[],
+            ),
+            _stored_training_job_status(
+                "appliance_energy",
+                appliance,
+                health=appliance_energy_health_for(appliance),
+                artifact_in_use=bool(self._appliance_energy_estimates),
+                read_live_fingerprint=lambda: (
+                    self._read_appliance_energy_training_request().fingerprint
+                ),
+                issues=[
+                    {"subject": appliance_id, "reason": reason}
+                    for appliance_id, reason in sorted(
+                        ((appliance or {}).get("failed_appliances") or {}).items()
+                    )
+                ],
+            ),
+        ]
+        return {
+            "trainingTime": batch.training_time,
+            "nextScheduledTrainingAt": batch.next_scheduled_at,
+            "isRunning": batch.is_running,
+            "currentJob": batch.current_job,
+            "anyFailed": any(job["health"] == "failed" for job in jobs),
+            "jobs": jobs,
+        }
 
     def _read_house_training_request(self) -> HouseTrainingRequest:
         """What the house consumption fit should answer, read live per run."""

@@ -62,17 +62,31 @@ class HouseConsumptionTrainingJob:
 
     async def async_train(self) -> str:
         """Fit and store the profile. Returns the ``last_outcome`` recorded."""
-        request = self._read_request()
+        # Inside the guard: building the request reads live config and can
+        # raise, and a failure there is as much a failed run as a failed fit.
+        try:
+            request = self._read_request()
+        except Exception as err:  # noqa: BLE001 - recorded, not propagated
+            outcome = await self._async_record_training_failed(err)
+        else:
+            outcome = await self._async_train(request)
+
+        await self._on_trained()
+        return outcome
+
+    async def _async_train(self, request: HouseTrainingRequest) -> str:
         if request.total_energy_entity_id is None:
             outcome = "not_configured"
             await self._store.async_record_house_consumption_failure(
                 last_outcome=outcome,
                 error_reason=None,
+                attempted_at=dt_util.now().isoformat(),
             )
+            return outcome
         # An entity that no longer exists would otherwise come back from the
         # recorder as an empty window and be reported as "not enough history",
         # which sends the user looking in the wrong place.
-        elif self._hass.states.get(request.total_energy_entity_id) is None:
+        if self._hass.states.get(request.total_energy_entity_id) is None:
             outcome = "entity_missing"
             _LOGGER.warning(
                 "House consumption training skipped: %s does not exist",
@@ -81,19 +95,22 @@ class HouseConsumptionTrainingJob:
             await self._store.async_record_house_consumption_failure(
                 last_outcome=outcome,
                 error_reason=request.total_energy_entity_id,
+                attempted_at=dt_util.now().isoformat(),
             )
-        else:
-            try:
-                outcome = await self._async_fit_and_store(request)
-            except Exception as err:  # noqa: BLE001 - recorded, not propagated
-                _LOGGER.exception("House consumption profile training failed")
-                outcome = "training_failed"
-                await self._store.async_record_house_consumption_failure(
-                    last_outcome=outcome,
-                    error_reason=str(err) or err.__class__.__name__,
-                )
+            return outcome
+        try:
+            return await self._async_fit_and_store(request)
+        except Exception as err:  # noqa: BLE001 - recorded, not propagated
+            return await self._async_record_training_failed(err)
 
-        await self._on_trained()
+    async def _async_record_training_failed(self, err: Exception) -> str:
+        _LOGGER.exception("House consumption profile training failed")
+        outcome = "training_failed"
+        await self._store.async_record_house_consumption_failure(
+            last_outcome=outcome,
+            error_reason=str(err) or err.__class__.__name__,
+            attempted_at=dt_util.now().isoformat(),
+        )
         return outcome
 
     async def _async_fit_and_store(self, request: HouseTrainingRequest) -> str:
@@ -192,3 +209,20 @@ class HouseConsumptionTrainingJob:
             ]
             for entity_id, values_by_hour in energy_by_entity.items()
         }
+
+
+def health_for(section: dict[str, Any] | None) -> str:
+    """This job's stored outcome as ``ok | degraded | failed | idle``.
+
+    ``not_configured`` is ``idle``, not ``failed``, although it is written
+    through the failure path: a house without a meter is a configuration
+    choice, not a broken run.
+    """
+    outcome = section.get("last_outcome") if section is not None else None
+    if outcome == "profile_trained":
+        return "ok"
+    if outcome == "insufficient_history":
+        return "degraded"
+    if outcome in ("entity_missing", "training_failed"):
+        return "failed"
+    return "idle"

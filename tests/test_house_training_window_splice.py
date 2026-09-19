@@ -377,7 +377,7 @@ class _FakeStore:
         self.section = {"data": data, "last_outcome": last_outcome}
 
     async def async_record_house_consumption_failure(
-        self, *, last_outcome, error_reason
+        self, *, last_outcome, error_reason, attempted_at
     ) -> None:
         self.section = {"last_outcome": last_outcome, "error_reason": error_reason}
 

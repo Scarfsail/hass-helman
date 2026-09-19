@@ -428,7 +428,9 @@ def test_compute_fingerprint_includes_algorithm_version():
         "slot_invalidation_data_glitch_backfill_max_minutes="
         f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
         "max_interpolated_consecutive_slots="
-        f"{cfg.max_interpolated_consecutive_slots}"
+        f"{cfg.max_interpolated_consecutive_slots};"
+        f"total_energy_entity_id={cfg.total_energy_entity_id};"
+        f"daily_energy_entity_ids={','.join(cfg.daily_energy_entity_ids)}"
     )
     import hashlib
 
