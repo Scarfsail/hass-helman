@@ -2013,17 +2013,24 @@ export class HelmanSolarInspector extends LitElement {
              panel opens the same instance, so the two never disagree about
              which day is on screen.
 
-             Gone with the strip: the band is the host's only consumer here and
-             the only thing that can open it, and the host holds a schedule
-             subscription and loads appliances, controllable entities, history
-             and projections of its own. Leaving it mounted would keep all of
-             that for an editor nothing can reach. -->
-        ${this.hideScheduleStrip
+             It holds a schedule subscription and loads appliances,
+             controllable entities, history and projections of its own, so it
+             is mounted only where something can actually reach it. Two things
+             can: the band, and the schedule badges the house breakdown draws
+             through the power-devices container -- which follow the house
+             series, since the breakdown does. With the band hidden and the
+             house series dropped, nothing can open the editor and the host
+             goes.
+
+             It cannot be created on demand instead: openFor returns early
+             until the owner has synced, so a host built at click time would
+             swallow the first press. -->
+        ${this.hideScheduleStrip && !this._houseBreakdownReachable()
           ? ""
           : html`
               <scheduling-day-editor-host
                 .hass=${this.hass}
-                .preload=${true}
+                .preload=${!this.hideScheduleStrip}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
               ></scheduling-day-editor-host>
             `}
@@ -3495,6 +3502,15 @@ export class HelmanSolarInspector extends LitElement {
       return true;
     }
     return this.chartSeries.includes(series);
+  }
+
+  /**
+   * Whether the slot detail can still draw a house breakdown -- and with it the
+   * device boxes whose schedule badges open the day editor. The same two series
+   * the breakdown itself is gated on, named once so the two cannot drift.
+   */
+  private _houseBreakdownReachable() {
+    return this._isSeriesEnabled("houseActual") || this._isSeriesEnabled("houseForecast");
   }
 
   private _isSeriesVisible(series: SeriesKey) {

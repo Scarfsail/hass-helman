@@ -439,3 +439,82 @@ test("an actual-only pair places no chip for the forecast it dropped", async ({ 
     expect(chips).toHaveLength(1);
     expect(chips[0].hatched).toBe(false);
 });
+
+/** Seed a house breakdown with one schedulable consumer in every native slot. */
+async function seedHouseBreakdown(page: Page): Promise<void> {
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        const slots: any[] = [];
+        for (let m = 0; m < 1440; m += 15) {
+            const hh = String(Math.floor(m / 60)).padStart(2, "0");
+            const mm = String(m % 60).padStart(2, "0");
+            slots.push({
+                slot: `${hh}:${mm}`,
+                unmeasuredWh: 40,
+                appliances: [{
+                    entityId: "sensor.boiler_power",
+                    label: "Boiler",
+                    wh: 60,
+                    switchEntityId: "switch.boiler",
+                    powerEntityId: "sensor.boiler_power",
+                    deferrable: true,
+                    controllableIds: ["boiler"],
+                }],
+            });
+        }
+        payload.series.houseActualBreakdown = slots;
+        payload.availability.hasHouseActualBreakdown = true;
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+}
+
+test("a hidden schedule strip keeps the editor the house badges open", async ({ page }) => {
+    // The breakdown draws device boxes through the power-devices container, and
+    // those carry schedule badges that open the day editor. They follow the
+    // house series, not the strip -- so hiding the strip alone must not leave a
+    // visible badge with nothing behind it.
+    await mountCard(page, { hide_schedule_strip: true });
+    await seedEverySeries(page);
+    await seedHouseBreakdown(page);
+    await selectSlot(page, "12:00");
+
+    // The badge is three shadow roots down, inside the device box the breakdown
+    // draws, so the demonstration is a deep walk rather than a flat query.
+    const badges = await page.evaluate(() => {
+        const found: string[] = [];
+        const walk = (node: ParentNode) => {
+            for (const child of node.querySelectorAll("*")) {
+                if (child.tagName.toLowerCase() === "helman-schedule-badge") {
+                    found.push(child.tagName.toLowerCase());
+                }
+                const shadow = (child as HTMLElement).shadowRoot;
+                if (shadow) walk(shadow);
+            }
+        };
+        walk(document.querySelector("helman-solar-inspector-card")!.shadowRoot!);
+        return found;
+    });
+    expect(badges.length).toBeGreaterThan(0);
+
+    const rows = await rowsPresent(page);
+    expect(rows.schedule).toBe(false);
+    expect(rows.editorHost).toBe(true);
+});
+
+test("dropping the house series too takes the editor host with them", async ({ page }) => {
+    await mountCard(page, SOLAR_ONLY);
+    await seedEverySeries(page);
+    await seedHouseBreakdown(page);
+    await selectSlot(page, "12:00");
+
+    const rows = await rowsPresent(page);
+    expect(rows.schedule).toBe(false);
+    // Nothing left that can reach the editor, so it is not mounted at all.
+    expect(rows.editorHost).toBe(false);
+});
