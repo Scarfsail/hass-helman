@@ -518,3 +518,67 @@ test("dropping the house series too takes the editor host with them", async ({ p
     // Nothing left that can reach the editor, so it is not mounted at all.
     expect(rows.editorHost).toBe(false);
 });
+
+/** The hover popup's rows for one slot, as label plus which columns it quotes. */
+function tooltipRows(page: Page, slot: string): Promise<
+    { label: string; actual: boolean; forecast: boolean }[]
+> {
+    return page.evaluate((wanted) => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        return el._chartTooltipModel(el._payload, wanted).rows.map((row: any) => ({
+            label: row.label,
+            actual: row.actual !== null,
+            forecast: row.forecast !== null,
+        }));
+    }, slot);
+}
+
+test("the hover popup quotes only the series the config allows", async ({ page }) => {
+    await mountCard(page, {});
+    await seedEverySeries(page);
+    // Present by default, so their absence below is the allowlist's doing.
+    expect((await tooltipRows(page, "12:00")).map((row) => row.label))
+        .toEqual(expect.arrayContaining(["Solar production", "House", "Grid", "Battery"]));
+
+    await reconfigure(page, SOLAR_ONLY);
+
+    const labels = (await tooltipRows(page, "12:00")).map((row) => row.label);
+    expect(labels).toContain("Solar production");
+    expect(labels).not.toContain("House");
+    expect(labels).not.toContain("Grid");
+    expect(labels).not.toContain("Battery");
+});
+
+test("an actual-only pair quotes no forecast column in the popup", async ({ page }) => {
+    await mountCard(page, { chart_series: ["actual", "gridActual"] });
+    await seedEverySeries(page);
+
+    const grid = (await tooltipRows(page, "12:00")).find((row) => row.label === "Grid");
+    expect(grid).toBeDefined();
+    expect(grid!.actual).toBe(true);
+    // The forecast half was left out, so the row keeps the column it can speak for.
+    expect(grid!.forecast).toBe(false);
+});
+
+test("an aggregate view keeps the editor its own badges open", async ({ page }) => {
+    // `chart_series` governs the day chart alone, so the month view still draws
+    // its house breakdown -- and the schedule badges on it.
+    await mountCard(page, SOLAR_ONLY);
+    await seedEverySeries(page);
+    expect((await rowsPresent(page)).editorHost).toBe(false);
+
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        el._viewMode = "month";
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+
+    expect((await rowsPresent(page)).editorHost).toBe(true);
+});

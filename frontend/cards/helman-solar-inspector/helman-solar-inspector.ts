@@ -512,6 +512,18 @@ function sameTooltipContent(a: TooltipContent | null, b: TooltipContent | null):
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
+/**
+ * Which two series each tooltip family speaks for, as [actual, forecast]. The
+ * popup reads families rather than series, so this is what lets the config's
+ * allowlist reach it without every branch of the row builder checking.
+ */
+const FAMILY_SERIES: Record<SeriesFamily, readonly [SeriesKey, SeriesKey]> = {
+  solar: ["actual", "corrected"],
+  house: ["houseActual", "houseForecast"],
+  battery: ["batteryActual", "batteryForecast"],
+  grid: ["gridActual", "gridForecast"],
+};
+
 type InspectorPayload = {
   date: string;
   timezone: string;
@@ -912,7 +924,9 @@ export class HelmanSolarInspector extends LitElement {
     | null = null;
   /** The combined chart's popup, one build per hovered slot. */
   private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
-  private _chartTooltipFor: { payload: InspectorPayload; slot: string } | null = null;
+  private _chartTooltipFor:
+    | { payload: InspectorPayload; slot: string; enabled: readonly SeriesKey[] | undefined }
+    | null = null;
   /**
    * The wider-bucket starts the current view drew over a hole in one of its
    * Wh series, each mapped to how many native slots each short series is
@@ -2015,25 +2029,21 @@ export class HelmanSolarInspector extends LitElement {
 
              It holds a schedule subscription and loads appliances,
              controllable entities, history and projections of its own, so it
-             is mounted only where something can actually reach it. Two things
-             can: the band, and the schedule badges the house breakdown draws
-             through the power-devices container -- which follow the house
-             series, since the breakdown does. With the band hidden and the
-             house series dropped, nothing can open the editor and the host
-             goes.
+             is mounted only where something can actually reach it -- see
+             _scheduleEditorReachable, which owns that question.
 
              It cannot be created on demand instead: openFor returns early
              until the owner has synced, so a host built at click time would
              swallow the first press. -->
-        ${this.hideScheduleStrip && !this._houseBreakdownReachable()
-          ? ""
-          : html`
+        ${this._scheduleEditorReachable()
+          ? html`
               <scheduling-day-editor-host
                 .hass=${this.hass}
                 .preload=${!this.hideScheduleStrip}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
               ></scheduling-day-editor-host>
-            `}
+            `
+          : ""}
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
@@ -3513,6 +3523,18 @@ export class HelmanSolarInspector extends LitElement {
     return this._isSeriesEnabled("houseActual") || this._isSeriesEnabled("houseForecast");
   }
 
+  /**
+   * Whether anything on the card can still open the day editor: the band, or a
+   * schedule badge on one of the device boxes a breakdown panel draws. The day
+   * view's breakdown follows the house series; the aggregate views' does not,
+   * because `chart_series` deliberately governs the day chart alone.
+   */
+  private _scheduleEditorReachable() {
+    if (!this.hideScheduleStrip) return true;
+    if (this._viewMode !== "day") return true;
+    return this._houseBreakdownReachable();
+  }
+
   private _isSeriesVisible(series: SeriesKey) {
     return this._isSeriesEnabled(series) && !this._hiddenSeries.has(series);
   }
@@ -3828,8 +3850,9 @@ export class HelmanSolarInspector extends LitElement {
   private _chartTooltipModel(payload: InspectorPayload, slot: string): { rows: TooltipRow[]; title: string } {
     if (this._chartTooltipFor === null
       || this._chartTooltipFor.payload !== payload
-      || this._chartTooltipFor.slot !== slot) {
-      this._chartTooltipFor = { payload, slot };
+      || this._chartTooltipFor.slot !== slot
+      || this._chartTooltipFor.enabled !== this.chartSeries) {
+      this._chartTooltipFor = { payload, slot, enabled: this.chartSeries };
       this._chartTooltip = {
         rows: this._allSeriesTooltipRows(payload, slot),
         title: this._formatSelectionRange([slot]),
@@ -3842,7 +3865,24 @@ export class HelmanSolarInspector extends LitElement {
   private _allSeriesTooltipRows(payload: InspectorPayload, slot: string): TooltipRow[] {
     const families: SeriesFamily[] = ["solar", "house", "battery", "grid"];
     return families
-      .flatMap((family) => this._seriesTooltipRows(payload, family, slot))
+      .flatMap((family) => {
+        // A series the config left out is not quoted here either: a popup is as
+        // much a reading of the series as the band it is taken from. Whole
+        // families drop out, and a half-dropped pair loses that column -- the
+        // rows of one family all speak for the same two series, so this is the
+        // one place it has to be said.
+        const [actualSeries, forecastSeries] = FAMILY_SERIES[family];
+        const actualOn = this._isSeriesEnabled(actualSeries);
+        const forecastOn = this._isSeriesEnabled(forecastSeries);
+        if (!actualOn && !forecastOn) return [];
+        const rows = this._seriesTooltipRows(payload, family, slot);
+        if (actualOn && forecastOn) return rows;
+        return rows.map((row) => ({
+          ...row,
+          actual: actualOn ? row.actual : null,
+          forecast: forecastOn ? row.forecast : null,
+        }));
+      })
       .filter((row) => row.actual !== null || row.forecast !== null);
   }
 
