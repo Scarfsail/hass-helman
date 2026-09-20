@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
 import unittest
@@ -222,6 +223,21 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
 
         _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
         self.assertEqual(kwargs["config"], {})
+
+    def test_manifest_orders_setup_after_lovelace(self) -> None:
+        """The panel's config is a snapshot, so Lovelace has to be set up first.
+
+        ``async_register_panel`` runs once and the config it passes is fixed for
+        the lifetime of the install. If Helman were set up before Lovelace, the
+        card resource would not exist yet, the snapshot would carry no URL, and
+        the second registration attempt returns early -- leaving a storage-mode
+        install showing the editor's "unavailable" message for good. Not a hard
+        dependency: Helman itself does not need Lovelace.
+        """
+        manifest = json.loads((ROOT / "custom_components" / "helman" / "manifest.json").read_text())
+
+        self.assertIn("lovelace", manifest.get("after_dependencies", []))
+        self.assertNotIn("lovelace", manifest.get("dependencies", []))
 
     async def test_unregister_panel_removes_registered_panel(self) -> None:
         hass = FakeHass()

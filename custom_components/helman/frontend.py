@@ -47,6 +47,13 @@ def registered_card_module_url(hass: HomeAssistant) -> str | None:
     second time and kills the dashboard's Helman cards for that page session.
     Better no embedded chart than a broken dashboard, so callers that would hand
     the URL onwards get nothing here instead of a guess.
+
+    This reads a *snapshot*: whatever ``async_register_frontend`` managed to
+    register, which is nothing at all if Lovelace had not been set up yet. The
+    panel is registered once and carries its config for the lifetime of the
+    install, so ``manifest.json`` declares ``lovelace`` in ``after_dependencies``
+    to put that setup before ours. Without it a storage-mode install that raced
+    us would show the editor's "unavailable" message for good.
     """
     return hass.data.get(DOMAIN, {}).get(_CARD_RESOURCE_URL)
 
