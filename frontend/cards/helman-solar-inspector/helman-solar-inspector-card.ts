@@ -8,6 +8,7 @@ import {
     watchedEntityChanged,
     type WatchedEntitiesDetail,
 } from "../shared/hass-change";
+import { SERIES_KEYS } from "./helman-solar-inspector";
 import "./helman-solar-inspector";
 
 @customElement("helman-solar-inspector-card")
@@ -51,6 +52,28 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                 {
                     name: "dim_incomplete_slots",
                     selector: { boolean: {} },
+                },
+                {
+                    name: "hide_schedule_strip",
+                    selector: { boolean: {} },
+                },
+                {
+                    name: "hide_price_strip",
+                    selector: { boolean: {} },
+                },
+                {
+                    name: "hide_money_strip",
+                    selector: { boolean: {} },
+                },
+                {
+                    name: "chart_series",
+                    selector: {
+                        select: {
+                            multiple: true,
+                            mode: "list",
+                            options: SERIES_KEYS.map((key) => ({ value: key, label: key })),
+                        },
+                    },
                 },
             ],
         };
@@ -152,6 +175,9 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
             daylight_only_default: true,
             show_bias_ratio: false,
             dim_incomplete_slots: true,
+            hide_schedule_strip: false,
+            hide_price_strip: false,
+            hide_money_strip: false,
             ...config,
         };
     }
@@ -174,6 +200,10 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                         .slotMinutesDefault=${this._config?.slot_minutes != null ? Number(this._config.slot_minutes) : undefined}
                         .biasRatioDefault=${this._config?.show_bias_ratio ?? false}
                         .dimIncompleteSlots=${this._config?.dim_incomplete_slots ?? true}
+                        .hideScheduleStrip=${this._config?.hide_schedule_strip ?? false}
+                        .hidePriceStrip=${this._config?.hide_price_strip ?? false}
+                        .hideMoneyStrip=${this._config?.hide_money_strip ?? false}
+                        .chartSeries=${this._config?.chart_series}
                     ></helman-solar-inspector>
                 </div>
             </ha-card>

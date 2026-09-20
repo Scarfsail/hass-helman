@@ -1,4 +1,5 @@
 import type { LovelaceCardConfig } from "../../hass-frontend/src/data/lovelace/config/card";
+import type { SeriesKey } from "./helman-solar-inspector";
 
 export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
     /** When true, the card background is transparent. Default: false. */
@@ -43,4 +44,28 @@ export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
      * whatever the chart looks like.
      */
     dim_incomplete_slots?: boolean;
+    /**
+     * When true, the scheduled-actions row below the chart is not rendered.
+     * A hard hide: there is no runtime control that brings it back.
+     * Default: false.
+     */
+    hide_schedule_strip?: boolean;
+    /**
+     * When true, the import/export price rails are not rendered — and with them
+     * the slot detail's price tiles, which are fed by the rails. Default: false.
+     */
+    hide_price_strip?: boolean;
+    /**
+     * When true, the money rails are not rendered, and neither are the money
+     * tiles in the daily totals and in the selected-slot detail. Default: false.
+     */
+    hide_money_strip?: boolean;
+    /**
+     * The day-chart series the card may draw. When unset every series is drawn.
+     * A series left out is not drawn, has no legend tile and no metric tile, and
+     * no runtime control brings it back — so a card listing only the solar
+     * series reads as a solar chart rather than as a dashboard card with four
+     * rows switched off.
+     */
+    chart_series?: SeriesKey[];
 }
