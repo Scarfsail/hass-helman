@@ -1776,9 +1776,25 @@ export class HelmanConfigEditorPanel
     `;
   }
 
+  /**
+   * The label a YAML editor announces itself by. Four sections share the
+   * label "Forecast" -- one per power device -- so a section's own label
+   * only tells them apart together with the section it sits in, which is
+   * what the visual nesting shows and a screen reader otherwise misses.
+   */
+  private _scopeAriaLabel(scopeId: ScopeId): string {
+    const scope = getScope(scopeId);
+    const parentId = scope.parentId;
+    const parent = parentId ? getScope(parentId) : undefined;
+    if (scope.kind !== "section" || parent?.kind !== "section") {
+      return this._t(scope.labelKey);
+    }
+    return `${this._t(parent.labelKey)} / ${this._t(scope.labelKey)}`;
+  }
+
   private _renderYamlEditor(scopeId: ScopeId): TemplateResult {
     const scope = getScope(scopeId);
-    const scopeLabel = this._t(scope.labelKey);
+    const scopeLabel = this._scopeAriaLabel(scopeId);
     const helperKey =
       scope.kind === "document"
         ? "editor.yaml.helpers.document"
@@ -1929,15 +1945,24 @@ export class HelmanConfigEditorPanel
               ["power_devices", "house", "unmeasured_power_title"],
               "editor.fields.unmeasured_power_title",
             )}
-            ${this._renderEntityGroup(
-              ["power_devices", "house", "forecast", "total_energy_entity_id"],
-              "editor.fields.forecast_total_energy_entity",
-              {
-                includeDomains: ["sensor"],
-                helpKey: "editor.help.house_forecast_total_energy_entity",
-              },
-            )}
           </div>
+
+          ${this._renderSectionScope(
+            SECTION_SCOPE_IDS.power_devices.house_forecast,
+            html`
+              <div class="field-grid">
+                ${this._renderEntityGroup(
+                  ["power_devices", "house", "forecast", "total_energy_entity_id"],
+                  "editor.fields.forecast_total_energy_entity",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.house_forecast_total_energy_entity",
+                  },
+                )}
+              </div>
+            `,
+            { initialOpen: false },
+          )}
         `,
         { initialOpen: false },
       )}
@@ -1945,65 +1970,53 @@ export class HelmanConfigEditorPanel
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.power_devices.solar,
         html`
-          ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.solar_general,
-            html`
-              <div class="field-grid field-grid--roomy">
-                ${this._renderPowerEntityGroup(
-                  "solar",
-                  "editor.fields.power_entity",
-                  "editor.help.solar_power_entity",
-                )}
-                ${this._renderEntityGroup(
-                  ["power_devices", "solar", "entities", "today_energy"],
-                  "editor.fields.today_energy_entity",
-                  {
-                    includeDomains: ["sensor"],
-                    helpKey: "editor.help.solar_today_energy_entity",
-                  },
-                )}
-              </div>
-            `,
-            { initialOpen: false },
-          )}
+          <div class="field-grid field-grid--roomy">
+            ${this._renderPowerEntityGroup(
+              "solar",
+              "editor.fields.power_entity",
+              "editor.help.solar_power_entity",
+            )}
+            ${this._renderEntityGroup(
+              ["power_devices", "solar", "entities", "today_energy"],
+              "editor.fields.today_energy_entity",
+              {
+                includeDomains: ["sensor"],
+                helpKey: "editor.help.solar_today_energy_entity",
+              },
+            )}
+          </div>
 
           ${this._renderSectionScope(
             SECTION_SCOPE_IDS.power_devices.solar_forecast,
             html`
               <p class="inline-note">${this._t("editor.notes.solar_forecast_bias_correction")}</p>
-              ${this._renderSectionScope(
-                SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
-                html`
-                  <div class="field-grid field-grid--roomy">
-                    ${this._renderEntityGroup(
-                      ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-                      "editor.fields.forecast_total_energy_entity",
-                      {
-                        includeDomains: ["sensor"],
-                        helpKey: "editor.help.solar_forecast_total_energy_entity",
-                      },
-                    )}
-                  </div>
+              <div class="field-grid field-grid--roomy">
+                ${this._renderEntityGroup(
+                  ["power_devices", "solar", "forecast", "total_energy_entity_id"],
+                  "editor.fields.forecast_total_energy_entity",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.solar_forecast_total_energy_entity",
+                  },
+                )}
+              </div>
 
-                  ${renderSortableList({
-                    items: dailyEnergyEntityIds,
-                    containerClass: "list-stack",
-                    renderItem: (_value, index) => this._renderDailyEnergyEntity(index),
-                    onMove: (oldIndex, newIndex) =>
-                      this._moveListItem(
-                        ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                        oldIndex,
-                        newIndex,
-                      ),
-                  })}
-                  <div class="section-footer">
-                    <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
-                      ${this._t("editor.actions.add_daily_energy_entity")}
-                    </button>
-                  </div>
-                `,
-                { initialOpen: false },
-              )}
+              ${renderSortableList({
+                items: dailyEnergyEntityIds,
+                containerClass: "list-stack",
+                renderItem: (_value, index) => this._renderDailyEnergyEntity(index),
+                onMove: (oldIndex, newIndex) =>
+                  this._moveListItem(
+                    ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+                    oldIndex,
+                    newIndex,
+                  ),
+              })}
+              <div class="section-footer">
+                <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
+                  ${this._t("editor.actions.add_daily_energy_entity")}
+                </button>
+              </div>
             `,
             { initialOpen: false },
           )}
@@ -2056,32 +2069,39 @@ export class HelmanConfigEditorPanel
               },
             )}
           </div>
-          <div class="field-grid">
-            ${this._renderOptionalNumberField(
-              ["power_devices", "battery", "forecast", "charge_efficiency"],
-              "editor.fields.charge_efficiency",
-              undefined,
-              "editor.help.battery_charge_efficiency",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "battery", "forecast", "discharge_efficiency"],
-              "editor.fields.discharge_efficiency",
-              undefined,
-              "editor.help.battery_discharge_efficiency",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "battery", "forecast", "max_charge_power_w"],
-              "editor.fields.max_charge_power_w",
-              undefined,
-              "editor.help.battery_max_charge_power_w",
-            )}
-            ${this._renderOptionalNumberField(
-              ["power_devices", "battery", "forecast", "max_discharge_power_w"],
-              "editor.fields.max_discharge_power_w",
-              undefined,
-              "editor.help.battery_max_discharge_power_w",
-            )}
-          </div>
+
+          ${this._renderSectionScope(
+            SECTION_SCOPE_IDS.power_devices.battery_forecast,
+            html`
+              <div class="field-grid">
+                ${this._renderOptionalNumberField(
+                  ["power_devices", "battery", "forecast", "charge_efficiency"],
+                  "editor.fields.charge_efficiency",
+                  undefined,
+                  "editor.help.battery_charge_efficiency",
+                )}
+                ${this._renderOptionalNumberField(
+                  ["power_devices", "battery", "forecast", "discharge_efficiency"],
+                  "editor.fields.discharge_efficiency",
+                  undefined,
+                  "editor.help.battery_discharge_efficiency",
+                )}
+                ${this._renderOptionalNumberField(
+                  ["power_devices", "battery", "forecast", "max_charge_power_w"],
+                  "editor.fields.max_charge_power_w",
+                  undefined,
+                  "editor.help.battery_max_charge_power_w",
+                )}
+                ${this._renderOptionalNumberField(
+                  ["power_devices", "battery", "forecast", "max_discharge_power_w"],
+                  "editor.fields.max_discharge_power_w",
+                  undefined,
+                  "editor.help.battery_max_discharge_power_w",
+                )}
+              </div>
+            `,
+            { initialOpen: false },
+          )}
         `,
         { initialOpen: false },
       )}
@@ -2095,42 +2115,51 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.grid_power_entity",
             )}
-            ${this._renderEntityGroup(
-              ["power_devices", "grid", "forecast", "sell_price_entity_id"],
-              "editor.fields.sell_price_entity",
-              {
-                includeDomains: ["sensor"],
-                helpKey: "editor.help.grid_sell_price_entity",
-              },
-            )}
-            ${this._renderOptionalTextField(
-              ["power_devices", "grid", "forecast", "import_price_unit"],
-              "editor.fields.import_price_unit",
-              "editor.helpers.import_price_unit",
-              "editor.help.grid_import_price_unit",
-            )}
           </div>
 
-          <p class="inline-note">
-            ${this._t("editor.notes.grid_import_windows")}
-          </p>
-          ${renderSortableList({
-            items: importPriceWindows,
-            containerClass: "list-stack",
-            renderItem: (windowConfig, index) =>
-              this._renderImportPriceWindow(windowConfig, index),
-            onMove: (oldIndex, newIndex) =>
-              this._moveListItem(
-                ["power_devices", "grid", "forecast", "import_price_windows"],
-                oldIndex,
-                newIndex,
-              ),
-          })}
-          <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddImportPriceWindow}>
-              ${this._t("editor.actions.add_import_price_window")}
-            </button>
-          </div>
+          ${this._renderSectionScope(
+            SECTION_SCOPE_IDS.power_devices.grid_forecast,
+            html`
+              <div class="field-grid">
+                ${this._renderEntityGroup(
+                  ["power_devices", "grid", "forecast", "sell_price_entity_id"],
+                  "editor.fields.sell_price_entity",
+                  {
+                    includeDomains: ["sensor"],
+                    helpKey: "editor.help.grid_sell_price_entity",
+                  },
+                )}
+                ${this._renderOptionalTextField(
+                  ["power_devices", "grid", "forecast", "import_price_unit"],
+                  "editor.fields.import_price_unit",
+                  "editor.helpers.import_price_unit",
+                  "editor.help.grid_import_price_unit",
+                )}
+              </div>
+
+              <p class="inline-note">
+                ${this._t("editor.notes.grid_import_windows")}
+              </p>
+              ${renderSortableList({
+                items: importPriceWindows,
+                containerClass: "list-stack",
+                renderItem: (windowConfig, index) =>
+                  this._renderImportPriceWindow(windowConfig, index),
+                onMove: (oldIndex, newIndex) =>
+                  this._moveListItem(
+                    ["power_devices", "grid", "forecast", "import_price_windows"],
+                    oldIndex,
+                    newIndex,
+                  ),
+              })}
+              <div class="section-footer">
+                <button type="button" class="add-button" @click=${this._handleAddImportPriceWindow}>
+                  ${this._t("editor.actions.add_import_price_window")}
+                </button>
+              </div>
+            `,
+            { initialOpen: false },
+          )}
         `,
         { initialOpen: false },
       )}

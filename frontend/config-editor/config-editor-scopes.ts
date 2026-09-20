@@ -26,12 +26,13 @@ export type ScopeId =
   | "section:visualization.card_labels_and_history"
   | "section:visualization.device_label_text"
   | "section:power_devices.house"
+  | "section:power_devices.house.forecast"
   | "section:power_devices.solar"
-  | "section:power_devices.solar.general"
   | "section:power_devices.solar.forecast"
-  | "section:power_devices.solar.forecast.general"
   | "section:power_devices.battery"
+  | "section:power_devices.battery.forecast"
   | "section:power_devices.grid"
+  | "section:power_devices.grid.forecast"
   | "section:training.settings"
   | "section:training.house_consumption"
   | "section:training.solar_bias"
@@ -71,16 +72,21 @@ export const TAB_ICONS: Record<TabId, string> = {
   visualization: "M21,8V6H3V8H21M3,18H12V16H3V18M3,13H21V11H3V13Z",
 };
 
+/** One glyph for every device's `forecast` sub-panel. */
+const FORECAST_ICON =
+  "M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.27L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z";
+
 export const SECTION_ICONS: Record<string, string> = {
   "section:visualization.card_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:visualization.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
+  "section:power_devices.house.forecast": FORECAST_ICON,
   "section:power_devices.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
-  "section:power_devices.solar.general": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
-  "section:power_devices.solar.forecast": "M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.27L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z",
-  "section:power_devices.solar.forecast.general": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
+  "section:power_devices.solar.forecast": FORECAST_ICON,
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
+  "section:power_devices.battery.forecast": FORECAST_ICON,
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
+  "section:power_devices.grid.forecast": FORECAST_ICON,
   "section:training.settings": CONFIGURATION_ICON,
   "section:training.house_consumption": CONFIGURATION_ICON,
   // What the panel does is drop slots from the training data, not explain
@@ -127,12 +133,13 @@ export const SECTION_SCOPE_IDS = {
   },
   power_devices: {
     house: "section:power_devices.house",
+    house_forecast: "section:power_devices.house.forecast",
     solar: "section:power_devices.solar",
-    solar_general: "section:power_devices.solar.general",
     solar_forecast: "section:power_devices.solar.forecast",
-    solar_forecast_general: "section:power_devices.solar.forecast.general",
     battery: "section:power_devices.battery",
+    battery_forecast: "section:power_devices.battery.forecast",
     grid: "section:power_devices.grid",
+    grid_forecast: "section:power_devices.grid.forecast",
   },
   training: {
     settings: "section:training.settings",
@@ -178,17 +185,6 @@ const AUTOMATION_SETTINGS_MEMBERS = [
   {
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"],
-  },
-] satisfies ScopeProjectionMember[];
-
-const SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS = [
-  {
-    yamlKey: "total_energy_entity_id",
-    documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-  },
-  {
-    yamlKey: "daily_energy_entity_ids",
-    documentPath: ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
   },
 ] satisfies ScopeProjectionMember[];
 
@@ -284,6 +280,17 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
+  [SECTION_SCOPE_IDS.power_devices.house_forecast]: {
+    id: SECTION_SCOPE_IDS.power_devices.house_forecast,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.house,
+    tabId: "power_devices",
+    labelKey: "editor.sections.forecast",
+    adapter: createPathScopeAdapter(["power_devices", "house", "forecast"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
   [SECTION_SCOPE_IDS.power_devices.solar]: {
     id: SECTION_SCOPE_IDS.power_devices.solar,
     kind: "section",
@@ -295,35 +302,16 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.solar_general]: {
-    id: SECTION_SCOPE_IDS.power_devices.solar_general,
-    kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.solar,
-    tabId: "power_devices",
-    labelKey: "editor.sections.solar_general",
-    adapter: createPathScopeAdapter(["power_devices", "solar", "entities"], {
-      emptyValue: EMPTY_OBJECT,
-      rootKind: "object",
-    }),
-  },
   [SECTION_SCOPE_IDS.power_devices.solar_forecast]: {
     id: SECTION_SCOPE_IDS.power_devices.solar_forecast,
     kind: "section",
     parentId: SECTION_SCOPE_IDS.power_devices.solar,
     tabId: "power_devices",
-    labelKey: "editor.sections.solar_forecast",
+    labelKey: "editor.sections.forecast",
     adapter: createPathScopeAdapter(["power_devices", "solar", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
-  },
-  [SECTION_SCOPE_IDS.power_devices.solar_forecast_general]: {
-    id: SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
-    kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.solar_forecast,
-    tabId: "power_devices",
-    labelKey: "editor.sections.solar_forecast_general",
-    adapter: createProjectionScopeAdapter(SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS),
   },
   [SECTION_SCOPE_IDS.power_devices.battery]: {
     id: SECTION_SCOPE_IDS.power_devices.battery,
@@ -336,6 +324,17 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
+  [SECTION_SCOPE_IDS.power_devices.battery_forecast]: {
+    id: SECTION_SCOPE_IDS.power_devices.battery_forecast,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.battery,
+    tabId: "power_devices",
+    labelKey: "editor.sections.forecast",
+    adapter: createPathScopeAdapter(["power_devices", "battery", "forecast"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
   [SECTION_SCOPE_IDS.power_devices.grid]: {
     id: SECTION_SCOPE_IDS.power_devices.grid,
     kind: "section",
@@ -343,6 +342,17 @@ export const EDITOR_SCOPES = {
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
     adapter: createPathScopeAdapter(["power_devices", "grid"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.power_devices.grid_forecast]: {
+    id: SECTION_SCOPE_IDS.power_devices.grid_forecast,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.grid,
+    tabId: "power_devices",
+    labelKey: "editor.sections.forecast",
+    adapter: createPathScopeAdapter(["power_devices", "grid", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),

@@ -228,19 +228,22 @@ test("Power devices -> Solar holds only its entities and forecast sources", asyn
     await openTab(page, "Power devices");
 
     const solar = section(page, "Solar");
+    // One sub-panel, matching the YAML: `forecast`. The "General" wrappers
+    // that used to sit around the plain fields are gone (#317).
     const nested = await solar
         .locator("details.section-card .section-summary-label")
         .allTextContents();
-    expect(nested.map((label) => label.trim())).toEqual(["General", "Forecast", "General"]);
+    expect(nested.map((label) => label.trim())).toEqual(["Forecast"]);
 
     await expect(solar.locator("helman-bias-correction-status")).toHaveCount(0);
     await expect(solar.locator("helman-training-job-status")).toHaveCount(0);
     await expect(solar.locator("helman-solar-bias-diagnostics")).toHaveCount(0);
 
-    // And the forecast section points to where correction went.
-    await openSection(page, "Solar");
-    await openSection(page, "Forecast");
-    await expect(section(page, "Forecast").locator(":scope > .section-content > .inline-note")).toContainText(
+    // And the forecast section itself points to where correction went.
+    const forecast = solar.locator("details.section-card", {
+        has: page.locator(".section-summary-label", { hasText: "Forecast" }),
+    });
+    await expect(forecast.locator(":scope > .section-content > .inline-note")).toContainText(
         "Training tab",
     );
 });
