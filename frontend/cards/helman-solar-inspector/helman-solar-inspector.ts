@@ -2011,12 +2011,22 @@ export class HelmanSolarInspector extends LitElement {
         <!-- One editor for the whole card. The band strip draws its day off
              this host and opens it on a lane press; a badge in the composition
              panel opens the same instance, so the two never disagree about
-             which day is on screen. -->
-        <scheduling-day-editor-host
-          .hass=${this.hass}
-          .preload=${true}
-          .timeZone=${this._haTimeZone() ?? "UTC"}
-        ></scheduling-day-editor-host>
+             which day is on screen.
+
+             Gone with the strip: the band is the host's only consumer here and
+             the only thing that can open it, and the host holds a schedule
+             subscription and loads appliances, controllable entities, history
+             and projections of its own. Leaving it mounted would keep all of
+             that for an editor nothing can reach. -->
+        ${this.hideScheduleStrip
+          ? ""
+          : html`
+              <scheduling-day-editor-host
+                .hass=${this.hass}
+                .preload=${true}
+                .timeZone=${this._haTimeZone() ?? "UTC"}
+              ></scheduling-day-editor-host>
+            `}
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so

@@ -139,6 +139,9 @@ function rowsPresent(page: Page): Promise<Record<string, boolean>> {
             price: has("helman-solar-price-strip"),
             money: has("helman-solar-money-strip"),
             schedule: has("helman-solar-schedule-band-strip"),
+            // The day editor the band opens: its only consumer and its only
+            // entry point is that band, and it does backend work of its own.
+            editorHost: has("scheduling-day-editor-host"),
         };
     });
 }
@@ -206,6 +209,7 @@ test("a default card keeps every row and every series", async ({ page }) => {
         price: true,
         money: true,
         schedule: true,
+        editorHost: true,
     });
     const labels = await metricLabels(page);
     expect(labels).toContain("House");
@@ -229,6 +233,7 @@ test("the solar-only config drops the four rows below the chart", async ({ page 
         price: false,
         money: false,
         schedule: false,
+        editorHost: false,
     });
 });
 
