@@ -11,6 +11,8 @@
       "visualization": "Karta Helman"
     },
     "actions": {
+      "show_more": "Zobrazit více",
+      "show_less": "Zobrazit méně",
       "reload_config": "Načíst uloženou konfiguraci znovu",
       "validate": "Validovat",
       "validating": "Validuji...",
@@ -56,7 +58,6 @@
       "device_label_text": "Texty štítků zařízení",
       "house": "Dům",
       "solar": "Solár",
-      "bias_correction": "Korekce zkreslení",
       "battery": "Baterie",
       "grid": "Síť",
       "automation_settings": "Nastavení automatizace",
@@ -70,17 +71,17 @@
       "use_modes": "Režimy použití",
       "eco_gears": "Eco gears",
       "vehicles": "Vozidla",
-      "bias_correction_settings": "Nastavení korekce zkreslení",
       "bias_correction_slot_invalidation": "Vyřazení slotů z trénovacích dat",
       "solar_general": "Obecné",
       "solar_forecast": "Předpověď",
       "solar_forecast_general": "Obecné",
-      "bias_correction_config": "Konfigurace",
       "consumption": "Spotřeba",
       "training_settings": "Nastavení trénování",
       "house_consumption": "Predikce spotřeby domácnosti",
       "solar_bias": "Korekce solární prognózy",
-      "appliance_energy": "Energie spotřebičů"
+      "appliance_energy": "Energie spotřebičů",
+      "config": "Konfigurace",
+      "diagnostics": "Diagnostika"
     },
     "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
@@ -97,11 +98,11 @@
       "training_solar_bias": "Následující nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou se korekce přeskočí; maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá.",
       "training_solar_bias_min_valid_slot_days": "Třetí nastavení je podmínkou pro každý slot zvlášť, ne pro celé sestavení. Den je rozkrájen na 15minutové sloty a každý se koriguje z vlastních podkladů: při výchozí hodnotě 5 se slot 09:15 koriguje až tehdy, když alespoň 5 dní v okně mělo v 09:15 použitelná data. Dny s nulovou prognózou nebo s oříznutou výrobou se nepočítají -- proto se noční sloty nikdy nekorigují. Protože posuzuje každý slot zvlášť, a ne historii konkrétní entity, neodpovídá mu žádný řádek v tabulce níže.",
       "training_house_consumption_what": "Helman se učí, kolik domácnost spotřebuje v kterou denní dobu, aby plánovač věděl, kolik dům odebere zítra ve 14:00, aniž byste mu to museli říct. Tuto spotřebu zároveň dělí na dvě části: základní spotřebu, která běží pořád, a spotřebu ovládaných spotřebičů, kterou lze v čase přesouvat. Kvůli tomuto rozdělení se zde vedle měřiče domácnosti čte i vlastní měřič energie každého ovládaného spotřebiče -- každý se od celkové spotřeby domu odečte a to, co zbude, je základní spotřeba.",
-      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce níže -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná.",
-      "training_appliance_energy": "Energie spotřebičů se učí, kolik každý řízený spotřebič se strategií historického průměru spotřebuje za hodinu provozu, a to z jeho vlastního elektroměru za jeho vlastní období zpětného pohledu. Nemá žádná globální nastavení: elektroměr i období se nastavují u každého spotřebiče na kartě Řízené spotřebiče a tabulka níže je jen jejich přehled pro čtení.",
-      "edited_as_yaml_elsewhere": "Právě je otevřeno jako YAML v sekci {section}, upravte ho tedy tam; sem se vrátí, jakmile se tam přepne zpět na vizuální režim.",
-      "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy.",
-      "training_solar_bias_correction_yaml": "Tato nastavení jsou uložena pod power_devices.solar.forecast.bias_correction. V YAML je najdete ve vlastním YAML zobrazení této sekce a v YAML zobrazení karty Výkonová zařízení, ne v YAML karty Trénování."
+      "training_solar_bias_what": "Solární prognóza přichází od externího poskytovatele a mýlí se opakujícím se způsobem: konkrétní pole je každé ráno ve stejnou hodinu zastíněné, nebo je poskytovatel příliš optimistický při oparu. Helman se tuto opakující se odchylku učí tak, že pro každý slot porovnává zveřejněnou prognózu se skutečnou výrobou, a korekci pak uplatňuje na budoucí prognózy. Obě strany tohoto porovnání jsou v tabulce v Diagnostice -- zveřejněná prognóza se načítá ze zaznamenaných atributů první entity denní prognózy. Výkon sítě a stav nabití baterie se čtou jen kvůli jedinému: aby šlo rozpoznat sloty, kdy byla výroba oříznutá, a ne skutečně nízká. Při plné baterii a nulovém exportu měnič výrobu přiškrtí a takový slot by korekci jinak naučil, že prognóza byla příliš optimistická, přestože byla správná.",
+      "training_appliance_energy": "Energie spotřebičů se učí, kolik každý řízený spotřebič se strategií historického průměru spotřebuje za hodinu provozu, a to z jeho vlastního elektroměru za jeho vlastní období zpětného pohledu. Elektroměr i období se nastavují u každého spotřebiče na kartě Řízené spotřebiče.",
+      "training_settings_what": "Helman trénuje tři modely na vaší vlastní zaznamenané historii: co solární pole doopravdy vyrobí oproti prognóze, kolik domácnost spotřebuje v kterou denní dobu a kolik každý řízený spotřebič spotřebuje za hodinu provozu. Trénování běží jednou denně v čase nastaveném níže a každý model lze natrénovat i ručně. Všechno, co plánovač předpovídá, na nich stojí -- model, který se nenatrénoval nebo má příliš málo historie, se tak projeví zde, a ne až jako tiše chybný plán.",
+      "training_solar_bias_slot_invalidation": "Ne každý zaznamenaný slot je poctivým důkazem o prognóze. Při plné baterii a nulovém exportu měnič výrobu přiškrtí, takže výroba vyjde nízko, přestože prognóza byla správná; stejně tak může chyba měřidla jediný slot vyhnat do špičky nebo srazit na nulu. Tyto prahy určují, které sloty se před sestavením modelu vyřadí, aby se korekce učila z počasí, a ne z přiškrcení a vadných dat.",
+      "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy."
     },
     "empty": {
       "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
@@ -132,6 +133,7 @@
       "grid_power": "Výkon sítě",
       "controllable_fallback_name": "Spotřebič",
       "no_entity": "Nenastaveno",
+      "attention": "Něco zde vyžaduje pozornost",
       "column_role": "Co z ní trenér bere",
       "battery_soc": "Stav nabití baterie",
       "role_house_meter": "Celková spotřeba domácnosti, ze které se model sestavuje.",
@@ -574,7 +576,6 @@
     "train_now": "Natrénovat nyní",
     "training": "Trénuje se...",
     "status_unavailable": "Stav trénování zatím není k dispozici.",
-    "health_label": "Stav",
     "result_in_use": "Používaný výsledek",
     "last_attempt": "Poslední pokus",
     "not_recorded": "Nezaznamenáno",

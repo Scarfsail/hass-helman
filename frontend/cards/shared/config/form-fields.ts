@@ -23,6 +23,18 @@ export interface FormFieldHost {
     setValue(path: PathSegment[], value: JsonValue | undefined): void;
     /** Open the host's help dialog. */
     openHelp(labelKey: string, contentKey: string): void;
+    /**
+     * The backend's default for a path, as placeholder text, or `""`.
+     *
+     * Optional: a host with no defaults to serve -- the optimizer dialog,
+     * whose fields carry their own schema defaults -- simply omits it.
+     */
+    configDefaultHint?(path: PathSegment[]): string;
+}
+
+/** The placeholder a field shows while it is unset, or `""`. */
+function defaultHint(host: FormFieldHost, path: PathSegment[]): string {
+    return host.configDefaultHint?.(path) ?? "";
 }
 
 /** The day classes an optimizer can be restricted to, in reading order. */
@@ -217,6 +229,7 @@ export function renderOptionalNumberField(
                     step="any"
                     min=${options.min ?? nothing}
                     max=${options.max ?? nothing}
+                    placeholder=${defaultHint(host, path)}
                     .value=${stringValue(host.getValue(path))}
                     @change=${(event: Event) =>
                         setOptionalNumber(host, path, (event.currentTarget as HTMLInputElement).value)}

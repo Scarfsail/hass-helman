@@ -29,7 +29,7 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 18
+CONFIG_DOCUMENT_VERSION = 19
 
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,
@@ -178,3 +178,9 @@ SOLAR_BIAS_AGGREGATION_METHODS = ("ratio_of_sums", "trimmed_mean")
 # forecast a slot must land before the shortfall reads as clipping.
 SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W = 50.0
 SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO = 0.8
+
+# Data-glitch inference: how much forecast a neighbouring slot must carry
+# before a zero reads as a glitch rather than as night, and how long after a
+# gap a backfilled meter reading still counts.
+SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH = 200.0
+SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES = 120

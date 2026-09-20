@@ -266,7 +266,8 @@ def _validate_training_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """The five history-window settings, relocated here since v14.
+    """The history-window settings (relocated here in v14) and, under
+    ``training.solar_bias``, the solar bias correction settings (v19).
 
     A peer of ``power_devices``, not nested under it -- these settings are
     read by several entities' history rather than owned by one, which is the
@@ -360,6 +361,7 @@ def _validate_training_config(
                 window=solar_bias_map.get("max_training_window_days"),
                 window_path="training.solar_bias.max_training_window_days",
             )
+            _validate_solar_bias_correction(config, solar_bias_map, report)
 
 
 def _validate_window_covers_minimum(
@@ -545,20 +547,28 @@ def _validate_solar_config(
         forecast_map.get("daily_energy_entity_ids"),
     )
 
-    # bias_correction subtree validation
-    bias = forecast_map.get("bias_correction")
-    if bias is None:
-        return
-    bias_map = _require_mapping(
-        bias,
-        "power_devices.solar.forecast.bias_correction",
-        section,
-        report,
-    )
-    if bias_map is None:
-        return
+    # The correction settings moved into training.solar_bias in v19 (see
+    # ``_migrate_v18_to_v19``); load migrates, save refuses the old block.
+    if "bias_correction" in forecast_map:
+        report.add_error(
+            section=section,
+            path="power_devices.solar.forecast.bias_correction",
+            code="relocated_config_key",
+            message=(
+                "'power_devices.solar.forecast.bias_correction' moved; write its "
+                "keys directly under training.solar_bias"
+            ),
+        )
 
-    base_path = "power_devices.solar.forecast.bias_correction"
+
+def _validate_solar_bias_correction(
+    config: Mapping[str, Any],
+    bias_map: Mapping[str, Any],
+    report: ValidationReport,
+) -> None:
+    """The correction settings of ``training.solar_bias`` (flattened in v19)."""
+    section = "training"
+    base_path = "training.solar_bias"
 
     # enabled: optional bool
     _validate_optional_bool(
@@ -568,24 +578,9 @@ def _validate_solar_config(
         bias_map.get("enabled"),
     )
 
-    # The three day-count settings moved to training.solar_bias.*; the old
-    # paths (including the legacy training_window_days alias) are refused
-    # rather than validated.
-    for retired_key, new_path in (
-        ("min_history_days", "training.solar_bias.min_history_days"),
-        ("max_training_window_days", "training.solar_bias.max_training_window_days"),
-        ("training_window_days", "training.solar_bias.max_training_window_days"),
-        ("min_valid_slot_days", "training.solar_bias.min_valid_slot_days"),
-    ):
-        if retired_key in bias_map:
-            report.add_error(
-                section=section,
-                path=f"{base_path}.{retired_key}",
-                code="retired_config_key",
-                message=f"'{base_path}.{retired_key}' moved to '{new_path}'",
-            )
-
-    # clamp_min: float in (0, 1]
+    # clamp_min: float in [0, 1]. Zero is the default the reader applies, and
+    # an outage is caught by slot invalidation rather than by this floor, so a
+    # document has to be able to state it.
     clamp_min = bias_map.get("clamp_min")
     if clamp_min is not None:
         if isinstance(clamp_min, bool) or not isinstance(clamp_min, (int, float)):
@@ -596,12 +591,12 @@ def _validate_solar_config(
                 message=f"{base_path}.clamp_min must be a number",
             )
         else:
-            if not (clamp_min > 0 and clamp_min <= 1):
+            if not (clamp_min >= 0 and clamp_min <= 1):
                 report.add_error(
                     section=section,
                     path=f"{base_path}.clamp_min",
                     code="invalid_range",
-                    message=f"{base_path}.clamp_min must be > 0 and <= 1",
+                    message=f"{base_path}.clamp_min must be >= 0 and <= 1",
                 )
 
     # clamp_max: float in [1, 10]

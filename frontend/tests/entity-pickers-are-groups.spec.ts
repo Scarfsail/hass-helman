@@ -85,7 +85,6 @@ const CONFIG = {
             forecast: {
                 total_energy_entity_id: "sensor.solar_energy",
                 daily_energy_entity_ids: ["sensor.solar_day_0"],
-                bias_correction: { total_energy_entity_id: "sensor.solar_bias_energy" },
             },
         },
         battery: {
@@ -104,6 +103,7 @@ const CONFIG = {
     },
     training: {
         house_consumption: { min_history_days: 30 },
+        solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
     controllables: [
         {

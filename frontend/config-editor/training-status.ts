@@ -430,7 +430,10 @@ export class HelmanTrainingStatus extends TrainingStatusBase {
   }
 }
 
-/** One `jobs[]` entry, with its own Train now. */
+/**
+ * One `jobs[]` entry, with its own Train now. Its health sits in the panel
+ * header and its issues under Diagnostics -- see the two elements below.
+ */
 export class HelmanTrainingJobStatus extends TrainingStatusBase {
   @property({ attribute: false }) job: TrainingJobStatus | null = null;
   /** The batch's `isRunning`: every run button waits while anything runs. */
@@ -446,10 +449,6 @@ export class HelmanTrainingJobStatus extends TrainingStatusBase {
     const outcome = job.lastOutcome
       ? this._tValue(`training.outcomes.${job.id}.${job.lastOutcome}`, job.lastOutcome)
       : "";
-    const health = [
-      this._tValue(`training.health.${job.health}`, job.health),
-      ...(job.enabled ? [] : [this._t("training.disabled")]),
-    ].join(" · ");
     const lastAttempt = [
       job.lastAttemptAt
         ? this._formatDateWithAge(job.lastAttemptAt)
@@ -464,10 +463,6 @@ export class HelmanTrainingJobStatus extends TrainingStatusBase {
             ? html`<div class="notice error">${this._t("training.failed_nothing_served")}</div>`
             : nothing}
         <div class="status-grid">
-          ${this._renderRow(
-            this._t("training.health_label"),
-            html`<span class="badge health-${job.health}">${health}</span>`,
-          )}
           ${job.artifactInUse
             ? html`<div class="result-in-use">
                 ${this._renderRow(
@@ -493,16 +488,6 @@ export class HelmanTrainingJobStatus extends TrainingStatusBase {
               ? html`<div class="quiet staleness-unknown">${this._t("training.staleness_unknown")}</div>`
               : nothing}
         </div>
-        ${job.issues.length > 0
-          ? html`
-              <div class="section-title">${this._t("training.issues")}</div>
-              <ul class="issues">
-                ${job.issues.map(
-                  (issue) => html`<li><strong>${issue.subject}</strong>: ${issue.reason}</li>`,
-                )}
-              </ul>
-            `
-          : nothing}
         <div class="controls">
           <button
             type="button"
@@ -514,6 +499,41 @@ export class HelmanTrainingJobStatus extends TrainingStatusBase {
           </button>
         </div>
         ${this._renderMessage()}
+      </div>
+    `;
+  }
+}
+
+/** A job's health chip, for the editor to place in its panel header. */
+export class HelmanTrainingHealthBadge extends TrainingStatusBase {
+  @property({ attribute: false }) job: TrainingJobStatus | null = null;
+
+  render(): TemplateResult | typeof nothing {
+    const job = this.job;
+    if (!job) return nothing;
+    const health = [
+      this._tValue(`training.health.${job.health}`, job.health),
+      ...(job.enabled ? [] : [this._t("training.disabled")]),
+    ].join(" · ");
+    return html`<span class="badge health-${job.health}">${health}</span>`;
+  }
+}
+
+/** A job's issues from its last attempt, or nothing when it had none. */
+export class HelmanTrainingIssues extends TrainingStatusBase {
+  @property({ attribute: false }) job: TrainingJobStatus | null = null;
+
+  render(): TemplateResult | typeof nothing {
+    const issues = this.job?.issues ?? [];
+    if (issues.length === 0) return nothing;
+    return html`
+      <div class="container">
+        <div class="section-title">${this._t("training.issues")}</div>
+        <ul class="issues">
+          ${issues.map(
+            (issue) => html`<li><strong>${issue.subject}</strong>: ${issue.reason}</li>`,
+          )}
+        </ul>
       </div>
     `;
   }
@@ -636,6 +656,8 @@ declare global {
   interface HTMLElementTagNameMap {
     "helman-training-status": HelmanTrainingStatus;
     "helman-training-job-status": HelmanTrainingJobStatus;
+    "helman-training-health-badge": HelmanTrainingHealthBadge;
+    "helman-training-issues": HelmanTrainingIssues;
     "helman-solar-bias-diagnostics": HelmanSolarBiasDiagnostics;
   }
 }
@@ -643,6 +665,8 @@ declare global {
 for (const [tag, element] of [
   ["helman-training-status", HelmanTrainingStatus],
   ["helman-training-job-status", HelmanTrainingJobStatus],
+  ["helman-training-health-badge", HelmanTrainingHealthBadge],
+  ["helman-training-issues", HelmanTrainingIssues],
   ["helman-solar-bias-diagnostics", HelmanSolarBiasDiagnostics],
 ] as const) {
   if (!customElements.get(tag)) customElements.define(tag, element);

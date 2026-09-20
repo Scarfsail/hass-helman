@@ -396,13 +396,7 @@ SOLAR_HISTORY_PATH = (
     "forecast",
     "total_energy_entity_id",
 )
-BIAS_HISTORY_PATH = (
-    "power_devices",
-    "solar",
-    "forecast",
-    "bias_correction",
-    "total_energy_entity_id",
-)
+BIAS_HISTORY_PATH = ("training", "solar_bias", "total_energy_entity_id")
 DAILY_HISTORY_PATH = (
     "power_devices",
     "solar",
@@ -606,10 +600,10 @@ class TestHistoryDepth(_HistoryTestCase):
                     "forecast": {
                         "total_energy_entity_id": HOUSE_METER,
                         "daily_energy_entity_ids": [HOUSE_METER],
-                        "bias_correction": {"total_energy_entity_id": HOUSE_METER},
                     }
                 },
-            }
+            },
+            "training": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}},
         }
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         for path in (
@@ -624,15 +618,7 @@ class TestHistoryDepth(_HistoryTestCase):
                 self.assertIsNotNone(_fact(inspection, "history"))
 
     def test_the_bias_entity_is_judged_against_its_own_default(self):
-        config = {
-            "power_devices": {
-                "solar": {
-                    "forecast": {
-                        "bias_correction": {"total_energy_entity_id": HOUSE_METER}
-                    }
-                }
-            }
-        }
+        config = {"training": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}}}
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         _, inspection = self.inspect_twice(hass, config, BIAS_HISTORY_PATH)
         self.assertEqual(

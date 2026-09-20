@@ -13,16 +13,12 @@ from custom_components.helman.config_validation import validate_config_document
 class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_valid_full_config_passes(self) -> None:
         config = _valid_config()
-        config.setdefault("power_devices", {}).setdefault("solar", {}).setdefault(
-            "forecast", {}
-        )["bias_correction"] = {
-            "enabled": True,
-            "clamp_min": 0.1,
-            "clamp_max": 5.0,
-        }
         config.setdefault("training", {})["solar_bias"] = {
             "min_history_days": 10,
             "max_training_window_days": 90,
+            "enabled": True,
+            "clamp_min": 0.1,
+            "clamp_max": 5.0,
         }
 
         report = validate_config_document(config)
@@ -30,7 +26,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_enabled_must_be_bool(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "enabled": "yes",
         }
 
@@ -38,7 +34,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.enabled"
+                issue.path == "training.solar_bias.enabled"
                 for issue in report.errors
             )
         )
@@ -139,54 +135,70 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         report = validate_config_document(config)
         self.assertTrue(report.valid)
 
-    def test_the_retired_bias_correction_paths_are_refused(self) -> None:
-        """Saving with any of the five old paths fails with retired_config_key.
+    def test_the_relocated_bias_correction_block_is_refused(self) -> None:
+        """Load migrates (see ``_migrate_v18_to_v19``); save refuses.
 
-        Load migrates (see ``_migrate_v13_to_v14``); save refuses -- these keys
-        moved to ``training.solar_bias`` and are never accepted at their old
-        home again, including the legacy ``training_window_days`` alias.
+        The whole block moved into ``training.solar_bias``, so any
+        ``bias_correction`` key -- the day-count keys that left it in v14
+        included -- is refused as one relocated block.
         """
-        for retired_key, value in (
-            ("min_history_days", 10),
-            ("max_training_window_days", 90),
-            ("training_window_days", 45),
-            ("min_valid_slot_days", 5),
-        ):
-            with self.subTest(retired_key=retired_key):
+        for block in ({"enabled": True}, {"min_history_days": 10}, {}):
+            with self.subTest(block=block):
                 config = _valid_config()
-                config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-                    retired_key: value,
-                }
+                config["power_devices"]["solar"]["forecast"]["bias_correction"] = block
 
                 report = validate_config_document(config)
                 self.assertFalse(report.valid)
+                self.assertEqual(
+                    [
+                        (issue.path, issue.code)
+                        for issue in report.errors
+                        if "bias_correction" in issue.path
+                    ],
+                    [
+                        (
+                            "power_devices.solar.forecast.bias_correction",
+                            "relocated_config_key",
+                        )
+                    ],
+                )
                 self.assertTrue(
                     any(
-                        issue.path
-                        == f"power_devices.solar.forecast.bias_correction.{retired_key}"
-                        and issue.code == "retired_config_key"
+                        "training.solar_bias" in issue.message
                         for issue in report.errors
                     )
                 )
 
-    def test_clamp_min_invalid_when_zero(self) -> None:
+    def test_clamp_min_valid_when_zero(self) -> None:
+        # Zero is what the reader applies when the key is absent, and the
+        # editor now offers it as the field's hint, so a document that states
+        # it has to save.
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "clamp_min": 0.0,
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(report.valid)
+
+    def test_clamp_min_invalid_when_negative(self) -> None:
+        config = _valid_config()
+        config.setdefault("training", {})["solar_bias"] = {
+            "clamp_min": -0.1,
         }
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.clamp_min"
+                issue.path == "training.solar_bias.clamp_min"
                 for issue in report.errors
             )
         )
 
     def test_clamp_max_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "clamp_max": 11.0,
         }
 
@@ -194,14 +206,14 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.clamp_max"
+                issue.path == "training.solar_bias.clamp_max"
                 for issue in report.errors
             )
         )
 
     def test_clamp_min_must_be_less_than_clamp_max(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "clamp_min": 1.0,
             "clamp_max": 1.0,
         }
@@ -210,22 +222,21 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path.startswith("power_devices.solar.forecast.bias_correction")
+                issue.path.startswith("training.solar_bias")
                 for issue in report.errors
             )
         )
 
-    def test_absence_of_bias_correction_is_valid(self) -> None:
+    def test_absence_of_correction_settings_is_valid(self) -> None:
         config = _valid_config()
-        # ensure solar forecast has no bias_correction
-        config["power_devices"]["solar"]["forecast"].pop("bias_correction", None)
+        config.get("training", {}).pop("solar_bias", None)
 
         report = validate_config_document(config)
         self.assertTrue(report.valid)
 
     def test_valid_slot_invalidation_config_passes(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -242,7 +253,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         A stored document that still carries it must load, not error — the load
         migration is what removes it."""
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "export_enabled_entity_id": "switch.export_enabled",
@@ -256,7 +267,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_slot_invalidation_requires_grid_power_entity(self) -> None:
         config = _valid_config()
         config["power_devices"]["grid"]["entities"]["power"] = "   "
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -268,7 +279,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.max_battery_soc_percent"
+                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "missing_prerequisite"
                 for issue in report.errors
             )
@@ -276,7 +287,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_ratio_above_one(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "curtailment_max_actual_forecast_ratio": 1.5,
@@ -289,7 +300,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.curtailment_max_actual_forecast_ratio"
+                == "training.solar_bias.slot_invalidation.curtailment_max_actual_forecast_ratio"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -297,7 +308,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_negative_export_deadband(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "curtailment_max_export_w": -5,
@@ -310,7 +321,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.curtailment_max_export_w"
+                == "training.solar_bias.slot_invalidation.curtailment_max_export_w"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -318,7 +329,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_bool_soc_type(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": True,
             }
@@ -330,7 +341,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.max_battery_soc_percent"
+                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "invalid_type"
                 for issue in report.errors
             )
@@ -338,7 +349,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_soc_out_of_range(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 0,
             }
@@ -350,7 +361,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.max_battery_soc_percent"
+                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -359,7 +370,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_slot_invalidation_requires_battery_capacity_entity(self) -> None:
         config = _valid_config()
         config["power_devices"]["battery"]["entities"]["capacity"] = "   "
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -371,7 +382,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation"
+                == "training.solar_bias.slot_invalidation"
                 and issue.code == "missing_prerequisite"
                 for issue in report.errors
             )
@@ -380,7 +391,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_aggregation_method_invalid_type_rejected(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "aggregation_method": 42,
         }
 
@@ -388,7 +399,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.aggregation_method"
+                issue.path == "training.solar_bias.aggregation_method"
                 and issue.code == "invalid_type"
                 for issue in report.errors
             )
@@ -396,7 +407,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_aggregation_method_unknown_value_rejected(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+        config.setdefault("training", {})["solar_bias"] = {
             "aggregation_method": "mean_of_ratios",
         }
 
@@ -404,7 +415,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.solar.forecast.bias_correction.aggregation_method"
+                issue.path == "training.solar_bias.aggregation_method"
                 and issue.code == "invalid_choice"
                 for issue in report.errors
             )
@@ -414,7 +425,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         for method in ("ratio_of_sums", "trimmed_mean"):
             with self.subTest(method=method):
                 config = _valid_config()
-                config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+                config.setdefault("training", {})["solar_bias"] = {
                     "aggregation_method": method,
                 }
 

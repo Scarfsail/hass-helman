@@ -69,6 +69,12 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
+  configDefaultHint,
+  configDefaultValue,
+  fetchConfigDefaults,
+  type ConfigDefaults,
+} from "../cards/shared/config/config-defaults";
+import {
   buildControllableSelectionState,
   buildClimateModeFieldState,
 } from "../cards/shared/optimizer/controllable-target-ui";
@@ -76,12 +82,13 @@ import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
   SECTION_SCOPE_IDS,
+  DIAGNOSTICS_ICON,
   TAB_ICONS,
   TAB_SCOPE_IDS,
   TAB_SECTIONS,
   TABS,
+  TRAINING_JOB_ICONS,
   type EditorMode,
-  getAncestorScopeIds,
   getDescendantScopeIds,
   getScope,
   type ScopeId,
@@ -89,6 +96,7 @@ import {
 } from "./config-editor-scopes";
 import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
+import { mdiAlertOutline } from "@mdi/js";
 import {
   fetchOptimizerSchema,
   type OptimizerConfigBucket,
@@ -134,6 +142,7 @@ import {
   type TrainingStatus,
   type TrainingStatusChangedDetail,
 } from "./training-status";
+import "./info-callout";
 import "./entity-group";
 import {
   ENTITY_GROUP_CONNECTED,
@@ -152,7 +161,6 @@ import type {
   ApplianceMetadataResponse,
   SaveConfigResponse,
   StatusMessage,
-  ValidationIssue,
   ValidationReport,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
@@ -310,6 +318,7 @@ export class HelmanConfigEditorPanel
     _liveApplianceMetadata: { state: true },
     _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
+    _configDefaults: { state: true },
     _helpDialog: { state: true },
     _entityInspections: { state: true },
     _entitiesOnly: { state: true },
@@ -595,6 +604,12 @@ export class HelmanConfigEditorPanel
       min-width: 0;
     }
 
+    .section-summary-badge {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+    }
+
     .section-chevron {
       flex-shrink: 0;
       width: 18px;
@@ -696,6 +711,15 @@ export class HelmanConfigEditorPanel
       border-bottom: 1px solid var(--divider-color);
     }
 
+    /* Nested two panels deep since #313 (job panel, then Diagnostics), so a
+       phone has less width to give; tighter cells keep it from scrolling. */
+    @media (max-width: 600px) {
+      .training-depth-table th,
+      .training-depth-table td {
+        padding: 6px 5px;
+      }
+    }
+
     /* Only the digits hold a line. Everything else -- the prose, the entity
        ids, and these columns' own two-word headings -- wraps, so a narrow
        screen makes the table taller instead of pushing it sideways. */
@@ -790,6 +814,18 @@ export class HelmanConfigEditorPanel
       color: inherit;
     }
 
+    /* A collapsed Diagnostics panel's header: something inside is short or
+       reported an issue. An icon, not a count -- the two sources overlap. */
+    .training-attention {
+      display: flex;
+    }
+
+    .training-attention-icon {
+      width: 20px;
+      height: 20px;
+      fill: var(--warning-color, #ffa600);
+    }
+
     .section-footer {
       display: flex;
       justify-content: flex-start;
@@ -828,6 +864,7 @@ export class HelmanConfigEditorPanel
     .entities-only .list-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
     .entities-only details.section-card:not(.scope-yaml):not(:has(helman-entity-group, .scope-yaml)),
     .entities-only .inline-note,
+    .entities-only helman-info-callout,
     .entities-only .section-footer,
     .entities-only .mode-toggle {
       display: none;
@@ -985,6 +1022,9 @@ export class HelmanConfigEditorPanel
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
+  // What the backend applies where a field is left unset, by dotted path.
+  // Drawn as placeholder text, never written: `null` just means no hints.
+  private _configDefaults: ConfigDefaults | null = null;
   // The condition group whose name is being renamed inline. One slot, not a
   // per-group flag: only one name can be under edit at a time.
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
@@ -1528,13 +1568,6 @@ export class HelmanConfigEditorPanel
     // A scope in YAML mode renders a code editor holding entity ids as text,
     // which no `:has()` can see. Marked so the entities-only view keeps it --
     // see `.scope-yaml` in the styles for why hiding it would be a lie.
-    // A scope rendered away from its YAML owner (the bias correction block,
-    // on Training while its data sits under Power devices) must not stay
-    // editable while that owner is open as YAML: the YAML editor holds a
-    // snapshot, and its next keystroke would write these edits away again.
-    const yamlAncestorId = getAncestorScopeIds(scopeId).find((id) =>
-      this._isScopeYaml(id),
-    );
     const sectionClasses = this._isScopeYaml(scopeId)
       ? "section-card scope-yaml"
       : "section-card";
@@ -1548,21 +1581,15 @@ export class HelmanConfigEditorPanel
               <span class="section-summary-label">${this._t(scope.labelKey)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
-              ${yamlAncestorId ? nothing : this._renderModeToggle(scopeId, { inSummary: false })}
+              ${this._renderModeToggle(scopeId, { inSummary: false })}
             </div>
             ${this._renderSvgIcon(chevronPath, "section-chevron")}
           </div>
         </summary>
         <div class="section-content">
-          ${yamlAncestorId
-            ? html`<p class="inline-note">
-                ${this._tFormat("editor.notes.edited_as_yaml_elsewhere", {
-                  section: this._t(getScope(yamlAncestorId).labelKey),
-                })}
-              </p>`
-            : this._isScopeYaml(scopeId)
-              ? this._renderYamlEditor(scopeId)
-              : content}
+          ${this._isScopeYaml(scopeId)
+            ? this._renderYamlEditor(scopeId)
+            : content}
         </div>
       </details>
     `;
@@ -1572,20 +1599,27 @@ export class HelmanConfigEditorPanel
     return renderSvgIcon(path, className);
   }
 
+  /**
+   * A plain panel: no YAML scope behind it, so no visual/YAML toggle. `icon`
+   * is an SVG path shown before the label; `badge` sits in the summary row
+   * just before the chevron.
+   */
   private _renderSimpleSection(
     label: string,
     content: TemplateResult,
-    options: { open?: boolean } = {},
+    options: { open?: boolean; icon?: string; badge?: TemplateResult } = {},
   ): TemplateResult {
-    const { open = true } = options;
+    const { open = true, icon, badge } = options;
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     return html`
       <details class="section-card" ?open=${open}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
+              ${icon ? this._renderSvgIcon(icon, "section-icon") : nothing}
               <span class="section-summary-label">${label}</span>
             </div>
+            ${badge ? html`<div class="section-summary-badge">${badge}</div>` : nothing}
             ${this._renderSvgIcon(chevronPath, "section-chevron")}
           </div>
         </summary>
@@ -2119,252 +2153,297 @@ export class HelmanConfigEditorPanel
    * the batch with Train all now, then one panel per job in batch order, each
    * read from the one `helman/training/status` poll the tab badge reads too.
    *
-   * Issue #306 nests the whole solar bias correction block in the Solar bias
-   * panel. Its fields still write `power_devices.solar.forecast.bias_correction`;
-   * only the sections moved, so no document path changed.
+   * Issue #306 moved the solar bias correction settings to this tab, and
+   * #312 moved their data after them: every solar bias setting lives flat
+   * under `training.solar_bias`, so the Solar bias panel is one YAML scope.
+   *
+   * Issue #313 gives every panel one shape, so the state reads at a glance
+   * and the rest is a drill-down: a plain parent panel with the job's health
+   * in its header, then the explanation, the status, a collapsed
+   * Configuration scope -- the only part with a YAML toggle -- and a
+   * collapsed Diagnostics panel holding the issues and the depth table. See
+   * `_renderTrainingJobSection`.
    */
   private _renderTrainingTab(): TemplateResult {
     return html`
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.settings,
+      ${this._renderSimpleSection(
+        this._t("editor.sections.training_settings"),
         html`
+          <helman-info-callout
+            .hass=${this.hass}
+            .text=${this._t("editor.notes.training_settings_what")}
+          ></helman-info-callout>
           <helman-training-status
             .hass=${this.hass}
             .status=${this._trainingStatus}
             .disabled=${this._dirty}
             @helman-training-status-changed=${this._handleTrainingStatusChanged}
           ></helman-training-status>
-          <div class="field-grid">
-            ${this._renderOptionalTextField(
-              ["training", "training_time"],
-              "editor.fields.training_time",
-              "editor.helpers.training_time",
-              "editor.help.training_time",
-            )}
-          </div>
+          ${this._renderSectionScope(
+            SECTION_SCOPE_IDS.training.settings,
+            html`
+              <div class="field-grid">
+                ${this._renderOptionalTextField(
+                  ["training", "training_time"],
+                  "editor.fields.training_time",
+                  "editor.helpers.training_time",
+                  "editor.help.training_time",
+                )}
+              </div>
+            `,
+            { initialOpen: false },
+          )}
         `,
+        { icon: TAB_ICONS.training },
       )}
 
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.solar_bias,
+      ${this._renderTrainingJobSection(
+        "solar_bias",
+        "editor.notes.training_solar_bias_what",
+        this._renderSectionScope(
+          SECTION_SCOPE_IDS.training.solar_bias,
+          html`
+            <helman-info-callout
+              .hass=${this.hass}
+              .text=${this._t("editor.notes.training_solar_bias")}
+            ></helman-info-callout>
+            <div class="field-grid">
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "min_history_days"],
+                "editor.fields.solar_bias_min_history_days",
+                "editor.helpers.solar_bias_min_history_days",
+                "editor.help.solar_bias_min_history_days",
+              )}
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "max_training_window_days"],
+                "editor.fields.solar_bias_max_training_window_days",
+                "editor.helpers.solar_bias_max_training_window_days",
+                "editor.help.solar_bias_max_training_window_days",
+              )}
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "min_valid_slot_days"],
+                "editor.fields.solar_bias_min_valid_slot_days",
+                "editor.helpers.solar_bias_min_valid_slot_days",
+                "editor.help.solar_bias_min_valid_slot_days",
+              )}
+            </div>
+            <p class="inline-note">${this._t("editor.notes.training_solar_bias_min_valid_slot_days")}</p>
+            <div class="field-grid">
+              ${this._renderBooleanField(
+                ["training", "solar_bias", "enabled"],
+                "editor.fields.bias_correction_enabled",
+                this._configDefaultValue(["training", "solar_bias", "enabled"]) === true,
+                "editor.help.bias_correction_enabled",
+              )}
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "clamp_min"],
+                "editor.fields.bias_correction_clamp_min",
+                undefined,
+                "editor.help.bias_correction_clamp_min",
+              )}
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "clamp_max"],
+                "editor.fields.bias_correction_clamp_max",
+                undefined,
+                "editor.help.bias_correction_clamp_max",
+              )}
+              ${renderSelectFieldWithDefault(
+                this,
+                ["training", "solar_bias", "aggregation_method"],
+                "editor.fields.bias_correction_aggregation_method",
+                [
+                  { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
+                  { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
+                ],
+                String(this._configDefaultValue(["training", "solar_bias", "aggregation_method"]) ?? ""),
+                "editor.help.bias_correction_aggregation_method",
+              )}
+              ${this._renderOptionalNumberField(
+                ["training", "solar_bias", "max_interpolated_consecutive_slots"],
+                "editor.fields.bias_correction_max_interpolated_consecutive_slots",
+                "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
+                "editor.help.bias_correction_max_interpolated_consecutive_slots",
+              )}
+              ${this._renderEntityGroup(
+                ["training", "solar_bias", "total_energy_entity_id"],
+                "editor.fields.bias_correction_total_energy_entity",
+                {
+                  includeDomains: ["sensor"],
+                  helpKey: "editor.help.bias_correction_total_energy_entity",
+                },
+              )}
+            </div>
+
+            ${this._renderSectionScope(
+              SECTION_SCOPE_IDS.training.solar_bias_slot_invalidation,
+              html`
+                <helman-info-callout
+                  .hass=${this.hass}
+                  .text=${this._t("editor.notes.training_solar_bias_slot_invalidation")}
+                ></helman-info-callout>
+                <div class="field-grid">
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "max_battery_soc_percent"],
+                    "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
+                    "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
+                    "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
+                    { min: 0, max: 100, suffix: "%" },
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "curtailment_max_export_w"],
+                    "editor.fields.bias_correction_slot_invalidation_curtailment_max_export_w",
+                    "editor.helpers.bias_correction_slot_invalidation_curtailment_max_export_w",
+                    "editor.help.bias_correction_slot_invalidation_curtailment_max_export_w",
+                    { min: 0, suffix: "W" },
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "curtailment_max_actual_forecast_ratio"],
+                    "editor.fields.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                    "editor.helpers.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                    "editor.help.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                    { min: 0, max: 1 },
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "data_glitch_max_slot_wh"],
+                    "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                    "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                    "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                    { min: 0, suffix: "Wh" },
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "data_glitch_min_neighbour_forecast_wh"],
+                    "editor.fields.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                    "editor.helpers.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                    "editor.help.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                    { min: 0, suffix: "Wh" },
+                  )}
+                  ${this._renderOptionalNumberField(
+                    ["training", "solar_bias", "slot_invalidation", "data_glitch_backfill_max_minutes"],
+                    "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                    "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                    "editor.help.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                    { min: 0, suffix: "min" },
+                  )}
+                </div>
+              `,
+              { initialOpen: false },
+            )}
+          `,
+          { initialOpen: false },
+        ),
+        this._solarBiasDepthRows(),
         html`
-          ${this._renderTrainingJobStatus("solar_bias")}
           <helman-solar-bias-diagnostics
             .hass=${this.hass}
             .job=${this._trainingJob("solar_bias")}
             .configRevision=${this._configBaseline}
           ></helman-solar-bias-diagnostics>
-          <p class="inline-note">${this._t("editor.notes.training_solar_bias_what")}</p>
-          <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
-          <div class="field-grid">
-            ${this._renderOptionalNumberField(
-              ["training", "solar_bias", "min_history_days"],
-              "editor.fields.solar_bias_min_history_days",
-              "editor.helpers.solar_bias_min_history_days",
-              "editor.help.solar_bias_min_history_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["training", "solar_bias", "max_training_window_days"],
-              "editor.fields.solar_bias_max_training_window_days",
-              "editor.helpers.solar_bias_max_training_window_days",
-              "editor.help.solar_bias_max_training_window_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["training", "solar_bias", "min_valid_slot_days"],
-              "editor.fields.solar_bias_min_valid_slot_days",
-              "editor.helpers.solar_bias_min_valid_slot_days",
-              "editor.help.solar_bias_min_valid_slot_days",
-            )}
-          </div>
-          <p class="inline-note">${this._t("editor.notes.training_solar_bias_min_valid_slot_days")}</p>
-          ${this._renderTrainingDepthTable(this._solarBiasDepthRows())}
         `,
       )}
 
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.solar_bias_correction,
-        html`
-          <p class="inline-note">${this._t("editor.notes.training_solar_bias_correction_yaml")}</p>
-          ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.training.solar_bias_correction_config,
-            html`
-              <div class="field-grid">
-                ${this._renderBooleanField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
-                  "editor.fields.bias_correction_enabled",
-                  false,
-                  "editor.help.bias_correction_enabled",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
-                  "editor.fields.bias_correction_clamp_min",
-                  undefined,
-                  "editor.help.bias_correction_clamp_min",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
-                  "editor.fields.bias_correction_clamp_max",
-                  undefined,
-                  "editor.help.bias_correction_clamp_max",
-                )}
-                ${this._renderOptionalSelectField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
-                  "editor.fields.bias_correction_aggregation_method",
-                  [
-                    { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
-                    { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
-                  ],
-                  "editor.help.bias_correction_aggregation_method",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "max_interpolated_consecutive_slots"],
-                  "editor.fields.bias_correction_max_interpolated_consecutive_slots",
-                  "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
-                  "editor.help.bias_correction_max_interpolated_consecutive_slots",
-                )}
-                ${this._renderEntityGroup(
-                  ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
-                  "editor.fields.bias_correction_total_energy_entity",
-                  {
-                    includeDomains: ["sensor"],
-                    helpKey: "editor.help.bias_correction_total_energy_entity",
-                  },
-                )}
-              </div>
-
-              ${this._renderSectionScope(
-                SECTION_SCOPE_IDS.training.solar_bias_correction_slot_invalidation,
-                html`
-                  <div class="field-grid">
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "max_battery_soc_percent",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      { min: 0, max: 100, suffix: "%" },
-                    )}
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "curtailment_max_export_w",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_curtailment_max_export_w",
-                      "editor.helpers.bias_correction_slot_invalidation_curtailment_max_export_w",
-                      "editor.help.bias_correction_slot_invalidation_curtailment_max_export_w",
-                      { min: 0, suffix: "W" },
-                    )}
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "curtailment_max_actual_forecast_ratio",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
-                      "editor.helpers.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
-                      "editor.help.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
-                      { min: 0, max: 1 },
-                    )}
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "data_glitch_max_slot_wh",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
-                      "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
-                      "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
-                      { min: 0, suffix: "Wh" },
-                    )}
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "data_glitch_min_neighbour_forecast_wh",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
-                      "editor.helpers.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
-                      "editor.help.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
-                      { min: 0, suffix: "Wh" },
-                    )}
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "data_glitch_backfill_max_minutes",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
-                      "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
-                      "editor.help.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
-                      { min: 0, suffix: "min" },
-                    )}
-                  </div>
-                `,
-                { initialOpen: false },
+      ${this._renderTrainingJobSection(
+        "house_consumption",
+        "editor.notes.training_house_consumption_what",
+        this._renderSectionScope(
+          SECTION_SCOPE_IDS.training.house_consumption,
+          html`
+            <helman-info-callout
+              .hass=${this.hass}
+              .text=${this._t("editor.notes.training_house_consumption")}
+            ></helman-info-callout>
+            <div class="field-grid">
+              ${this._renderOptionalNumberField(
+                ["training", "house_consumption", "min_history_days"],
+                "editor.fields.house_consumption_min_history_days",
+                "editor.helpers.house_consumption_min_history_days",
+                "editor.help.house_consumption_min_history_days",
               )}
-            `,
-            { initialOpen: false },
-          )}
-
-        `,
-        { initialOpen: false },
+              ${this._renderOptionalNumberField(
+                ["training", "house_consumption", "training_window_days"],
+                "editor.fields.house_consumption_training_window_days",
+                "editor.helpers.house_consumption_training_window_days",
+                "editor.help.house_consumption_training_window_days",
+              )}
+            </div>
+          `,
+          { initialOpen: false },
+        ),
+        this._houseConsumptionDepthRows(),
       )}
 
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.house_consumption,
-        html`
-          ${this._renderTrainingJobStatus("house_consumption")}
-          <p class="inline-note">${this._t("editor.notes.training_house_consumption_what")}</p>
-          <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
-          <div class="field-grid">
-            ${this._renderOptionalNumberField(
-              ["training", "house_consumption", "min_history_days"],
-              "editor.fields.house_consumption_min_history_days",
-              "editor.helpers.house_consumption_min_history_days",
-              "editor.help.house_consumption_min_history_days",
-            )}
-            ${this._renderOptionalNumberField(
-              ["training", "house_consumption", "training_window_days"],
-              "editor.fields.house_consumption_training_window_days",
-              "editor.helpers.house_consumption_training_window_days",
-              "editor.help.house_consumption_training_window_days",
-            )}
-          </div>
-          ${this._renderTrainingDepthTable(this._houseConsumptionDepthRows())}
-        `,
-      )}
-
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.training.appliance_energy,
-        html`
-          ${this._renderTrainingJobStatus("appliance_energy")}
-          <p class="inline-note">${this._t("editor.notes.training_appliance_energy")}</p>
-          ${this._renderTrainingDepthTable(this._applianceEnergyDepthRows())}
-        `,
+      ${this._renderTrainingJobSection(
+        "appliance_energy",
+        "editor.notes.training_appliance_energy",
+        nothing,
+        this._applianceEnergyDepthRows(),
       )}
     `;
+  }
+
+  /**
+   * One job's panel: explanation, status, Configuration, Diagnostics, in
+   * that order, each left out when it has nothing to show.
+   *
+   * The Diagnostics header warns when the job reported issues or a depth
+   * row is short. It is an icon rather than a count, because the two can be
+   * the same problem -- an appliance's issue and its meter's short row.
+   */
+  private _renderTrainingJobSection(
+    id: keyof typeof TRAINING_JOB_ICONS,
+    explanationKey: string,
+    configuration: TemplateResult | typeof nothing,
+    depthRows: TrainingDepthRow[],
+    extraDiagnostics: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
+    const job = this._trainingJob(id);
+    const hasIssues = (job?.issues.length ?? 0) > 0;
+    const needsAttention =
+      hasIssues || depthRows.some((row) => this._isTrainingDepthRowShort(row));
+    const hasDiagnostics =
+      hasIssues || depthRows.length > 0 || extraDiagnostics !== nothing;
+    const attentionLabel = this._t("editor.training_depth.attention");
+    return this._renderSimpleSection(
+      this._t(`editor.sections.${id}`),
+      html`
+        <helman-info-callout
+          .hass=${this.hass}
+          .text=${this._t(explanationKey)}
+        ></helman-info-callout>
+        ${this._renderTrainingJobStatus(id)}
+        ${configuration}
+        ${hasDiagnostics
+          ? this._renderSimpleSection(
+              this._t("editor.sections.diagnostics"),
+              html`
+                <helman-training-issues .hass=${this.hass} .job=${job}></helman-training-issues>
+                ${extraDiagnostics}
+                ${this._renderTrainingDepthTable(depthRows)}
+              `,
+              {
+                open: false,
+                icon: DIAGNOSTICS_ICON,
+                badge: needsAttention
+                  ? html`<span
+                      class="training-attention"
+                      role="img"
+                      title=${attentionLabel}
+                      aria-label=${attentionLabel}
+                    >${this._renderSvgIcon(mdiAlertOutline, "training-attention-icon")}</span>`
+                  : undefined,
+              },
+            )
+          : nothing}
+      `,
+      {
+        icon: TRAINING_JOB_ICONS[id],
+        badge: job
+          ? html`<helman-training-health-badge
+              .hass=${this.hass}
+              .job=${job}
+            ></helman-training-health-badge>`
+          : undefined,
+      },
+    );
   }
 
   private _trainingJob(id: string) {
@@ -2457,13 +2536,7 @@ export class HelmanConfigEditorPanel
     return [
       {
         label: this._t("editor.training_depth.bias_meter"),
-        path: [
-          "power_devices",
-          "solar",
-          "forecast",
-          "bias_correction",
-          "total_energy_entity_id",
-        ],
+        path: ["training", "solar_bias", "total_energy_entity_id"],
         roleKey: "editor.training_depth.role_bias_meter",
       },
       {
@@ -2640,8 +2713,33 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
+  /** The inspection draft behind a depth row, and its history fact. */
+  private _trainingDepthInspection(row: TrainingDepthRow) {
     const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
+    const historyFact: EntityFact | undefined = draft?.facts?.find(
+      (fact) => fact.id === "history",
+    );
+    return { draft, historyFact };
+  }
+
+  /**
+   * Whether a depth row is short of the history it needs.
+   *
+   * Severity is a property of the pair now that `available` is the spliced
+   * effective depth (issue #186) -- the raw-states cell alone no longer says
+   * whether the row is short, so the highlight is on the row.
+   */
+  private _isTrainingDepthRowShort(row: TrainingDepthRow): boolean {
+    const { historyFact } = this._trainingDepthInspection(row);
+    const available = historyFact?.params?.["available"];
+    if (row.requiredDays !== undefined) {
+      return typeof available === "number" && available < row.requiredDays;
+    }
+    return historyFact?.severity === "warn";
+  }
+
+  private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
+    const { draft, historyFact } = this._trainingDepthInspection(row);
     // The config document first, then whatever the backend resolved. For every
     // row but one those are the same string. The exception is a row for an
     // entity Helman publishes: its path names nothing in the document, so only
@@ -2650,27 +2748,11 @@ export class HelmanConfigEditorPanel
     const entityId =
       this._stringValue(this._getValue(row.path)) ||
       this._stringValue(draft?.entityId);
-    const historyFact: EntityFact | undefined = draft?.facts?.find(
-      (fact) => fact.id === "history",
-    );
     const rawStates = historyFact?.params?.["raw_states"];
     const statistics = historyFact?.params?.["statistics"];
     const name = html`<div class="training-depth-label">${row.label}</div>`;
-    // Severity is a property of the pair now that `available` is the spliced
-    // effective depth (issue #186) -- the raw-states cell alone no longer
-    // says whether the row is short, so the highlight moves to the row.
-    const available = historyFact?.params?.["available"];
-    const warnsForOwnRequirement =
-      row.requiredDays !== undefined &&
-      typeof available === "number" &&
-      available < row.requiredDays;
-    const rowClass =
-      warnsForOwnRequirement ||
-      (row.requiredDays === undefined && historyFact?.severity === "warn")
-        ? "training-depth-warn"
-        : "";
     return html`
-      <tr class=${rowClass}>
+      <tr class=${this._isTrainingDepthRowShort(row) ? "training-depth-warn" : ""}>
         <td>
           ${entityId
             ? html`<button
@@ -3998,6 +4080,7 @@ export class HelmanConfigEditorPanel
           ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
         </div>
         <input
+          placeholder=${this.configDefaultHint(path)}
           .value=${this._stringValue(this._getValue(path))}
           @change=${(event: Event) =>
             this._setOptionalString(path, (event.currentTarget as HTMLInputElement).value)}
@@ -4458,21 +4541,6 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-
-  /**
-   * The tab an issue's field is edited on. By its backend section, except the
-   * solar bias correction block, which lives under power_devices in the
-   * document but is edited on the Training tab (issue #306).
-   */
-  private _issueTabId(issue: ValidationIssue): TabId {
-    if (
-      issue.path === "power_devices.solar.forecast.bias_correction" ||
-      issue.path.startsWith("power_devices.solar.forecast.bias_correction.")
-    ) {
-      return "training";
-    }
-    return TAB_SECTIONS[issue.section] ?? "power_devices";
-  }
   private _buildTabIssueCounts(): Record<TabId, { errors: number; warnings: number }> {
     const counts: Record<TabId, { errors: number; warnings: number }> = {
       power_devices: { errors: 0, warnings: 0 },
@@ -4484,10 +4552,12 @@ export class HelmanConfigEditorPanel
 
     if (this._validation) {
       for (const issue of this._validation.errors) {
-        counts[this._issueTabId(issue)].errors += 1;
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
+        counts[tabId].errors += 1;
       }
       for (const issue of this._validation.warnings) {
-        counts[this._issueTabId(issue)].warnings += 1;
+        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
+        counts[tabId].warnings += 1;
       }
     }
 
@@ -4530,13 +4600,19 @@ export class HelmanConfigEditorPanel
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult, schemaResult, labelNamesResult] =
-        await Promise.allSettled([
-          this.hass.callWS<unknown>({ type: "helman/get_config" }),
-          this._loadLiveApplianceMetadata(),
-          fetchOptimizerSchema(this.hass),
-          this._loadHaLabelNames(),
-        ]);
+      const [
+        loadedResult,
+        liveApplianceMetadataResult,
+        schemaResult,
+        defaultsResult,
+        labelNamesResult,
+      ] = await Promise.allSettled([
+        this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        this._loadLiveApplianceMetadata(),
+        fetchOptimizerSchema(this.hass),
+        fetchConfigDefaults(this.hass),
+        this._loadHaLabelNames(),
+      ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
       }
@@ -4557,6 +4633,8 @@ export class HelmanConfigEditorPanel
           : null;
       this._optimizerSchema =
         schemaResult.status === "fulfilled" ? schemaResult.value : null;
+      this._configDefaults =
+        defaultsResult.status === "fulfilled" ? defaultsResult.value : null;
       this._haLabelNames =
         labelNamesResult.status === "fulfilled" ? labelNamesResult.value : null;
       this._validation = null;
@@ -5319,6 +5397,22 @@ export class HelmanConfigEditorPanel
 
   openHelp(labelKey: string, contentKey: string): void {
     this._helpDialog = { labelKey, contentKey };
+  }
+
+  configDefaultHint(path: PathSegment[]): string {
+    return configDefaultHint(this._configDefaults, path);
+  }
+
+  /**
+   * The backend's default for a control that always renders some state.
+   *
+   * A checkbox drawn unchecked, or a select drawn blank, states that the
+   * setting is off while the backend has it on -- a user who wants it off
+   * would change nothing and leave it running. So these read the default
+   * rather than falling back to an empty value.
+   */
+  private _configDefaultValue(path: PathSegment[]): string | number | boolean | undefined {
+    return configDefaultValue(this._configDefaults, path);
   }
 
   private _getValue(path: PathSegment[]): unknown {

@@ -10,6 +10,8 @@
       "visualization": "Helman card"
     },
     "actions": {
+      "show_more": "Show more",
+      "show_less": "Show less",
       "reload_config": "Reload stored config",
       "validate": "Validate",
       "validating": "Validating...",
@@ -55,7 +57,6 @@
       "device_label_text": "Device label text",
       "house": "House",
       "solar": "Solar",
-      "bias_correction": "Bias Correction",
       "battery": "Battery",
       "grid": "Grid",
       "automation_settings": "Automation settings",
@@ -69,17 +70,17 @@
       "use_modes": "Use modes",
       "eco_gears": "Eco gears",
       "vehicles": "Vehicles",
-      "bias_correction_settings": "Bias correction settings",
       "bias_correction_slot_invalidation": "Invalidate training slot data",
       "solar_general": "General",
       "solar_forecast": "Forecast",
       "solar_forecast_general": "General",
-      "bias_correction_config": "Configuration",
       "consumption": "Consumption",
       "training_settings": "Training settings",
       "house_consumption": "House consumption forecast",
       "solar_bias": "Solar forecast correction",
-      "appliance_energy": "Appliance energy"
+      "appliance_energy": "Appliance energy",
+      "config": "Configuration",
+      "diagnostics": "Diagnostics"
     },
     "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
@@ -96,11 +97,11 @@
       "training_solar_bias": "The settings below decide how that fit is made. The minimum history is the floor under which correction is skipped; the maximum training window is how far back the fit looks.",
       "training_solar_bias_min_valid_slot_days": "The third setting is a condition on each slot rather than on the fit as a whole. The day is cut into 15-minute slots and each is corrected on its own evidence: with the default of 5, the 09:15 slot is corrected only once at least 5 days in the window have had usable data at 09:15. Days where the forecast was zero, or where production was capped, do not count -- which is why night slots are never corrected. Because it judges each slot separately rather than any one entity's history, no row in the table below answers to it.",
       "training_house_consumption_what": "Helman learns what your household consumes at each time of day, so the planner can tell what the house will draw tomorrow at 14:00 without being told. It also splits that total in two: the baseline that runs whatever you do, and the consumption of the controllable appliances, which can be moved in time. That split is why every controllable's own energy meter is read here alongside the house meter -- each one is subtracted from the house total, and what remains is the baseline.",
-      "training_solar_bias_what": "The solar forecast comes from an outside provider, and it is wrong in ways that repeat: a given array is shaded at the same hour each morning, or the provider is optimistic about haze. Helman learns that repeating error by comparing the forecast published for each slot against what the array actually produced, and applies the correction to future forecasts. Both sides of that comparison are in the table below -- the published forecast is recovered from the recorded attributes of the first daily forecast entity. Grid power and battery state of charge are read for one purpose only: to recognise the slots where production was capped rather than genuinely low. With a full battery and nothing being exported, the inverter throttles, and a slot like that would otherwise teach the correction that the forecast was too optimistic when it was right.",
-      "training_appliance_energy": "Appliance energy learns how much each controllable on the history average strategy uses per hour it runs, from its own energy meter over its own lookback. It has no global settings: the meter and the lookback are set on each appliance in the Controllables tab, and the table below is a read-only view of them.",
-      "edited_as_yaml_elsewhere": "Open as YAML in {section} right now, so edit it there; it returns here once that switches back to visual.",
-      "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction.",
-      "training_solar_bias_correction_yaml": "These settings are stored under power_devices.solar.forecast.bias_correction. In YAML they appear in this section's own YAML view and in the Power devices tab's YAML view, not in the Training tab's."
+      "training_solar_bias_what": "The solar forecast comes from an outside provider, and it is wrong in ways that repeat: a given array is shaded at the same hour each morning, or the provider is optimistic about haze. Helman learns that repeating error by comparing the forecast published for each slot against what the array actually produced, and applies the correction to future forecasts. Both sides of that comparison are in the Diagnostics table -- the published forecast is recovered from the recorded attributes of the first daily forecast entity. Grid power and battery state of charge are read for one purpose only: to recognise the slots where production was capped rather than genuinely low. With a full battery and nothing being exported, the inverter throttles, and a slot like that would otherwise teach the correction that the forecast was too optimistic when it was right.",
+      "training_appliance_energy": "Appliance energy learns how much each controllable on the history average strategy uses per hour it runs, from its own energy meter over its own lookback. The meter and the lookback are set on each appliance in the Controllables tab.",
+      "training_settings_what": "Helman trains three models on your own recorded history: what the solar array really produces against the forecast, what the household consumes at each time of day, and how much each controllable appliance uses per hour it runs. Training runs once a day at the time set below, and every model can also be trained on demand. Everything the planner predicts rests on these, so a model that has not trained, or one with too little history, surfaces here rather than as a quietly wrong plan.",
+      "training_solar_bias_slot_invalidation": "Not every recorded slot is honest evidence about the forecast. With a full battery and nothing being exported the inverter throttles the array, so production reads low although the forecast was right, and a meter glitch can spike or zero a single slot the same way. These thresholds decide which slots are thrown out before the fit, so the correction learns from the weather rather than from clipping and bad data.",
+      "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction."
     },
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
@@ -131,6 +132,7 @@
       "grid_power": "Grid power",
       "controllable_fallback_name": "Controllable",
       "no_entity": "Not configured",
+      "attention": "Something here needs attention",
       "column_role": "What the trainer takes from it",
       "battery_soc": "Battery state of charge",
       "role_house_meter": "The household total the consumption profile is fitted from.",
@@ -573,7 +575,6 @@
     "train_now": "Train now",
     "training": "Training...",
     "status_unavailable": "Training status is not available yet.",
-    "health_label": "Health",
     "result_in_use": "Result in use",
     "last_attempt": "Last attempt",
     "not_recorded": "Not recorded",

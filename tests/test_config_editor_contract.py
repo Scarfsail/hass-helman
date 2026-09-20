@@ -225,8 +225,11 @@ _install_import_stubs()
 
 from custom_components.helman.automation import config as automation_config_module
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN
+from custom_components.helman.config_defaults import CONFIG_FIELD_DEFAULTS
+from custom_components.helman.solar_bias_correction.models import read_bias_config
 from custom_components.helman.websockets import (
     ws_get_config,
+    ws_get_config_defaults,
     ws_save_config,
     ws_validate_config,
 )
@@ -409,6 +412,82 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connection.errors, [])
         self.assertEqual(connection.results, [(1, config)])
+
+    def test_get_config_defaults_requires_admin(self) -> None:
+        connection = FakeConnection(is_admin=False)
+
+        ws_get_config_defaults(
+            FakeHass(FakeStorage()),
+            connection,
+            {"id": 1, "type": "helman/get_config_defaults"},
+        )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
+
+    def test_get_config_defaults_serves_dotted_paths(self) -> None:
+        connection = FakeConnection(is_admin=True)
+
+        ws_get_config_defaults(
+            FakeHass(FakeStorage()),
+            connection,
+            {"id": 1, "type": "helman/get_config_defaults"},
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(connection.results, [(1, dict(CONFIG_FIELD_DEFAULTS))])
+
+    def test_config_defaults_match_what_the_bias_reader_applies(self) -> None:
+        """The hint and the runtime have to be the same number.
+
+        Spot-checked against the one reader with the most entries in the map;
+        an empty document is exactly the "nothing configured" case the editor
+        draws the placeholders for.
+        """
+        resolved = read_bias_config({})
+
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS["training.training_time"],
+            resolved.training_time,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS["training.solar_bias.min_history_days"],
+            resolved.min_history_days,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS["training.solar_bias.min_valid_slot_days"],
+            resolved.min_valid_slot_days,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS["training.solar_bias.clamp_min"],
+            resolved.clamp_min,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS["training.solar_bias.clamp_max"],
+            resolved.clamp_max,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS[
+                "training.solar_bias.max_interpolated_consecutive_slots"
+            ],
+            resolved.max_interpolated_consecutive_slots,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS[
+                "training.solar_bias.slot_invalidation.curtailment_max_export_w"
+            ],
+            resolved.slot_invalidation_curtailment_max_export_w,
+        )
+        self.assertEqual(
+            CONFIG_FIELD_DEFAULTS[
+                "training.solar_bias.slot_invalidation."
+                "curtailment_max_actual_forecast_ratio"
+            ],
+            resolved.slot_invalidation_curtailment_max_actual_forecast_ratio,
+        )
 
     def test_validate_config_returns_structured_report(self) -> None:
         connection = FakeConnection(is_admin=True)
