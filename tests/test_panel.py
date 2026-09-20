@@ -72,6 +72,18 @@ def _install_import_stubs() -> None:
 
     http_mod.StaticPathConfig = StaticPathConfig
 
+    # `panel.py` reaches into `frontend.py` for the version-stamped card URL,
+    # which asks the loader for the integration's manifest version.
+    loader_mod = sys.modules.get("homeassistant.loader")
+    if loader_mod is None:
+        loader_mod = types.ModuleType("homeassistant.loader")
+        sys.modules["homeassistant.loader"] = loader_mod
+
+    async def async_get_integration(_hass, _domain):
+        return types.SimpleNamespace(version="1.2.3")
+
+    loader_mod.async_get_integration = async_get_integration
+
     components_pkg.frontend = frontend_mod
     components_pkg.panel_custom = panel_custom_mod
     components_pkg.http = http_mod
@@ -79,7 +91,16 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.const import PANEL_FRONTEND_URL_PATH, PANEL_ICON, PANEL_URL
+from custom_components.helman.const import (
+    CARD_URL,
+    PANEL_FRONTEND_URL_PATH,
+    PANEL_ICON,
+    PANEL_URL,
+)
+from custom_components.helman.frontend import (
+    async_card_module_url,
+    async_register_frontend,
+)
 from custom_components.helman.panel import async_register_panel, async_unregister_panel
 
 
@@ -94,6 +115,37 @@ class FakeHttp:
 class FakeConfig:
     def path(self, part: str) -> str:
         return f"/config/{part}"
+
+
+class FakeResources:
+    """The storage-mode Lovelace resource collection, as frontend.py uses it."""
+
+    def __init__(self) -> None:
+        self.items: list[dict] = []
+
+    async def async_get_info(self) -> dict:
+        return {}
+
+    def async_items(self) -> list[dict]:
+        return list(self.items)
+
+    async def async_create_item(self, data: dict) -> dict:
+        item = {"id": f"res{len(self.items)}", **data}
+        self.items.append(item)
+        return item
+
+    async def async_update_item(self, item_id: str, changes: dict) -> None:
+        for item in self.items:
+            if item["id"] == item_id:
+                item.update(changes)
+
+    async def async_delete_item(self, item_id: str) -> None:
+        self.items = [item for item in self.items if item["id"] != item_id]
+
+
+class FakeLovelace:
+    def __init__(self) -> None:
+        self.resources = FakeResources()
 
 
 class FakeHass:
@@ -126,6 +178,50 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(kwargs["require_admin"])
         self.assertEqual(kwargs["frontend_url_path"], PANEL_FRONTEND_URL_PATH)
         self.assertEqual(kwargs["sidebar_icon"], PANEL_ICON)
+
+    async def test_register_panel_hands_the_editor_the_versioned_card_url(self) -> None:
+        """The URL in the panel config is the one Lovelace loads, stamp included.
+
+        The editor imports it at runtime to embed the solar inspector, and the
+        browser keys module identity on the URL -- so a stamp that drifted from
+        the registered Lovelace resource would evaluate the card bundle a second
+        time. Registered in setup order: the frontend creates the resource, then
+        the panel passes on the URL of the resource that was actually created.
+        """
+        hass = FakeHass()
+        hass.data["lovelace"] = FakeLovelace()
+
+        await async_register_frontend(hass)
+        await async_register_panel(hass)
+
+        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        expected = await async_card_module_url(hass)
+        self.assertEqual(kwargs["config"], {"card_module_url": expected})
+        self.assertTrue(expected.startswith(f"{CARD_URL}?v="))
+        # The very URL the dashboard will import, not merely one of the same shape.
+        self.assertEqual(
+            [item["url"] for item in hass.data["lovelace"].resources.items],
+            [expected],
+        )
+
+    async def test_register_panel_passes_no_card_url_without_a_registered_resource(
+        self,
+    ) -> None:
+        """No resource of ours, no URL for the editor to import.
+
+        Under YAML-mode Lovelace the resource list is the user's, so the spelling
+        they gave the card bundle is unknown here. Importing a differently spelled
+        URL for the same file evaluates it twice, which redefines every custom
+        element and breaks that page's dashboard cards -- so the editor is handed
+        nothing and says so, rather than being handed a guess.
+        """
+        hass = FakeHass()  # no `lovelace` in hass.data: resources unavailable
+
+        await async_register_frontend(hass)
+        await async_register_panel(hass)
+
+        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        self.assertEqual(kwargs["config"], {})
 
     async def test_unregister_panel_removes_registered_panel(self) -> None:
         hass = FakeHass()

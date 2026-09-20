@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import { SOLAR_INSPECTOR_EMBED_CONFIG } from "../config-editor/solar-inspector-embed";
 
 /**
  * The solar-only options on `helman-solar-inspector-card`:
@@ -19,14 +20,14 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-card.js",
 );
 
-/** The config the Training tab's solar diagnostics mounts the card with. */
-const SOLAR_ONLY = {
-    show_bias_ratio: true,
-    hide_schedule_strip: true,
-    hide_price_strip: true,
-    hide_money_strip: true,
-    chart_series: ["actual", "corrected", "raw"],
-};
+/**
+ * The config the Training tab's solar Diagnostics mounts the card with.
+ *
+ * The embed's own object, not a copy of it: what these options do to the card is
+ * covered here, and an embed that drifted away from the fixture would take its
+ * coverage with it.
+ */
+const SOLAR_ONLY = SOLAR_INSPECTOR_EMBED_CONFIG;
 
 const SOLAR_COLOR = "#facc15";
 const RAW_COLOR = "#64748b";

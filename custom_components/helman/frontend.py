@@ -18,6 +18,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 _FRONTEND_STATIC_REGISTERED = "frontend_static_registered"
 _CARD_RESOURCE_ID = "card_resource_id"
+_CARD_RESOURCE_URL = "card_resource_url"
 
 
 async def async_register_frontend(hass: HomeAssistant) -> None:
@@ -35,6 +36,34 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
     await _async_register_card_resource(hass)
 
 
+def registered_card_module_url(hass: HomeAssistant) -> str | None:
+    """The card URL Lovelace is known to load, or ``None`` if we cannot tell.
+
+    Only a resource this integration registered itself, in storage mode, is a
+    URL we can promise a dashboard will import verbatim. Under YAML-mode
+    Lovelace the resource list is the user's, so the spelling they used is
+    unknown to us -- and importing a *differently spelled* URL for the same file
+    is what evaluates the bundle twice, which registers every custom element a
+    second time and kills the dashboard's Helman cards for that page session.
+    Better no embedded chart than a broken dashboard, so callers that would hand
+    the URL onwards get nothing here instead of a guess.
+    """
+    return hass.data.get(DOMAIN, {}).get(_CARD_RESOURCE_URL)
+
+
+async def async_card_module_url(hass: HomeAssistant) -> str:
+    """The card bundle's public URL, version-stamped.
+
+    The one place this string is built. The config editor lazily imports the
+    very same URL to embed the solar inspector, and the browser keys module
+    identity on the URL -- so an unversioned or independently assembled URL
+    would evaluate a second copy of the bundle, registering every custom
+    element twice and pushing every card into ``window.customCards`` again.
+    """
+    integration = await async_get_integration(hass, DOMAIN)
+    return f"{CARD_URL}?v={integration.version}"
+
+
 async def _async_register_card_resource(hass: HomeAssistant) -> None:
     resources = _get_storage_resources(hass)
     if resources is None:
@@ -43,8 +72,7 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
         )
         return
 
-    integration = await async_get_integration(hass, DOMAIN)
-    versioned_url = f"{CARD_URL}?v={integration.version}"
+    versioned_url = await async_card_module_url(hass)
 
     await resources.async_get_info()  # ensures the collection is loaded
     existing = next(
@@ -57,16 +85,19 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
         if existing["url"] != versioned_url:
             await resources.async_update_item(existing["id"], {"url": versioned_url})
         domain_data[_CARD_RESOURCE_ID] = existing["id"]
+        domain_data[_CARD_RESOURCE_URL] = versioned_url
     else:
         created = await resources.async_create_item(
             {"res_type": "module", "url": versioned_url}
         )
         domain_data[_CARD_RESOURCE_ID] = created["id"]
+        domain_data[_CARD_RESOURCE_URL] = versioned_url
 
 
 async def async_unregister_frontend(hass: HomeAssistant) -> None:
     """Remove the auto-registered Lovelace card resource."""
     domain_data = hass.data.get(DOMAIN, {})
+    domain_data.pop(_CARD_RESOURCE_URL, None)
     resource_id = domain_data.pop(_CARD_RESOURCE_ID, None)
     if resource_id is None:
         return

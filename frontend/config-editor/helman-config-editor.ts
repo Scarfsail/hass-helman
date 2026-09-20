@@ -142,6 +142,12 @@ import {
   type TrainingStatus,
   type TrainingStatusChangedDetail,
 } from "./training-status";
+import {
+  INSPECTOR_CARD_TAG,
+  SOLAR_INSPECTOR_EMBED_CONFIG,
+  inspectorCardLoader,
+  type SolarInspectorCardElement,
+} from "./solar-inspector-embed";
 import "./info-callout";
 import "./entity-group";
 import {
@@ -323,6 +329,7 @@ export class HelmanConfigEditorPanel
     _entityInspections: { state: true },
     _entitiesOnly: { state: true },
     _trainingStatus: { state: true },
+    _inspectorCardError: { state: true },
   };
 
   static styles = [
@@ -941,7 +948,14 @@ export class HelmanConfigEditorPanel
 
   declare narrow?: boolean;
   declare route?: unknown;
-  declare panel?: unknown;
+  /**
+   * The panel registration Home Assistant renders us from.
+   *
+   * `config` is the backend-controlled blob `async_register_panel` passed, and
+   * the only thing read out of it is the version-stamped card bundle URL the
+   * solar Diagnostics embed imports.
+   */
+  declare panel?: { config?: { card_module_url?: string } | null };
 
   private _hass?: HomeAssistantLike;
   private _localize?: LocalizeFunction;
@@ -1082,6 +1096,30 @@ export class HelmanConfigEditorPanel
   // badge shows a failure without the tab being open. `null` until the first
   // answer, and kept on a failed tick like the entity poll's last reading.
   private _trainingStatus: TrainingStatus | null = null;
+  /**
+   * The one-shot loader for the card artifact, and the one card built from it.
+   *
+   * Both survive the section being collapsed and reopened: the loader so the
+   * artifact is fetched and evaluated once, the element so reopening shows the
+   * day the reader had paged to rather than refetching it. Created on the first
+   * open of the solar Diagnostics panel and never on a `hass` tick -- see
+   * `_handleSolarDiagnosticsToggle`.
+   */
+  private _inspectorCardLoad?: () => Promise<void>;
+  /**
+   * Whether the reader has opened the panel at all.
+   *
+   * Separate from the loader, because the loader can be a no-op: Home Assistant
+   * loads every Lovelace resource the first time any dashboard renders, so on the
+   * ordinary path into this page -- Overview, then Helman in the sidebar -- the
+   * card tag is already registered and there is nothing to load. Mounting on
+   * "the tag exists" would then mount the card inside the closed panel, with its
+   * clock, its listeners and a day fetch, which is the whole thing this is lazy
+   * to avoid. The open is the signal; loading is only what may follow it.
+   */
+  private _inspectorRequested = false;
+  private _inspectorCard?: SolarInspectorCardElement;
+  private _inspectorCardError: string | null = null;
   private _trainingStatusTimer?: ReturnType<typeof setInterval>;
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
@@ -1603,16 +1641,32 @@ export class HelmanConfigEditorPanel
    * A plain panel: no YAML scope behind it, so no visual/YAML toggle. `icon`
    * is an SVG path shown before the label; `badge` sits in the summary row
    * just before the chevron.
+   *
+   * `onToggle` hears the panel being opened and closed. A collapsed `details`
+   * renders its content all the same, so anything that must not run until a
+   * reader asks for it -- a fetch, a lazily loaded bundle -- has to hang off
+   * this rather than off the template.
    */
   private _renderSimpleSection(
     label: string,
     content: TemplateResult,
-    options: { open?: boolean; icon?: string; badge?: TemplateResult } = {},
+    options: {
+      open?: boolean;
+      icon?: string;
+      badge?: TemplateResult;
+      onToggle?: (open: boolean) => void;
+    } = {},
   ): TemplateResult {
-    const { open = true, icon, badge } = options;
+    const { open = true, icon, badge, onToggle } = options;
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     return html`
-      <details class="section-card" ?open=${open}>
+      <details
+        class="section-card"
+        ?open=${open}
+        @toggle=${onToggle
+          ? (event: Event) => onToggle((event.target as HTMLDetailsElement).open)
+          : nothing}
+      >
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
@@ -2367,7 +2421,9 @@ export class HelmanConfigEditorPanel
             .job=${this._trainingJob("solar_bias")}
             .configRevision=${this._configBaseline}
           ></helman-solar-bias-diagnostics>
+          ${this._renderSolarInspectorCard()}
         `,
+        (open) => this._handleSolarDiagnosticsToggle(open),
       )}
 
       ${this._renderTrainingJobSection(
@@ -2423,6 +2479,7 @@ export class HelmanConfigEditorPanel
     configuration: TemplateResult | typeof nothing,
     depthRows: TrainingDepthRow[],
     extraDiagnostics: TemplateResult | typeof nothing = nothing,
+    onDiagnosticsToggle?: (open: boolean) => void,
   ): TemplateResult {
     const job = this._trainingJob(id);
     const hasIssues = (job?.issues.length ?? 0) > 0;
@@ -2451,6 +2508,7 @@ export class HelmanConfigEditorPanel
               {
                 open: false,
                 icon: DIAGNOSTICS_ICON,
+                onToggle: onDiagnosticsToggle,
                 badge: needsAttention
                   ? html`<span
                       class="training-attention"
@@ -2473,6 +2531,76 @@ export class HelmanConfigEditorPanel
           : undefined,
       },
     );
+  }
+
+  /**
+   * Start loading the card artifact, the first time the panel is opened.
+   *
+   * A collapsed `details` still renders its content into the DOM, so the
+   * laziness cannot come from the template -- the card would mount, and fetch a
+   * day, before anyone asked to see it. Hence the toggle: the load starts on the
+   * open and then never again, because the loader is the record of having asked.
+   */
+  private _handleSolarDiagnosticsToggle(open: boolean): void {
+    if (!open) return;
+    if (!this._inspectorRequested) {
+      this._inspectorRequested = true;
+      // Not reactive on its own: the render is otherwise driven by the load
+      // settling, and an already-registered tag settles it in a microtask.
+      this.requestUpdate();
+    }
+    // A failed load clears the loader, so reopening the panel tries again.
+    if (this._inspectorCardLoad) return;
+    const url = this.panel?.config?.card_module_url;
+    if (!url) {
+      // No URL to import means no card, and a section that stayed blank would
+      // read as a chart that had nothing to draw.
+      this._inspectorCardError = this._t("editor.messages.card_module_url_missing");
+      return;
+    }
+    this._inspectorCardLoad = inspectorCardLoader(url);
+    void this._inspectorCardLoad()
+      .then(() => {
+        this._inspectorCardError = null;
+        this.requestUpdate();
+      })
+      .catch((error) => {
+        // `loadOnce` forgets a failed attempt, but the loader field here is what
+        // gates the retry -- dropping it lets the next open try again.
+        this._inspectorCardLoad = undefined;
+        // Both halves, unlike the editor's other errors: what fails here is a
+        // bare module fetch, whose message names a URL and nothing else, so on
+        // its own it would not say which part of the page had gone missing.
+        this._inspectorCardError = [
+          this._t("editor.messages.load_inspector_card_failed"),
+          this._formatError(error, ""),
+        ]
+          .filter(Boolean)
+          .join(" ");
+      });
+  }
+
+  /**
+   * The embedded inspector, once its artifact has been evaluated.
+   *
+   * One element, built imperatively and interpolated as a node, because a card is
+   * configured by a *call*: `setConfig` is Lovelace's contract, and a template can
+   * set properties but cannot call a method. Built once and kept, so `setConfig`
+   * runs once too; `hass` is assigned on every render, the way a dashboard does it.
+   */
+  private _renderSolarInspectorCard(): TemplateResult | typeof nothing {
+    if (!this._inspectorRequested) return nothing;
+    if (this._inspectorCardError) {
+      return html`<div class="message error">${this._inspectorCardError}</div>`;
+    }
+    if (!customElements.get(INSPECTOR_CARD_TAG)) return nothing;
+    if (!this._inspectorCard) {
+      const card = document.createElement(INSPECTOR_CARD_TAG) as SolarInspectorCardElement;
+      card.setConfig(SOLAR_INSPECTOR_EMBED_CONFIG);
+      this._inspectorCard = card;
+    }
+    this._inspectorCard.hass = this.hass;
+    return html`${this._inspectorCard}`;
   }
 
   private _trainingJob(id: string) {
