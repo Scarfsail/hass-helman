@@ -330,3 +330,107 @@ test("an empty chart_series reads as unset rather than as an empty chart", async
     expect(await chartColors(page)).toContain(SOLAR_COLOR);
     expect(await metricLabels(page)).toContain("Grid");
 });
+
+/** Select a slot, so the detail panel above the daily totals is drawn. */
+async function selectSlot(page: Page, slot: string): Promise<void> {
+    await page.evaluate(async (selected) => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        el._slotSelection = { selectedSlots: [selected], focusSlot: selected, anchorSlot: selected };
+        el.requestUpdate();
+        await el.updateComplete;
+    }, slot);
+}
+
+/** Reconfigure a mounted card the way the Lovelace editor does. */
+async function reconfigure(page: Page, config: Record<string, unknown>): Promise<void> {
+    await page.evaluate(async (cfg) => {
+        const card = document.querySelector("helman-solar-inspector-card") as HTMLElement & {
+            setConfig: (config: unknown) => void;
+            requestUpdate: () => void;
+            updateComplete: Promise<unknown>;
+        };
+        card.setConfig({ type: "custom:helman-solar-inspector-card", ...cfg });
+        card.requestUpdate();
+        await card.updateComplete;
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        await (root?.host as any)?.updateComplete;
+    }, config);
+}
+
+test("hiding the price strip takes the slot detail's price tiles with it", async ({ page }) => {
+    await mountCard(page, {});
+    await seedEverySeries(page);
+    // The fake backend serves no price entities, so the strip publishes nothing;
+    // stand in for the `price-columns` event a real day would have delivered.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const rail = (value: number) => Array.from({ length: 24 }, (_, hour) => ({
+            startMinutes: hour * 60,
+            endMinutes: (hour + 1) * 60,
+            value,
+        }));
+        el._importPriceColumns = rail(6);
+        el._exportPriceColumns = rail(2);
+        el._priceUnit = "CZK/kWh";
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+    await selectSlot(page, "12:00");
+    // The tiles are gated on the columns the strip reports, so they have to be
+    // there first for their absence below to mean anything.
+    expect(await metricLabels(page)).toContain("Import price");
+
+    // Hidden after the strip had already reported: the cache it filled is not
+    // refilled and not cleared by the strip going away, so the flag has to.
+    await reconfigure(page, { hide_price_strip: true });
+
+    expect((await rowsPresent(page)).price).toBe(false);
+    const labels = await metricLabels(page);
+    expect(labels).not.toContain("Import price");
+    expect(labels).not.toContain("Export price");
+});
+
+test("an actual-only pair places no chip for the forecast it dropped", async ({ page }) => {
+    await mountCard(page, { chart_series: ["actual", "houseActual"] });
+    await seedEverySeries(page);
+    // A slot the day has no house actual for: both halves of the pair are then
+    // absent, and the placeholder must still not speak for the dropped forecast.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        payload.series.houseActual = [];
+        payload.availability.hasHouseActual = false;
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+    await selectSlot(page, "12:00");
+
+    const chips = await page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const card = [...(root?.querySelectorAll(".metric-card") ?? [])].find(
+            (node) => (node.querySelector(".metric-label")?.textContent ?? "").trim() === "House",
+        );
+        return [...(card?.querySelectorAll(".metric-chip") ?? [])].map((node) => ({
+            title: node.getAttribute("title") ?? "",
+            // The hatched fill is the forecast's, the flat wash the actual's.
+            hatched: (node.getAttribute("style") ?? "").includes("repeating-linear-gradient"),
+        }));
+    });
+
+    expect(chips).toHaveLength(1);
+    expect(chips[0].hatched).toBe(false);
+});

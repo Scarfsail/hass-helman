@@ -1950,6 +1950,13 @@ export class HelmanSolarInspector extends LitElement {
     // as well as on `hass`, because the flag can flip on its own -- the card
     // wrapper filters most `hass` updates away -- and a strip that came back
     // without a re-sync would render with an empty snapshot for good.
+    // The slot detail's price tiles are gated on the columns the strip reports,
+    // so a strip hidden after it had already reported would leave them drawn
+    // from a cache nothing refills. Clearing is the gate: one fact, one place.
+    if (changed.has("hidePriceStrip") && this.hidePriceStrip) {
+      this._importPriceColumns = [];
+      this._exportPriceColumns = [];
+    }
     if (changed.has("hass") || changed.has("hideScheduleStrip")) {
       if (this.hideScheduleStrip) {
         this._unsubscribeScheduleOwner?.();
@@ -5610,6 +5617,12 @@ export class HelmanSolarInspector extends LitElement {
     color: string,
     actual: { value: string; present: boolean; title: string; incomplete?: string | null },
     forecast: { value: string; present: boolean; title: string; incomplete?: string | null },
+    /**
+     * Which half the "neither reported" placeholder speaks for. The forecast by
+     * default, as it always did; the actual when the config left the forecast
+     * out, so the placeholder cannot name a series that is never drawn.
+     */
+    placeholder: "forecast" | "actual" = "forecast",
   ): TemplateResult[] {
     const chipFill = (isForecast: boolean): string =>
       isForecast
@@ -5629,7 +5642,9 @@ export class HelmanSolarInspector extends LitElement {
     if (actual.present) chips.push(chip(actual, false));
     if (forecast.present) chips.push(chip(forecast, true));
     // Neither side reported: keep a single placeholder so the card still reads.
-    if (chips.length === 0) chips.push(chip(forecast, true));
+    if (chips.length === 0) {
+      chips.push(placeholder === "forecast" ? chip(forecast, true) : chip(actual, false));
+    }
     return chips;
   }
 
@@ -5654,6 +5669,7 @@ export class HelmanSolarInspector extends LitElement {
       color,
       actualEnabled ? actual : { ...actual, present: false },
       forecastEnabled ? forecast : { ...forecast, present: false },
+      forecastEnabled ? "forecast" : "actual",
     );
     const toggled = [forecastSeries, actualSeries].filter((key) => this._isSeriesEnabled(key));
     const visible =
