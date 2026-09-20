@@ -3615,11 +3615,13 @@ export class HelmanSolarInspector extends LitElement {
     let last = Number.NEGATIVE_INFINITY;
     // No fixed bucket: infer each series' own sample spacing so the threshold is
     // read against true average watts, whether the series is 15-minute or hourly.
-    // Only the solar series actually drawn may crop the day: a card configured
-    // without them would otherwise hide the hours where its own data lives, and
-    // the `!isFinite` fallback below already means "show the whole day".
+    // Only the solar series actually drawn may crop the day -- drawn, not merely
+    // allowed: `raw` is hidden by default, so a card that allowed it and nothing
+    // else solar would otherwise crop to solar hours while showing none of them,
+    // hiding the hours its visible series live in. The `!isFinite` fallback below
+    // already means "show the whole day", which is what no visible solar wants.
     for (const key of ["raw", "corrected", "actual"] as const) {
-      if (!this._isSeriesEnabled(key)) continue;
+      if (!this._isSeriesVisible(key)) continue;
       for (const entry of toAveragePower(payload.series[key])) {
         if (entry.powerW < threshold) continue;
         if (entry.minutes < first) first = entry.minutes;

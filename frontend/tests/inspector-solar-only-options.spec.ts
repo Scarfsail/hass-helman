@@ -582,3 +582,50 @@ test("an aggregate view keeps the editor its own badges open", async ({ page }) 
 
     expect((await rowsPresent(page)).editorHost).toBe(true);
 });
+
+/** The x range the chart is currently cropped to, in minutes of the day. */
+function chartWindow(page: Page): Promise<{ start: number; end: number; daylightOnly: boolean }> {
+    return page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        return {
+            start: el._layout.dayStartMinutes,
+            end: el._layout.dayEndMinutes,
+            daylightOnly: el._daylightOnly,
+        };
+    });
+}
+
+test("a solar series that is allowed but not drawn does not crop the day", async ({ page }) => {
+    // `raw` is hidden by default, so this card allows a solar series and draws
+    // none: cropping to solar hours would hide the hours its house series lives in.
+    await mountCard(page, { chart_series: ["raw", "houseActual"] });
+    await seedEverySeries(page);
+    // The seed is flat across the day, which is above the daylight threshold
+    // everywhere and so crops to nothing; give raw real solar hours instead.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        payload.series.raw = Array.from({ length: 24 }, (_, hour) => ({
+            timestamp: `${payload.date}T${String(hour).padStart(2, "0")}:00:00`,
+            valueWh: hour >= 9 && hour < 15 ? 400 : 0,
+        }));
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+
+    const hidden = await chartWindow(page);
+    expect(hidden.daylightOnly).toBe(true);
+    expect(hidden).toMatchObject({ start: 0, end: 1440 });
+
+    // With the raw overlay actually drawn, it crops as it always did.
+    await reconfigure(page, { chart_series: ["raw", "houseActual"], show_bias_ratio: true });
+    const drawn = await chartWindow(page);
+    expect(drawn.end - drawn.start).toBeLessThan(1440);
+});
