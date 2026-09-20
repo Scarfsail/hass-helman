@@ -578,7 +578,9 @@ def _validate_solar_bias_correction(
         bias_map.get("enabled"),
     )
 
-    # clamp_min: float in (0, 1]
+    # clamp_min: float in [0, 1]. Zero is the default the reader applies, and
+    # an outage is caught by slot invalidation rather than by this floor, so a
+    # document has to be able to state it.
     clamp_min = bias_map.get("clamp_min")
     if clamp_min is not None:
         if isinstance(clamp_min, bool) or not isinstance(clamp_min, (int, float)):
@@ -589,12 +591,12 @@ def _validate_solar_bias_correction(
                 message=f"{base_path}.clamp_min must be a number",
             )
         else:
-            if not (clamp_min > 0 and clamp_min <= 1):
+            if not (clamp_min >= 0 and clamp_min <= 1):
                 report.add_error(
                     section=section,
                     path=f"{base_path}.clamp_min",
                     code="invalid_range",
-                    message=f"{base_path}.clamp_min must be > 0 and <= 1",
+                    message=f"{base_path}.clamp_min must be >= 0 and <= 1",
                 )
 
     # clamp_max: float in [1, 10]

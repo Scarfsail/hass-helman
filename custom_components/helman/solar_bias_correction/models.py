@@ -15,6 +15,8 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
     SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W,
     SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO,
+    SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
+    SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH,
 )
 
 
@@ -40,8 +42,12 @@ class BiasConfig:
         SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO
     )
     slot_invalidation_data_glitch_max_slot_wh: float | None = None
-    slot_invalidation_data_glitch_min_neighbour_forecast_wh: float = 200.0
-    slot_invalidation_data_glitch_backfill_max_minutes: int = 120
+    slot_invalidation_data_glitch_min_neighbour_forecast_wh: float = (
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH
+    )
+    slot_invalidation_data_glitch_backfill_max_minutes: int = (
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES
+    )
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
 
 
@@ -706,9 +712,12 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         slot_invalidation_data_glitch_max_slot_wh = float(glitch_max_slot_wh)
 
     glitch_min_neighbour = slot_invalidation.get(
-        "data_glitch_min_neighbour_forecast_wh", 200.0
+        "data_glitch_min_neighbour_forecast_wh",
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH,
     )
-    slot_invalidation_data_glitch_min_neighbour_forecast_wh = 200.0
+    slot_invalidation_data_glitch_min_neighbour_forecast_wh = (
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH
+    )
     if isinstance(glitch_min_neighbour, (int, float)) and not isinstance(
         glitch_min_neighbour, bool
     ):
@@ -716,8 +725,13 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
             glitch_min_neighbour
         )
 
-    glitch_backfill = slot_invalidation.get("data_glitch_backfill_max_minutes", 120)
-    slot_invalidation_data_glitch_backfill_max_minutes = 120
+    glitch_backfill = slot_invalidation.get(
+        "data_glitch_backfill_max_minutes",
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
+    )
+    slot_invalidation_data_glitch_backfill_max_minutes = (
+        SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES
+    )
     if isinstance(glitch_backfill, (int, float)) and not isinstance(
         glitch_backfill, bool
     ):

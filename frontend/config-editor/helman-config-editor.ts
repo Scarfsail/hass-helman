@@ -69,6 +69,12 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
+  configDefaultHint,
+  configDefaultValue,
+  fetchConfigDefaults,
+  type ConfigDefaults,
+} from "../cards/shared/config/config-defaults";
+import {
   buildControllableSelectionState,
   buildClimateModeFieldState,
 } from "../cards/shared/optimizer/controllable-target-ui";
@@ -76,6 +82,7 @@ import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
   SECTION_SCOPE_IDS,
+  DIAGNOSTICS_ICON,
   TAB_ICONS,
   TAB_SCOPE_IDS,
   TAB_SECTIONS,
@@ -311,6 +318,7 @@ export class HelmanConfigEditorPanel
     _liveApplianceMetadata: { state: true },
     _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
+    _configDefaults: { state: true },
     _helpDialog: { state: true },
     _entityInspections: { state: true },
     _entitiesOnly: { state: true },
@@ -1014,6 +1022,9 @@ export class HelmanConfigEditorPanel
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
+  // What the backend applies where a field is left unset, by dotted path.
+  // Drawn as placeholder text, never written: `null` just means no hints.
+  private _configDefaults: ConfigDefaults | null = null;
   // The condition group whose name is being renamed inline. One slot, not a
   // per-group flag: only one name can be under edit at a time.
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
@@ -2158,6 +2169,10 @@ export class HelmanConfigEditorPanel
       ${this._renderSimpleSection(
         this._t("editor.sections.training_settings"),
         html`
+          <helman-info-callout
+            .hass=${this.hass}
+            .text=${this._t("editor.notes.training_settings_what")}
+          ></helman-info-callout>
           <helman-training-status
             .hass=${this.hass}
             .status=${this._trainingStatus}
@@ -2179,6 +2194,7 @@ export class HelmanConfigEditorPanel
             { initialOpen: false },
           )}
         `,
+        { icon: TAB_ICONS.training },
       )}
 
       ${this._renderTrainingJobSection(
@@ -2187,7 +2203,10 @@ export class HelmanConfigEditorPanel
         this._renderSectionScope(
           SECTION_SCOPE_IDS.training.solar_bias,
           html`
-            <p class="inline-note">${this._t("editor.notes.training_solar_bias")}</p>
+            <helman-info-callout
+              .hass=${this.hass}
+              .text=${this._t("editor.notes.training_solar_bias")}
+            ></helman-info-callout>
             <div class="field-grid">
               ${this._renderOptionalNumberField(
                 ["training", "solar_bias", "min_history_days"],
@@ -2213,7 +2232,7 @@ export class HelmanConfigEditorPanel
               ${this._renderBooleanField(
                 ["training", "solar_bias", "enabled"],
                 "editor.fields.bias_correction_enabled",
-                false,
+                this._configDefaultValue(["training", "solar_bias", "enabled"]) === true,
                 "editor.help.bias_correction_enabled",
               )}
               ${this._renderOptionalNumberField(
@@ -2228,13 +2247,15 @@ export class HelmanConfigEditorPanel
                 undefined,
                 "editor.help.bias_correction_clamp_max",
               )}
-              ${this._renderOptionalSelectField(
+              ${renderSelectFieldWithDefault(
+                this,
                 ["training", "solar_bias", "aggregation_method"],
                 "editor.fields.bias_correction_aggregation_method",
                 [
                   { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
                   { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
                 ],
+                String(this._configDefaultValue(["training", "solar_bias", "aggregation_method"]) ?? ""),
                 "editor.help.bias_correction_aggregation_method",
               )}
               ${this._renderOptionalNumberField(
@@ -2256,6 +2277,10 @@ export class HelmanConfigEditorPanel
             ${this._renderSectionScope(
               SECTION_SCOPE_IDS.training.solar_bias_slot_invalidation,
               html`
+                <helman-info-callout
+                  .hass=${this.hass}
+                  .text=${this._t("editor.notes.training_solar_bias_slot_invalidation")}
+                ></helman-info-callout>
                 <div class="field-grid">
                   ${this._renderOptionalNumberField(
                     ["training", "solar_bias", "slot_invalidation", "max_battery_soc_percent"],
@@ -2322,7 +2347,10 @@ export class HelmanConfigEditorPanel
         this._renderSectionScope(
           SECTION_SCOPE_IDS.training.house_consumption,
           html`
-            <p class="inline-note">${this._t("editor.notes.training_house_consumption")}</p>
+            <helman-info-callout
+              .hass=${this.hass}
+              .text=${this._t("editor.notes.training_house_consumption")}
+            ></helman-info-callout>
             <div class="field-grid">
               ${this._renderOptionalNumberField(
                 ["training", "house_consumption", "min_history_days"],
@@ -2393,6 +2421,7 @@ export class HelmanConfigEditorPanel
               `,
               {
                 open: false,
+                icon: DIAGNOSTICS_ICON,
                 badge: needsAttention
                   ? html`<span
                       class="training-attention"
@@ -4051,6 +4080,7 @@ export class HelmanConfigEditorPanel
           ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
         </div>
         <input
+          placeholder=${this.configDefaultHint(path)}
           .value=${this._stringValue(this._getValue(path))}
           @change=${(event: Event) =>
             this._setOptionalString(path, (event.currentTarget as HTMLInputElement).value)}
@@ -4570,13 +4600,19 @@ export class HelmanConfigEditorPanel
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult, schemaResult, labelNamesResult] =
-        await Promise.allSettled([
-          this.hass.callWS<unknown>({ type: "helman/get_config" }),
-          this._loadLiveApplianceMetadata(),
-          fetchOptimizerSchema(this.hass),
-          this._loadHaLabelNames(),
-        ]);
+      const [
+        loadedResult,
+        liveApplianceMetadataResult,
+        schemaResult,
+        defaultsResult,
+        labelNamesResult,
+      ] = await Promise.allSettled([
+        this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        this._loadLiveApplianceMetadata(),
+        fetchOptimizerSchema(this.hass),
+        fetchConfigDefaults(this.hass),
+        this._loadHaLabelNames(),
+      ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
       }
@@ -4597,6 +4633,8 @@ export class HelmanConfigEditorPanel
           : null;
       this._optimizerSchema =
         schemaResult.status === "fulfilled" ? schemaResult.value : null;
+      this._configDefaults =
+        defaultsResult.status === "fulfilled" ? defaultsResult.value : null;
       this._haLabelNames =
         labelNamesResult.status === "fulfilled" ? labelNamesResult.value : null;
       this._validation = null;
@@ -5359,6 +5397,22 @@ export class HelmanConfigEditorPanel
 
   openHelp(labelKey: string, contentKey: string): void {
     this._helpDialog = { labelKey, contentKey };
+  }
+
+  configDefaultHint(path: PathSegment[]): string {
+    return configDefaultHint(this._configDefaults, path);
+  }
+
+  /**
+   * The backend's default for a control that always renders some state.
+   *
+   * A checkbox drawn unchecked, or a select drawn blank, states that the
+   * setting is off while the backend has it on -- a user who wants it off
+   * would change nothing and leave it running. So these read the default
+   * rather than falling back to an empty value.
+   */
+  private _configDefaultValue(path: PathSegment[]): string | number | boolean | undefined {
+    return configDefaultValue(this._configDefaults, path);
   }
 
   private _getValue(path: PathSegment[]): unknown {

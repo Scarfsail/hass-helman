@@ -16,6 +16,7 @@ from .const import (
 )
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
+from .config_defaults import CONFIG_FIELD_DEFAULTS
 from .config_validation import validate_config_document
 from .entity_inspection import inspect_targets
 from .solar_bias_correction.websocket import (
@@ -117,6 +118,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
     async_register_command(hass, ws_validate_config)
     async_register_command(hass, ws_save_config)
+    async_register_command(hass, ws_get_config_defaults)
     async_register_command(hass, ws_get_optimizer_schema)
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
@@ -285,6 +287,27 @@ def ws_get_config(
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
     connection.send_result(msg["id"], stor.config)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_config_defaults",
+})
+@callback
+def ws_get_config_defaults(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Serve what an unset optional config field is worth at runtime.
+
+    Same reason as the optimizer schema: the defaults are declared once, in
+    `const.py`, and applied by the readers. A parallel table in TypeScript
+    would drift, and a hint that disagrees with the backend is worse than no
+    hint at all — so the editor asks for them instead of knowing them.
+    """
+    if not _require_admin(connection, msg):
+        return
+    connection.send_result(msg["id"], dict(CONFIG_FIELD_DEFAULTS))
 
 
 @websocket_api.websocket_command({

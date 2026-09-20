@@ -178,3 +178,9 @@ SOLAR_BIAS_AGGREGATION_METHODS = ("ratio_of_sums", "trimmed_mean")
 # forecast a slot must land before the shortfall reads as clipping.
 SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W = 50.0
 SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO = 0.8
+
+# Data-glitch inference: how much forecast a neighbouring slot must carry
+# before a zero reads as a glitch rather than as night, and how long after a
+# gap a backfilled meter reading still counts.
+SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH = 200.0
+SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES = 120

@@ -169,10 +169,22 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
                     )
                 )
 
-    def test_clamp_min_invalid_when_zero(self) -> None:
+    def test_clamp_min_valid_when_zero(self) -> None:
+        # Zero is what the reader applies when the key is absent, and the
+        # editor now offers it as the field's hint, so a document that states
+        # it has to save.
         config = _valid_config()
         config.setdefault("training", {})["solar_bias"] = {
             "clamp_min": 0.0,
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(report.valid)
+
+    def test_clamp_min_invalid_when_negative(self) -> None:
+        config = _valid_config()
+        config.setdefault("training", {})["solar_bias"] = {
+            "clamp_min": -0.1,
         }
 
         report = validate_config_document(config)
