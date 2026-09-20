@@ -226,7 +226,7 @@ function defaultSlotMinutesForViewport(): number {
   return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
 }
 
-type SeriesKey =
+export type SeriesKey =
   | "raw"
   | "corrected"
   | "actual"
@@ -259,6 +259,9 @@ const SERIES_LABEL_KEYS: Record<SeriesKey, string> = {
   batteryForecast: "battery_forecast",
   batteryActual: "battery_actual",
 };
+
+/** Every series name, in one list, for the card's `chart_series` selector. */
+export const SERIES_KEYS = Object.keys(SERIES_LABEL_KEYS) as SeriesKey[];
 
 /**
  * The series that stack. The SoC series and the raw forecast are drawn
@@ -509,6 +512,18 @@ function sameTooltipContent(a: TooltipContent | null, b: TooltipContent | null):
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
+/**
+ * Which two series each tooltip family speaks for, as [actual, forecast]. The
+ * popup reads families rather than series, so this is what lets the config's
+ * allowlist reach it without every branch of the row builder checking.
+ */
+const FAMILY_SERIES: Record<SeriesFamily, readonly [SeriesKey, SeriesKey]> = {
+  solar: ["actual", "corrected"],
+  house: ["houseActual", "houseForecast"],
+  battery: ["batteryActual", "batteryForecast"],
+  grid: ["gridActual", "gridForecast"],
+};
+
 type InspectorPayload = {
   date: string;
   timezone: string;
@@ -647,6 +662,19 @@ export class HelmanSolarInspector extends LitElement {
    * worth knowing however the columns are drawn.
    */
   @property({ attribute: false }) dimIncompleteSlots = true;
+  /**
+   * The day-chart series this card is allowed to draw, or undefined for all of
+   * them. Unlike `biasRatioDefault` this is not an opening state: a series left
+   * out is not drawn, gets no legend tile and no metric tile, and there is no
+   * runtime control that brings it back.
+   */
+  @property({ attribute: false }) chartSeries?: readonly SeriesKey[];
+  /** Whether the scheduled-actions row is dropped entirely. */
+  @property({ attribute: false }) hideScheduleStrip = false;
+  /** Whether the import/export price rails are dropped entirely. */
+  @property({ attribute: false }) hidePriceStrip = false;
+  /** Whether the money rails and the money tiles are dropped entirely. */
+  @property({ attribute: false }) hideMoneyStrip = false;
 
   @state() private _selectedDate = "";
   /**
@@ -845,10 +873,21 @@ export class HelmanSolarInspector extends LitElement {
   private _view: InspectorPayload | null = null;
   private _viewFor: { payload: InspectorPayload; slot: number } | null = null;
   private _coverageFor:
-    | { payload: InspectorPayload; slot: number; hidden: ReadonlySet<SeriesKey> }
+    | {
+        payload: InspectorPayload;
+        slot: number;
+        hidden: ReadonlySet<SeriesKey>;
+        enabled: readonly SeriesKey[] | undefined;
+      }
     | null = null;
   private _stacks: ChartStacks | null = null;
-  private _stacksFor: { view: InspectorPayload; hidden: ReadonlySet<SeriesKey> } | null = null;
+  private _stacksFor:
+    | {
+        view: InspectorPayload;
+        hidden: ReadonlySet<SeriesKey>;
+        enabled: readonly SeriesKey[] | undefined;
+      }
+    | null = null;
   /**
    * The first slot the forecast has to speak for alone, off the current stacks.
    * The SoC columns and the popup's actual/forecast split read it, so it is
@@ -865,13 +904,19 @@ export class HelmanSolarInspector extends LitElement {
         daylightOnly: boolean;
         threshold: number;
         hidden: ReadonlySet<SeriesKey>;
+        enabled: readonly SeriesKey[] | undefined;
       }
     | null = null;
   /** The x scale the three strips share, one object per layout. */
   private _stripGeometry: ScheduleStripGeometry | null = null;
   private _socBarsModel: readonly SocBar[] = EMPTY_SOC_BARS;
   private _socBarsFor:
-    | { view: InspectorPayload; hidden: ReadonlySet<SeriesKey>; fillFrom: number }
+    | {
+        view: InspectorPayload;
+        hidden: ReadonlySet<SeriesKey>;
+        enabled: readonly SeriesKey[] | undefined;
+        fillFrom: number;
+      }
     | null = null;
   private _selectedMinutesModel: readonly number[] = EMPTY_SELECTED_MINUTES;
   private _selectedMinutesFor:
@@ -879,7 +924,9 @@ export class HelmanSolarInspector extends LitElement {
     | null = null;
   /** The combined chart's popup, one build per hovered slot. */
   private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
-  private _chartTooltipFor: { payload: InspectorPayload; slot: string } | null = null;
+  private _chartTooltipFor:
+    | { payload: InspectorPayload; slot: string; enabled: readonly SeriesKey[] | undefined }
+    | null = null;
   /**
    * The wider-bucket starts the current view drew over a hole in one of its
    * Wh series, each mapped to how many native slots each short series is
@@ -1911,8 +1958,28 @@ export class HelmanSolarInspector extends LitElement {
         this._loadedConnection = this.hass.connection;
         this._load();
       }
-      this._syncScheduleOwner();
       this._syncDataChangedSubscription();
+    }
+    // A hidden schedule strip holds no schedule subscription. Keyed on the flag
+    // as well as on `hass`, because the flag can flip on its own -- the card
+    // wrapper filters most `hass` updates away -- and a strip that came back
+    // without a re-sync would render with an empty snapshot for good.
+    // The slot detail's price tiles are gated on the columns the strip reports,
+    // so a strip hidden after it had already reported would leave them drawn
+    // from a cache nothing refills. Clearing is the gate: one fact, one place.
+    if (changed.has("hidePriceStrip") && this.hidePriceStrip) {
+      this._importPriceColumns = [];
+      this._exportPriceColumns = [];
+    }
+    if (changed.has("hass") || changed.has("hideScheduleStrip")) {
+      if (this.hideScheduleStrip) {
+        this._unsubscribeScheduleOwner?.();
+        this._unsubscribeScheduleOwner = undefined;
+        this._scheduleOwner = undefined;
+        this._scheduleSnapshot = EMPTY_SCHEDULE_SNAPSHOT;
+      } else {
+        this._syncScheduleOwner();
+      }
     }
     this._syncChartResizeObserver();
   }
@@ -1958,12 +2025,25 @@ export class HelmanSolarInspector extends LitElement {
         <!-- One editor for the whole card. The band strip draws its day off
              this host and opens it on a lane press; a badge in the composition
              panel opens the same instance, so the two never disagree about
-             which day is on screen. -->
-        <scheduling-day-editor-host
-          .hass=${this.hass}
-          .preload=${true}
-          .timeZone=${this._haTimeZone() ?? "UTC"}
-        ></scheduling-day-editor-host>
+             which day is on screen.
+
+             It holds a schedule subscription and loads appliances,
+             controllable entities, history and projections of its own, so it
+             is mounted only where something can actually reach it -- see
+             _scheduleEditorReachable, which owns that question.
+
+             It cannot be created on demand instead: openFor returns early
+             until the owner has synced, so a host built at click time would
+             swallow the first press. -->
+        ${this._scheduleEditorReachable()
+          ? html`
+              <scheduling-day-editor-host
+                .hass=${this.hass}
+                .preload=${!this.hideScheduleStrip}
+                .timeZone=${this._haTimeZone() ?? "UTC"}
+              ></scheduling-day-editor-host>
+            `
+          : ""}
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
@@ -2172,8 +2252,9 @@ export class HelmanSolarInspector extends LitElement {
             ${this._socBarsModel.length
               ? this._renderSocSection(view, layout)
               : ""}
-            ${this._renderPriceStrip(view, layout)}
-            ${this._renderScheduleActionsStrip(view, layout)}
+            ${this.hidePriceStrip ? "" : this._renderPriceStrip(view, layout)}
+            ${this.hideMoneyStrip ? "" : this._renderMoneyStrip(view)}
+            ${this.hideScheduleStrip ? "" : this._renderScheduleActionsStrip(view, layout)}
             ${this._renderSelectedSlotDetails(view)}
             ${this._renderTotals(view)}
           `
@@ -3213,6 +3294,9 @@ export class HelmanSolarInspector extends LitElement {
 
     const slot = this._slotMinutes;
     const hidden = this._hiddenSeries;
+    // `_isSeriesVisible` reads the allowlist as well as the legend, so every
+    // step keyed on `hidden` is keyed on this too.
+    const enabled = this.chartSeries;
 
     if (this._viewFor === null
       || this._viewFor.payload !== payload
@@ -3225,15 +3309,17 @@ export class HelmanSolarInspector extends LitElement {
     if (this._coverageFor === null
       || this._coverageFor.payload !== payload
       || this._coverageFor.slot !== slot
-      || this._coverageFor.hidden !== hidden) {
-      this._coverageFor = { payload, slot, hidden };
+      || this._coverageFor.hidden !== hidden
+      || this._coverageFor.enabled !== enabled) {
+      this._coverageFor = { payload, slot, hidden, enabled };
       this._computeCoverage(payload);
     }
 
     if (this._stacksFor === null
       || this._stacksFor.view !== view
-      || this._stacksFor.hidden !== hidden) {
-      this._stacksFor = { view, hidden };
+      || this._stacksFor.hidden !== hidden
+      || this._stacksFor.enabled !== enabled) {
+      this._stacksFor = { view, hidden, enabled };
       // "Nothing to draw" is a fact about the view alone, so it is decided
       // here with the stacks rather than beside them in the render.
       const hasAnySeries = view.availability.hasRawForecast
@@ -3258,7 +3344,8 @@ export class HelmanSolarInspector extends LitElement {
       || this._layoutFor.slot !== slot
       || this._layoutFor.daylightOnly !== this._daylightOnly
       || this._layoutFor.threshold !== this.daylightThresholdW
-      || this._layoutFor.hidden !== hidden) {
+      || this._layoutFor.hidden !== hidden
+      || this._layoutFor.enabled !== enabled) {
       this._layoutFor = {
         view,
         stacks,
@@ -3267,6 +3354,7 @@ export class HelmanSolarInspector extends LitElement {
         daylightOnly: this._daylightOnly,
         threshold: this.daylightThresholdW,
         hidden,
+        enabled,
       };
       const layout = this._computeChartLayout(view, stacks);
       this._layout = layout;
@@ -3285,8 +3373,9 @@ export class HelmanSolarInspector extends LitElement {
     if (this._socBarsFor === null
       || this._socBarsFor.view !== view
       || this._socBarsFor.hidden !== hidden
+      || this._socBarsFor.enabled !== enabled
       || this._socBarsFor.fillFrom !== fillFrom) {
-      this._socBarsFor = { view, hidden, fillFrom };
+      this._socBarsFor = { view, hidden, enabled, fillFrom };
       this._socBarsModel = this._socBars(view);
     }
 
@@ -3410,8 +3499,44 @@ export class HelmanSolarInspector extends LitElement {
     };
   }
 
+  /**
+   * Whether the config allows this series at all. The one gate every other
+   * visibility question goes through, so a disabled series cannot be reached by
+   * the legend, a stack, an axis range or a tile.
+   */
+  private _isSeriesEnabled(series: SeriesKey) {
+    // An empty list reads as "unset": the multi-select emits `[]` when the last
+    // option is unchecked, and a card with no series at all and nothing to say
+    // why is worse than the full one.
+    if (this.chartSeries === undefined || this.chartSeries.length === 0) {
+      return true;
+    }
+    return this.chartSeries.includes(series);
+  }
+
+  /**
+   * Whether the slot detail can still draw a house breakdown -- and with it the
+   * device boxes whose schedule badges open the day editor. The same two series
+   * the breakdown itself is gated on, named once so the two cannot drift.
+   */
+  private _houseBreakdownReachable() {
+    return this._isSeriesEnabled("houseActual") || this._isSeriesEnabled("houseForecast");
+  }
+
+  /**
+   * Whether anything on the card can still open the day editor: the band, or a
+   * schedule badge on one of the device boxes a breakdown panel draws. The day
+   * view's breakdown follows the house series; the aggregate views' does not,
+   * because `chart_series` deliberately governs the day chart alone.
+   */
+  private _scheduleEditorReachable() {
+    if (!this.hideScheduleStrip) return true;
+    if (this._viewMode !== "day") return true;
+    return this._houseBreakdownReachable();
+  }
+
   private _isSeriesVisible(series: SeriesKey) {
-    return !this._hiddenSeries.has(series);
+    return this._isSeriesEnabled(series) && !this._hiddenSeries.has(series);
   }
 
   private _toggleSeries(series: SeriesKey) {
@@ -3490,8 +3615,14 @@ export class HelmanSolarInspector extends LitElement {
     let last = Number.NEGATIVE_INFINITY;
     // No fixed bucket: infer each series' own sample spacing so the threshold is
     // read against true average watts, whether the series is 15-minute or hourly.
-    for (const series of [payload.series.raw, payload.series.corrected, payload.series.actual]) {
-      for (const entry of toAveragePower(series)) {
+    // Only the solar series actually drawn may crop the day -- drawn, not merely
+    // allowed: `raw` is hidden by default, so a card that allowed it and nothing
+    // else solar would otherwise crop to solar hours while showing none of them,
+    // hiding the hours its visible series live in. The `!isFinite` fallback below
+    // already means "show the whole day", which is what no visible solar wants.
+    for (const key of ["raw", "corrected", "actual"] as const) {
+      if (!this._isSeriesVisible(key)) continue;
+      for (const entry of toAveragePower(payload.series[key])) {
         if (entry.powerW < threshold) continue;
         if (entry.minutes < first) first = entry.minutes;
         if (entry.minutes > last) last = entry.minutes;
@@ -3721,8 +3852,9 @@ export class HelmanSolarInspector extends LitElement {
   private _chartTooltipModel(payload: InspectorPayload, slot: string): { rows: TooltipRow[]; title: string } {
     if (this._chartTooltipFor === null
       || this._chartTooltipFor.payload !== payload
-      || this._chartTooltipFor.slot !== slot) {
-      this._chartTooltipFor = { payload, slot };
+      || this._chartTooltipFor.slot !== slot
+      || this._chartTooltipFor.enabled !== this.chartSeries) {
+      this._chartTooltipFor = { payload, slot, enabled: this.chartSeries };
       this._chartTooltip = {
         rows: this._allSeriesTooltipRows(payload, slot),
         title: this._formatSelectionRange([slot]),
@@ -3735,7 +3867,24 @@ export class HelmanSolarInspector extends LitElement {
   private _allSeriesTooltipRows(payload: InspectorPayload, slot: string): TooltipRow[] {
     const families: SeriesFamily[] = ["solar", "house", "battery", "grid"];
     return families
-      .flatMap((family) => this._seriesTooltipRows(payload, family, slot))
+      .flatMap((family) => {
+        // A series the config left out is not quoted here either: a popup is as
+        // much a reading of the series as the band it is taken from. Whole
+        // families drop out, and a half-dropped pair loses that column -- the
+        // rows of one family all speak for the same two series, so this is the
+        // one place it has to be said.
+        const [actualSeries, forecastSeries] = FAMILY_SERIES[family];
+        const actualOn = this._isSeriesEnabled(actualSeries);
+        const forecastOn = this._isSeriesEnabled(forecastSeries);
+        if (!actualOn && !forecastOn) return [];
+        const rows = this._seriesTooltipRows(payload, family, slot);
+        if (actualOn && forecastOn) return rows;
+        return rows.map((row) => ({
+          ...row,
+          actual: actualOn ? row.actual : null,
+          forecast: forecastOn ? row.forecast : null,
+        }));
+      })
       .filter((row) => row.actual !== null || row.forecast !== null);
   }
 
@@ -4043,6 +4192,12 @@ export class HelmanSolarInspector extends LitElement {
           }}
         ></helman-solar-price-strip>
       </div>
+    `;
+  }
+
+  /** The money rails, split out so `hide_money_strip` can drop them alone. */
+  private _renderMoneyStrip(payload: InspectorPayload) {
+    return html`
       <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.money_strip_compact")}</span>
         <helman-solar-money-strip
@@ -4908,7 +5063,7 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
-          ${this._renderMoneyMetrics(payload, null)}
+          ${this.hideMoneyStrip ? "" : this._renderMoneyMetrics(payload, null)}
         </div>
       </div>
     `;
@@ -5100,11 +5255,15 @@ export class HelmanSolarInspector extends LitElement {
                 this._formatPrice(this._priceAtSelectionStart(this._exportPriceColumns, slots)),
               )
             : ""}
-          ${this._renderMoneyMetrics(payload, slots)}
+          ${this.hideMoneyStrip ? "" : this._renderMoneyMetrics(payload, slots)}
         </div>
       </div>
-      ${this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)}
-      ${this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast", null)}
+      ${this._isSeriesEnabled("houseActual")
+        ? this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)
+        : ""}
+      ${this._isSeriesEnabled("houseForecast")
+        ? this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast", null)
+        : ""}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
     `;
   }
@@ -5526,6 +5685,12 @@ export class HelmanSolarInspector extends LitElement {
     color: string,
     actual: { value: string; present: boolean; title: string; incomplete?: string | null },
     forecast: { value: string; present: boolean; title: string; incomplete?: string | null },
+    /**
+     * Which half the "neither reported" placeholder speaks for. The forecast by
+     * default, as it always did; the actual when the config left the forecast
+     * out, so the placeholder cannot name a series that is never drawn.
+     */
+    placeholder: "forecast" | "actual" = "forecast",
   ): TemplateResult[] {
     const chipFill = (isForecast: boolean): string =>
       isForecast
@@ -5545,7 +5710,9 @@ export class HelmanSolarInspector extends LitElement {
     if (actual.present) chips.push(chip(actual, false));
     if (forecast.present) chips.push(chip(forecast, true));
     // Neither side reported: keep a single placeholder so the card still reads.
-    if (chips.length === 0) chips.push(chip(forecast, true));
+    if (chips.length === 0) {
+      chips.push(placeholder === "forecast" ? chip(forecast, true) : chip(actual, false));
+    }
     return chips;
   }
 
@@ -5557,7 +5724,22 @@ export class HelmanSolarInspector extends LitElement {
     forecastSeries: SeriesKey,
     actualSeries: SeriesKey,
   ) {
-    const chips = this._metricChips(color, actual, forecast);
+    // A series the config left out has no tile at all: a dimmed legend button
+    // that cannot be un-dimmed would read as toggled off rather than absent.
+    if (!this._isSeriesEnabled(forecastSeries) && !this._isSeriesEnabled(actualSeries)) {
+      return "";
+    }
+    // Half a pair can be dropped on its own, and then its chip would report a
+    // number for a band that is never drawn.
+    const forecastEnabled = this._isSeriesEnabled(forecastSeries);
+    const actualEnabled = this._isSeriesEnabled(actualSeries);
+    const chips = this._metricChips(
+      color,
+      actualEnabled ? actual : { ...actual, present: false },
+      forecastEnabled ? forecast : { ...forecast, present: false },
+      forecastEnabled ? "forecast" : "actual",
+    );
+    const toggled = [forecastSeries, actualSeries].filter((key) => this._isSeriesEnabled(key));
     const visible =
       this._isSeriesVisible(forecastSeries) || this._isSeriesVisible(actualSeries);
     // Faint full-card wash plus a solid left rail, both in the series colour, so
@@ -5574,7 +5756,7 @@ export class HelmanSolarInspector extends LitElement {
             ? "bias_correction.inspector.legend_hide_series"
             : "bias_correction.inspector.legend_show_series",
         )}
-        @click=${() => this._toggleSeriesGroup([forecastSeries, actualSeries], visible)}
+        @click=${() => this._toggleSeriesGroup(toggled, visible)}
       >
         <div class="metric-label">${label}</div>
         <div class="metric-chips">${chips}</div>
@@ -5682,6 +5864,7 @@ export class HelmanSolarInspector extends LitElement {
     // `_partialSeries` mark through its own parameter rather than a chip.
     incomplete: string | null = null,
   ) {
+    if (series && !this._isSeriesEnabled(series)) return "";
     let background = "";
     if (color) {
       background = `background: ${this._seriesFill(color, dashed === true)};`;
