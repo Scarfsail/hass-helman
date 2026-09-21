@@ -54,6 +54,8 @@ interface Served {
     release: () => void;
     /** Answer the card artifact with a 404 instead. */
     fail: () => void;
+    /** Serve it properly again, as a transient outage ending would. */
+    recover: () => void;
 }
 
 /**
@@ -100,6 +102,9 @@ async function serve(page: Page): Promise<Served> {
         },
         fail: () => {
             failing = true;
+        },
+        recover: () => {
+            failing = false;
         },
     };
 }
@@ -381,6 +386,33 @@ test("a failed artifact load says so in the section", async ({ page }) => {
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => !!embeddedCard())).toBe(false);
     expect(served.cardRequests()).toBe(1);
+    // And it says the one thing that can actually recover it.
+    expect(await errorText(page)).toContain("Reload");
+});
+
+test("reopening cannot recover a failed load, even once the server is well", async ({ page }) => {
+    // Why the message says to reload rather than inviting another try. This
+    // pins the platform behaviour the decision rests on, not our own branch: the
+    // browser memoises a failed module fetch, so importing the same URL again
+    // rejects identically and without a request no matter who asks. A
+    // cache-busting URL is not the way out either -- that is a second module,
+    // which is the duplicate evaluation this whole design exists to prevent.
+    const served = await serve(page);
+    served.fail();
+    const errors = await mountEditor(page);
+
+    await setDiagnosticsOpen(page, true);
+    await expect.poll(() => errorText(page)).toContain("solar inspector card");
+
+    // The outage ends. It makes no difference: the module map remembers.
+    served.recover();
+    await setDiagnosticsOpen(page, false);
+    await setDiagnosticsOpen(page, true);
+    await page.waitForTimeout(200);
+
+    expect(await page.evaluate(() => !!embeddedCard())).toBe(false);
+    expect(await errorText(page)).toContain("Reload");
+    expect(errors).toEqual([]);
 });
 
 test("a panel config without the card URL still explains itself", async ({ page }) => {

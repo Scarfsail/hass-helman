@@ -356,7 +356,7 @@
       "fix_yaml_errors_first": "Fix the YAML errors before validating or saving.",
       "fix_descendant_yaml_errors": "Fix child YAML errors before switching this scope to YAML.",
       "enter_yaml_failed": "Failed to open the YAML editor for this scope.",
-      "load_inspector_card_failed": "Failed to load the solar inspector card.",
+      "load_inspector_card_failed": "Failed to load the solar inspector card. Reload the page to try again.",
       "card_module_url_missing": "The solar inspector chart is unavailable here: it needs the card resource this integration registers for Lovelace, which is not in use on this installation."
     },
     "confirm": {

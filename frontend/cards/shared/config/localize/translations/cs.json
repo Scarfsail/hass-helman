@@ -357,7 +357,7 @@
       "fix_yaml_errors_first": "Před validací nebo uložením opravte chyby v YAML.",
       "fix_descendant_yaml_errors": "Před přepnutím této úrovně do YAML opravte chyby v YAML v podřízených částech.",
       "enter_yaml_failed": "Nepodařilo se otevřít YAML editor pro tuto část.",
-      "load_inspector_card_failed": "Nepodařilo se načíst kartu solárního inspektoru.",
+      "load_inspector_card_failed": "Načtení karty solárního inspektoru selhalo. Zkuste to znovu po obnovení stránky.",
       "card_module_url_missing": "Graf solárního inspektoru zde není dostupný: potřebuje prostředek karty, který tato integrace registruje do Lovelace a který se na této instalaci nepoužívá."
     },
     "confirm": {

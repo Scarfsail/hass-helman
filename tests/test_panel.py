@@ -123,6 +123,8 @@ class FakeResources:
 
     def __init__(self) -> None:
         self.items: list[dict] = []
+        # Stands in for a Lovelace that will not change a resource's type.
+        self.ignore_res_type_updates = False
 
     async def async_get_info(self) -> dict:
         return {}
@@ -136,6 +138,8 @@ class FakeResources:
         return item
 
     async def async_update_item(self, item_id: str, changes: dict) -> None:
+        if self.ignore_res_type_updates:
+            changes = {k: v for k, v in changes.items() if k != "res_type"}
         for item in self.items:
             if item["id"] == item_id:
                 item.update(changes)
@@ -204,6 +208,52 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             [item["url"] for item in hass.data["lovelace"].resources.items],
             [expected],
         )
+
+    async def test_register_frontend_upgrades_a_legacy_js_resource_to_a_module(
+        self,
+    ) -> None:
+        """A leftover ``js`` resource is brought up to ``module``, then published.
+
+        The deprecated type is loaded by a ``script`` tag, and a classic script
+        and an ES module of one URL are two separate evaluations -- so the editor
+        importing it as a module while Lovelace loads it as a script would define
+        every custom element twice and break the dashboard's cards.
+        """
+        hass = FakeHass()
+        lovelace = FakeLovelace()
+        hass.data["lovelace"] = lovelace
+        lovelace.resources.items.append(
+            {"id": "legacy", "res_type": "js", "url": CARD_URL}
+        )
+
+        await async_register_frontend(hass)
+        await async_register_panel(hass)
+
+        self.assertEqual(
+            lovelace.resources.items,
+            [{"id": "legacy", "res_type": "module", "url": await async_card_module_url(hass)}],
+        )
+        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        self.assertEqual(kwargs["config"], {"card_module_url": await async_card_module_url(hass)})
+
+    async def test_register_panel_passes_no_card_url_when_the_resource_stays_classic(
+        self,
+    ) -> None:
+        """If the type will not budge, the editor is told nothing rather than a guess."""
+        hass = FakeHass()
+        lovelace = FakeLovelace()
+        hass.data["lovelace"] = lovelace
+        lovelace.resources.items.append(
+            {"id": "legacy", "res_type": "js", "url": CARD_URL}
+        )
+        # A Lovelace that accepts the URL change but not the type change.
+        lovelace.resources.ignore_res_type_updates = True
+
+        await async_register_frontend(hass)
+        await async_register_panel(hass)
+
+        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        self.assertEqual(kwargs["config"], {})
 
     async def test_register_panel_passes_no_card_url_without_a_registered_resource(
         self,

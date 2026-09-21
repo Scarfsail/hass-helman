@@ -2549,7 +2549,7 @@ export class HelmanConfigEditorPanel
       // settling, and an already-registered tag settles it in a microtask.
       this.requestUpdate();
     }
-    // A failed load clears the loader, so reopening the panel tries again.
+    // Once, failure included -- see the catch below.
     if (this._inspectorCardLoad) return;
     const url = this.panel?.config?.card_module_url;
     if (!url) {
@@ -2565,9 +2565,12 @@ export class HelmanConfigEditorPanel
         this.requestUpdate();
       })
       .catch((error) => {
-        // `loadOnce` forgets a failed attempt, but the loader field here is what
-        // gates the retry -- dropping it lets the next open try again.
-        this._inspectorCardLoad = undefined;
+        // The loader is deliberately *kept*: there is no retry to offer. A
+        // failed dynamic import is memoised by the browser's module map, so
+        // importing the same URL again rejects with the same error and without
+        // even a request -- measured, not assumed. Only a reload clears it, and
+        // a fresh URL is not an option: a differently spelled one is a second
+        // module, which is the duplicate evaluation all of this exists to avoid.
         // Both halves, unlike the editor's other errors: what fails here is a
         // bare module fetch, whose message names a URL and nothing else, so on
         // its own it would not say which part of the page had gone missing.

@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 _FRONTEND_STATIC_REGISTERED = "frontend_static_registered"
 _CARD_RESOURCE_ID = "card_resource_id"
 _CARD_RESOURCE_URL = "card_resource_url"
+_MODULE_RES_TYPE = "module"
 
 
 async def async_register_frontend(hass: HomeAssistant) -> None:
@@ -89,13 +90,35 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     if existing is not None:
-        if existing["url"] != versioned_url:
-            await resources.async_update_item(existing["id"], {"url": versioned_url})
+        # The type matters as much as the URL. A resource left over as the
+        # deprecated ``js`` type is loaded by a `script` tag, and a classic
+        # script and an ES module of the same URL are two separate evaluations
+        # -- so the editor importing it as a module while Lovelace loads it as a
+        # script would define every custom element twice. Bring both into line.
+        desired = {"url": versioned_url, "res_type": _MODULE_RES_TYPE}
+        changes = {key: value for key, value in desired.items() if existing.get(key) != value}
+        if changes:
+            await resources.async_update_item(existing["id"], changes)
+            existing = next(
+                (item for item in resources.async_items() if item["id"] == existing["id"]),
+                existing,
+            )
         domain_data[_CARD_RESOURCE_ID] = existing["id"]
-        domain_data[_CARD_RESOURCE_URL] = versioned_url
+        if existing.get("res_type") == _MODULE_RES_TYPE:
+            domain_data[_CARD_RESOURCE_URL] = versioned_url
+        else:
+            # The update did not take, so what Lovelace loads is still not a
+            # module. Publishing the URL anyway is the one thing that turns this
+            # into a broken dashboard, so the editor is told nothing instead.
+            domain_data.pop(_CARD_RESOURCE_URL, None)
+            _LOGGER.warning(
+                "Helman card Lovelace resource is not a module (%s); "
+                "the config editor will not embed the solar inspector",
+                existing.get("res_type"),
+            )
     else:
         created = await resources.async_create_item(
-            {"res_type": "module", "url": versioned_url}
+            {"res_type": _MODULE_RES_TYPE, "url": versioned_url}
         )
         domain_data[_CARD_RESOURCE_ID] = created["id"]
         domain_data[_CARD_RESOURCE_URL] = versioned_url
