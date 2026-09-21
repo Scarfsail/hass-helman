@@ -10,6 +10,9 @@
     "frontend",
     "http"
   ],
+  "after_dependencies": [
+    "lovelace"
+  ],
   "requirements": [],
   "documentation": "https://github.com/Scarfsail/hass-helman",
   "issue_tracker": "https://github.com/Scarfsail/hass-helman/issues",

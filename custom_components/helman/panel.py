@@ -18,6 +18,7 @@ from .const import (
     PANEL_TITLE,
     PANEL_URL,
 )
+from .frontend import registered_card_module_url
 
 _LOGGER = logging.getLogger(__name__)
 _PANEL_STATIC_REGISTERED = "panel_static_registered"
@@ -38,6 +39,13 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     if domain_data.get(_PANEL_REGISTERED):
         return
 
+    # The editor embeds the solar inspector by importing the card bundle at
+    # runtime, and it must be the byte-identical URL Lovelace loads or the
+    # browser evaluates a second copy of it. The backend owns the version
+    # stamp, so it hands the URL down rather than letting the frontend guess --
+    # and hands down nothing at all when it cannot vouch for the spelling, which
+    # the editor reports in place of the chart.
+    card_module_url = registered_card_module_url(hass)
     await panel_custom.async_register_panel(
         hass,
         webcomponent_name=PANEL_NAME,
@@ -46,7 +54,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
         require_admin=True,
-        config={},
+        config={} if card_module_url is None else {"card_module_url": card_module_url},
         config_panel_domain=DOMAIN,
     )
     domain_data[_PANEL_REGISTERED] = True

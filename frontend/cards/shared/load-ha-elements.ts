@@ -34,8 +34,12 @@ const TRACE_ELEMENTS = ["hat-script-graph", "ha-trace-path-details"] as const;
  * already registered, share one in-flight attempt between concurrent callers,
  * and forget a failed attempt so a later caller may retry. Writing that out per
  * loader is what made this file three copies of one idea.
+ *
+ * Exported because the config editor's inspector embed wants the same three
+ * things of a load that is not an HA chunk walk at all -- it imports Helman's
+ * own card artifact by URL -- and this is that idea.
  */
-function loadOnce(
+export function loadOnce(
   tags: readonly string[],
   walk: () => Promise<void>,
 ): () => Promise<void> {

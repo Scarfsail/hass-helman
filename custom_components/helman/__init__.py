@@ -137,8 +137,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await stor.async_load()
         domain_data["storage"] = stor
     async_register_websocket_commands(hass)
-    await async_register_panel(hass)
+    # Frontend first: it registers the Lovelace card resource, and the panel
+    # hands its URL to the config editor.
     await async_register_frontend(hass)
+    await async_register_panel(hass)
     return True
 
 
@@ -152,8 +154,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await stor.async_load()
         domain_data["storage"] = stor
 
-    await async_register_panel(hass)
+    # Frontend first: it registers the Lovelace card resource, and the panel
+    # hands its URL to the config editor.
     await async_register_frontend(hass)
+    await async_register_panel(hass)
     coordinator = HelmanCoordinator(hass, stor)
     await coordinator.async_setup()
 
