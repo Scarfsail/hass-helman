@@ -218,6 +218,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
      */
     private _stalenessCheck: Promise<void> | null = null;
 
+    /** The close is settled -- see `_close`. */
+    private _closing = false;
+
     /**
      * The `editor.*` strings, which live in the config editor's own table.
      *
@@ -261,7 +264,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 width="full"
                 .heading=${heading}
                 .headerTitle=${heading}
-                .preventScrimClose=${true}
+                @wa-hide=${this._handleHideRequest}
                 @closed=${this._handleClosed}
             >
                 <div class="dialog-content">
@@ -321,11 +324,17 @@ export class HelmanOptimizerEditDialog extends LitElement {
                         ${this._format("not_found", { id: this.optimizerIds.join(", ") })}
                     </div>
                 `;
-            case "ready":
-                // Stacked and all expanded rather than tabbed: seeing what
-                // drives a lane *together* is the reason the badge opens more
-                // than one, and one shared draft with one Save is what makes
-                // them one edit rather than several.
+            case "ready": {
+                // Stacked rather than tabbed: seeing what drives a lane
+                // *together* is the reason the badge opens more than one, and
+                // one shared draft with one Save is what makes them one edit
+                // rather than several.
+                //
+                // A lone optimizer opens expanded -- it is the whole dialog,
+                // and there is nothing to choose between. Several start
+                // collapsed, so the list of what drives the lane is readable
+                // at a glance instead of being several screens of form.
+                const expanded = view.indices.length === 1;
                 return html`
                     ${view.indices.map((location) => html`
                         <helman-optimizer-editor
@@ -334,7 +343,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                             .index=${location.index}
                             .schema=${view.schema}
                             .applianceMetadata=${view.applianceMetadata}
-                            .expanded=${true}
+                            .expanded=${expanded}
                             .hass=${this.hass}
                             .localize=${(key: string) => this._editorText(key)}
                             .listActions=${(basePath: PathSegment[], enabled: boolean) =>
@@ -343,6 +352,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                         ></helman-optimizer-editor>
                     `)}
                 `;
+            }
         }
     }
 
@@ -523,8 +533,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 // Saving is finishing, so the dialog closes. Leaving it open on
                 // a green message made Cancel the way out of a save that had
                 // already succeeded, which reads as though it might undo it.
-                this.open = false;
-                this._notifyClosed();
+                this._close();
                 return;
             }
             this._message = {
@@ -659,9 +668,51 @@ export class HelmanOptimizerEditDialog extends LitElement {
         if (this._dirty && !window.confirm(this._text("discard"))) {
             return;
         }
+        this._close();
+    };
+
+    /**
+     * Every other way out of the dialog: the scrim, Escape, the header's ×.
+     *
+     * Light dismiss is on, so a reader who opened the dialog to look gets to
+     * click away from it -- which is what a dialog that only reads should do.
+     * A draft is the one thing worth stopping for, and it is stopped with the
+     * same question Cancel asks, because it is the same decision.
+     *
+     * `wa-hide` is cancellable and fires before the dialog animates away, so
+     * refusing it here leaves the draft on screen rather than restoring it
+     * after the fact.
+     */
+    private _handleHideRequest = (event: Event): void => {
+        // Dialogs opened from inside this one hide through here too, retargeted
+        // to their own host; only this dialog's own hide is ours to answer.
+        if (event.target !== this.renderRoot.querySelector("ha-dialog")) {
+            return;
+        }
+        // Ours, so it stops here: the day editor this is mounted inside hides
+        // through an `ha-dialog` of its own, and the event's path crosses it.
+        event.stopPropagation();
+        if (this._closing || !this._dirty) {
+            return;
+        }
+        event.preventDefault();
+        if (window.confirm(this._text("discard"))) {
+            this._close();
+        }
+    };
+
+    /**
+     * The one way the dialog closes itself.
+     *
+     * The flag matters because closing hides, and hiding comes back through
+     * `_handleHideRequest` -- which would otherwise ask about the draft a
+     * second time, after the answer had already been given.
+     */
+    private _close(): void {
+        this._closing = true;
         this.open = false;
         this._notifyClosed();
-    };
+    }
 
     /**
      * Closing this dialog must not close the day editor behind it.

@@ -387,6 +387,7 @@ export class HelmanOptimizerEditor
         return html`
             <details
                 class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
+                ?open=${this.expanded}
             >
                 <summary>
                     <div class="appliance-summary-row">

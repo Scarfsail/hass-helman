@@ -271,6 +271,49 @@ async function fireDataChanged(page: Page, kind = "config"): Promise<void> {
     await page.waitForTimeout(600);
 }
 
+/**
+ * The hide a scrim click, Escape or the header's x starts.
+ *
+ * `ha-dialog` wraps `wa-dialog`, whose `wa-hide` is cancellable and retargets
+ * to the `ha-dialog` host on its way out -- so this is what the dialog actually
+ * sees. The harness's `ha-dialog` is an undefined element with no hide of its
+ * own, so the caller is told whether the hide was refused and plays the rest.
+ *
+ * Answers `true` when the hide went through, which in the real component is
+ * what goes on to fire `closed`.
+ */
+async function requestHide(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const host = document
+            .querySelector("scheduling-explanation-panel")!
+            .shadowRoot!.querySelector("helman-optimizer-edit-dialog");
+        if (!host) {
+            return false;
+        }
+        const dialogElement = host.shadowRoot!.querySelector("ha-dialog")!;
+        const hide = new CustomEvent("wa-hide", {
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+            detail: {},
+        });
+        const allowed = dialogElement.dispatchEvent(hide);
+        if (allowed) {
+            dialogElement.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+        }
+        return allowed;
+    });
+}
+
+/** Leave a draft behind, so the dialog has something to guard. */
+async function editThreshold(page: Page, value: string): Promise<void> {
+    const threshold = dialog(page)
+        .locator(".optimizer-card .condition-group input[type=number]")
+        .first();
+    await threshold.fill(value);
+    await threshold.blur();
+}
+
 /** Every websocket request the panel and the dialog made, in order. */
 async function calls(page: Page): Promise<{ type: string; config?: unknown }[]> {
     return page.evaluate(() => (window as unknown as Record<string, unknown>).__calls as never);
@@ -813,6 +856,58 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // is the event name every ha-dialog uses, so an unstopped one shuts the
         // day editor hosting this too.
         await expect(page.locator("scheduling-explanation-panel .explanation-panel")).toHaveCount(1);
+    });
+
+    test("clicking outside closes a dialog that was only being read", async ({ page }) => {
+        // The badge opens this to answer "what drives this lane?", and most
+        // openings never edit anything. Trapping those behind a button is the
+        // behaviour this replaces.
+        await mountPanel(page);
+        await openDialog(page);
+
+        expect(await requestHide(page)).toBe(true);
+        await expect(dialog(page)).toHaveCount(0);
+        await expect(page.locator("scheduling-explanation-panel .explanation-panel")).toHaveCount(1);
+    });
+
+    test("clicking outside a draft asks the question Cancel asks", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await editThreshold(page, "2.5");
+
+        const asked: string[] = [];
+        page.once("dialog", (confirmation) => {
+            asked.push(confirmation.message());
+            void confirmation.dismiss();
+        });
+        // Refused, so the draft stays on screen rather than being restored
+        // after the dialog has already animated away.
+        expect(await requestHide(page)).toBe(false);
+        expect(asked).toEqual(["Discard unsaved changes?"]);
+        await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
+        await expect(dialog(page).locator(".optimizer-card .condition-group input[type=number]").first())
+            .toHaveValue("2.5");
+
+        page.once("dialog", (confirmation) => void confirmation.accept());
+        await requestHide(page);
+        await expect(dialog(page)).toHaveCount(0);
+    });
+
+    test("a discard answered once is not asked again on the way out", async ({ page }) => {
+        // Closing hides, and the hide comes back through the same guard -- the
+        // second question would be asked after the answer had been given.
+        await mountPanel(page);
+        await openDialog(page);
+        await editThreshold(page, "2.5");
+
+        const asked: string[] = [];
+        page.on("dialog", (confirmation) => {
+            asked.push(confirmation.message());
+            void confirmation.accept();
+        });
+        await dialog(page).getByText("Cancel").click();
+        await expect(dialog(page)).toHaveCount(0);
+        expect(asked).toEqual(["Discard unsaved changes?"]);
     });
 
     test("nothing is asked of the backend until the button is pressed", async ({ page }) => {

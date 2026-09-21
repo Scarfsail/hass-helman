@@ -209,6 +209,15 @@ function badge(page: Page, key: string) {
     return lane(page, key).locator(".automation-badge");
 }
 
+/** Whether each card in the open dialog is expanded, in pipeline order. */
+async function cardsOpen(page: Page): Promise<boolean[]> {
+    return page.evaluate(() => [...(document
+        .querySelector("scheduling-entity-day-band")!
+        .shadowRoot!.querySelector("helman-optimizer-edit-dialog")
+        ?.shadowRoot?.querySelectorAll("helman-optimizer-editor") ?? [])]
+        .map((editor) => !!editor.shadowRoot!.querySelector("details")?.open));
+}
+
 function badgeState(page: Page, key: string): Promise<string> {
     return badge(page, key).evaluate((element) => element.className.replace("automation-badge", "").trim());
 }
@@ -265,6 +274,26 @@ test.describe("automation coverage on the schedule band", () => {
         // Three cards, including the one that is switched off: the badge is
         // where a disabled automation gets switched back on.
         await expect(dialog.locator("helman-optimizer-editor")).toHaveCount(3);
+    });
+
+    test("several automations open collapsed -- the list is what was asked for", async ({ page }) => {
+        // Three cards expanded is several screens of form, and the badge was
+        // pressed to see *what* drives the lane, not to edit all three.
+        await mountBand(page);
+        await badge(page, "inverter").click();
+        await expect(page.locator("helman-optimizer-edit-dialog helman-optimizer-editor"))
+            .toHaveCount(3);
+
+        expect(await cardsOpen(page)).toEqual([false, false, false]);
+    });
+
+    test("a lone automation opens expanded -- it is the whole dialog", async ({ page }) => {
+        await mountBand(page);
+        await badge(page, "boiler").click();
+        await expect(page.locator("helman-optimizer-edit-dialog helman-optimizer-editor"))
+            .toHaveCount(1);
+
+        expect(await cardsOpen(page)).toEqual([true]);
     });
 
     test("pressing it does not also select the lane underneath", async ({ page }) => {
