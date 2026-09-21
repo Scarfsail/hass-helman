@@ -119,7 +119,15 @@ class FakeConfig:
 
 
 class FakeResources:
-    """The storage-mode Lovelace resource collection, as frontend.py uses it."""
+    """The storage-mode Lovelace resource collection, as frontend.py uses it.
+
+    Including its field rename, which is the whole reason this fake models the
+    write path rather than echoing what it was handed: Lovelace *takes* a
+    resource's type as ``res_type`` and *stores* it as ``type``
+    (``ResourceStorageCollection._process_create_data`` and ``._update_data``).
+    A fake that kept the caller's spelling would let code that reads back the
+    wrong key pass here and fail on every real installation.
+    """
 
     def __init__(self) -> None:
         self.items: list[dict] = []
@@ -133,7 +141,7 @@ class FakeResources:
         return list(self.items)
 
     async def async_create_item(self, data: dict) -> dict:
-        item = {"id": f"res{len(self.items)}", **data}
+        item = {"id": f"res{len(self.items)}", **self._stored(data)}
         self.items.append(item)
         return item
 
@@ -142,7 +150,15 @@ class FakeResources:
             changes = {k: v for k, v in changes.items() if k != "res_type"}
         for item in self.items:
             if item["id"] == item_id:
-                item.update(changes)
+                item.update(self._stored(changes))
+
+    @staticmethod
+    def _stored(data: dict) -> dict:
+        """The item as Lovelace keeps it: ``res_type`` in, ``type`` out."""
+        stored = dict(data)
+        if "res_type" in stored:
+            stored["type"] = stored.pop("res_type")
+        return stored
 
     async def async_delete_item(self, item_id: str) -> None:
         self.items = [item for item in self.items if item["id"] != item_id]
@@ -222,16 +238,14 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass()
         lovelace = FakeLovelace()
         hass.data["lovelace"] = lovelace
-        lovelace.resources.items.append(
-            {"id": "legacy", "res_type": "js", "url": CARD_URL}
-        )
+        lovelace.resources.items.append({"id": "legacy", "type": "js", "url": CARD_URL})
 
         await async_register_frontend(hass)
         await async_register_panel(hass)
 
         self.assertEqual(
             lovelace.resources.items,
-            [{"id": "legacy", "res_type": "module", "url": await async_card_module_url(hass)}],
+            [{"id": "legacy", "type": "module", "url": await async_card_module_url(hass)}],
         )
         _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
         self.assertEqual(kwargs["config"], {"card_module_url": await async_card_module_url(hass)})
@@ -243,9 +257,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass()
         lovelace = FakeLovelace()
         hass.data["lovelace"] = lovelace
-        lovelace.resources.items.append(
-            {"id": "legacy", "res_type": "js", "url": CARD_URL}
-        )
+        lovelace.resources.items.append({"id": "legacy", "type": "js", "url": CARD_URL})
         # A Lovelace that accepts the URL change but not the type change.
         lovelace.resources.ignore_res_type_updates = True
 

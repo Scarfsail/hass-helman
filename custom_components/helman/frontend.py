@@ -20,6 +20,12 @@ _FRONTEND_STATIC_REGISTERED = "frontend_static_registered"
 _CARD_RESOURCE_ID = "card_resource_id"
 _CARD_RESOURCE_URL = "card_resource_url"
 _MODULE_RES_TYPE = "module"
+# Lovelace takes a resource's type as ``res_type`` and stores it as ``type``:
+# `ResourceStorageCollection._process_create_data` and `._update_data` rename the
+# field on the way in. So the two spellings below are both right, in their own
+# direction, and neither can be used for the other.
+_RES_TYPE_WRITE_FIELD = "res_type"
+_RES_TYPE_STORED_FIELD = "type"
 
 
 async def async_register_frontend(hass: HomeAssistant) -> None:
@@ -95,8 +101,11 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
         # script and an ES module of the same URL are two separate evaluations
         # -- so the editor importing it as a module while Lovelace loads it as a
         # script would define every custom element twice. Bring both into line.
-        desired = {"url": versioned_url, "res_type": _MODULE_RES_TYPE}
-        changes = {key: value for key, value in desired.items() if existing.get(key) != value}
+        changes: dict[str, str] = {}
+        if existing.get("url") != versioned_url:
+            changes["url"] = versioned_url
+        if existing.get(_RES_TYPE_STORED_FIELD) != _MODULE_RES_TYPE:
+            changes[_RES_TYPE_WRITE_FIELD] = _MODULE_RES_TYPE
         if changes:
             await resources.async_update_item(existing["id"], changes)
             existing = next(
@@ -104,7 +113,7 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
                 existing,
             )
         domain_data[_CARD_RESOURCE_ID] = existing["id"]
-        if existing.get("res_type") == _MODULE_RES_TYPE:
+        if existing.get(_RES_TYPE_STORED_FIELD) == _MODULE_RES_TYPE:
             domain_data[_CARD_RESOURCE_URL] = versioned_url
         else:
             # The update did not take, so what Lovelace loads is still not a
@@ -114,11 +123,11 @@ async def _async_register_card_resource(hass: HomeAssistant) -> None:
             _LOGGER.warning(
                 "Helman card Lovelace resource is not a module (%s); "
                 "the config editor will not embed the solar inspector",
-                existing.get("res_type"),
+                existing.get(_RES_TYPE_STORED_FIELD),
             )
     else:
         created = await resources.async_create_item(
-            {"res_type": _MODULE_RES_TYPE, "url": versioned_url}
+            {_RES_TYPE_WRITE_FIELD: _MODULE_RES_TYPE, "url": versioned_url}
         )
         domain_data[_CARD_RESOURCE_ID] = created["id"]
         domain_data[_CARD_RESOURCE_URL] = versioned_url
