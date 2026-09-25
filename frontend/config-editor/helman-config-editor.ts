@@ -4165,20 +4165,24 @@ export class HelmanConfigEditorPanel
                     ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
                   </div>
                   <select
-                    .value=${projectionStrategy ?? "fixed"}
                     @change=${(event: Event) =>
                       onStrategyChange((event.currentTarget as HTMLSelectElement).value)}
                   >
                     ${GENERIC_PROJECTION_STRATEGIES.map(
                       (option) => html`
-                        <option value=${option.value}>${this._t(option.labelKey)}</option>
+                        <option
+                          value=${option.value}
+                          ?selected=${option.value === (projectionStrategy ?? "fixed")}
+                        >${this._t(option.labelKey)}</option>
                       `,
                     )}
                   </select>
                 </div>
                 ${this._renderRequiredNumberField(
                   [...projectionPath, "hourly_energy_kwh"],
-                  "editor.fields.hourly_energy_kwh",
+                  projectionStrategy === "history_average"
+                    ? "editor.fields.fallback_hourly_energy_kwh"
+                    : "editor.fields.hourly_energy_kwh",
                   undefined,
                   "any",
                   "editor.help.appliance_hourly_energy_kwh",
@@ -4272,7 +4276,6 @@ export class HelmanConfigEditorPanel
           <div class="field">
             <label>${this._t("editor.fields.behavior")}</label>
             <select
-              .value=${this._stringValue(modeObject.behavior) || "fixed_max_power"}
               @change=${(event: Event) =>
                 this._setRequiredString(
                   [...valuesPath, modeKey, "behavior"],
@@ -4281,7 +4284,11 @@ export class HelmanConfigEditorPanel
             >
               ${USE_MODE_BEHAVIORS.map(
                 (option) => html`
-                  <option value=${option.value}>${this._t(option.labelKey)}</option>
+                  <option
+                    value=${option.value}
+                    ?selected=${option.value ===
+                    (this._stringValue(modeObject.behavior) || "fixed_max_power")}
+                  >${this._t(option.labelKey)}</option>
                 `,
               )}
             </select>

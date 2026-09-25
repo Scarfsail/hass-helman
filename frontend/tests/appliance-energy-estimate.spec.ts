@@ -176,3 +176,23 @@ test("a device on history_average shows the same value in its settings", async (
     // A fixed device projects its own figure; there is nothing learned to show.
     await expect(estimateLine(page, "Pool")).toHaveCount(0);
 });
+
+test("the strategy select opens on the configured strategy and names the kWh field by it", async ({
+    page,
+}) => {
+    await mountEditor(page);
+    await openTab(page, "Controllables");
+
+    const card = (name: string) =>
+        page.locator("details.list-card", {
+            has: page.locator(":scope > summary strong", { hasText: new RegExp(`^${name}$`) }),
+        });
+
+    // The select is committed before its options exist on first render, so
+    // a `.value` binding fell back to the first option ("fixed").
+    await expect(card("Dishwasher").locator("select")).toHaveValue("history_average");
+    await expect(card("Pool").locator("select")).toHaveValue("fixed");
+
+    await expect(card("Dishwasher").locator("label", { hasText: "Fallback hourly energy kWh" })).toHaveCount(1);
+    await expect(card("Pool").locator("label", { hasText: "Average hourly energy kWh" })).toHaveCount(1);
+});
