@@ -31,6 +31,8 @@ export interface TrainingJobStatus {
   /** `null` means unknown: the live fingerprint could not be read. */
   isStale: boolean | null;
   issues: { subject: string; reason: string }[];
+  /** Present on `appliance_energy` only: learned kWh per running hour, by controllable id. */
+  estimates?: Record<string, number>;
 }
 
 export interface TrainingStatus {

@@ -280,10 +280,8 @@ interface TrainingDepthRow {
   label: string;
   /** Where the entity id lives -- also the key `_entityInspections` is read by. */
   path: PathSegment[];
-  /** i18n key for what the trainer takes from this entity. */
-  roleKey: string;
-  /** Substituted into the role text, e.g. an appliance's own lookback. */
-  roleParams?: Record<string, string | number>;
+  /** i18n key for what the trainer takes from this entity; the appliance table has no role column. */
+  roleKey?: string;
   /** Override shared inspection severity with this consumer's own minimum. */
   requiredDays?: number;
   /**
@@ -295,6 +293,25 @@ interface TrainingDepthRow {
    */
   ownEntity?: boolean;
 }
+
+/** One device of the appliance-energy table -- see `_renderApplianceEnergyTable`. */
+interface ApplianceEnergyDepthDevice {
+  index: number;
+  id: string;
+  name: string;
+  learns: boolean;
+  /** The configured `hourly_energy_kwh`: a fixed device's figure, a learner's fallback. */
+  fixedKwh: unknown;
+  lookbackDays: number;
+  /** A learner's meter then its activity entity; a fixed sharer's activity only. */
+  entities: TrainingDepthRow[];
+}
+
+/** A device's learned energy, as the appliance-energy job reports it. */
+type ApplianceEnergyEstimate =
+  | { state: "learned"; kwh: number }
+  | { state: "failed"; reason: string }
+  | { state: "not_trained" };
 
 export class HelmanConfigEditorPanel
   extends LitElement
@@ -2248,6 +2265,7 @@ export class HelmanConfigEditorPanel
    * `_renderTrainingJobSection`.
    */
   private _renderTrainingTab(): TemplateResult {
+    const applianceDevices = this._applianceEnergyDepthDevices();
     return html`
       ${this._renderSimpleSection(
         this._t("editor.sections.training_settings"),
@@ -2460,7 +2478,10 @@ export class HelmanConfigEditorPanel
         "appliance_energy",
         "editor.notes.training_appliance_energy",
         nothing,
-        this._applianceEnergyDepthRows(),
+        applianceDevices.flatMap((device) => device.entities),
+        nothing,
+        undefined,
+        () => this._renderApplianceEnergyTable(applianceDevices),
       )}
     `;
   }
@@ -2480,6 +2501,9 @@ export class HelmanConfigEditorPanel
     depthRows: TrainingDepthRow[],
     extraDiagnostics: TemplateResult | typeof nothing = nothing,
     onDiagnosticsToggle?: (open: boolean) => void,
+    renderDepthTable: (
+      rows: TrainingDepthRow[],
+    ) => TemplateResult | typeof nothing = (rows) => this._renderTrainingDepthTable(rows),
   ): TemplateResult {
     const job = this._trainingJob(id);
     const hasIssues = (job?.issues.length ?? 0) > 0;
@@ -2503,7 +2527,7 @@ export class HelmanConfigEditorPanel
               html`
                 <helman-training-issues .hass=${this.hass} .job=${job}></helman-training-issues>
                 ${extraDiagnostics}
-                ${this._renderTrainingDepthTable(depthRows)}
+                ${renderDepthTable(depthRows)}
               `,
               {
                 open: false,
@@ -2725,7 +2749,7 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * Every entity the appliance energy job reads, with the lookback it reads.
+   * Every device the appliance energy job reads, with the lookback it reads.
    *
    * A `history_average` appliance reads its meter and its switch or climate
    * entity -- the second is how training knows when it ran, so a deep meter
@@ -2737,7 +2761,7 @@ export class HelmanConfigEditorPanel
    * A second, read-only view of settings that live on each controllable --
    * the same kind of view `_houseConsumptionDepthRows` gives those meters.
    */
-  private _applianceEnergyDepthRows(): TrainingDepthRow[] {
+  private _applianceEnergyDepthDevices(): ApplianceEnergyDepthDevice[] {
     const controllables = (asJsonArray(this._getValue(["controllables"])) ?? []).map(
       (controllable, index) => {
         const entry = asJsonObject(controllable) ?? {};
@@ -2747,6 +2771,7 @@ export class HelmanConfigEditorPanel
         const lookback = projection.lookback_days;
         return {
           index,
+          id: this._stringValue(entry.id),
           name:
             this._stringValue(entry.name) ||
             this._stringValue(entry.id) ||
@@ -2755,6 +2780,7 @@ export class HelmanConfigEditorPanel
           // Only these two kinds share a meter or learn from history.
           activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
           learns: projection.strategy === "history_average",
+          fixedKwh: projection.hourly_energy_kwh,
           // The backend trains on 30 days when the key is absent.
           lookback: typeof lookback === "number" ? lookback : 30,
         };
@@ -2771,38 +2797,53 @@ export class HelmanConfigEditorPanel
       if (members.length < 2 || learners.length === 0) return null;
       return Math.max(...learners.map((member) => member.lookback));
     };
-    return controllables.flatMap((item): TrainingDepthRow[] => {
+    return controllables.flatMap((item): ApplianceEnergyDepthDevice[] => {
       const shared = item.meter ? sharedLookback(item.meter) : null;
-      const activityRow = (roleKey: string, days: number): TrainingDepthRow[] =>
-        item.activity
-          ? [
-              {
-                label: item.name,
-                path: ["controllables", item.index, "controls", item.activity, "entity_id"],
-                roleKey,
-                roleParams: { days },
-                requiredDays: days,
-              },
-            ]
-          : [];
-      if (!item.learns) {
-        // A fixed sharer learns nothing, but when it ran still splits the meter.
-        return shared === null
-          ? []
-          : activityRow("editor.training_depth.role_appliance_sharer_activity", shared);
-      }
+      // A fixed sharer learns nothing, but when it ran still splits the meter.
+      if (!item.learns && shared === null) return [];
       const days = shared ?? item.lookback;
+      const entity = (label: string, path: PathSegment[]): TrainingDepthRow => ({
+        label: this._t(`editor.training_depth.appliance_entity_${label}`),
+        path,
+        requiredDays: days,
+      });
+      const activity = item.activity
+        ? [entity(item.activity, ["controllables", item.index, "controls", item.activity, "entity_id"])]
+        : [];
       return [
         {
-          label: item.name,
-          path: ["controllables", item.index, "consumption", "energy_entity_id"],
-          roleKey: "editor.training_depth.role_appliance_meter",
-          roleParams: { days },
-          requiredDays: days,
+          index: item.index,
+          id: item.id,
+          name: item.name,
+          learns: item.learns,
+          fixedKwh: item.fixedKwh,
+          lookbackDays: days,
+          entities: item.learns
+            ? [
+                entity("meter", ["controllables", item.index, "consumption", "energy_entity_id"]),
+                ...activity,
+              ]
+            : activity,
         },
-        ...activityRow("editor.training_depth.role_appliance_activity", days),
       ];
     });
+  }
+
+  /**
+   * What the appliance energy job learned for one controllable, or why not.
+   *
+   * The one reader of the job's `estimates` and appliance issues, shared by the
+   * Diagnostics table and the device's own Consumption settings so the two
+   * cannot disagree. A device with no status yet, added in the draft and never
+   * saved, or simply never trained, is `not_trained`.
+   */
+  private _applianceEnergyEstimate(controllableId: string): ApplianceEnergyEstimate {
+    const job = this._trainingJob("appliance_energy");
+    const kwh = job?.estimates?.[controllableId];
+    if (typeof kwh === "number") return { state: "learned", kwh };
+    const issue = job?.issues.find((candidate) => candidate.subject === controllableId);
+    if (issue) return { state: "failed", reason: issue.reason };
+    return { state: "not_trained" };
   }
 
   /**
@@ -2823,7 +2864,7 @@ export class HelmanConfigEditorPanel
     const rows = [
       ...this._houseConsumptionDepthRows(),
       ...this._solarBiasDepthRows(),
-      ...this._applianceEnergyDepthRows(),
+      ...this._applianceEnergyDepthDevices().flatMap((device) => device.entities),
     ];
     return rows.map((row) => ({
       key: entityGroupKey(row.path),
@@ -2839,8 +2880,7 @@ export class HelmanConfigEditorPanel
    * same for every row -- they are this section's own settings, edited in the
    * fields directly above -- so a column of them repeated down the table said
    * nothing a reader could not already see. The appliance-energy table is the
-   * exception: each row names its own lookback in the role text because that
-   * per-appliance value is also the requirement used to highlight that row.
+   * exception, with a table of its own: see `_renderApplianceEnergyTable`.
    *
    * What is left is what a reader cannot get anywhere else: which entities
    * this trainer reads, what it takes from each, and how deep the recorder
@@ -2899,44 +2939,150 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderTrainingDepthRow(row: TrainingDepthRow): TemplateResult {
-    const { draft, historyFact } = this._trainingDepthInspection(row);
-    // The config document first, then whatever the backend resolved. For every
-    // row but one those are the same string. The exception is a row for an
-    // entity Helman publishes: its path names nothing in the document, so only
-    // the inspection knows the id, and without this the row renders as "no
-    // entity configured" and is not clickable — while reporting a depth.
-    const entityId =
-      this._stringValue(this._getValue(row.path)) ||
-      this._stringValue(draft?.entityId);
+    const { historyFact } = this._trainingDepthInspection(row);
     const rawStates = historyFact?.params?.["raw_states"];
     const statistics = historyFact?.params?.["statistics"];
-    const name = html`<div class="training-depth-label">${row.label}</div>`;
     return html`
       <tr class=${this._isTrainingDepthRowShort(row) ? "training-depth-warn" : ""}>
         <td>
-          ${entityId
-            ? html`<button
-                type="button"
-                class="training-depth-entity-button"
-                aria-label=${this._moreInfoLabel(entityId)}
-                title=${entityId}
-                @click=${() => this._showMoreInfo(entityId)}
-              >
-                ${name}
-                <div class="training-depth-entity-id">${entityId}</div>
-              </button>`
-            : html`${name}
-                <div class="training-depth-entity-id training-depth-unset">
-                  ${this._t("editor.training_depth.no_entity")}
-                </div>`}
+          ${this._renderTrainingDepthEntity(
+            row,
+            html`<div class="training-depth-label">${row.label}</div>`,
+          )}
         </td>
-        <td class="training-depth-role">
-          ${row.roleParams ? this._tFormat(row.roleKey, row.roleParams) : this._t(row.roleKey)}
-        </td>
+        <td class="training-depth-role">${row.roleKey ? this._t(row.roleKey) : nothing}</td>
         <td class="training-depth-number">${this._trainingDepthCell(rawStates)}</td>
         <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
       </tr>
     `;
+  }
+
+  /**
+   * A depth row's entity id under `heading`, as one more-info button.
+   *
+   * The config document first, then whatever the backend resolved. For every
+   * row but one those are the same string. The exception is a row for an
+   * entity Helman publishes: its path names nothing in the document, so only
+   * the inspection knows the id, and without this the row renders as "no
+   * entity configured" and is not clickable — while reporting a depth.
+   */
+  private _renderTrainingDepthEntity(
+    row: TrainingDepthRow,
+    heading: TemplateResult | typeof nothing,
+  ): TemplateResult {
+    const entityId =
+      this._stringValue(this._getValue(row.path)) ||
+      this._stringValue(this._trainingDepthInspection(row).draft?.entityId);
+    return entityId
+      ? html`<button
+          type="button"
+          class="training-depth-entity-button"
+          aria-label=${this._moreInfoLabel(entityId)}
+          title=${entityId}
+          @click=${() => this._showMoreInfo(entityId)}
+        >
+          ${heading}
+          <div class="training-depth-entity-id">${entityId}</div>
+        </button>`
+      : html`${heading}
+          <div class="training-depth-entity-id training-depth-unset">
+            ${this._t("editor.training_depth.no_entity")}
+          </div>`;
+  }
+
+  /**
+   * The appliance energy table: one row per device, with what it learned.
+   *
+   * A device's meter and activity entity are listed inside its one row, not
+   * as sibling rows, because the job trains the device -- two rows read as
+   * two trainings. Depth is the effective one (`available`, #186) per entity:
+   * the only question for an appliance is whether each entity reaches back as
+   * far as the lookback, so the raw-states / statistics split stays in the
+   * solar and house tables. The row warns when any of its entities is short.
+   */
+  private _renderApplianceEnergyTable(
+    devices: ApplianceEnergyDepthDevice[],
+  ): TemplateResult | typeof nothing {
+    if (devices.length === 0) return nothing;
+    return html`
+      <div class="training-depth-table-wrap">
+        <table class="training-depth-table">
+          <thead>
+            <tr>
+              <th>${this._t("editor.training_depth.column_device")}</th>
+              <th>${this._t("editor.training_depth.column_learned_average")}</th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_lookback")}
+              </th>
+              <th class="training-depth-number">
+                ${this._t("editor.training_depth.column_history_depth")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            ${devices.map((device) => this._renderApplianceEnergyRow(device))}
+          </tbody>
+        </table>
+      </div>
+      <p class="inline-note">${this._t("editor.training_depth.appliance_table_note")}</p>
+    `;
+  }
+
+  private _renderApplianceEnergyRow(device: ApplianceEnergyDepthDevice): TemplateResult {
+    const depths = device.entities.map(
+      (row) => this._trainingDepthInspection(row).historyFact?.params?.["available"],
+    );
+    const known = depths.every((depth) => typeof depth === "number");
+    const short = device.entities.some((row) => this._isTrainingDepthRowShort(row));
+    return html`
+      <tr class=${short ? "training-depth-warn" : ""}>
+        <td>
+          <div class="training-depth-label">${device.name}</div>
+          ${device.entities.map((row) => this._renderTrainingDepthEntity(row, nothing))}
+        </td>
+        <td class="training-depth-role">${this._renderApplianceEnergyValue(device)}</td>
+        <td class="training-depth-number">
+          ${this._tFormat("editor.training_depth.days", { days: device.lookbackDays })}
+        </td>
+        <td class="training-depth-number">
+          <div>${known ? this._trainingDepthDays(Math.min(...(depths as number[]))) : "—"}</div>
+          ${device.entities.map(
+            (row, index) => html`<div class="training-depth-entity-id">
+              ${row.label} ${this._trainingDepthDays(depths[index])}
+            </div>`,
+          )}
+        </td>
+      </tr>
+    `;
+  }
+
+  /** The Learned average cell, read from `_applianceEnergyEstimate`. */
+  private _renderApplianceEnergyValue(
+    device: ApplianceEnergyDepthDevice,
+  ): TemplateResult | string {
+    const fallback = this._trainingDepthCell(device.fixedKwh);
+    if (!device.learns) {
+      return this._tFormat("editor.training_depth.value_fixed", { kwh: fallback });
+    }
+    const estimate = this._applianceEnergyEstimate(device.id);
+    if (estimate.state === "learned") {
+      return this._tFormat("editor.training_depth.value_learned", {
+        kwh: estimate.kwh.toFixed(2),
+      });
+    }
+    if (estimate.state === "failed") {
+      return html`<span title=${estimate.reason}>
+        ${this._tFormat("editor.training_depth.value_failed", { kwh: fallback })}
+      </span>`;
+    }
+    return this._t("editor.training_depth.value_not_trained");
+  }
+
+  /** A depth in days, or a dash while it is unknown. */
+  private _trainingDepthDays(value: unknown): string {
+    return typeof value === "number" && Number.isFinite(value)
+      ? this._tFormat("editor.training_depth.days", { days: value })
+      : "—";
   }
 
   /**
@@ -3870,6 +4016,7 @@ export class HelmanConfigEditorPanel
                 this._t("editor.sections.consumption"),
                 this._renderConsumptionSection(consumptionPath, {
                   noteKey: "editor.notes.generic_appliance_projection",
+                  controllableId: this._stringValue(this._getValue(["controllables", index, "id"])),
                   projectionStrategy,
                   onStrategyChange: (strategy) =>
                     this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
@@ -3947,6 +4094,7 @@ export class HelmanConfigEditorPanel
                 this._t("editor.sections.consumption"),
                 this._renderConsumptionSection(consumptionPath, {
                   noteKey: "editor.notes.climate_appliance_projection",
+                  controllableId: this._stringValue(this._getValue(["controllables", index, "id"])),
                   projectionStrategy,
                   onStrategyChange: (strategy) =>
                     this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
@@ -3971,11 +4119,13 @@ export class HelmanConfigEditorPanel
     consumptionPath: PathSegment[],
     options: {
       noteKey?: string;
+      /** Whose learned energy to show on `history_average`. */
+      controllableId?: string;
       projectionStrategy?: string;
       onStrategyChange?: (strategy: string) => void;
     } = {},
   ): TemplateResult {
-    const { noteKey, projectionStrategy, onStrategyChange } = options;
+    const { noteKey, controllableId, projectionStrategy, onStrategyChange } = options;
     const hasMeter = Boolean(
       this._stringValue(this._getValue([...consumptionPath, "energy_entity_id"])),
     );
@@ -4043,10 +4193,38 @@ export class HelmanConfigEditorPanel
                     )
                   : nothing}
               </div>
+              ${projectionStrategy === "history_average" && controllableId !== undefined
+                ? this._renderApplianceEnergyEstimateLine(
+                    controllableId,
+                    this._getValue([...projectionPath, "hourly_energy_kwh"]),
+                  )
+                : nothing}
             `
           : nothing}
       </div>
     `;
+  }
+
+  /**
+   * The learned figure a `history_average` device projects with, read-only.
+   *
+   * Same source as the Training tab's appliance table, so the two agree. The
+   * fallback is the draft's `hourly_energy_kwh`, the figure the backend uses
+   * until an estimate exists.
+   */
+  private _renderApplianceEnergyEstimateLine(
+    controllableId: string,
+    fallbackKwh: unknown,
+  ): TemplateResult {
+    const estimate = this._applianceEnergyEstimate(controllableId);
+    const kwh = this._trainingDepthCell(fallbackKwh);
+    const text =
+      estimate.state === "learned"
+        ? this._tFormat("editor.appliance_estimate.learned", { kwh: estimate.kwh.toFixed(2) })
+        : estimate.state === "failed"
+          ? this._tFormat("editor.appliance_estimate.failed", { reason: estimate.reason, kwh })
+          : this._tFormat("editor.appliance_estimate.not_trained", { kwh });
+    return html`<p class="inline-note appliance-energy-estimate">${text}</p>`;
   }
 
   private _renderUseMode(
