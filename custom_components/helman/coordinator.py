@@ -1531,21 +1531,27 @@ class HelmanCoordinator:
                 ),
                 issues=[],
             ),
-            _stored_training_job_status(
-                "appliance_energy",
-                appliance,
-                health=appliance_energy_health_for(appliance),
-                artifact_in_use=bool(self._appliance_energy_estimates),
-                read_live_fingerprint=lambda: (
-                    self._read_appliance_energy_training_request().fingerprint
+            {
+                **_stored_training_job_status(
+                    "appliance_energy",
+                    appliance,
+                    health=appliance_energy_health_for(appliance),
+                    artifact_in_use=bool(self._appliance_energy_estimates),
+                    read_live_fingerprint=lambda: (
+                        self._read_appliance_energy_training_request().fingerprint
+                    ),
+                    issues=[
+                        {"subject": appliance_id, "reason": reason}
+                        for appliance_id, reason in sorted(
+                            ((appliance or {}).get("failed_appliances") or {}).items()
+                        )
+                    ],
                 ),
-                issues=[
-                    {"subject": appliance_id, "reason": reason}
-                    for appliance_id, reason in sorted(
-                        ((appliance or {}).get("failed_appliances") or {}).items()
-                    )
-                ],
-            ),
+                # The adopted map, not the stored document: it is what
+                # projection and automation actually read. kWh per running
+                # hour, keyed by controllable id.
+                "estimates": dict(self._appliance_energy_estimates),
+            },
         ]
         return {
             "trainingTime": batch.training_time,

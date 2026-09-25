@@ -283,6 +283,14 @@ class TrainingStatusTests(unittest.TestCase):
         self.assertTrue(appliance["artifactInUse"])
         self.assertFalse(appliance["usingOlderArtifact"])
 
+    def test_only_the_appliance_job_carries_the_adopted_estimates(self) -> None:
+        estimates = {"dishwasher": 1.12, "living_ac": 0.6}
+        payload = self._payload(_make_coordinator(appliance_estimates=estimates))
+
+        self.assertEqual(_job(payload, "appliance_energy")["estimates"], estimates)
+        self.assertNotIn("estimates", _job(payload, "solar_bias"))
+        self.assertNotIn("estimates", _job(payload, "house_consumption"))
+
     def test_a_current_short_house_profile_is_degraded_not_older(self) -> None:
         store = _make_store(house_consumption=_section("insufficient_history"))
         payload = self._payload(

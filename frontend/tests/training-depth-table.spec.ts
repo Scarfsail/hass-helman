@@ -256,8 +256,8 @@ test("every governed entity in #172's table gets a row, fed by the shared poll",
     // House meter + one controllable, then the solar comparison -- whose
     // forecast side is two rows, the source and what Helman records from it --
     // plus grid and battery. The appliance energy panel (#305) lists the same
-    // controllable once more, being on history_average: a second row over the
-    // same meter, so still seven targets.
+    // controllable once more, being on history_average: one device row (#321)
+    // over the same meter, so still seven targets.
     const tables = await waitForRows(page, 8);
 
     const allRows = tables.flat();
@@ -522,25 +522,37 @@ test("shallow raw states behind deep statistics no longer marks the row", async 
     expect(warnRowTexts.some((text) => text.includes("sensor.solar_bias_meter"))).toBe(false);
 });
 
+/** The appliance energy panel's table rows, one per device. */
+function applianceRows(page: Page) {
+    return page
+        .locator("details.section-card", {
+            has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
+        })
+        .locator(".training-depth-table tbody tr");
+}
+
 test("an appliance row judges depth against its own lookback", async ({ page }) => {
     const config = JSON.parse(JSON.stringify(CONFIG));
     config.controllables[0].consumption.projection.lookback_days = 40;
     await mountEditor(page, config);
-    await waitForRows(page, 8);
 
-    const matchingRows = await page.evaluate(() => {
+    // One device, one row: its meter (33 d) is short of its own 40 days, while
+    // the house table's row over the same meter keeps the house window's 14.
+    const rows = applianceRows(page);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText("Dishwasher");
+    await expect(rows.first()).toContainText("40 d");
+    await expect(rows.first()).toHaveClass(/training-depth-warn/);
+
+    const houseRowWarns = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        return Array.from(root?.querySelectorAll(".training-depth-table tbody tr") ?? [])
-            .filter((row) => row.textContent?.includes("Dishwasher"))
-            .map((row) => ({
-                text: row.textContent ?? "",
-                warning: row.classList.contains("training-depth-warn"),
-            }));
+        const table = root?.querySelectorAll(".training-depth-table")[1];
+        const row = Array.from(table?.querySelectorAll("tbody tr") ?? []).find((tr) =>
+            tr.textContent?.includes("Dishwasher"),
+        );
+        return row?.classList.contains("training-depth-warn") ?? null;
     });
-
-    expect(matchingRows).toHaveLength(2);
-    expect(matchingRows.find((row) => row.text.includes("40 days"))?.warning).toBe(true);
-    expect(matchingRows.find((row) => !row.text.includes("40 days"))?.warning).toBe(false);
+    expect(houseRowWarns).toBe(false);
 });
 
 test("an appliance's activity entity is judged against the lookback training reads", async ({
@@ -602,26 +614,54 @@ test("an appliance's activity entity is judged against the lookback training rea
         "controllables.2.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
     });
 
-    const appliancePanel = page.locator("details.section-card", {
-        has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
-    });
-    const rows = appliancePanel.locator(".training-depth-table tbody tr");
-    await expect(rows).toHaveCount(5);
+    // One row per device (#321): the pool reads nothing, so it is absent.
+    const rows = applianceRows(page);
+    await expect(rows).toHaveCount(3);
     await expect
         .poll(async () =>
             rows.evaluateAll((trs) =>
                 trs.map((tr) => ({
-                    entity: tr.querySelector(".training-depth-entity-id")?.textContent?.trim(),
+                    name: tr.querySelector(".training-depth-label")?.textContent?.trim(),
+                    entities: Array.from(
+                        tr.querySelectorAll("td:first-child .training-depth-entity-id"),
+                    ).map((cell) => cell.textContent?.trim()),
                     warning: tr.classList.contains("training-depth-warn"),
                 })),
             ),
         )
         .toEqual([
-            { entity: "sensor.dishwasher_energy", warning: false },
-            { entity: "switch.dishwasher", warning: true },
-            { entity: "sensor.ac_breaker", warning: false },
-            { entity: "climate.living", warning: false },
-            { entity: "climate.bedroom", warning: true },
+            {
+                name: "Dishwasher",
+                entities: ["sensor.dishwasher_energy", "switch.dishwasher"],
+                warning: true,
+            },
+            {
+                name: "Living AC",
+                entities: ["sensor.ac_breaker", "climate.living"],
+                warning: false,
+            },
+            { name: "Bedroom AC", entities: ["climate.bedroom"], warning: true },
         ]);
-    await expect(rows.nth(4)).toContainText("14 days");
+    // The dishwasher's depth is its shallowest entity, then each one's own.
+    await expect(rows.nth(0).locator("td").nth(3)).toContainText("5 d");
+    await expect(rows.nth(0).locator("td").nth(3)).toContainText("meter 33 d");
+    await expect(rows.nth(0).locator("td").nth(3)).toContainText("switch 5 d");
+    // The fixed sharer is judged against the shared meter's learning lookback.
+    await expect(rows.nth(2).locator("td").nth(1)).toHaveText("Fixed · 1 kWh/h");
+    await expect(rows.nth(2).locator("td").nth(2)).toHaveText("14 d");
+
+    // Regrouping changed the rows, not what the shared poll asks about.
+    const requestedKeys = await page.evaluate(() =>
+        ((window as any).__inspectRequests.at(-1)?.targets ?? []).map((target: any) => target.key),
+    );
+    expect(requestedKeys).toEqual(
+        expect.arrayContaining([
+            "controllables.0.consumption.energy_entity_id",
+            "controllables.0.controls.switch.entity_id",
+            "controllables.1.consumption.energy_entity_id",
+            "controllables.1.controls.climate.entity_id",
+            "controllables.2.controls.climate.entity_id",
+        ]),
+    );
+    expect(requestedKeys).not.toContain("controllables.3.controls.switch.entity_id");
 });

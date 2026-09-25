@@ -503,8 +503,8 @@ test("the appliance panel lists only history_average controllables", async ({ pa
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText("Dishwasher");
     await expect(rows.first()).toContainText("sensor.dishwasher_energy");
-    // Its own lookback, read from the controllable.
-    await expect(rows.first()).toContainText("21 days");
+    // Its own lookback, read from the controllable, in the Lookback column.
+    await expect(rows.first().locator("td").nth(2)).toHaveText("21 d");
     await expect(section).toContainText("Controllables tab");
 });
 

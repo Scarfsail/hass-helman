@@ -122,6 +122,11 @@
       "use_mode_mapping": "Mapování režimu použití",
       "eco_gear_mapping": "Mapování eco gear"
     },
+    "appliance_estimate": {
+      "learned": "Naučeno z historie: {kwh} kWh/h",
+      "not_trained": "Zatím nenaučeno: do té doby se používá {kwh} kWh/h",
+      "failed": "Bez odhadu ({reason}): používá se {kwh} kWh/h"
+    },
     "training_depth": {
       "column_entity": "Entita",
       "column_raw_states": "Podrobná data (d)",
@@ -143,9 +148,19 @@
       "role_forecast_source": "Prognostická strana porovnání. Helman si predikci každého slotu ukládá ještě před jeho začátkem, takže trénink čte vlastní archiv, ne historii této entity -- jak daleko zpět ji recorder drží, tady nic neurčuje.",
       "forecast_recorded": "Zaznamenaná prognóza",
       "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo.",
-      "role_appliance_meter": "Průměrováno na hodinu provozu za období {days} dní: vlastní období tohoto spotřebiče, u sdíleného měřiče nejdelší ze spotřebičů, které se učí. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
-      "role_appliance_activity": "Kdy spotřebič běžel, za stejných {days} dní: trénink průměruje měřič jen přes hodiny, kdy tato entita ukazuje chod, takže bez dostatečné historie zde nevznikne odhad, ať je historie měřiče jakkoli dlouhá. Upravuje se u spotřebiče na kartě Řízené spotřebiče.",
-      "role_appliance_sharer_activity": "Sdílí měřič se spotřebičem, který se učí z historie, takže kdy tento běžel, rozhoduje o jeho podílu na rozdělení za {days} dní. Upravuje se u spotřebiče na kartě Řízené spotřebiče."
+      "column_device": "Zařízení",
+      "column_learned_average": "Naučený průměr",
+      "column_lookback": "Období",
+      "column_history_depth": "Hloubka historie",
+      "days": "{days} d",
+      "value_learned": "{kwh} kWh/h",
+      "value_failed": "Bez odhadu · použito {kwh} kWh/h",
+      "value_not_trained": "Zatím nenaučeno",
+      "value_fixed": "Pevně · {kwh} kWh/h",
+      "appliance_entity_meter": "měřič",
+      "appliance_entity_switch": "spínač",
+      "appliance_entity_climate": "klimatizace",
+      "appliance_table_note": "Průměr se počítá jen z hodin, kdy spínač nebo klimatizační entita spotřebiče ukazuje chod, za uvedené období. Spotřebič s pevnou hodnotou je uveden, když sdílí měřič se spotřebičem, který se učí, protože kdy běžel, rozhoduje o jeho podílu na měřiči. Nastavení je u spotřebiče na kartě Řízené spotřebiče."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",
