@@ -244,6 +244,7 @@
       "climate_entity": "Entita topení/klimatizace",
       "switch_entity": "Entita přepínače",
       "projection_strategy": "Strategie projekce",
+      "fallback_hourly_energy_kwh": "Záložní hodinová energie kWh",
       "hourly_energy_kwh": "Průměrná hodinová energie kWh",
       "history_lookback_days": "Počet dní historie",
       "max_charging_power_kw": "Max. nabíjecí výkon kW",

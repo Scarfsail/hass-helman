@@ -243,6 +243,7 @@
       "climate_entity": "Climate entity",
       "switch_entity": "Switch entity",
       "projection_strategy": "Projection strategy",
+      "fallback_hourly_energy_kwh": "Fallback hourly energy kWh",
       "hourly_energy_kwh": "Average hourly energy kWh",
       "history_lookback_days": "History lookback days",
       "max_charging_power_kw": "Max charging power kW",
