@@ -478,6 +478,7 @@ class FakeStorage:
 
 class FakeExecutor:
     def __init__(self) -> None:
+        self.is_running = True
         self.events: list[str] = []
         self.reconcile_error: Exception | None = None
         self.restore_error: Exception | None = None
@@ -492,23 +493,13 @@ class FakeExecutor:
     async def async_unload(self) -> None:
         self.events.append("unload")
 
-    async def async_reconcile(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
+    async def async_reconcile_and_wait(self, *, reason: str) -> None:
         self.events.append(f"reconcile:{reason}")
         if self.reconcile_error is not None:
             raise self.reconcile_error
 
-    async def async_reconcile_safely(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
-        self.events.append(f"safe_reconcile:{reason}")
+    def request_reconcile(self, *, reason: str) -> None:
+        self.events.append(f"request_reconcile:{reason}")
 
     async def async_restore_normal(self, *, reason: str) -> None:
         self.events.append(f"restore:{reason}")
@@ -857,7 +848,6 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator._async_run_post_schedule_write_side_effects.assert_awaited_once_with(
             reason="schedule_updated",
-            reference_time=REFERENCE_TIME,
         )
         coordinator._automation_triggers.request_immediate.assert_awaited_once_with(
             reason="user_edit",

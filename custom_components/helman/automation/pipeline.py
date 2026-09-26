@@ -556,7 +556,6 @@ class AutomationRunner:
                 current_stage = "post_write_side_effects"
                 await self._coordinator._async_run_post_schedule_write_side_effects(
                     reason="automation_updated",
-                    reference_time=active_reference_time,
                 )
             return self._finalize_result(
                 result=result,

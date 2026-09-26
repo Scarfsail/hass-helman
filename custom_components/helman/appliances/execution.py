@@ -13,10 +13,7 @@ from ..scheduling.runtime_status import (
     RuntimeActionKind,
     RuntimeOutcome,
 )
-from ..scheduling.actuation import (
-    ScheduleActuator,
-    ScheduleExecutionDisabledError,
-)
+from ..scheduling.actuation import ScheduleActuator
 from ..controllables.controllers import SelectEntityController
 from ..controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -92,7 +89,7 @@ class SwitchEntityController:
                 "turn_on",
                 {"entity_id": self.entity_id},
             )
-        except ScheduleExecutionDisabledError:
+        except ScheduleError:
             raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
@@ -106,7 +103,7 @@ class SwitchEntityController:
                 "turn_off",
                 {"entity_id": self.entity_id},
             )
-        except ScheduleExecutionDisabledError:
+        except ScheduleError:
             raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
@@ -181,7 +178,7 @@ class ClimateEntityController:
                 "set_hvac_mode",
                 {"entity_id": self.entity_id, "hvac_mode": hvac_mode},
             )
-        except ScheduleExecutionDisabledError:
+        except ScheduleError:
             raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(

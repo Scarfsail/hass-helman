@@ -133,6 +133,7 @@ from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
+    ScheduleExecutionUnavailableError,
     ScheduleResponseDict,
     ScheduleSlot,
     appliance_actions,
@@ -800,7 +801,13 @@ class HelmanCoordinator:
         )
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
+        # Guards execution-flag transitions only; never held while the executor
+        # or hardware is awaited.
         self._schedule_execution_lock = asyncio.Lock()
+        # Bumped by every flag transition -- enable, disable, and a failed
+        # enable's rollback -- so a failed enable only rolls the flag back when
+        # no newer transition has been made since.
+        self._schedule_execution_generation = 0
         self._schedule_executor = ScheduleExecutor(
             hass,
             ScheduleExecutorDependencies(
@@ -1193,11 +1200,33 @@ class HelmanCoordinator:
             await self._async_cleanup_automation_owned_actions_if_needed(
                 reference_time=reference_time,
             )
-        await self._async_reconcile_schedule_execution(
-            reason="startup",
-            reference_time=reference_time,
-        )
+        self._schedule_startup_schedule_execution()
         self._schedule_startup_forecast_refresh()
+
+    def _schedule_startup_schedule_execution(self) -> None:
+        """Start the executor once Home Assistant has finished starting.
+
+        Never awaited: a persisted slot whose hardware is slow or stalled must
+        not hold up integration setup or Home Assistant's startup. A cold start
+        therefore makes no schedule hardware writes before HA has started; a
+        reload in an already-running HA starts at once, as ``async_at_started``
+        fires immediately. The executor keeps running whether or not execution
+        is enabled: its tick drives the pre-execution reality check, and
+        whether anything is applied is decided inside the reconcile, and
+        ultimately by the actuation gate.
+        """
+
+        @callback
+        def _start_schedule_execution(_hass: HomeAssistant) -> None:
+            self._create_tracked_refresh_task(self._async_start_schedule_execution())
+
+        self._unsub_listeners.append(
+            async_at_started(self._hass, _start_schedule_execution)
+        )
+
+    async def _async_start_schedule_execution(self) -> None:
+        await self._schedule_executor.async_start()
+        self._schedule_executor.request_reconcile(reason="startup")
 
     def _schedule_startup_forecast_refresh(self) -> None:
         """Build the first forecast once Home Assistant has finished starting.
@@ -3108,7 +3137,6 @@ class HelmanCoordinator:
         if document_changed:
             await self._async_run_post_schedule_write_side_effects(
                 reason="schedule_updated",
-                reference_time=request_now,
             )
             if set_by == "user":
                 await self._automation_triggers.request_immediate(
@@ -3120,15 +3148,15 @@ class HelmanCoordinator:
         self,
         *,
         reason: str,
-        reference_time: datetime,
     ) -> None:
         # No cache invalidation here: the schedule signatures the pipeline read
         # computes cover every slot this write can have touched, so the next
         # card read rebuilds only if the plan it draws actually changed.
-        await self._async_reconcile_schedule_execution(
-            reason=reason,
-            reference_time=reference_time,
-        )
+        #
+        # The write is already persisted; execution is only requested, so a
+        # websocket reply or automation run never waits behind hardware. The
+        # worker reads the time and the schedule afresh when it starts.
+        self._schedule_executor.request_reconcile(reason=reason)
 
     async def _persist_automation_result_locked(
         self,
@@ -3168,14 +3196,28 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
     ) -> bool:
         request_now = reference_time or dt_util.now()
-        should_trigger_automation_on_enable = False
 
+        # Only the flag transition is serialized. The enable reconcile below is
+        # awaited outside this lock, so a disable issued while hardware is slow
+        # still persists at once.
         async with self._schedule_execution_lock:
             async with self._schedule_lock:
                 current_document = await self._load_pruned_schedule_document_locked(
                     reference_time=request_now
                 )
                 was_enabled = current_document.execution_enabled
+
+                if enabled and not self._schedule_executor.is_running:
+                    # Home Assistant is still starting (or the entry is going
+                    # away): nothing could validate an enable now. Decide before
+                    # touching storage; an already-enabled flag is applied by
+                    # the startup reconcile anyway.
+                    if was_enabled:
+                        return True
+                    raise ScheduleExecutionUnavailableError(
+                        "Schedule execution is not running yet; try again once "
+                        "Home Assistant has started"
+                    )
 
                 if enabled and not was_enabled:
                     await self._save_schedule_document(
@@ -3184,79 +3226,122 @@ class HelmanCoordinator:
                             slots=current_document.slots,
                         )
                     )
-                    should_trigger_automation_on_enable = True
+            # Only a real flag change is a newer decision: a repeated enable
+            # must not cancel the rollback of the first one still in flight.
+            if enabled != was_enabled:
+                self._schedule_execution_generation += 1
+            generation = self._schedule_execution_generation
 
-            if enabled:
-                await self._schedule_executor.async_start()
-                try:
-                    await self._schedule_executor.async_reconcile(
-                        reason="enable_request",
-                        reference_time=request_now,
-                    )
-                except ScheduleError as err:
-                    if not was_enabled:
-                        _LOGGER.warning(
-                            "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
-                            err,
-                            err.code,
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "Failed to reconcile already-enabled schedule execution: %s (%s)",
-                            err,
-                            err.code,
-                        )
-                    if not was_enabled:
-                        async with self._schedule_lock:
-                            latest_document = self._load_schedule_document()
-                            if latest_document.execution_enabled:
-                                await self._save_schedule_document(
-                                    ScheduleDocument(
-                                        execution_enabled=False,
-                                        slots=latest_document.slots,
-                                    )
-                                )
-                        await self._schedule_executor.async_stop()
-                    raise
-                if should_trigger_automation_on_enable:
-                    await self._automation_triggers.request_immediate(
-                        reason="execution_enabled",
-                        reference_time=request_now,
-                    )
-                return True
+            if not enabled:
+                # Disabling execution is passive: Helman stops touching hardware
+                # and leaves the inverter and every appliance exactly as they
+                # are. The user restores normal state explicitly, whenever they
+                # choose, via the scheduling card. Disabling therefore cannot
+                # fail and never rolls back.
+                #
+                # The executor keeps running so its tick still drives the
+                # pre-execution reality check; it just stops applying anything.
+                # Runtime status is dropped right away so the card does not keep
+                # showing what was executing a moment ago.
+                self._schedule_executor.reset_runtime()
 
-            # Disabling execution is passive: Helman stops touching hardware and
-            # leaves the inverter and every appliance exactly as they are. The
-            # user restores normal state explicitly, whenever they choose, via
-            # the scheduling card. Disabling therefore cannot fail and never
-            # rolls back.
-            #
-            # The executor keeps running so its tick still drives the
-            # pre-execution reality check; it just stops applying anything.
-            # Runtime status is dropped right away so the card does not keep
-            # showing what was executing a moment ago.
-            await self._schedule_executor.async_start()
-            self._schedule_executor.reset_runtime()
+                if not was_enabled:
+                    return False
 
-            if not was_enabled:
-                return False
-
-            async with self._schedule_lock:
-                latest_document = await self._load_pruned_schedule_document_locked(
+                await self._async_persist_execution_disabled_locked(
                     reference_time=request_now
                 )
-                if latest_document.execution_enabled:
-                    # Keep the plan intact: automation keeps planning while
-                    # execution is off, so the card and the inspectors show what
-                    # Helman would be doing. Only the apply step is suppressed.
-                    await self._save_schedule_document(
-                        ScheduleDocument(
-                            execution_enabled=False,
-                            slots=latest_document.slots,
-                        )
-                    )
+                return False
 
-            return False
+        try:
+            await self._schedule_executor.async_reconcile_and_wait(
+                reason="enable_request",
+            )
+        except ScheduleError as err:
+            if generation != self._schedule_execution_generation:
+                # A newer flag change superseded this request -- typically a
+                # disable, whose gate then aborted this attempt. Its outcome is
+                # moot; report the flag as persisted, as the success path does.
+                _LOGGER.debug(
+                    "Superseded enable reconcile ended with: %s (%s)",
+                    err,
+                    err.code,
+                )
+                return self._load_schedule_document().execution_enabled
+            if not was_enabled:
+                _LOGGER.warning(
+                    "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
+                    err,
+                    err.code,
+                )
+                await self._async_roll_back_failed_enable(
+                    generation=generation,
+                    reference_time=request_now,
+                )
+            else:
+                _LOGGER.warning(
+                    "Failed to reconcile already-enabled schedule execution: %s (%s)",
+                    err,
+                    err.code,
+                )
+            raise
+        # Report the flag as persisted, not as requested: a disable or another
+        # enable's rollback may have landed while this one waited on hardware.
+        enabled_now = self._load_schedule_document().execution_enabled
+        # Announce only the enable that made the transition, and only if no
+        # newer transition has superseded it.
+        if (
+            enabled_now
+            and not was_enabled
+            and generation == self._schedule_execution_generation
+        ):
+            await self._automation_triggers.request_immediate(
+                reason="execution_enabled",
+                reference_time=request_now,
+            )
+        return enabled_now
+
+    async def _async_persist_execution_disabled_locked(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> None:
+        """Persist ``executionEnabled=false``; caller holds the flag lock."""
+        async with self._schedule_lock:
+            latest_document = await self._load_pruned_schedule_document_locked(
+                reference_time=reference_time
+            )
+            if latest_document.execution_enabled:
+                # Keep the plan intact: automation keeps planning while
+                # execution is off, so the card and the inspectors show what
+                # Helman would be doing. Only the apply step is suppressed.
+                await self._save_schedule_document(
+                    ScheduleDocument(
+                        execution_enabled=False,
+                        slots=latest_document.slots,
+                    )
+                )
+
+    async def _async_roll_back_failed_enable(
+        self,
+        *,
+        generation: int,
+        reference_time: datetime,
+    ) -> None:
+        async with self._schedule_execution_lock:
+            # A newer enable or disable has decided the flag since; this old
+            # failure must not undo it.
+            if generation != self._schedule_execution_generation:
+                return
+            # The rollback is itself a flag transition: an overlapping enable
+            # still waiting must report the persisted state, not success.
+            # Bumped before the save, which yields on disk I/O, so such a
+            # waiter sees the transition however it interleaves with it.
+            self._schedule_execution_generation += 1
+            await self._async_persist_execution_disabled_locked(
+                reference_time=reference_time
+            )
+            self._schedule_executor.reset_runtime()
 
     @staticmethod
     def _build_cleaned_automation_schedule_document(
@@ -3285,25 +3370,6 @@ class HelmanCoordinator:
                 return False
             await self._save_schedule_document(cleaned_document)
             return True
-
-    async def _async_reconcile_schedule_execution(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
-        # The executor keeps running whether or not execution is enabled: its
-        # tick drives the pre-execution reality check, which keeps the plan in
-        # sync with current conditions even when nothing is applied. Whether
-        # anything is actually applied is decided inside the reconcile, and
-        # ultimately by the actuation gate.
-        request_now = reference_time or dt_util.now()
-        async with self._schedule_execution_lock:
-            await self._schedule_executor.async_start()
-            await self._schedule_executor.async_reconcile_safely(
-                reason=reason,
-                reference_time=request_now,
-            )
 
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         if self._automation_input_bundle is None:
@@ -5170,7 +5236,9 @@ class HelmanCoordinator:
         if plan_at is None:
             return False
         # Fresh plan: trust it. This also breaks the re-plan -> execute loop,
-        # since a just-built plan is always inside the window.
+        # since a just-built plan is normally inside the window. One executed
+        # after a slow hardware attempt may not be, but it was built from
+        # current conditions, so it re-plans only if they flip again.
         age = (reference_time - plan_at).total_seconds()
         if age < AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS:
             return False

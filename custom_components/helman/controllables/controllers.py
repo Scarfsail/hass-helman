@@ -19,8 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..scheduling.actuation import ScheduleActuator, ScheduleExecutionDisabledError
-from ..scheduling.schedule import ScheduleExecutionUnavailableError
+from ..scheduling.actuation import ScheduleActuator
+from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
 
 _SELECT_DOMAINS = {"input_select", "select"}
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
@@ -102,8 +102,9 @@ class SelectEntityController:
                 "select_option",
                 {"entity_id": self.entity_id, "option": option},
             )
-        except ScheduleExecutionDisabledError:
-            # The gate is closed on purpose; it is not a fault of this entity.
+        except ScheduleError:
+            # The actuator's own diagnostics -- a closed gate, or a timeout
+            # naming the service, entity and duration -- are already specific.
             raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(

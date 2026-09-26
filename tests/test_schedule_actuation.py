@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
 import types
@@ -50,6 +51,9 @@ from custom_components.helman.scheduling.actuation import (  # noqa: E402
     ScheduleActuator,
     ScheduleExecutionDisabledError,
 )
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleExecutionUnavailableError,
+)
 
 
 class FakeStates:
@@ -63,6 +67,8 @@ class FakeStates:
 class FakeServices:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict, bool]] = []
+        # When set, every call parks until the event fires -- a stalled service.
+        self.release: asyncio.Event | None = None
 
     async def async_call(
         self,
@@ -73,6 +79,8 @@ class FakeServices:
         blocking: bool,
     ) -> None:
         self.calls.append((domain, service, data, blocking))
+        if self.release is not None:
+            await self.release.wait()
 
 
 class FakeHass:
@@ -135,6 +143,62 @@ class ScheduleActuatorTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(hass.services.calls), 1)
+
+    async def test_stalled_call_times_out_naming_service_entity_and_duration(
+        self,
+    ) -> None:
+        hass = FakeHass()
+        hass.services.release = asyncio.Event()
+        actuator = ScheduleActuator(
+            hass,
+            is_execution_enabled=lambda: True,
+            service_call_timeout_seconds=0.01,
+        )
+
+        with self.assertRaises(ScheduleExecutionUnavailableError) as raised:
+            await actuator.async_call(
+                "switch", "turn_on", {"entity_id": "switch.ev_charge"}
+            )
+
+        message = str(raised.exception)
+        self.assertIn("switch.turn_on", message)
+        self.assertIn("switch.ev_charge", message)
+        self.assertIn("0.01 seconds", message)
+        self.assertIsInstance(raised.exception.__cause__, TimeoutError)
+        # Still a blocking call, just a bounded one.
+        self.assertTrue(hass.services.calls[0][3])
+
+    async def test_integration_timeout_is_not_reported_as_helmans_timeout(
+        self,
+    ) -> None:
+        hass = FakeHass()
+
+        async def _integration_times_out(*args, **kwargs) -> None:
+            raise TimeoutError("cloud API timed out")
+
+        hass.services.async_call = _integration_times_out
+        actuator = ScheduleActuator(hass, is_execution_enabled=lambda: True)
+
+        with self.assertRaisesRegex(TimeoutError, "cloud API timed out"):
+            await actuator.async_call(
+                "switch", "turn_on", {"entity_id": "switch.ev_charge"}
+            )
+
+    async def test_cancellation_propagates_out_of_a_stalled_call(self) -> None:
+        hass = FakeHass()
+        hass.services.release = asyncio.Event()
+        actuator = ScheduleActuator(hass, is_execution_enabled=lambda: True)
+
+        task = asyncio.create_task(
+            actuator.async_call(
+                "select", "select_option", {"entity_id": "select.ev_mode"}
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
 
     def test_reads_are_allowed_while_the_gate_is_closed(self) -> None:
         state = object()

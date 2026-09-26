@@ -225,6 +225,9 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         {"__init__": lambda self, execution_enabled=False, slots=None: None},
     )
     schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
+    schedule_mod.ScheduleExecutionUnavailableError = type(
+        "ScheduleExecutionUnavailableError", (schedule_mod.ScheduleError,), {}
+    )
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
