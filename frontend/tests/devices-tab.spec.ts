@@ -367,6 +367,21 @@ test("generated child ids avoid share sensor slug collisions", async ({ page }) 
     await expect.poll(async () => (await config(page))[1].children.at(-1)?.id).toBe("ac_room_2");
 });
 
+test("reordering devices closes an add picker tied to the old parent path", async ({ page }) => {
+    await mountEditor(page);
+    await openTab(page, "Devices");
+    const panel = page.locator("helman-config-editor-panel");
+    await panel.locator(".add-device").first().dispatchEvent("click");
+    await expect(panel.locator(".add-device-picker")).toHaveCount(1);
+    await panel.locator("ha-sortable").first().evaluate((sortable) => {
+        sortable.dispatchEvent(new CustomEvent("item-moved", {
+            detail: { oldIndex: 1, newIndex: 2 }, bubbles: true, composed: true,
+        }));
+    });
+    await expect.poll(async () => (await config(page))[2].id).toBe(BREAKER.id);
+    await expect(panel.locator(".add-device-picker")).toHaveCount(0);
+});
+
 test("nested children render and edit in place", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");

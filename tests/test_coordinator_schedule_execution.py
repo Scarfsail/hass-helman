@@ -665,6 +665,31 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             ["heat"],
         )
 
+    async def test_derived_appliance_name_refreshes_after_startup(self) -> None:
+        config = _valid_climate_config()
+        device = config["devices"][0]
+        del device["name"]
+        config["visualization"] = {"power_sensor_name_cleaner_regex": " Power$"}
+        storage = FakeStorage(schedule_document={}, config=config)
+        hass = FakeHass()
+        coordinator = HelmanCoordinator(hass, storage)
+        coordinator._active_config = storage.config
+        coordinator._appliances_registry = build_appliances_runtime_registry(config)
+
+        response = await coordinator.get_appliances()
+        self.assertEqual(response["appliances"][0]["name"], device["id"])
+        hass.states._states["climate.living_room"] = FakeState(
+            "heat", attributes={"friendly_name": "Living room Power"}
+        )
+        response = await coordinator.get_appliances()
+        self.assertEqual(response["appliances"][0]["name"], "Living room")
+        hass.states._states["climate.living_room"].attributes["friendly_name"] = "Renamed Power"
+        response = await coordinator.get_appliances()
+        self.assertEqual(response["appliances"][0]["name"], "Renamed")
+        device["name"] = "My override"
+        response = await coordinator.get_appliances()
+        self.assertEqual(response["appliances"][0]["name"], "My override")
+
     async def test_set_schedule_rejects_climate_mode_missing_from_live_capabilities(
         self,
     ) -> None:

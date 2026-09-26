@@ -1864,6 +1864,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _resetDeviceModes(): void {
+    this._addDeviceTarget = null;
     this._deviceModes = {};
     this._deviceYamlValues = {};
     this._deviceYamlErrors = {};
