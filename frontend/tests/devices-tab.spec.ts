@@ -605,6 +605,57 @@ test("the tree round-trips through YAML, whole and per card", async ({ page }) =
     expect(devices[1]).toEqual(BREAKER);
 });
 
+for (const ancestor of ["card", "tab"] as const) {
+    test(`replacing ${ancestor} YAML clears descendant caches and removed errors`, async ({ page }) => {
+        await mountEditor(page);
+        await openTab(page, "Devices");
+        const panel = page.locator("helman-config-editor-panel");
+        const mode = async (id: string, label: string) => {
+            await page.evaluate(({ id, label }) => {
+                window.__own(id, "summary .mode-toggle button").find(
+                    (button) => button.textContent?.trim() === label,
+                )?.click();
+            }, { id, label });
+        };
+        await mode("pc", "YAML");
+        await expect(panel.locator("ha-yaml-editor")).toHaveCount(1);
+        await panel.locator("ha-yaml-editor").evaluate((editor) => {
+            editor.dispatchEvent(new CustomEvent("value-changed", {
+                detail: { isValid: false, errorMsg: "Broken child YAML" },
+                bubbles: true, composed: true,
+            }));
+        });
+        await expect(panel.locator(".header button", { hasText: "Save" })).toBeDisabled();
+
+        if (ancestor === "card") {
+            await mode("study", "YAML");
+        } else {
+            await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
+        }
+        const nextStudy = { ...STUDY, children: [STUDY.children[1]] };
+        const replacement = ancestor === "card"
+            ? nextStudy
+            : [INVERTER, BREAKER, nextStudy, BOILER];
+        await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
+            editor.dispatchEvent(new CustomEvent("value-changed", {
+                detail: { value, isValid: true }, bubbles: true, composed: true,
+            }));
+        }, replacement);
+        if (ancestor === "card") {
+            await mode("study", "Visual");
+        } else {
+            await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "Visual" }).click();
+        }
+        await expect(panel.locator("ha-yaml-editor")).toHaveCount(0);
+        await expect(panel.locator(".header button", { hasText: "Save" })).toBeEnabled();
+        await mode("lamp", "YAML");
+        await expect(panel.locator("ha-yaml-editor")).toHaveCount(1);
+        expect(await panel.locator("ha-yaml-editor").evaluate((editor) => (editor as any).defaultValue))
+            .toEqual(STUDY.children[1]);
+        expect((await config(page))[2]).toEqual(nextStudy);
+    });
+}
+
 test("validation errors surface on the nested card they name", async ({ page }) => {
     const issue = (path: string, message: string) => ({
         section: "devices",

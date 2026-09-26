@@ -1870,6 +1870,17 @@ export class HelmanConfigEditorPanel
     this._deviceYamlErrors = {};
   }
 
+  /** Replacing an ancestor invalidates every descendant's path-keyed editor state. */
+  private _clearDescendantDeviceModes(path: PathSegment[]): void {
+    const prefix = `${entityGroupKey(path)}.`;
+    const keep = <T>(values: Partial<Record<string, T>>): Partial<Record<string, T>> =>
+      Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith(prefix)));
+    this._deviceModes = keep(this._deviceModes);
+    this._deviceYamlValues = keep(this._deviceYamlValues);
+    this._deviceYamlErrors = keep(this._deviceYamlErrors);
+    if (this._addDeviceTarget?.startsWith(prefix)) this._addDeviceTarget = null;
+  }
+
   private _handleDeviceYamlChanged(
     path: PathSegment[],
     detail: YamlEditorValueChangedDetail,
@@ -1886,6 +1897,7 @@ export class HelmanConfigEditorPanel
     try {
       const nextConfig = cloneJson(this._config ?? {});
       setValueAtPath(nextConfig, path, cloneJson(parsed.value));
+      this._clearDescendantDeviceModes(path);
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
@@ -5618,6 +5630,13 @@ export class HelmanConfigEditorPanel
     try {
       const nextValue = cloneJson(normalizedValue.value);
       this._config = adapter.apply(this._config ?? {}, nextValue);
+      if (
+        scopeId === DOCUMENT_SCOPE_ID ||
+        scopeId === TAB_SCOPE_IDS.devices ||
+        scopeId === SECTION_SCOPE_IDS.devices.configured_devices
+      ) {
+        this._resetDeviceModes();
+      }
       this._dirty = true;
       this._validation = null;
       this._message = null;
