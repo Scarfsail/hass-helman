@@ -1077,6 +1077,112 @@ def _migrate_v18_to_v19(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v19_to_v20(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``controllables`` -> the ``devices`` tree.
+
+    Everything in the old list was schedulable, so every non-inverter entry
+    says so now with ``schedulable: true``; the inverter moves unchanged and
+    carries no flag. ``consumption.deferrable`` is dropped everywhere: the
+    carve-out is derived from ``schedulable`` from here on, and no known config
+    ever set the opt-out.
+
+    The implicit shared meter becomes explicit. Two or more entries naming one
+    ``energy_entity_id`` become the children of a new passive parent that owns
+    the meter, placed where the first sharer was. The parent's id is the
+    meter's object id (``_2``, ``_3``... on a clash with any existing id); the
+    sharers keep their ids, controls and projections and lose only the meter,
+    which they now draw from their parent — so optimizer targets and stored
+    schedules keep resolving.
+
+    A ``controllables`` value that is not a list moves across unchanged, for
+    the validator to report in the new vocabulary.
+    """
+    if "controllables" not in document:
+        return (document, [])
+    controllables = document.pop("controllables")
+    if not isinstance(controllables, list):
+        document["devices"] = controllables
+        return (document, [])
+
+    entries = [_schedulable_device(entry) for entry in controllables]
+    sharers: dict[str, list[int]] = {}
+    for index, entry in enumerate(entries):
+        meter = _consumption_meter(entry)
+        if meter is not None:
+            sharers.setdefault(meter, []).append(index)
+    taken_ids = {
+        entry["id"].strip()
+        for entry in entries
+        if isinstance(entry, Mapping) and isinstance(entry.get("id"), str)
+    }
+
+    devices: list[Any] = []
+    for index, entry in enumerate(entries):
+        meter = _consumption_meter(entry)
+        group = sharers.get(meter, []) if meter is not None else []
+        if len(group) < 2:
+            devices.append(entry)
+            continue
+        if index != group[0]:
+            continue
+        parent_id = _unique_id(meter.partition(".")[2] or meter, taken_ids)
+        devices.append(
+            {
+                "id": parent_id,
+                "consumption": {"energy_entity_id": meter},
+                "children": [_without_meter(entries[member]) for member in group],
+            }
+        )
+    document["devices"] = devices
+    return (document, [])
+
+
+def _schedulable_device(entry: Any) -> Any:
+    """One old entry as a device: ``schedulable: true``, no ``deferrable``."""
+    if not isinstance(entry, Mapping) or entry.get("kind") == "inverter":
+        return entry
+    device = {**entry, "schedulable": True}
+    consumption = device.get("consumption")
+    if isinstance(consumption, Mapping) and "deferrable" in consumption:
+        device["consumption"] = {
+            key: value for key, value in consumption.items() if key != "deferrable"
+        }
+    return device
+
+
+def _consumption_meter(entry: Any) -> str | None:
+    """A non-inverter entry's ``consumption.energy_entity_id``, stripped."""
+    if not isinstance(entry, Mapping) or entry.get("kind") == "inverter":
+        return None
+    consumption = entry.get("consumption")
+    if not isinstance(consumption, Mapping):
+        return None
+    meter = consumption.get("energy_entity_id")
+    return meter.strip() if isinstance(meter, str) and meter.strip() else None
+
+
+def _without_meter(entry: dict[str, Any]) -> dict[str, Any]:
+    """A sharer as a meterless child: its ``consumption`` minus the meter."""
+    consumption = {
+        key: value
+        for key, value in entry["consumption"].items()
+        if key != "energy_entity_id"
+    }
+    child = {key: value for key, value in entry.items() if key != "consumption"}
+    if consumption:
+        child["consumption"] = consumption
+    return child
+
+
+def _unique_id(base: str, taken_ids: set[str]) -> str:
+    """``base``, or ``base_2``, ``base_3``... — the first no device holds yet."""
+    candidate, suffix = base, 2
+    while candidate in taken_ids:
+        candidate, suffix = f"{base}_{suffix}", suffix + 1
+    taken_ids.add(candidate)
+    return candidate
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1096,6 +1202,7 @@ _MIGRATIONS = {
     16: _migrate_v16_to_v17,
     17: _migrate_v17_to_v18,
     18: _migrate_v18_to_v19,
+    19: _migrate_v19_to_v20,
 }
 
 

@@ -43,6 +43,18 @@ climate_module = importlib.import_module(
 ApplianceEnergyTrainingJob = appliance_energy_module.ApplianceEnergyTrainingJob
 ApplianceEnergyTrainingRequest = appliance_energy_module.ApplianceEnergyTrainingRequest
 SharedMeterMember = appliance_energy_module.SharedMeterMember
+SharedMeter = appliance_energy_module.SharedMeter
+
+
+def _member(appliance):
+    """The member an appliance's running signal makes, as the coordinator builds it."""
+    if isinstance(appliance, generic_module.GenericApplianceRuntime):
+        return SharedMeterMember.for_signal(
+            appliance.id, appliance.switch_entity_id, "switch"
+        )
+    return SharedMeterMember.for_signal(
+        appliance.id, appliance.climate_entity_id, "climate"
+    )
 
 
 def _make_generic(
@@ -152,16 +164,28 @@ class _SharedMeterRecorder:
     recorder itself stays out of the picture.
     """
 
-    def __init__(self, switch_states, energy_states, *, error=False) -> None:
+    def __init__(
+        self, switch_states, energy_states, *, error=False, children_states=None
+    ) -> None:
         self._switch_states = switch_states
         self._energy_states = energy_states
+        self._children_states = children_states or {}
         self._error = error
         self.calls: list[tuple[str, list, int]] = []
+        self.metered_children: list[tuple[str, ...]] = []
 
     async def __call__(
-        self, _hass, *, members, energy_entity_id, reference_time, lookback_days
+        self,
+        _hass,
+        *,
+        members,
+        energy_entity_id,
+        reference_time,
+        lookback_days,
+        metered_children=(),
     ):
         self.calls.append((energy_entity_id, list(members), lookback_days))
+        self.metered_children.append(tuple(metered_children))
         if self._error:
             raise RuntimeError("recorder is down")
         return recorder_module._estimate_shared_meter_hourly_energy_kwh(
@@ -173,6 +197,10 @@ class _SharedMeterRecorder:
             _at(10),
             _at(12),
             "kWh",
+            metered_children=[
+                (self._children_states.get(child, []), "kWh")
+                for child in metered_children
+            ],
         )
 
 
@@ -233,7 +261,10 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             store,
             read_request=lambda: ApplianceEnergyTrainingRequest(
                 appliances=tuple(appliances),
-                shared_meters=shared_meters or {},
+                shared_meters={
+                    meter: SharedMeter(members)
+                    for meter, members in (shared_meters or {}).items()
+                },
             ),
             on_trained=on_trained,
         )
@@ -269,8 +300,8 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             [a, b],
             shared_meters={
                 _SHARED_METER: (
-                    SharedMeterMember.for_appliance(a),
-                    SharedMeterMember.for_appliance(b),
+                    _member(a),
+                    _member(b),
                 )
             },
         )
@@ -305,8 +336,8 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             [a],
             shared_meters={
                 _SHARED_METER: (
-                    SharedMeterMember.for_appliance(a),
-                    SharedMeterMember.for_appliance(fixed),
+                    _member(a),
+                    _member(fixed),
                 )
             },
         )
@@ -326,8 +357,8 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             [_make_generic(), a, b],
             shared_meters={
                 _SHARED_METER: (
-                    SharedMeterMember.for_appliance(a),
-                    SharedMeterMember.for_appliance(b),
+                    _member(a),
+                    _member(b),
                 )
             },
         )
@@ -426,8 +457,8 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             [_make_generic(), a, b],
             shared_meters={
                 _SHARED_METER: (
-                    SharedMeterMember.for_appliance(a),
-                    SharedMeterMember.for_appliance(b),
+                    _member(a),
+                    _member(b),
                 )
             },
         )
@@ -599,16 +630,14 @@ class ApplianceEnergyFingerprintTests(unittest.TestCase):
         a = _make_generic("ac-a", energy_entity_id=_SHARED_METER)
         b = _make_generic("ac-b", energy_entity_id=_SHARED_METER)
         fixed = _make_generic("ac-c", strategy="fixed", energy_entity_id=None)
-        members = (SharedMeterMember.for_appliance(a), SharedMeterMember.for_appliance(b))
+        members = (_member(a), _member(b))
 
         before = ApplianceEnergyTrainingRequest(
-            (a, b), shared_meters={_SHARED_METER: members}
+            (a, b), shared_meters={_SHARED_METER: SharedMeter(members)}
         ).fingerprint
         after = ApplianceEnergyTrainingRequest(
             (a, b),
-            shared_meters={
-                _SHARED_METER: (*members, SharedMeterMember.for_appliance(fixed))
-            },
+            shared_meters={_SHARED_METER: SharedMeter((*members, _member(fixed)))},
         ).fingerprint
 
         self.assertNotEqual(before, after)

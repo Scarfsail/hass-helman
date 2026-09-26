@@ -280,7 +280,7 @@
       "group_params_override": "Přepsat nastavení pro tuto skupinu",
       "run_when": "Spouštět ve dnech",
       "consumption_energy_entity": "Entita měřiče energie",
-      "consumption_deferrable": "Odložitelný spotřebič",
+      "schedulable": "Plánovatelné",
       "self_sustainability_margin_pct": "Nutná rezerva nad min. SoC %",
       "power_polarity": "Znaménková konvence",
       "power_polarity_positive_is_production": "Kladná = výroba",
@@ -353,7 +353,7 @@
       "group_params_inherited": "Nic není přepsáno — skupina používá nastavení výše.",
       "last_condition_group": "Optimalizátor potřebuje alespoň jednu skupinu podmínek.",
       "custom_conditions": "Kombinují se (AND) se systémovými podmínkami skupiny. Když selžou jen ony, akce se naplánují jako kandidáti, ale nikdy se neprovedou.",
-      "consumption_energy_entity": "Kumulativní senzor energie (kWh) tohoto zařízení. Volitelné.",
+      "consumption_energy_entity": "Kumulativní senzor energie (kWh) tohoto zařízení.",
       "house_consumption_min_history_days": "Kolik dní historie musí sestavení nakonec mít. Pod touto hranicí predikce hlásí nedostatek dat, místo aby predikovala z příliš mála.",
       "house_consumption_training_window_days": "Jak daleko do minulosti trénování sahá. Starší dny se vůbec nenačítají, takže tato hodnota zároveň omezuje minimum výše."
     },
@@ -551,7 +551,7 @@
       "climate_mode": "Který režim tento optimalizátor na klimatizačním spotřebiči nastavuje.",
       "min_hours_per_day": "Kolik hodin musí spotřebič v okně každý den nasbírat.",
       "consumption_energy_entity": "Kumulativní senzor energie (kWh) sledující celkovou spotřebu elektřiny tohoto zařízení. Patří k zařízení, ne k jednomu jeho použití: predikce domu ho odečítá od celkové spotřeby domu, aby našla základní zátěž, a čte ho i projekce poptávky z historie.",
-      "consumption_deferrable": "Ve výchozím stavu zapnuto. Predikce spotřeby domu toto zařízení odečte od celkové spotřeby domu a zbyde základní zátěž, kterou nelze přesunout v čase. Vypněte u zařízení, které měříte, ale reálně neplánujete — jeho zátěž pak zůstane v základní zátěži."
+      "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži."
     }
   },
   "common": {

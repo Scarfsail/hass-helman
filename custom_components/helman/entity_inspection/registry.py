@@ -26,7 +26,7 @@ from ..const import (
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
 )
-from ..controllables.config import read_deferrable_consumers
+from ..controllables.config import read_carved_meters
 from ..solar_bias_correction.forecast_slot_history import (
     SOLAR_FORECAST_CURRENT_ENTITY,
 )
@@ -69,27 +69,28 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: four governs its own requirement -- they are judged against the same
 #: ``training.*`` path the entity that already carried the badge is.
 #:
-#: The controllable meter is the one whose matches are not all governed. The
-#: house trainer reads the *deferrable consumers*, not every controllable: the
-#: inverter is refused a ``consumption`` block outright, and a metered load can
-#: opt out with ``consumption.deferrable: false`` while still being metered for
-#: its own projection. So that key asks
-#: :func:`~..controllables.config.read_deferrable_consumers` whether this match
-#: is one the trainer will actually read, rather than restating its rule here
-#: and letting the two drift.
+#: The device meter is the one whose matches are not all governed. The house
+#: trainer reads the *carved* meters, not every device's: a passive device's
+#: meter stays in the baseline unless every meterless child behind it is
+#: schedulable. So that key asks
+#: :func:`~..controllables.config.read_carved_meters` whether this match is one
+#: the trainer will actually read, rather than restating its rule here and
+#: letting the two drift.
 def _meter_feeds_the_house_trainer(request: InspectionRequest) -> bool:
-    """Whether this controllable's meter is one the house trainer reads.
+    """Whether this device's meter is one the house trainer reads.
 
-    Asked of :func:`~..controllables.config.read_deferrable_consumers` rather
-    than answered here, so the badge and the trainer can never disagree about
-    which meters are carved out of house load.
+    Asked of :func:`~..controllables.config.read_carved_meters` rather than
+    answered here, so the badge and the trainer can never disagree about which
+    meters are carved out of house load. A metered child of a carved meter is
+    read too, for the own energy it subtracts.
     """
     entity_id = request.entity_id()
     if entity_id is None:
         return False
     return any(
         consumer.get("energy_entity_id") == entity_id
-        for consumer in read_deferrable_consumers(request.config)
+        or entity_id in consumer.get("metered_children", ())
+        for consumer in read_carved_meters(request.config)
     )
 
 
@@ -114,7 +115,12 @@ EVALUATORS: dict[str, Evaluator] = {
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
-    "controllables.*.consumption.energy_entity_id": history_evaluator(
+    "devices.*.consumption.energy_entity_id": history_evaluator(
+        ("training", "house_consumption", "min_history_days"),
+        HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        governs=_meter_feeds_the_house_trainer,
+    ),
+    "devices.*.children.*.consumption.energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
@@ -124,9 +130,14 @@ EVALUATORS: dict[str, Evaluator] = {
     # of a meter one of those learns from. Measured, never judged here -- the
     # requirement is each appliance's own lookback, which the Training tab's
     # depth table applies. Wrapped rather than replaced so the Controllables
-    # tab keeps showing the switch or climate state it always has.
-    "controllables.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
-    "controllables.*.controls.climate.entity_id": history_aware(
+    # tab keeps showing the switch or climate state it always has. A child's
+    # control is keyed one level down, since the matcher is fixed-depth.
+    "devices.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
+    "devices.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
+    "devices.*.children.*.controls.switch.entity_id": history_aware(
+        evaluate_entity_value
+    ),
+    "devices.*.children.*.controls.climate.entity_id": history_aware(
         evaluate_entity_value
     ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),

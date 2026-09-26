@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 /**
  * The Controllables tab, after the inverter stopped having a tab of its own.
  *
+ * It edits the top level of the `devices` tree; children ride along untouched
+ * in the draft and are edited through YAML until the Devices tab lands.
+ *
  * The inverter used to be edited on a Scheduler tab holding one section and no
  * scheduling policy at all. It is now an entry in the same list as the
  * appliances — which only helps if it renders as a real card. The kind
@@ -42,6 +45,7 @@ const INVERTER = {
 
 const EV_CHARGER = {
     kind: "ev_charger",
+    schedulable: true,
     id: "ev",
     name: "EV Charging",
     limits: { max_charging_power_kw: 11 },
@@ -56,6 +60,7 @@ const EV_CHARGER = {
 
 const BOILER = {
     kind: "generic",
+    schedulable: true,
     id: "boiler",
     name: "Boiler",
     controls: { switch: { entity_id: "switch.boiler" } },
@@ -71,7 +76,7 @@ declare global {
     }
 }
 
-async function mountEditor(page: Page, controllables: unknown[]): Promise<void> {
+async function mountEditor(page: Page, devices: unknown[]): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(
@@ -103,7 +108,7 @@ async function mountEditor(page: Page, controllables: unknown[]): Promise<void> 
             },
         };
         document.body.appendChild(element);
-    }, { config_version: 7, controllables });
+    }, { config_version: 7, devices });
 
     await openControllablesTab(page);
 }
@@ -235,11 +240,11 @@ test("editing an action option writes to controls.mode.options", async ({ page }
         .poll(() =>
             page.evaluate(() => {
                 const config = window.__editorConfig() as {
-                    controllables: Array<{
+                    devices: Array<{
                         controls: { mode: { options: Record<string, string> } };
                     }>;
                 };
-                return config.controllables[0].controls.mode.options.stop_export;
+                return config.devices[0].controls.mode.options.stop_export;
             }),
         )
         .toBe("Feed-in Priority");
@@ -312,17 +317,79 @@ test("a controllable carries a Consumption section, beside Controls", async ({
     expect(titles).not.toContain("Projection");
 });
 
-test("the usage options appear only once a meter is picked", async ({ page }) => {
-    const unmetered = {
-        ...BOILER,
-        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 2 } },
-    };
-
-    await mountEditor(page, [unmetered]);
-    expect(await fieldLabels(page)).not.toContain("Deferrable consumer");
-
+test("a device carries a Schedulable toggle and no deferrable one", async ({ page }) => {
     await mountEditor(page, [BOILER]);
-    expect(await fieldLabels(page)).toContain("Deferrable consumer");
+
+    const labels = await fieldLabels(page);
+    expect(labels).toContain("Schedulable");
+    expect(labels).not.toContain("Deferrable consumer");
+});
+
+test("a passive device without a kind shows its meter but no projection", async ({
+    page,
+}) => {
+    // What the migration makes of a shared meter: a kindless passive parent.
+    await mountEditor(page, [
+        { id: "breaker", consumption: { energy_entity_id: "sensor.breaker_energy" } },
+    ]);
+
+    const rawPreviews = await root(page).evaluate(
+        (element) =>
+            (element as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot.querySelectorAll(
+                ".raw-preview",
+            ).length,
+    );
+    expect(rawPreviews).toBe(0);
+    const labels = await fieldLabels(page);
+    expect(labels).toContain("Energy meter entity");
+    expect(labels).not.toContain("Projection strategy");
+});
+
+test("a document with children round-trips through the editor unchanged", async ({
+    page,
+}) => {
+    const breaker = {
+        id: "jistic_klimatizace_energy",
+        consumption: {
+            energy_entity_id: "sensor.jistic_klimatizace_energy",
+            power_entity_id: "sensor.jistic_klimatizace_power",
+        },
+        children: [
+            {
+                id: "klima-obyvak",
+                kind: "climate",
+                schedulable: true,
+                name: "Klima Obyvak",
+                controls: { climate: { entity_id: "climate.obyvak" } },
+                consumption: {
+                    projection: { strategy: "history_average", hourly_energy_kwh: 0.25 },
+                },
+            },
+        ],
+    };
+    await mountEditor(page, [INVERTER, breaker]);
+    await expect.poll(() => cardTitles(page)).toHaveLength(2);
+
+    // An edit on the parent's own card leaves its children exactly as they were.
+    await root(page).evaluate((element) => {
+        const shadow = (element as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot;
+        const card = shadow.querySelectorAll(".list-card")[1];
+        const field = Array.from(card.querySelectorAll(".field")).find(
+            (candidate) =>
+                candidate.querySelector("label")?.textContent?.trim() === "Appliance name",
+        );
+        const input = field?.querySelector("input") as HTMLInputElement;
+        input.value = "AC breaker";
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    });
+
+    await expect
+        .poll(() =>
+            page.evaluate(
+                () => (window.__editorConfig() as { devices: unknown[] }).devices[1],
+            ),
+        )
+        .toEqual({ ...breaker, name: "AC breaker" });
 });
 
 test("the EV charger gets a meter but no projection controls", async ({ page }) => {

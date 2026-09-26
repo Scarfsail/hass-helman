@@ -4,7 +4,7 @@ import functools
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -16,6 +16,7 @@ from ..consumption_forecast_profiles import (
     profile_to_dict,
     rows_to_dict,
 )
+from ..recorder_hourly_series import own_energy_changes
 from ..recorder_statistics_span import query_spliced_hourly_energy
 from ..storage import TrainingArtifactsStore
 
@@ -121,13 +122,22 @@ class HouseConsumptionTrainingJob:
         # expensive half of the read by the number of consumers to get the same
         # rows back.
         rows_by_entity = await self._async_query_hourly_history(
-            [
-                request.total_energy_entity_id,
-                *(
-                    consumer["energy_entity_id"]
-                    for consumer in request.consumers_config
-                ),
-            ],
+            # De-duplicated: a carved sub-meter is also its parent's child.
+            list(
+                dict.fromkeys(
+                    (
+                        request.total_energy_entity_id,
+                        *(
+                            entity_id
+                            for consumer in request.consumers_config
+                            for entity_id in (
+                                consumer["energy_entity_id"],
+                                *consumer.get("metered_children", ()),
+                            )
+                        ),
+                    )
+                )
+            ),
             request.training_window_days,
             reference_time=local_now,
         )
@@ -136,9 +146,7 @@ class HouseConsumptionTrainingJob:
             ConsumerHistoryData(
                 entity_id=consumer["energy_entity_id"],
                 label=consumer["label"],
-                values_by_ts=rows_to_dict(
-                    rows_by_entity.get(consumer["energy_entity_id"]) or []
-                ),
+                values_by_ts=_own_values_by_ts(rows_by_entity, consumer),
                 # The read either happened for all of them or for none: a
                 # failure raises out of ``async_train``, which records
                 # ``training_failed`` and keeps the previous profile.
@@ -209,6 +217,29 @@ class HouseConsumptionTrainingJob:
             ]
             for entity_id, values_by_hour in energy_by_entity.items()
         }
+
+
+def _own_values_by_ts(
+    rows_by_entity: dict[str, list[dict]], consumer: dict[str, Any]
+) -> dict[float, float]:
+    """A carved meter's own hourly energy, keyed like the house rows.
+
+    Its metered children's hours are subtracted, so the baseline subtracts
+    each nested meter once. A meter without them passes through unchanged.
+    """
+
+    def by_hour(entity_id: str) -> dict[datetime, float]:
+        return {
+            dt_util.utc_from_timestamp(ts): change
+            for ts, change in rows_to_dict(rows_by_entity.get(entity_id) or []).items()
+        }
+
+    own = own_energy_changes(
+        by_hour(consumer["energy_entity_id"]),
+        [by_hour(child) for child in consumer.get("metered_children", ())],
+        slot=timedelta(hours=1),
+    )
+    return {hour.timestamp(): change for hour, change in own.items()}
 
 
 def health_for(section: dict[str, Any] | None) -> str:

@@ -406,7 +406,7 @@ DAILY_HISTORY_PATH = (
 )
 GRID_POWER_HISTORY_PATH = ("power_devices", "grid", "entities", "power")
 BATTERY_CAPACITY_HISTORY_PATH = ("power_devices", "battery", "entities", "capacity")
-CONTROLLABLE_ENERGY_HISTORY_PATH = ("controllables", 0, "consumption", "energy_entity_id")
+CONTROLLABLE_ENERGY_HISTORY_PATH = ("devices", 0, "consumption", "energy_entity_id")
 FORECAST_SOURCE_HISTORY_PATH = (
     "power_devices",
     "solar",
@@ -740,12 +740,16 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
     history fact at all.
 
     "Every controllable" is the trainer's list, not the config's: the house
-    forecast reads the deferrable consumers, so a meter the trainer skips is
+    forecast reads the carved meters, so a meter the trainer skips is
     measured without being judged.
     """
 
     def _controllable_config(self, entity: str) -> dict:
-        return {"controllables": [{"consumption": {"energy_entity_id": entity}}]}
+        return {
+            "devices": [
+                {"schedulable": True, "consumption": {"energy_entity_id": entity}}
+            ]
+        }
 
     def test_the_grid_meter_keeps_its_power_reading_and_gains_a_history_fact(self):
         hass = _ProbingHass({"sensor.grid_power": _State("1400")})
@@ -805,8 +809,8 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
                 hass = _ProbingHass({entity: _State(state)})
                 first, second = self.inspect_twice(
                     hass,
-                    {"controllables": [{"controls": {kind: {"entity_id": entity}}}]},
-                    ["controllables", 0, "controls", kind, "entity_id"],
+                    {"devices": [{"controls": {kind: {"entity_id": entity}}}]},
+                    ["devices", 0, "controls", kind, "entity_id"],
                 )
                 self.assertEqual(
                     [fact["token"] for fact in first["facts"]], ["value"]
@@ -888,20 +892,13 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         self.assertIsNotNone(fact)
         self.assertNotIn("required", fact["params"])
 
-    def test_a_meter_opted_out_of_deferral_is_measured_but_not_judged(self):
-        # `consumption.deferrable: false` meters a load for its own projection
-        # and keeps it out of the house split -- so the house window never
-        # reads this meter, and an orange badge against it would be a lie.
+    def test_a_passive_devices_meter_is_measured_but_not_judged(self):
+        # A passive device stays in the house baseline -- so the house window
+        # never reads this meter on its own, and an orange badge against it
+        # would be a lie.
         hass = _ProbingHass({"sensor.fridge_energy": _State("3.4", unit="kWh")})
         config = {
-            "controllables": [
-                {
-                    "consumption": {
-                        "energy_entity_id": "sensor.fridge_energy",
-                        "deferrable": False,
-                    }
-                }
-            ]
+            "devices": [{"consumption": {"energy_entity_id": "sensor.fridge_energy"}}]
         }
         _, inspection = self.inspect_twice(
             hass, config, CONTROLLABLE_ENERGY_HISTORY_PATH
@@ -912,6 +909,28 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         self.assertNotIn(
             ["training", "house_consumption", "min_history_days"],
             inspection["dependsOn"],
+        )
+
+    def test_a_metered_child_of_a_carved_meter_is_judged(self):
+        # The trainer reads it to subtract from its parent's own energy.
+        hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
+        config = {
+            "devices": [
+                {
+                    "consumption": {"energy_entity_id": "sensor.study_energy"},
+                    "children": [
+                        {"consumption": {"energy_entity_id": "sensor.plug_energy"}},
+                        {"schedulable": True},
+                    ],
+                }
+            ]
+        }
+        _, inspection = self.inspect_twice(
+            hass, config, ("devices", 0, "children", 0, "consumption", "energy_entity_id")
+        )
+        fact = _fact(inspection, "history")
+        self.assertEqual(
+            fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
         )
 
 

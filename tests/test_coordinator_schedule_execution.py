@@ -296,9 +296,10 @@ def _battery_forecast_schedule_signature(coordinator):
 
 def _valid_appliances_config() -> dict:
     return {
-        "controllables": [
+        "devices": [
             {
                 "kind": "ev_charger",
+                "schedulable": True,
                 "id": "garage-ev",
                 "name": "Garage EV",
                 "limits": {"max_charging_power_kw": 11.0},
@@ -340,9 +341,10 @@ def _valid_appliances_config() -> dict:
 
 def _valid_climate_config() -> dict:
     return {
-        "controllables": [
+        "devices": [
             {
                 "kind": "climate",
+                "schedulable": True,
                 "id": "living-room-hvac",
                 "name": "Living Room HVAC",
                 "controls": {
@@ -1370,10 +1372,10 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(captured.output), 1)
         self.assertIn(
-            "controllables[inverter].controls.mode.entity_id", captured.output[0]
+            "devices[inverter].controls.mode.entity_id", captured.output[0]
         )
         self.assertIn(
-            "controllables[inverter].controls.mode.options.normal",
+            "devices[inverter].controls.mode.options.normal",
             captured.output[0],
         )
 

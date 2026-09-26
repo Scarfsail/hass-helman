@@ -257,6 +257,7 @@ export function createApplianceDraft(
     kind: "ev_charger",
     id: applianceId,
     name: applianceName,
+    schedulable: true,
     limits: {
       max_charging_power_kw: 11,
     },
@@ -297,6 +298,7 @@ export function createGenericApplianceDraft(
     kind: "generic",
     id: applianceId,
     name: applianceName,
+    schedulable: true,
     controls: {
       switch: {
         entity_id: "",
@@ -320,6 +322,7 @@ export function createClimateApplianceDraft(
     kind: "climate",
     id: applianceId,
     name: applianceName,
+    schedulable: true,
     controls: {
       climate: {
         entity_id: "",

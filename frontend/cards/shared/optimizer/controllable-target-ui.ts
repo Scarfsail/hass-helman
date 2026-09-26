@@ -1,16 +1,16 @@
-import { asJsonArray, asJsonObject } from "../config/config-document";
+import { deviceKind, isSchedulable, iterDevices } from "../config/devices";
 import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "../config/types";
 
 /**
- * The optimizer target picker's state, over the draft `controllables` list.
+ * The optimizer target picker's state, over the draft `devices` tree.
  *
- * Every optimizer kind names what it drives the same way now — by controllable
- * id — so this reads one list and filters it by the kinds the optimizer's spec
- * says it may drive (`OptimizerSchema.controllableKinds`, which the backend
- * derives from `CONTROLLABLE_SPECS`). Filtering here rather than in the
- * renderer is what makes "the picker cannot offer an incompatible target" the
- * same rule as "validation rejects an incompatible target": both read the one
- * declaration.
+ * Every optimizer kind names what it drives the same way now — by device id —
+ * so this reads the whole tree, keeps only schedulable devices (a passive one
+ * can never be targeted), and filters by the kinds the optimizer's spec says
+ * it may drive (`OptimizerSchema.controllableKinds`, which the backend derives
+ * from `CONTROLLABLE_SPECS`). Filtering here rather than in the renderer is
+ * what makes "the picker cannot offer an incompatible target" the same rule as
+ * "validation rejects an incompatible target": both read the one declaration.
  *
  * The *draft* list, deliberately: an appliance the user just added must be
  * targetable before they save. Live metadata only supplies what a draft cannot
@@ -124,24 +124,18 @@ function _readDraftControllableOptions(
     return [];
   }
 
-  const controllables = asJsonArray(config.controllables) ?? [];
   const options: ControllableTargetOption[] = [];
-  for (const controllable of controllables) {
-    const controllableObject = asJsonObject(controllable);
-    if (!controllableObject) {
-      continue;
-    }
-
-    const controllableId = _readNonEmptyString(controllableObject.id);
-    const kind = _readNonEmptyString(controllableObject.kind);
-    if (!controllableId || !allowedKinds.includes(kind)) {
+  for (const { device } of iterDevices(config)) {
+    const controllableId = _readNonEmptyString(device.id);
+    const kind = deviceKind(device);
+    if (!controllableId || !isSchedulable(device) || !allowedKinds.includes(kind)) {
       continue;
     }
 
     const liveAppliance = liveAppliancesById[controllableId];
     options.push({
       id: controllableId,
-      name: _readNonEmptyString(controllableObject.name) || controllableId,
+      name: _readNonEmptyString(device.name) || controllableId,
       kind,
       liveClimateModes:
         kind === "climate" ? _readLiveClimateModes(liveAppliance, kind) : null,

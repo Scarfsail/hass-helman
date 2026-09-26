@@ -33,6 +33,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.migration import (  # noqa: E402
+    _migrate_v9_to_v10,
     migrate_config_document,
     needs_migration,
 )
@@ -425,11 +426,13 @@ class ControllablesUnificationTests(unittest.TestCase):
         "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
     }
     #: What ``_APPLIANCE`` looks like once the chain has also run v8 -> v9,
-    #: which moves ``projection`` under ``consumption``. These tests migrate all
-    #: the way to the current version, so the v6 -> v7 assertions have to expect
-    #: the later step's output too.
+    #: which moves ``projection`` under ``consumption``, and v19 -> v20, which
+    #: marks it schedulable. These tests migrate all the way to the current
+    #: version, so the v6 -> v7 assertions have to expect the later steps'
+    #: output too.
     _APPLIANCE_V9 = {
         "kind": "generic",
+        "schedulable": True,
         "id": "dishwasher",
         "name": "Dishwasher",
         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -451,7 +454,7 @@ class ControllablesUnificationTests(unittest.TestCase):
         self.assertNotIn("scheduler", migrated)
         self.assertNotIn("appliances", migrated)
         self.assertEqual(
-            migrated["controllables"],
+            migrated["devices"],
             [
                 {
                     "kind": "inverter",
@@ -481,12 +484,12 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"appliances": [self._APPLIANCE, second]}
         )
 
-        self.assertEqual(migrated["controllables"], [self._APPLIANCE_V9, second_v9])
+        self.assertEqual(migrated["devices"], [self._APPLIANCE_V9, second_v9])
 
     def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
         migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
 
-        self.assertEqual(migrated["controllables"], [])
+        self.assertEqual(migrated["devices"], [])
 
     def test_a_document_with_neither_key_grows_no_controllables(self) -> None:
         migrated, _ids = self._migrate_from_v6({"history_buckets": 60})
@@ -498,12 +501,12 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"scheduler": {"control": {**self._CONTROL, "future_key": "keep-me"}}}
         )
 
-        self.assertEqual(migrated["controllables"][0]["future_key"], "keep-me")
+        self.assertEqual(migrated["devices"][0]["future_key"], "keep-me")
 
     def test_an_appliances_value_that_is_not_a_list_is_moved_not_dropped(self) -> None:
         migrated, _ids = self._migrate_from_v6({"appliances": {"oops": True}})
 
-        self.assertEqual(migrated["controllables"], {"oops": True})
+        self.assertEqual(migrated["devices"], {"oops": True})
         self.assertNotIn("appliances", migrated)
 
     def test_a_v1_document_reaches_the_new_shape_through_every_step(self) -> None:
@@ -517,7 +520,7 @@ class ControllablesUnificationTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(
-            [entry["kind"] for entry in migrated["controllables"]],
+            [entry["kind"] for entry in migrated["devices"]],
             ["inverter", "generic"],
         )
         self.assertEqual(ids, ["e"])
@@ -701,7 +704,7 @@ class ConsumptionBlockTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(
             {"controllables": list(controllables), "config_version": 8}
         )
-        return migrated["controllables"]
+        return migrated["devices"]
 
     def test_the_meter_comes_up_and_lookback_flattens(self) -> None:
         (entry,) = self._migrate_from_v8(
@@ -836,7 +839,8 @@ class DeferrableConsumerDerivationTests(unittest.TestCase):
                 }
             },
         }
-        migrated, _ids = migrate_config_document(document)
+        # This step alone: v20 later drops the ``deferrable`` it writes.
+        migrated, _ids = _migrate_v9_to_v10(document)
         return (
             migrated["controllables"],
             migrated["power_devices"]["house"]["forecast"],
@@ -929,7 +933,7 @@ class DeferrableConsumerDerivationTests(unittest.TestCase):
         self.assertEqual(entry, untouched)
 
     def test_a_document_with_no_old_key_still_opts_metered_devices_out(self) -> None:
-        migrated, _ids = migrate_config_document(
+        migrated, _ids = _migrate_v9_to_v10(
             {
                 "config_version": 9,
                 "controllables": [self._metered("pool", "sensor.pool_energy")],
@@ -1813,6 +1817,112 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
             },
         )
         self.assertEqual(migrated["power_devices"]["solar"]["forecast"], {})
+
+
+class DevicesTreeMigrationTests(unittest.TestCase):
+    """v19 -> v20: ``controllables`` becomes the ``devices`` tree."""
+
+    @staticmethod
+    def _migrate_from_v19(controllables):
+        migrated, _ids = migrate_config_document(
+            {"config_version": 19, "controllables": controllables}
+        )
+        return migrated
+
+    @staticmethod
+    def _climate(controllable_id, meter):
+        return {
+            "kind": "climate",
+            "id": controllable_id,
+            "controls": {"climate": {"entity_id": f"climate.{controllable_id}"}},
+            "consumption": {
+                "energy_entity_id": meter,
+                "projection": {"strategy": "history_average", "hourly_energy_kwh": 0.25},
+            },
+        }
+
+    def test_every_non_inverter_entry_becomes_schedulable_and_loses_deferrable(
+        self,
+    ) -> None:
+        inverter = {"kind": "inverter", "id": "inverter", "controls": {}}
+        pool = {
+            "kind": "generic",
+            "id": "pool",
+            "consumption": {"energy_entity_id": "sensor.pool", "deferrable": True},
+        }
+
+        migrated = self._migrate_from_v19([inverter, pool])
+
+        self.assertNotIn("controllables", migrated)
+        self.assertEqual(
+            migrated["devices"],
+            [
+                inverter,
+                {
+                    "kind": "generic",
+                    "id": "pool",
+                    "consumption": {"energy_entity_id": "sensor.pool"},
+                    "schedulable": True,
+                },
+            ],
+        )
+
+    def test_sharers_of_a_meter_become_the_children_of_a_passive_parent(self) -> None:
+        meter = "sensor.jistic_klimatizace_energy"
+        pool = {"kind": "generic", "id": "pool", "consumption": {"energy_entity_id": "sensor.pool"}}
+
+        migrated = self._migrate_from_v19(
+            [
+                pool,
+                self._climate("ac-a", meter),
+                {"kind": "generic", "id": "rail"},
+                self._climate("ac-b", meter),
+            ]
+        )
+
+        def child(controllable_id):
+            # The sharer as it was, minus its meter, plus the flag.
+            entry = self._climate(controllable_id, meter)
+            del entry["consumption"]["energy_entity_id"]
+            return {**entry, "schedulable": True}
+
+        self.assertEqual(
+            migrated["devices"],
+            [
+                {**pool, "schedulable": True},
+                {
+                    "id": "jistic_klimatizace_energy",
+                    "consumption": {"energy_entity_id": meter},
+                    "children": [child("ac-a"), child("ac-b")],
+                },
+                {"kind": "generic", "id": "rail", "schedulable": True},
+            ],
+        )
+
+    def test_the_parent_id_is_suffixed_on_a_clash(self) -> None:
+        meter = "sensor.breaker"
+
+        migrated = self._migrate_from_v19(
+            [
+                {"kind": "generic", "id": "breaker"},
+                {"kind": "generic", "id": "breaker_2"},
+                self._climate("ac-a", meter),
+                self._climate("ac-b", meter),
+            ]
+        )
+
+        self.assertEqual(migrated["devices"][2]["id"], "breaker_3")
+
+    def test_a_value_that_is_not_a_list_moves_across_unchanged(self) -> None:
+        migrated = self._migrate_from_v19({"oops": True})
+
+        self.assertEqual(migrated["devices"], {"oops": True})
+        self.assertNotIn("controllables", migrated)
+
+    def test_a_document_without_controllables_grows_no_devices(self) -> None:
+        migrated, _ids = migrate_config_document({"config_version": 19})
+
+        self.assertNotIn("devices", migrated)
 
 
 if __name__ == "__main__":

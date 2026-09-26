@@ -279,7 +279,7 @@
       "group_params_override": "Override settings for this group",
       "run_when": "Run on days",
       "consumption_energy_entity": "Energy meter entity",
-      "consumption_deferrable": "Deferrable consumer",
+      "schedulable": "Schedulable",
       "self_sustainability_margin_pct": "Required reserve above min SoC %",
       "power_polarity": "Sign convention",
       "power_polarity_positive_is_production": "Positive = production",
@@ -352,7 +352,7 @@
       "group_params_inherited": "Nothing overridden — this group uses the settings above.",
       "last_condition_group": "An optimizer needs at least one condition group.",
       "custom_conditions": "ANDed with this group's system conditions. When only these fail, actions are still scheduled as candidates but never executed.",
-      "consumption_energy_entity": "Cumulative energy sensor (kWh) for this device. Optional.",
+      "consumption_energy_entity": "Cumulative energy sensor (kWh) for this device.",
       "house_consumption_min_history_days": "How many days of history the fit must end up with. Below this the forecast reports insufficient data rather than predicting from too little.",
       "house_consumption_training_window_days": "How far back the training reaches. Days beyond this are never fetched, so this also caps the minimum above it."
     },
@@ -550,7 +550,7 @@
       "climate_mode": "Which mode this optimizer authors on the climate appliance.",
       "min_hours_per_day": "Hours the appliance must accumulate inside the window each day.",
       "consumption_energy_entity": "Cumulative energy sensor (kWh) that tracks this device's total electricity consumption. It belongs to the device, not to any one use of it: the house forecast subtracts it from the house total to find the baseline, and a history-based demand projection reads it too.",
-      "consumption_deferrable": "On by default. The house consumption forecast subtracts this device from the house total, leaving a baseline of load that cannot be moved in time. Turn it off for a device you meter but that is not realistically schedulable — its load then stays inside the baseline."
+      "schedulable": "Helman may plan and run this device, and optimizers can target it. A schedulable device's energy is carved out of the house baseline and added back as planned demand. Leave it off for a device you only want measured — its load then stays inside the baseline."
     }
   },
   "common": {

@@ -68,7 +68,7 @@ const CONFIG = {
             slot_invalidation: { max_battery_soc_percent: 95 },
         },
     },
-    controllables: [
+    devices: [
         {
             kind: "inverter",
             id: "inverter",
@@ -77,6 +77,8 @@ const CONFIG = {
         },
         {
             kind: "generic",
+            schedulable: true,
+            schedulable: true,
             id: "boiler",
             name: "Boiler",
             controls: { switch: { entity_id: "switch.boiler" } },
@@ -90,9 +92,9 @@ const CONFIG = {
 
 /** The same, for the tab whose entity groups live inside appliance cards. */
 const CONTROLLABLE_ENTITY_PATHS = [
-    "controllables.0.controls.mode.entity_id",
-    "controllables.1.controls.switch.entity_id",
-    "controllables.1.consumption.energy_entity_id",
+    "devices.0.controls.mode.entity_id",
+    "devices.1.controls.switch.entity_id",
+    "devices.1.consumption.energy_entity_id",
 ].sort();
 
 const DAILY_ENERGY_ENTITIES =

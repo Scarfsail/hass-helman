@@ -167,25 +167,30 @@ training:
   `min_history_days`. This is the main driver of the nightly training cost — see
   [Scheduled work](#scheduled-work).
 
-**Deferrable consumers** — the loads subtracted from the house total to leave the baseline
-(`house total - sum(deferrables)`) — are not listed here. They are read off `controllables`: a
-controllable is a device whose consumption can be deferred, so each one that names its energy meter
-counts as one, unless it opts out.
+**Deferrable consumers** — the loads subtracted from the house total to leave the baseline (`house total - sum(deferrables)`) — are not listed here. They are derived from `devices`: a meter's own energy (its reading minus its sub-metered children's) is carved out of the baseline exactly when all demand behind it is schedulable — the device owning it is `schedulable: true`, or every child drawing from it without a meter of its own is.
 
 ```yaml
-controllables:
+devices:
   - id: ev
     kind: ev_charger
     name: EV Charging
+    schedulable: true
     controls: { ... }
     consumption:
       energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
-      deferrable: true                                    # optional; true is the default
+  - id: jistic_klimatizace_energy                         # a passive breaker meter...
+    consumption:
+      energy_entity_id: sensor.jistic_klimatizace_energy
+      power_entity_id: sensor.jistic_klimatizace_power
+    children:                                             # ...the devices drawing from it
+      - id: klima-obyvak
+        kind: climate
+        schedulable: true
+        controls: { climate: { entity_id: climate.obyvak } }
+        consumption: { projection: { ... } }
 ```
 
-Set `deferrable: false` for a device you meter for its own demand projection but want left inside
-the baseline. The inverter may not declare `consumption` at all — it moves energy rather than
-drawing it.
+A passive device (no `schedulable`) stays inside the baseline. The inverter may not declare `consumption` at all — it moves energy rather than drawing it.
 
 For how the house-load chain feeding `total_energy_entity_id` is built, see
 [Supporting entities](docs/supporting-entities.md#1-the-house-load-chain).
