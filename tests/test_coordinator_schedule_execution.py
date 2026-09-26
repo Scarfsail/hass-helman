@@ -1072,9 +1072,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(storage.schedule_document["executionEnabled"])
 
         release_reconcile.set()
-        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
-            with self.assertRaises(ScheduleExecutionUnavailableError):
-                await enable
+        # The disable superseded the enable: its failure is moot, and it reports
+        # the flag as persisted rather than an error.
+        self.assertFalse(await asyncio.wait_for(enable, timeout=1))
         self.assertFalse(storage.schedule_document["executionEnabled"])
         # The old enable's rollback was fenced off: only the disable touched it.
         self.assertEqual(executor.events.count("reset_runtime"), 1)
@@ -1118,11 +1118,35 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         release_reconcile.set()
-        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
-            with self.assertRaises(ScheduleExecutionUnavailableError):
-                await old_enable
+        # Superseded: it reports the newer enable's flag instead of its failure.
+        self.assertTrue(await asyncio.wait_for(old_enable, timeout=1))
 
         self.assertTrue(storage.schedule_document["executionEnabled"])
+
+    async def test_enable_before_the_executor_has_started_rolls_back(
+        self,
+    ) -> None:
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        # The real executor, never started: Home Assistant is still starting.
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            with self.assertRaisesRegex(
+                ScheduleExecutionUnavailableError, "not started yet"
+            ):
+                await coordinator.set_schedule_execution(
+                    enabled=True, reference_time=REFERENCE_TIME
+                )
+
+        self.assertFalse(storage.schedule_document["executionEnabled"])
 
     async def test_repeated_enable_does_not_fence_off_the_first_rollback(
         self,
@@ -1162,8 +1186,10 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
             results = await asyncio.gather(first, second, return_exceptions=True)
 
-        for result in results:
-            self.assertIsInstance(result, ScheduleExecutionUnavailableError)
+        # The first enable fails and rolls back; the double click is then
+        # superseded by that rollback and reports the persisted flag.
+        self.assertIsInstance(results[0], ScheduleExecutionUnavailableError)
+        self.assertIs(results[1], False)
         self.assertFalse(storage.schedule_document["executionEnabled"])
 
     async def test_overlapping_enable_reports_disabled_after_first_rolls_back(

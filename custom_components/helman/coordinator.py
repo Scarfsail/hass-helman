@@ -3245,6 +3245,16 @@ class HelmanCoordinator:
                 reason="enable_request",
             )
         except ScheduleError as err:
+            if generation != self._schedule_execution_generation:
+                # A newer flag change superseded this request -- typically a
+                # disable, whose gate then aborted this attempt. Its outcome is
+                # moot; report the flag as persisted, as the success path does.
+                _LOGGER.debug(
+                    "Superseded enable reconcile ended with: %s (%s)",
+                    err,
+                    err.code,
+                )
+                return self._load_schedule_document().execution_enabled
             if not was_enabled:
                 _LOGGER.warning(
                     "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",

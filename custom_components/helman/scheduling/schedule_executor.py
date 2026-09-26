@@ -44,6 +44,7 @@ from .schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
+    ScheduleExecutionUnavailableError,
     ScheduleNotConfiguredError,
     appliance_actions,
     build_horizon_start,
@@ -448,11 +449,16 @@ class ScheduleExecutor:
         """Ask the worker for a reconcile and wait for the attempt serving it.
 
         Joins the same queue as every background request rather than running
-        its own, and raises that attempt's error.
+        its own, and raises that attempt's error. Raises too while the executor
+        is stopped -- before Home Assistant has started, or after unload --
+        rather than reporting a reconcile that never ran as a success.
         """
         waiter = self._queue_reconcile(reason=reason, wait=True)
-        if waiter is not None:
-            await waiter
+        if waiter is None:
+            raise ScheduleExecutionUnavailableError(
+                "Schedule execution has not started yet"
+            )
+        await waiter
 
     def _queue_reconcile(
         self,
