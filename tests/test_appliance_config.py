@@ -127,6 +127,34 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
 
 
 class ApplianceConfigTests(unittest.TestCase):
+    def test_device_names_are_optional_for_all_schedulable_kinds(self) -> None:
+        for device in [_generic_appliance(), _climate_appliance(), _valid_config()["devices"][0]]:
+            with self.subTest(kind=device["kind"]):
+                del device["name"]
+                registry = build_appliances_runtime_registry({"devices": [device]})
+                self.assertEqual(len(registry.appliances), 1)
+                self.assertEqual(registry.appliances[0].name, device["id"])
+                self.assertNotIn("name", device)
+
+    def test_runtime_name_uses_the_shared_resolution_and_cleaner(self) -> None:
+        device = _generic_appliance()
+        del device["name"]
+        config = {
+            "devices": [device],
+            "visualization": {"power_sensor_name_cleaner_regex": " Energy$"},
+        }
+        registry = build_appliances_runtime_registry(
+            config,
+            friendly_name=lambda entity_id: "Dishwasher Energy" if entity_id == "sensor.dishwasher_energy_total" else None,
+        )
+        self.assertEqual(registry.appliances[0].name, "Dishwasher")
+
+        config["visualization"]["power_sensor_name_cleaner_regex"] = ".*"
+        registry = build_appliances_runtime_registry(
+            config, friendly_name=lambda _entity_id: "Power"
+        )
+        self.assertEqual(registry.appliances[0].name, "dishwasher")
+
     def test_a_passive_device_with_controls_gets_no_runtime(self) -> None:
         passive = {**_generic_appliance(), "schedulable": False}
 

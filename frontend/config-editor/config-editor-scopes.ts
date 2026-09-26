@@ -13,7 +13,7 @@ export type TabId =
   | "power_devices"
   | "training"
   | "automation"
-  | "controllables"
+  | "devices"
   | "visualization";
 
 export type ScopeId =
@@ -21,7 +21,7 @@ export type ScopeId =
   | "tab:power_devices"
   | "tab:training"
   | "tab:automation"
-  | "tab:controllables"
+  | "tab:devices"
   | "tab:visualization"
   | "section:visualization.card_labels_and_history"
   | "section:visualization.device_label_text"
@@ -40,7 +40,7 @@ export type ScopeId =
   | "section:automation.settings"
   | "section:automation.appliance_optimizer_pipeline"
   | "section:automation.system_optimizer_pipeline"
-  | "section:controllables.configured_controllables";
+  | "section:devices.configured_devices";
 
 export interface EditorScope {
   id: ScopeId;
@@ -68,7 +68,7 @@ export const TAB_ICONS: Record<TabId, string> = {
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
-  controllables: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
+  devices: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
   visualization: "M21,8V6H3V8H21M3,18H12V16H3V18M3,13H21V11H3V13Z",
 };
 
@@ -96,12 +96,12 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.appliance_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
-  "section:controllables.configured_controllables": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
+  "section:devices.configured_devices": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
 };
 
 export const TABS: Array<{ id: TabId; labelKey: string }> = [
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
-  { id: "controllables", labelKey: "editor.tabs.controllables" },
+  { id: "devices", labelKey: "editor.tabs.devices" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "training", labelKey: "editor.tabs.training" },
   { id: "visualization", labelKey: "editor.tabs.visualization" },
@@ -112,7 +112,7 @@ export const TAB_SECTIONS: Record<string, TabId> = {
   power_devices: "power_devices",
   training: "training",
   automation: "automation",
-  controllables: "controllables",
+  devices: "devices",
   root: "power_devices",
 };
 
@@ -122,7 +122,7 @@ export const TAB_SCOPE_IDS = {
   power_devices: "tab:power_devices",
   training: "tab:training",
   automation: "tab:automation",
-  controllables: "tab:controllables",
+  devices: "tab:devices",
   visualization: "tab:visualization",
 } as const satisfies Record<TabId, ScopeId>;
 
@@ -152,8 +152,8 @@ export const SECTION_SCOPE_IDS = {
     appliance_optimizer_pipeline: "section:automation.appliance_optimizer_pipeline",
     system_optimizer_pipeline: "section:automation.system_optimizer_pipeline",
   },
-  controllables: {
-    configured_controllables: "section:controllables.configured_controllables",
+  devices: {
+    configured_devices: "section:devices.configured_devices",
   },
 } as const;
 
@@ -228,12 +228,12 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [TAB_SCOPE_IDS.controllables]: {
-    id: TAB_SCOPE_IDS.controllables,
+  [TAB_SCOPE_IDS.devices]: {
+    id: TAB_SCOPE_IDS.devices,
     kind: "tab",
     parentId: DOCUMENT_SCOPE_ID,
-    tabId: "controllables",
-    labelKey: "editor.tabs.controllables",
+    tabId: "devices",
+    labelKey: "editor.tabs.devices",
     adapter: createPathScopeAdapter(["devices"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
@@ -428,12 +428,12 @@ export const EDITOR_SCOPES = {
       rootKind: "array",
     }),
   },
-  [SECTION_SCOPE_IDS.controllables.configured_controllables]: {
-    id: SECTION_SCOPE_IDS.controllables.configured_controllables,
+  [SECTION_SCOPE_IDS.devices.configured_devices]: {
+    id: SECTION_SCOPE_IDS.devices.configured_devices,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.controllables,
-    tabId: "controllables",
-    labelKey: "editor.sections.configured_controllables",
+    parentId: TAB_SCOPE_IDS.devices,
+    tabId: "devices",
+    labelKey: "editor.sections.configured_devices",
     adapter: createPathScopeAdapter(["devices"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",

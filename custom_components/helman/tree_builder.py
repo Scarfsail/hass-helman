@@ -20,6 +20,7 @@ from .controllables.config import (
     read_carved_meters,
     read_shared_meters,
     share_sensor_slug,
+    resolve_device_icon,
     resolve_device_name,
     running_signal,
 )
@@ -333,10 +334,7 @@ class HelmanTreeBuilder:
                         parent_node.children.append(share_node)
                 continue
             power_sensor_id = _consumption_entity(device, "power_entity_id")
-            power_state = self._hass.states.get(power_sensor_id) if power_sensor_id else None
-            icon = _configured_icon(device)
-            if icon is None:
-                icon = power_state.attributes.get("icon") if power_state else None
+            icon = resolve_device_icon(device, entity_icon=self._entity_icon)
 
             # Labels from every entity on the meter's HA device
             labels: list[str] = []
@@ -424,7 +422,7 @@ class HelmanTreeBuilder:
             labels=[],
             label_badge_texts=[],
             source_config=None,
-            icon=_configured_icon(device),
+            icon=resolve_device_icon(device, entity_icon=self._entity_icon),
             compact=False,
             show_additional_info=False,
             children_full_width=True,
@@ -440,6 +438,10 @@ class HelmanTreeBuilder:
     def _friendly_name(self, entity_id: str) -> str | None:
         state = self._hass.states.get(entity_id)
         return state.attributes.get("friendly_name") if state else None
+
+    def _entity_icon(self, entity_id: str) -> str | None:
+        state = self._hass.states.get(entity_id)
+        return state.attributes.get("icon") if state else None
 
     def _add_unmeasured_nodes(
         self,
@@ -504,11 +506,6 @@ def _consumption_entity(device: Device, key: str) -> str | None:
     consumption = device.get("consumption")
     value = consumption.get(key) if isinstance(consumption, Mapping) else None
     return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def _configured_icon(device: Device) -> str | None:
-    icon = device.get("icon")
-    return icon if isinstance(icon, str) and icon.strip() else None
 
 
 def _switch_entity(device: Device) -> str | None:

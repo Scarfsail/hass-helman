@@ -7,8 +7,8 @@
       "power_devices": "Výkonová zařízení",
       "training": "Trénování",
       "automation": "Automatizace",
-      "controllables": "Ovládané prvky",
-      "visualization": "Karta Helman"
+      "visualization": "Karta Helman",
+      "devices": "Zařízení"
     },
     "actions": {
       "show_more": "Zobrazit více",
@@ -23,9 +23,6 @@
       "add_daily_energy_entity": "Přidat entitu denní energie",
       "add_import_price_window": "Přidat okno ceny importu",
       "add_inverter": "Přidat střídač",
-      "add_ev_charger": "Přidat EV nabíječku",
-      "add_climate_appliance": "Přidat topení/klimatizaci",
-      "add_generic_appliance": "Přidat obecný spotřebič",
       "add_export_price_optimizer": "Přidat optimalizátor exportní ceny",
       "add_charge_hold_optimizer": "Přidat optimalizátor zadržení nabíjení",
       "add_charge_from_grid_optimizer": "Přidat optimalizátor nabíjení ze sítě",
@@ -38,7 +35,10 @@
       "drag_to_reorder": "Přetažením změníte pořadí",
       "add_condition_group": "+ Skupina podmínek",
       "rename_condition_group": "Přejmenovat skupinu",
-      "add_controllable_target": "+ Spotřebič"
+      "add_controllable_target": "+ Spotřebič",
+      "add_device": "Přidat zařízení",
+      "add_child_device": "Přidat podřízené zařízení",
+      "cancel": "Zrušit"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -64,22 +64,24 @@
       "automation_settings": "Nastavení automatizace",
       "appliance_optimizer_pipeline": "Optimalizátory spotřebičů",
       "system_optimizer_pipeline": "Systémové optimalizátory",
-      "configured_controllables": "Nakonfigurované ovládané prvky",
       "identity": "Identita",
       "action_options": "Volby akcí",
-      "identity_and_limits": "Identita a limity",
       "controls": "Ovládání",
       "use_modes": "Režimy použití",
       "eco_gears": "Eco gears",
       "vehicles": "Vozidla",
       "bias_correction_slot_invalidation": "Vyřazení slotů z trénovacích dat",
-      "consumption": "Spotřeba",
       "training_settings": "Nastavení trénování",
       "house_consumption": "Predikce spotřeby domácnosti",
       "solar_bias": "Korekce solární prognózy",
       "appliance_energy": "Energie spotřebičů",
       "config": "Konfigurace",
-      "diagnostics": "Diagnostika"
+      "diagnostics": "Diagnostika",
+      "configured_devices": "Nakonfigurovaná zařízení",
+      "inverter": "Střídač",
+      "measurements": "Měření",
+      "projection": "Odhad spotřeby",
+      "children": "Podřízená zařízení"
     },
     "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
@@ -88,10 +90,8 @@
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
       "appliance_optimizer_pipeline": "Běží v tomto pořadí. Dřívější optimalizátory si nejdřív zaberou svůj podíl spotřeby a pozdější s tím už počítají; optimalizátor, který závisí na jiném, musí být uvedený až po něm. Runtime mezi kroky znovu sestavuje snapshot a neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
       "system_optimizer_pipeline": "Běží jednou, až po všech optimalizátorech spotřebičů, a vidí celkovou naplánovanou spotřebu spotřebičů za celý den -- takže automatizace střídače reaguje na to, co si spotřebiče už zabraly, a neplánuje naslepo. Neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
-      "controllables": "Všechno, co Helman ovládá, je v jednom seznamu: střídač a EV nabíječka, topení/klimatizace i obecný spotřebič. Všechny čtyři typy se editují přímo tady. Nepodporované budoucí typy se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
       "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
       "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu.",
-      "ev_charger_consumption": "Vlastní měřič energie nabíječky. Nemá projekci poptávky — ta vychází z vozidla — ale jeho zátěž je odložitelná, což optimalizátoru umožní přesunout nabíjení do levnějších slotů.",
       "training_house_consumption": "Následující dvě nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou predikce místo odhadování hlásí nedostatek dat; trénovací okno určuje, jak daleko do minulosti se sestavení dívá. Obojí platí pro všechny entity v tabulce -- odečet totiž sedí jen tehdy, když se každý měřič čte za stejné období jako měřič domácnosti.",
       "training_solar_bias": "Následující nastavení určují, jak se tento model sestaví. Minimální historie je hranice, pod kterou se korekce přeskočí; maximální trénovací okno určuje, jak daleko do minulosti se trénink dívá.",
       "training_solar_bias_min_valid_slot_days": "Třetí nastavení je podmínkou pro každý slot zvlášť, ne pro celé sestavení. Den je rozkrájen na 15minutové sloty a každý se koriguje z vlastních podkladů: při výchozí hodnotě 5 se slot 09:15 koriguje až tehdy, když alespoň 5 dní v okně mělo v 09:15 použitelná data. Dny s nulovou prognózou nebo s oříznutou výrobou se nepočítají -- proto se noční sloty nikdy nekorigují. Protože posuzuje každý slot zvlášť, a ne historii konkrétní entity, neodpovídá mu žádný řádek v tabulce níže.",
@@ -100,14 +100,16 @@
       "training_appliance_energy": "Energie spotřebičů se učí, kolik každý řízený spotřebič se strategií historického průměru spotřebuje za hodinu provozu, a to z jeho vlastního elektroměru za jeho vlastní období zpětného pohledu. Elektroměr i období se nastavují u každého spotřebiče na kartě Řízené spotřebiče.",
       "training_settings_what": "Helman trénuje tři modely na vaší vlastní zaznamenané historii: co solární pole doopravdy vyrobí oproti prognóze, kolik domácnost spotřebuje v kterou denní dobu a kolik každý řízený spotřebič spotřebuje za hodinu provozu. Trénování běží jednou denně v čase nastaveném níže a každý model lze natrénovat i ručně. Všechno, co plánovač předpovídá, na nich stojí -- model, který se nenatrénoval nebo má příliš málo historie, se tak projeví zde, a ne až jako tiše chybný plán.",
       "training_solar_bias_slot_invalidation": "Ne každý zaznamenaný slot je poctivým důkazem o prognóze. Při plné baterii a nulovém exportu měnič výrobu přiškrtí, takže výroba vyjde nízko, přestože prognóza byla správná; stejně tak může chyba měřidla jediný slot vyhnat do špičky nebo srazit na nulu. Tyto prahy určují, které sloty se před sestavením modelu vyřadí, aby se korekce učila z počasí, a ne z přiškrcení a vadných dat.",
-      "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy."
+      "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy.",
+      "devices": "Všechna zařízení domu, která spotřebovávají energii, jako strom: zařízení může mít podřízená zařízení, která mají vlastní elektroměr, nebo odebírají z jeho elektroměru. Plánovatelná zařízení Helman plánuje a spouští, ostatní jen měří. Střídač se nastavuje ve Výkonových zařízeních."
     },
     "empty": {
       "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
       "no_system_optimizers": "Zatím nejsou nakonfigurovány žádné systémové optimalizátory.",
-      "no_controllables": "Zatím nejsou nakonfigurovány žádné ovládané prvky.",
       "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků.",
-      "no_entities_on_tab": "Tato záložka nekonfiguruje žádné entity."
+      "no_entities_on_tab": "Tato záložka nekonfiguruje žádné entity.",
+      "no_devices": "Zatím žádná zařízení. Po instalaci se nic neimportuje automaticky: přidejte každé zařízení výběrem jeho elektroměru.",
+      "no_inverter": "Není nakonfigurován žádný střídač."
     },
     "badges": {
       "optimizer_warning": "Upozornění na pořadí"
@@ -218,7 +220,6 @@
       "when_price_below": "Když je cena pod",
       "max_run_price": "Max. cena slotu pro běh",
       "requires_appliance": "Vyžaduje spotřebič",
-      "appliance_id": "Spotřebič",
       "controllable_id": "ID ovládaného prvku",
       "controllable_name": "Název ovládaného prvku",
       "climate_mode": "Režim topení/klimatizace",
@@ -238,8 +239,6 @@
       "charge_start_margin_slots": "Rezerva slotů před začátkem nabíjení",
       "min_hours_per_day": "Min. hodin za den",
       "max_consecutive_skips": "Max. po sobě jdoucích vynechání",
-      "appliance_name": "Název spotřebiče",
-      "appliance_icon": "Ikona spotřebiče",
       "kind": "Druh",
       "climate_entity": "Entita topení/klimatizace",
       "switch_entity": "Entita přepínače",
@@ -290,7 +289,14 @@
       "power_polarity_positive_is_charging": "Kladná = nabíjení",
       "power_polarity_positive_is_discharging": "Kladná = vybíjení",
       "power_polarity_positive_is_export": "Kladná = dodávka do sítě",
-      "power_polarity_positive_is_import": "Kladná = odběr ze sítě"
+      "power_polarity_positive_is_import": "Kladná = odběr ze sítě",
+      "device_name": "Název",
+      "device_icon": "Ikona",
+      "device_id": "Id",
+      "parent": "Nadřazené zařízení",
+      "consumption_power_entity": "Entita výkonu",
+      "add_device_entity": "Elektroměr nového zařízení",
+      "add_child_device_entity": "Elektroměr, spínač nebo klimatizace nového podřízeného zařízení"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -338,7 +344,6 @@
       "appliance_runtime_climate_mode_unavailable": "Živé režimy klimatizace pro tento rozpracovaný spotřebič zatím nejsou dostupné. Uložte a znovu načtěte konfiguraci, aby se načetly režimy podporované za běhu.",
       "appliance_runtime_climate_mode_single": "Tento klimatický spotřebič aktuálně nabízí jen jeden zapisovatelný režim, proto je pole jen pro čtení.",
       "appliance_runtime_climate_mode_unknown": "Uložený klimatický režim už zvolený spotřebič nepodporuje. Vyberte některý z živě podporovaných režimů a opravte ho.",
-      "appliance_icon": "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
       "solar_bias_min_history_days": "Kolik použitelných dní musí sestavení nakonec mít. Pod touto hranicí se korekce zcela přeskočí, místo aby se sestavila z příliš mála dat.",
       "solar_bias_max_training_window_days": "Jak daleko do minulosti trénování sahá. Starší dny se vůbec nenačítají, takže tato hodnota zároveň omezuje minimum výše.",
       "solar_bias_min_valid_slot_days": "Kolik různých dní musí mít použitelná data ve stejnou denní dobu, aby se tato denní doba korigovala.",
@@ -355,7 +360,17 @@
       "custom_conditions": "Kombinují se (AND) se systémovými podmínkami skupiny. Když selžou jen ony, akce se naplánují jako kandidáti, ale nikdy se neprovedou.",
       "consumption_energy_entity": "Kumulativní senzor energie (kWh) tohoto zařízení.",
       "house_consumption_min_history_days": "Kolik dní historie musí sestavení nakonec mít. Pod touto hranicí predikce hlásí nedostatek dat, místo aby predikovala z příliš mála.",
-      "house_consumption_training_window_days": "Jak daleko do minulosti trénování sahá. Starší dny se vůbec nenačítají, takže tato hodnota zároveň omezuje minimum výše."
+      "house_consumption_training_window_days": "Jak daleko do minulosti trénování sahá. Starší dny se vůbec nenačítají, takže tato hodnota zároveň omezuje minimum výše.",
+      "device_name": "Volitelné. Když pole necháte prázdné, použije se název odvozený z entit zařízení.",
+      "device_icon": "Volitelné. Když pole necháte prázdné, použije se ikona entity výkonu zařízení.",
+      "parent": "Podřízená zařízení mohou mít jen zařízení s vlastním elektroměrem, která nejsou plánovatelná. Zařízení se přesune se vším, co je pod ním.",
+      "schedulable": "Helman ho smí plánovat a spouštět; může být cílem optimalizátoru; jeho spotřeba pak odchází ze základní předpovědi.",
+      "schedulable_has_children": "Zařízení s podřízenými zařízeními nemůže být plánovatelné; nastavte jako plánovatelná jeho podřízená zařízení.",
+      "schedulable_siblings": "Platí pro všech {count} zařízení odebírajících z elektroměru nadřazeného zařízení: jsou buď všechna plánovatelná, nebo všechna pasivní.",
+      "consumption_power_entity": "Senzor okamžitého výkonu (W). Zařízení, jehož podřízená zařízení odebírají z jeho elektroměru, ho potřebuje k rozdělení živého výkonu mezi ně.",
+      "consumption_energy_entity_child": "U podřízeného zařízení volitelné: když pole necháte prázdné, odebírá z elektroměru nadřazeného zařízení.",
+      "add_device": "Jeho id se jednou vygeneruje z entity a už se nemění.",
+      "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění."
     },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -406,7 +421,11 @@
       "select_label": "Vyberte štítek",
       "live_modes_unavailable": "Živé režimy nejsou k dispozici",
       "unknown": "neznámý",
-      "missing_id": "chybí id"
+      "missing_id": "chybí id",
+      "top_level": "Žádné (nejvyšší úroveň)",
+      "kind_generic": "Obecné",
+      "kind_climate": "Klimatizace",
+      "kind_ev_charger": "EV nabíječka"
     },
     "toggles": {
       "entities_only": "Pouze entity"
@@ -436,14 +455,10 @@
     "dynamic": {
       "daily_energy_entity": "Entita denní energie {index}",
       "import_window": "Importní okno {index}",
-      "appliance": "Spotřebič {index}",
       "appliance_option": "{name} ({id})",
       "priority_position": "#{position}",
       "appliance_option_pending_reload": "{label} (zpřístupní se po uložení a znovunačtení)",
       "optimizer": "Optimalizátor {index}",
-      "ev_charger": "EV nabíječka {index}",
-      "climate_appliance": "Topení/klimatizace {index}",
-      "generic_appliance": "Obecný spotřebič {index}",
       "vehicle": "Vozidlo {index}",
       "stale_appliance": "{id} (už není v aktuální konfiguraci)",
       "unknown_label": "{name} (není štítek v Home Assistantu)",
@@ -509,8 +524,6 @@
       "appliance_runtime_window": "Omezit umístění na denní časové okno. Nechte vypnuté pro celý horizont.",
       "appliance_runtime_max_run_price": "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Slot okna lze použít jen tehdy, když jeho exportní cena zůstane po celý slot na této hodnotě nebo pod ní; ponechte prázdné, aby šlo použít kterýkoli slot okna. Den, který pod tímto prahem nedosáhne minima hodin, běží alespoň na vyhovujících slotech a maximální počet po sobě jdoucích vynechání nakonec vynutí plný běh.",
       "appliance_runtime_max_consecutive_skips": "Maximální počet po sobě jdoucích dní, které lze vynechat, než je vynucen běh spotřebiče.",
-      "appliance_id": "Jedinečný interní identifikátor tohoto spotřebiče. Používá se v odkazech automatizací a sledování plánování. Neměňte ho po nakonfigurování spotřebiče, mohlo by to rozbít existující automatizace.",
-      "appliance_name": "Zobrazovaný název tohoto spotřebiče v dashboardu Helman a přehledech energie.",
       "ev_max_charging_power_kw": "Maximální výkon nabíjení EV nabíječky v kW. Optimalizátor ho používá k modelování rychlosti nabíjení vozidla a plánování oken nabíjení.",
       "ev_charge_switch_entity": "Entita přepínače, která fyzicky povoluje nebo zakazuje nabíjení EV. Helman ji zapíná a vypíná pro realizaci plánu nabíjení. Musí být skutečný řídicí přepínač vaší nabíječky.",
       "ev_use_mode_entity": "Entita select nebo input_select, která ovládá provozní režim EV nabíječky (např. pevný maximální výkon, řízení přebytkem). Helman zapisuje aktivní režim do této entity pro realizaci naplánovaného chování nabíjení.",
@@ -551,7 +564,21 @@
       "climate_mode": "Který režim tento optimalizátor na klimatizačním spotřebiči nastavuje.",
       "min_hours_per_day": "Kolik hodin musí spotřebič v okně každý den nasbírat.",
       "consumption_energy_entity": "Kumulativní senzor energie (kWh) sledující celkovou spotřebu elektřiny tohoto zařízení. Patří k zařízení, ne k jednomu jeho použití: predikce domu ho odečítá od celkové spotřeby domu, aby našla základní zátěž, a čte ho i projekce poptávky z historie.",
-      "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži."
+      "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži.",
+      "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím."
+    },
+    "device_filter": {
+      "label": "Zobrazit zařízení",
+      "all": "Vše",
+      "schedulable": "Plánovatelná",
+      "passive": "Pasivní"
+    },
+    "device_badges": {
+      "energy": "Energie",
+      "power": "Výkon",
+      "switch": "Spínač",
+      "schedulable": "Plánovatelné",
+      "issues": "Problémy: {count}"
     }
   },
   "common": {

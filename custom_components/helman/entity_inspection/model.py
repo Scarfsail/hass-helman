@@ -87,6 +87,10 @@ class Inspection:
     status: Status
     facts: tuple[Fact, ...] = ()
     consulted: tuple[tuple[tuple[PathSegment, ...], Any], ...] = ()
+    #: What a field left unset resolves to -- a device's derived name or icon,
+    #: which the editor shows as the field's placeholder. Resolved here so the
+    #: editor never derives one itself.
+    placeholder: str | None = None
 
     @property
     def signature(self) -> tuple[Any, ...]:
@@ -99,9 +103,12 @@ class Inspection:
         return tuple(path for path, _value in self.consulted)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "entityId": self.entity_id,
             "status": self.status,
             "facts": [fact.to_dict() for fact in self.facts],
             "dependsOn": [list(path) for path in self.depends_on],
         }
+        if self.placeholder is not None:
+            result["placeholder"] = self.placeholder
+        return result

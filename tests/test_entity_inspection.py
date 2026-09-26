@@ -934,6 +934,29 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         )
 
 
+    def test_a_deep_device_meter_keeps_history_and_its_house_requirement(self):
+        leaf = {"id": "plug", "schedulable": True, "consumption": {"energy_entity_id": "sensor.plug_energy"}}
+        config = {"devices": [{"children": [{"children": [leaf]}]}]}
+        hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
+        path = ("devices", 0, "children", 0, "children", 0, "consumption", "energy_entity_id")
+        _, inspection = self.inspect_twice(hass, config, path)
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertEqual(fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS)
+        self.assertIn(list(path), inspection["dependsOn"])
+
+    def test_deep_device_activity_controls_keep_history(self):
+        for control, entity_id in [("switch", "switch.plug"), ("climate", "climate.room")]:
+            with self.subTest(control=control):
+                leaf = {"controls": {control: {"entity_id": entity_id}}}
+                config = {"devices": [{"children": [{"children": [leaf]}]}]}
+                hass = _ProbingHass({entity_id: _State("on")})
+                path = ("devices", 0, "children", 0, "children", 0, "controls", control, "entity_id")
+                _, inspection = self.inspect_twice(hass, config, path)
+                self.assertIsNotNone(_fact(inspection, "history"))
+                self.assertIn(list(path), inspection["dependsOn"])
+
+
 class TestHistoryCache(_HistoryTestCase):
     """The recorder is asked once a minute, not once every two seconds."""
 
@@ -1400,6 +1423,108 @@ class TestWebsocketCommand(unittest.TestCase):
         )
         [(_, payload)] = connection.results
         self.assertIsNotNone(payload["results"][0]["saved"])
+
+
+
+class _NamedState:
+    def __init__(self, friendly_name: str, icon: str | None = None) -> None:
+        self.state = "0"
+        self.attributes = {"friendly_name": friendly_name}
+        if icon is not None:
+            self.attributes["icon"] = icon
+
+
+BREAKER = {
+    "id": "jistic_klimatizace_energy",
+    "consumption": {
+        "energy_entity_id": "sensor.jistic_klimatizace_energy",
+        "power_entity_id": "sensor.jistic_klimatizace_power",
+    },
+    "children": [
+        {
+            "id": "klima-obyvak",
+            "kind": "climate",
+            "controls": {"climate": {"entity_id": "climate.obyvak"}},
+        }
+    ],
+}
+
+
+class TestDeviceFieldPlaceholders(unittest.TestCase):
+    """A device's name and icon placeholders are the backend's own resolution.
+
+    The Devices tab shows what an unset ``name`` or ``icon`` resolves to, at
+    any depth of the tree; the editor sends the field's path and renders the
+    ``placeholder`` it gets back.
+    """
+
+    HASS = _Hass(
+        {
+            "sensor.jistic_klimatizace_power": _NamedState(
+                "Jistič klimatizace Power", icon="mdi:air-conditioner"
+            ),
+            "climate.obyvak": _NamedState("Obývák klimatizace"),
+        }
+    )
+
+    def _placeholder(self, config: dict, path: tuple) -> str | None:
+        return inspect_target(self.HASS, config, path).to_dict().get("placeholder")
+
+    def test_an_unset_name_resolves_like_every_other_surface(self):
+        config = {
+            "devices": [BREAKER],
+            "visualization": {"power_sensor_name_cleaner_regex": " Power$"},
+        }
+        self.assertEqual(
+            self._placeholder(config, ("devices", 0, "name")), "Jistič klimatizace"
+        )
+
+    def test_a_child_resolves_from_its_control_entity(self):
+        self.assertEqual(
+            self._placeholder({"devices": [BREAKER]}, ("devices", 0, "children", 0, "name")),
+            "Obývák klimatizace",
+        )
+
+    def test_the_override_is_not_its_own_placeholder(self):
+        config = {"devices": [{**BREAKER, "name": "AC breaker", "icon": "mdi:fan"}]}
+        self.assertEqual(
+            self._placeholder(config, ("devices", 0, "name")), "Jistič klimatizace Power"
+        )
+        self.assertEqual(
+            self._placeholder(config, ("devices", 0, "icon")), "mdi:air-conditioner"
+        )
+
+    def test_no_derivable_icon_is_no_placeholder(self):
+        self.assertIsNone(
+            self._placeholder({"devices": [BREAKER]}, ("devices", 0, "children", 0, "icon"))
+        )
+
+    def test_a_device_path_matches_at_any_depth_and_nothing_else_does(self):
+        from custom_components.helman.entity_inspection.device import (
+            evaluate_device_field,
+        )
+
+        for path in [
+            ("devices", 0, "name"),
+            ("devices", 0, "children", 1, "icon"),
+            ("devices", 0, "children", 1, "children", 2, "name"),
+        ]:
+            with self.subTest(path=path):
+                self.assertIs(evaluator_for(path)[0], evaluate_device_field)
+        for path in [
+            ("devices", 0, "id"),
+            ("devices", "0", "name"),
+            ("devices", 0, "controls", 1, "name"),
+            ("power_devices", 0, "name"),
+        ]:
+            with self.subTest(path=path):
+                self.assertIsNot(evaluator_for(path)[0], evaluate_device_field)
+
+    def test_an_ordinary_inspection_carries_no_placeholder(self):
+        hass = _Hass({"sensor.grid_power": _State("1400")})
+        self.assertNotIn(
+            "placeholder", inspect_target(hass, _config(), POWER_PATH).to_dict()
+        )
 
 
 if __name__ == "__main__":

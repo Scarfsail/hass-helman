@@ -31,6 +31,7 @@ from ..solar_bias_correction.forecast_slot_history import (
     SOLAR_FORECAST_CURRENT_ENTITY,
 )
 from .context import InspectionRequest, PathSegment
+from .device import device_field, device_prefix_length, evaluate_device_field
 from .fallback import evaluate_entity_value
 from .history import (
     fixed_entity_history_evaluator,
@@ -120,26 +121,15 @@ EVALUATORS: dict[str, Evaluator] = {
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
     ),
-    "devices.*.children.*.consumption.energy_entity_id": history_evaluator(
-        ("training", "house_consumption", "min_history_days"),
-        HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
-        governs=_meter_feeds_the_house_trainer,
-    ),
     # When an appliance ran: the appliance energy trainer reads this history
     # alongside its meter, for a history_average appliance and for any sharer
     # of a meter one of those learns from. Measured, never judged here -- the
     # requirement is each appliance's own lookback, which the Training tab's
-    # depth table applies. Wrapped rather than replaced so the Controllables
-    # tab keeps showing the switch or climate state it always has. A child's
-    # control is keyed one level down, since the matcher is fixed-depth.
+    # depth table applies. Wrapped rather than replaced so the Devices
+    # tab keeps showing the switch or climate state it always has. Nested
+    # device prefixes are normalized before matching, at any tree depth.
     "devices.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
     "devices.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
-    "devices.*.children.*.controls.switch.entity_id": history_aware(
-        evaluate_entity_value
-    ),
-    "devices.*.children.*.controls.climate.entity_id": history_aware(
-        evaluate_entity_value
-    ),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "training.solar_bias.total_energy_entity_id": (
         history_evaluator(
@@ -204,10 +194,22 @@ def evaluator_for(
 
     Always answers: an unclaimed path gets :data:`FALLBACK_EVALUATOR` and no
     wildcards, because every entity in the configuration is worth a reading
-    even where there is nothing to make of it.
+    even where there is nothing to make of it. A device's ``name`` or ``icon``,
+    at any depth of the tree, is answered by :mod:`.device` first.
     """
+    if device_field(path) is not None:
+        return evaluate_device_field, ()
+    # Only the matcher sees a top-level-shaped path. The evaluator still gets
+    # the original nested path, so history, dependencies and reverts address
+    # the actual draft field.
+    prefix_length = device_prefix_length(path)
+    match_path = (
+        (*path[:2], *path[prefix_length:])
+        if prefix_length is not None
+        else path
+    )
     for key, evaluator in EVALUATORS.items():
-        wildcards = match_key(key, path)
+        wildcards = match_key(key, match_path)
         if wildcards is not None:
             return evaluator, wildcards
     return FALLBACK_EVALUATOR, ()

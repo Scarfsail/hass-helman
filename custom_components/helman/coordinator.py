@@ -104,9 +104,11 @@ from .consumption_forecast_builder import (
 )
 from .controllables.config import (
     is_active_state,
+    iter_device_paths,
     read_carved_meters,
     read_schedulable_consumers,
     read_shared_meters,
+    resolve_device_name,
     running_active_states,
 )
 from .consumption_forecast_profiles import (
@@ -1131,6 +1133,7 @@ class HelmanCoordinator:
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
+            friendly_name=self._entity_friendly_name,
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.
@@ -2413,7 +2416,7 @@ class HelmanCoordinator:
         The card filters this against live entity state, so it reacts to state
         changes without asking the backend again.
         """
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         return build_controllable_entities(
             control_config=self._read_schedule_control_config(),
             registry=self._appliances_registry,
@@ -2445,16 +2448,43 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    def _refresh_climate_appliance_capabilities(self) -> None:
+    def _entity_friendly_name(self, entity_id: str) -> str | None:
+        state = self._hass.states.get(entity_id)
+        name = state.attributes.get("friendly_name") if state is not None else None
+        return name if isinstance(name, str) else None
+
+    def _refresh_appliance_metadata(self) -> None:
+        """Resolve identity and climate capabilities from currently available states."""
+        config = getattr(self, "_active_config", None)
+        devices = {
+            device["id"].strip(): device
+            for _path, device, _parent in iter_device_paths(config)
+            if isinstance(device, Mapping) and isinstance(device.get("id"), str)
+        }
+        visualization = config.get("visualization") if isinstance(config, Mapping) else None
+        cleaner = (
+            visualization.get("power_sensor_name_cleaner_regex")
+            if isinstance(visualization, Mapping)
+            else None
+        )
         refreshed_appliances = []
         changed = False
 
         for appliance in self._appliances_registry.appliances:
-            if not isinstance(appliance, ClimateApplianceRuntime):
-                refreshed_appliances.append(appliance)
-                continue
-
-            refreshed_appliance = self._resolve_climate_appliance_capabilities(appliance)
+            refreshed_appliance = appliance
+            device = devices.get(appliance.id)
+            if device is not None:
+                name = resolve_device_name(
+                    device,
+                    friendly_name=self._entity_friendly_name,
+                    cleaner_regex=cleaner if isinstance(cleaner, str) else None,
+                )
+                if name != appliance.name:
+                    refreshed_appliance = replace(refreshed_appliance, name=name)
+            if isinstance(refreshed_appliance, ClimateApplianceRuntime):
+                refreshed_appliance = self._resolve_climate_appliance_capabilities(
+                    refreshed_appliance
+                )
             refreshed_appliances.append(refreshed_appliance)
             if refreshed_appliance != appliance:
                 changed = True
@@ -2503,7 +2533,7 @@ class HelmanCoordinator:
         )
 
     async def _async_normalize_schedule_document(self) -> None:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         raw_document = self._storage.schedule_document
         if raw_document is None:
             return
@@ -2567,7 +2597,7 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> tuple[ScheduleDocument, ScheduleDocument]:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         loaded_document = self._load_schedule_document()
         schedule_document = normalize_schedule_document_for_registry(
             loaded_document,
@@ -2680,7 +2710,7 @@ class HelmanCoordinator:
             )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         return build_appliances_response(self._appliances_registry)
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
@@ -3039,7 +3069,7 @@ class HelmanCoordinator:
         return round(total / 1000.0, 4)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         request_now = dt_util.now()
         canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
             reference_time=request_now

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..controllables.config import (
@@ -10,6 +10,7 @@ from ..controllables.config import (
     iter_device_paths,
     peek_controllable_kind,
     read_devices,
+    resolve_device_name,
 )
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .climate_appliance import ClimateApplianceConfigError, read_climate_appliance
@@ -28,6 +29,7 @@ def build_appliances_runtime_registry(
     config: Mapping[str, Any] | None,
     *,
     logger: logging.Logger | None = None,
+    friendly_name: Callable[[str], str | None] | None = None,
 ) -> AppliancesRuntimeRegistry:
     """The schedulable appliance devices, as runtime objects.
 
@@ -44,6 +46,12 @@ def build_appliances_runtime_registry(
 
     appliances = []
     seen_appliance_ids: set[str] = set()
+    visualization = config.get("visualization") if isinstance(config, Mapping) else None
+    cleaner_regex = (
+        visualization.get("power_sensor_name_cleaner_regex")
+        if isinstance(visualization, Mapping)
+        else None
+    )
 
     for path, device, parent in iter_device_paths(config):
         if not isinstance(device, Mapping):
@@ -59,6 +67,8 @@ def build_appliances_runtime_registry(
                 device,
                 parent,
                 path=path,
+                friendly_name=friendly_name,
+                cleaner_regex=cleaner_regex if isinstance(cleaner_regex, str) else None,
             )
         except (
             ClimateApplianceConfigError,
@@ -109,16 +119,23 @@ def read_device_appliance(
     parent: Mapping[str, Any] | None,
     *,
     path: str,
+    friendly_name: Callable[[str], str | None] | None = None,
+    cleaner_regex: str | None = None,
 ):
     """One appliance device as its per-kind runtime object.
 
-    The per-kind readers see the device as they always have, with two things
-    filled in from the tree: the default ``generic`` kind, and the device's
-    effective meter — so a meterless child on ``history_average`` reads the
-    meter it draws from, its parent's.
+    The per-kind readers receive the default ``generic`` kind, the shared
+    resolved name (the id when entity states are unavailable), and the device's
+    effective meter — so a meterless child on ``history_average`` reads its
+    parent's meter. These derived fields are never written to the document.
     """
     view = dict(device)
     view.setdefault("kind", _GENERIC_APPLIANCE_KIND)
+    view["name"] = resolve_device_name(
+        device,
+        friendly_name=friendly_name or (lambda _entity_id: None),
+        cleaner_regex=cleaner_regex,
+    )
     meter = effective_meter(device, parent)
     consumption = device.get("consumption")
     if meter is not None and isinstance(consumption, Mapping):
