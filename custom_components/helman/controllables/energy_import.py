@@ -62,8 +62,11 @@ def import_energy_preferences(
 
     A row whose meter a device already owns is not duplicated: that device
     keeps its identity, flags and controls and only gains a missing
-    ``power_entity_id``. Existing devices are never moved. ``devices`` itself
-    is not modified.
+    ``power_entity_id``. Existing devices keep their place relative to one
+    another; the one move made is a top-level existing device going, with its
+    subtree, under a *newly imported* device Energy nests it in — otherwise the
+    new meter and the one inside it would both count the same energy.
+    ``devices`` itself is not modified.
     """
     imported = deepcopy(list(devices))
     owners: dict[str, dict[str, Any]] = {}
@@ -74,7 +77,9 @@ def import_energy_preferences(
         if (meter := own_meter(device)) is not None:
             owners.setdefault(meter, device)
 
+    top_level = list(imported)
     new_devices: list[tuple[dict[str, Any], str | None]] = []
+    existing_nesting: list[tuple[dict[str, Any], str]] = []
     external: list[str] = []
     for row in _device_consumption(preferences):
         meter = _entity_id(row.get("stat_consumption"))
@@ -88,6 +93,8 @@ def import_energy_preferences(
         if owner is not None:
             if power is not None and not owner["consumption"].get("power_entity_id"):
                 owner["consumption"] = {**owner["consumption"], "power_entity_id": power}
+            if (parent_meter := _entity_id(row.get("included_in_stat"))) is not None:
+                existing_nesting.append((owner, parent_meter))
             continue
         consumption = {"energy_entity_id": meter}
         if power is not None:
@@ -101,6 +108,7 @@ def import_energy_preferences(
 
     included_in = {id(device): parent for device, parent in new_devices}
     conflicts: list[EnergyImportConflict] = []
+    placed: set[int] = set()
     for device, parent_meter in new_devices:
         blocker = _schedulable_container(device, included_in, owners)
         if blocker is not None:
@@ -131,7 +139,27 @@ def import_energy_preferences(
             continue
         children = parent.setdefault("children", []) if parent is not None else None
         (children if isinstance(children, list) else imported).append(device)
+        placed.add(id(device))
+
+    for owner, parent_meter in existing_nesting:
+        parent = owners.get(parent_meter)
+        if (
+            parent is None
+            or id(parent) not in placed
+            or not any(owner is device for device in top_level)
+            or _in_subtree(parent, owner)
+        ):
+            continue
+        imported[:] = [device for device in imported if device is not owner]
+        parent.setdefault("children", []).append(owner)
     return EnergyImport(imported, conflicts, external)
+
+
+def _in_subtree(device: Mapping[str, Any], root: Mapping[str, Any]) -> bool:
+    """Whether ``device`` is ``root`` or sits anywhere beneath it."""
+    return device is root or any(
+        _in_subtree(device, child) for child in device_children(root)
+    )
 
 
 def _schedulable_container(

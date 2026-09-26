@@ -196,6 +196,36 @@ class EnergyImportTests(unittest.TestCase):
         self.assertEqual(result.devices, devices)
         self.assertEqual(result.conflicts, [])
 
+    def test_an_existing_device_moves_under_a_new_parent_containing_it(self) -> None:
+        # The new garage meter already counts the dishwasher's energy; leaving
+        # both at the top level would count it twice.
+        dishwasher = _dishwasher()
+        result = _import(
+            [dishwasher],
+            _row("sensor.garage_energy", "sensor.garage_power"),
+            _row("sensor.dishwasher_energy", None, "sensor.garage_energy"),
+        )
+
+        (garage,) = result.devices
+        self.assertEqual(garage["id"], "garage_energy")
+        self.assertEqual(garage["children"], [dishwasher])
+        self.assertEqual(result.conflicts, [])
+
+    def test_a_new_row_under_an_existing_device_does_not_swallow_it(self) -> None:
+        # The breaker is existing and nests the new plug; the plug's own
+        # (bogus) Energy parent would be the breaker's descendant: no move.
+        breaker = {"id": "breaker", "consumption": {"energy_entity_id": "sensor.breaker_energy"}}
+        result = _import(
+            [breaker],
+            _row("sensor.plug_energy", "sensor.plug_power", "sensor.breaker_energy"),
+            _row("sensor.breaker_energy", None, "sensor.plug_energy"),
+        )
+
+        self.assertEqual([d["id"] for d in result.devices], ["breaker"])
+        self.assertEqual(
+            [c["id"] for c in result.devices[0]["children"]], ["plug_energy"]
+        )
+
     def test_external_statistics_are_skipped_and_reported(self) -> None:
         result = _import([], _row("tibber:energy_consumption"), _row("sensor.oven_energy"))
 
