@@ -478,6 +478,7 @@ class FakeStorage:
 
 class FakeExecutor:
     def __init__(self) -> None:
+        self.is_running = True
         self.events: list[str] = []
         self.reconcile_error: Exception | None = None
         self.restore_error: Exception | None = None

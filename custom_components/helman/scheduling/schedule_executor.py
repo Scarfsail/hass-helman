@@ -387,6 +387,10 @@ class ScheduleExecutor:
         self._unloaded = False
 
     @property
+    def is_running(self) -> bool:
+        return not self._stopped
+
+    @property
     def runtime(self) -> ScheduleExecutionRuntime:
         return self._runtime
 
@@ -449,16 +453,24 @@ class ScheduleExecutor:
         """Ask the worker for a reconcile and wait for the attempt serving it.
 
         Joins the same queue as every background request rather than running
-        its own, and raises that attempt's error. Raises too while the executor
-        is stopped -- before Home Assistant has started, or after unload --
-        rather than reporting a reconcile that never ran as a success.
+        its own, and raises that attempt's error. A reconcile that never ran --
+        the executor is stopped, or stops while this waits -- is reported as
+        unavailable, never as a success.
         """
         waiter = self._queue_reconcile(reason=reason, wait=True)
         if waiter is None:
+            raise ScheduleExecutionUnavailableError("Schedule execution is not running")
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            # Our own cancellation propagates; a waiter cancelled by stop or
+            # unload is a reconcile that did not happen.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
             raise ScheduleExecutionUnavailableError(
-                "Schedule execution has not started yet"
-            )
-        await waiter
+                "Schedule execution stopped before the reconcile completed"
+            ) from None
 
     def _queue_reconcile(
         self,

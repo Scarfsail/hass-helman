@@ -133,6 +133,7 @@ from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
+    ScheduleExecutionUnavailableError,
     ScheduleResponseDict,
     ScheduleSlot,
     appliance_actions,
@@ -3206,6 +3207,18 @@ class HelmanCoordinator:
                 )
                 was_enabled = current_document.execution_enabled
 
+                if enabled and not self._schedule_executor.is_running:
+                    # Home Assistant is still starting (or the entry is going
+                    # away): nothing could validate an enable now. Decide before
+                    # touching storage; an already-enabled flag is applied by
+                    # the startup reconcile anyway.
+                    if was_enabled:
+                        return True
+                    raise ScheduleExecutionUnavailableError(
+                        "Schedule execution is not running yet; try again once "
+                        "Home Assistant has started"
+                    )
+
                 if enabled and not was_enabled:
                     await self._save_schedule_document(
                         ScheduleDocument(
@@ -3320,12 +3333,14 @@ class HelmanCoordinator:
             # failure must not undo it.
             if generation != self._schedule_execution_generation:
                 return
+            # The rollback is itself a flag transition: an overlapping enable
+            # still waiting must report the persisted state, not success.
+            # Bumped before the save, which yields on disk I/O, so such a
+            # waiter sees the transition however it interleaves with it.
+            self._schedule_execution_generation += 1
             await self._async_persist_execution_disabled_locked(
                 reference_time=reference_time
             )
-            # The rollback is itself a flag transition: an overlapping enable
-            # still waiting must report the persisted state, not success.
-            self._schedule_execution_generation += 1
             self._schedule_executor.reset_runtime()
 
     @staticmethod

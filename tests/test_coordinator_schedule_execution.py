@@ -467,6 +467,7 @@ class FakeStorage:
 
 class FakeExecutor:
     def __init__(self) -> None:
+        self.is_running = True
         self.events: list[str] = []
         self.start_calls = 0
         self.stop_calls = 0
@@ -1123,7 +1124,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(storage.schedule_document["executionEnabled"])
 
-    async def test_enable_before_the_executor_has_started_rolls_back(
+    async def test_enable_before_the_executor_has_started_is_refused_unsaved(
         self,
     ) -> None:
         storage = FakeStorage(
@@ -1138,15 +1139,33 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         # The real executor, never started: Home Assistant is still starting.
         coordinator = HelmanCoordinator(FakeHass(), storage)
 
-        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
-            with self.assertRaisesRegex(
-                ScheduleExecutionUnavailableError, "not started yet"
-            ):
-                await coordinator.set_schedule_execution(
-                    enabled=True, reference_time=REFERENCE_TIME
-                )
+        with self.assertRaisesRegex(ScheduleExecutionUnavailableError, "not running"):
+            await coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
 
+        # Decided before touching storage: no enable-then-rollback flicker.
+        self.assertEqual(storage.saved_schedule_documents, [])
         self.assertFalse(storage.schedule_document["executionEnabled"])
+
+    async def test_repeated_enable_before_the_executor_has_started_is_a_no_op(
+        self,
+    ) -> None:
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            }
+        )
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+
+        self.assertTrue(
+            await coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        self.assertEqual(storage.saved_schedule_documents, [])
 
     async def test_repeated_enable_does_not_fence_off_the_first_rollback(
         self,
@@ -1167,6 +1186,16 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             await release_reconcile.wait()
             raise ScheduleExecutionUnavailableError("charger stalled")
 
+        # Like the real store: the in-memory document updates at once, then the
+        # disk write yields -- so the double click can run while the rollback's
+        # save is still in flight.
+        save_document = storage.async_save_schedule_document
+
+        async def _yielding_save(schedule_document: dict) -> None:
+            await save_document(schedule_document)
+            await asyncio.sleep(0)
+
+        storage.async_save_schedule_document = _yielding_save
         executor.async_reconcile_and_wait = _blocked_then_failing
         first = asyncio.create_task(
             coordinator.set_schedule_execution(

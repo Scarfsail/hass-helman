@@ -1418,7 +1418,8 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(executor._worker_task)
             self.assertIsNone(executor._pending_request)
             self.assertEqual(unsubscribed, [True])
-            with self.assertRaises(asyncio.CancelledError):
+            # Not a cancellation of the caller: a reconcile that never ran.
+            with self.assertRaisesRegex(ScheduleExecutionUnavailableError, "stopped"):
                 await waiter
 
             # A startup callback racing the unload cannot bring the interval
