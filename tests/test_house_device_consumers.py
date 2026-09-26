@@ -34,6 +34,7 @@ def _tree(children):
 def _node(node_id, **overrides):
     node = {
         "id": node_id,
+        "energyEntityId": node_id,
         "displayName": node_id,
         "switchEntityId": None,
         "isUnmeasured": False,
@@ -68,6 +69,20 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                     "power_entity_id": "sensor.dishwasher_power",
                 }
             ],
+        )
+
+    def test_the_meter_is_read_from_energy_entity_id_not_the_node_id(self):
+        # The node id is only the card's list key; the meter is its own field.
+        tree = _tree(
+            [
+                _node("row-key", energyEntityId="sensor.dishwasher_energy"),
+                _node("sensor.no_meter_energy", energyEntityId=None),
+            ]
+        )
+
+        self.assertEqual(
+            [c["energy_entity_id"] for c in extract(tree)],
+            ["sensor.dishwasher_energy"],
         )
 
     def test_no_power_sensor_on_the_card_means_none_here(self):

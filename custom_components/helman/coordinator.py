@@ -13,7 +13,6 @@ from statistics import median
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
-from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers import entity_registry as er
@@ -650,7 +649,6 @@ class HelmanCoordinator:
         self._storage = storage
         self._cached_tree: dict | None = None
         self._unsub_listeners: list = []
-        self._unsub_energy: Callable[[], None] | None = None
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors: dict[str, Any] = {}
@@ -1120,11 +1118,6 @@ class HelmanCoordinator:
         )
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
-                "device_registry_updated", self._on_registry_updated
-            )
-        )
-        self._unsub_listeners.append(
-            self._hass.bus.async_listen(
                 "helman_solar_bias_trained",
                 self._on_solar_bias_changed,
             )
@@ -1135,15 +1128,6 @@ class HelmanCoordinator:
                 self._on_solar_bias_changed,
             )
         )
-
-        # Energy prefs use an internal listener API, not the event bus.
-        # Capture the returned unsubscribe callable for clean teardown.
-        async def _on_energy_updated() -> None:
-            self._cached_tree = None
-            await self._async_rebuild_subscriptions()
-
-        manager = await energy_data.async_get_manager(self._hass)
-        self._unsub_energy = manager.async_listen_updates(_on_energy_updated)
 
         # Build tree upfront to learn which power sensors to track
         tree = await self.get_device_tree()
@@ -5717,10 +5701,6 @@ class HelmanCoordinator:
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()
-
-        if self._unsub_energy is not None:
-            self._unsub_energy()
-            self._unsub_energy = None
 
     def _create_tracked_refresh_task(
         self,

@@ -2,10 +2,10 @@
 
 The power card marks the loads the optimizer may move in time, and it must do so
 from the same roster the house forecast carves out — no second list to keep in
-agreement. A house child's node id *is* its energy statistic, which is exactly
-what ``read_carved_meters`` is keyed by, so the match is a dict lookup —
-which also hands the node the controllable ids the schedule is stored under — and
-nothing else on the tree is touched.
+agreement. A house child is a metered device, and its meter is exactly what
+``read_carved_meters`` is keyed by, so the match is a dict lookup — which also
+hands the node the device ids the schedule is stored under — and nothing else on
+the tree is touched.
 """
 
 from __future__ import annotations
@@ -29,10 +29,10 @@ from custom_components.helman.tree_builder import HelmanTreeBuilder  # noqa: E40
 
 
 class _Registry:
-    """A registry that knows nothing: every device here is meter-only.
+    """A registry that knows nothing: no device here carries labels.
 
-    The tree only consults the registries for the switch, the labels and a power
-    sensor fallback, none of which deferrability depends on.
+    The tree only consults the registries for the labels, which deferrability
+    does not depend on.
     """
 
     entities: dict = {}
@@ -59,20 +59,10 @@ def _controllable(controllable_id, energy_entity_id, *, schedulable=True):
     return entry
 
 
-def _house_children(controllables, stats, parent_of=None):
-    builder = HelmanTreeBuilder(_Hass(), {"devices": controllables})
-    prefs = {
-        "device_consumption": [
-            {
-                "stat_consumption": stat,
-                "stat_rate": f"{stat}_power",
-                "included_in_stat": (parent_of or {}).get(stat),
-            }
-            for stat in stats
-        ]
-    }
+def _house_children(devices):
+    builder = HelmanTreeBuilder(_Hass(), {"devices": devices})
     reg = _Registry()
-    children = builder._build_house_children(prefs, reg, reg, reg, {}, {})
+    children = builder._build_house_children(reg, reg, {})
     return {node.id: node for node in children}
 
 
@@ -80,8 +70,10 @@ class TestHouseChildDeferrability(unittest.TestCase):
 
     def test_only_the_children_that_are_deferrable_controllables_are_marked(self):
         nodes = _house_children(
-            [_controllable("dishwasher", "sensor.dishwasher_energy")],
-            ["sensor.dishwasher_energy", "sensor.fridge_energy"],
+            [
+                _controllable("dishwasher", "sensor.dishwasher_energy"),
+                _controllable("fridge", "sensor.fridge_energy", schedulable=False),
+            ]
         )
 
         self.assertTrue(nodes["sensor.dishwasher_energy"].deferrable)
@@ -89,18 +81,16 @@ class TestHouseChildDeferrability(unittest.TestCase):
 
     def test_a_passive_device_is_not_marked(self):
         nodes = _house_children(
-            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)],
-            ["sensor.boiler_energy"],
+            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)]
         )
 
         self.assertFalse(nodes["sensor.boiler_energy"].deferrable)
 
     def test_the_flag_reaches_the_wire_and_the_remainder_defaults_false(self):
-        nodes = _house_children(
-            [_controllable("dishwasher", "sensor.dishwasher_energy")],
-            ["sensor.kitchen_energy", "sensor.dishwasher_energy"],
-            parent_of={"sensor.dishwasher_energy": "sensor.kitchen_energy"},
-        )
+        kitchen = _controllable("kitchen", "sensor.kitchen_energy", schedulable=False)
+        kitchen["consumption"]["power_entity_id"] = "sensor.kitchen_power"
+        kitchen["children"] = [_controllable("dishwasher", "sensor.dishwasher_energy")]
+        nodes = _house_children([kitchen])
         kitchen = nodes["sensor.kitchen_energy"]
         # The remainder is synthesised without consulting the roster at all.
         HelmanTreeBuilder(_Hass(), {})._add_unmeasured_nodes(kitchen, "Unmeasured")
@@ -126,8 +116,10 @@ class TestHouseChildControllableId(unittest.TestCase):
 
     def test_a_deferrable_child_carries_the_controllable_that_owns_its_meter(self):
         nodes = _house_children(
-            [_controllable("dishwasher", "sensor.dishwasher_energy")],
-            ["sensor.dishwasher_energy", "sensor.fridge_energy"],
+            [
+                _controllable("dishwasher", "sensor.dishwasher_energy"),
+                _controllable("fridge", "sensor.fridge_energy", schedulable=False),
+            ]
         )
 
         self.assertEqual(
@@ -148,7 +140,7 @@ class TestHouseChildControllableId(unittest.TestCase):
                 for index in range(4)
             ],
         }
-        nodes = _house_children([breaker], [meter])
+        nodes = _house_children([breaker])
 
         self.assertEqual(list(nodes), [meter])
         self.assertTrue(nodes[meter].deferrable)
@@ -160,18 +152,14 @@ class TestHouseChildControllableId(unittest.TestCase):
     def test_a_roster_entry_with_no_id_is_deferrable_with_no_controllable(self):
         # Such an entry can never be scheduled, so there is nothing to key off —
         # but it is still carved out of the base load, so it stays deferrable.
-        nodes = _house_children(
-            [_controllable(None, "sensor.dryer_energy")],
-            ["sensor.dryer_energy"],
-        )
+        nodes = _house_children([_controllable(None, "sensor.dryer_energy")])
 
         self.assertTrue(nodes["sensor.dryer_energy"].deferrable)
         self.assertEqual(nodes["sensor.dryer_energy"].controllable_ids, [])
 
     def test_a_passive_device_carries_no_controllable_ids(self):
         nodes = _house_children(
-            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)],
-            ["sensor.boiler_energy"],
+            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)]
         )
 
         self.assertEqual(nodes["sensor.boiler_energy"].controllable_ids, [])

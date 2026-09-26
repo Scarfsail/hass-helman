@@ -13,7 +13,8 @@ when someone thinks of it.
 
 The store is found automatically at the sibling Home Assistant checkout, or via
 ``HELMAN_STORED_CONFIG``. When there is none — CI, a fresh clone — the test
-skips, loudly enough to say why.
+skips, loudly enough to say why. The Energy preferences the v21 step imports are
+read from the ``energy`` store beside it.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ from custom_components.helman.consumption_forecast_builder import (
     ConsumptionForecastBuilder,
 )
 from custom_components.helman.controllables.config import (
+    iter_devices,
+    own_meter,
     read_carved_meters,
     read_schedulable_ids,
     read_shared_meters,
@@ -65,6 +68,15 @@ def _find_stored_config() -> Path | None:
     return DEFAULT_STORED_CONFIG if DEFAULT_STORED_CONFIG.is_file() else None
 
 
+FIXTURES = REPO_ROOT / "tests" / "fixtures"
+
+#: The live installation's Energy ``device_consumption``: 12 rows, the study
+#: breaker with two nested plugs, and the AC breaker P1 made a parent of.
+LIVE_ENERGY_PREFERENCES = json.loads(
+    (FIXTURES / "live_energy_preferences.json").read_text()
+)
+
+
 def _read_document(path: Path) -> dict:
     """Unwrap Home Assistant's ``Store`` envelope, or take a bare document."""
     payload = json.loads(path.read_text())
@@ -82,9 +94,11 @@ class StoredConfigMigrationTests(unittest.TestCase):
             )
         self.path = path
         self.document = _read_document(path)
+        energy = path.parent / "energy"
+        self.preferences = _read_document(energy) if energy.is_file() else None
 
     def test_the_stored_config_migrates_and_reads_back(self) -> None:
-        migrated, migrated_ids = migrate_config_document(self.document)
+        migrated, migrated_ids = migrate_config_document(self.document, self.preferences)
 
         # The reader is the real gate: it rejects unknown keys, so anything the
         # migration forgot to move or drop fails right here.
@@ -98,29 +112,21 @@ class StoredConfigMigrationTests(unittest.TestCase):
         self.assertIsInstance(migrated_ids, list)
 
     def test_the_migrated_config_passes_full_validation(self) -> None:
-        migrated, _ids = migrate_config_document(self.document)
+        migrated, _ids = migrate_config_document(self.document, self.preferences)
 
         report = validate_config_document(migrated)
 
-        # The v20 migration creates the shared-meter parent without a power
-        # sensor (it never infers one); the Energy import in v21 fills it.
-        # Until then that is the only error the live config may carry.
-        unexpected = [
-            issue
-            for issue in report.errors
-            if issue.code != "power_entity_required"
-        ]
         self.assertEqual(
-            unexpected,
+            report.errors,
             [],
             "migrated stored config does not validate:\n"
-            + "\n".join(f"  {issue.path}: {issue.message}" for issue in unexpected),
+            + "\n".join(f"  {issue.path}: {issue.message}" for issue in report.errors),
         )
 
     def test_migrating_an_already_migrated_config_changes_nothing(self) -> None:
-        once, _ids = migrate_config_document(self.document)
+        once, _ids = migrate_config_document(self.document, self.preferences)
 
-        twice, migrated_ids = migrate_config_document(once)
+        twice, migrated_ids = migrate_config_document(once, self.preferences)
 
         # Migration runs on every load. A second pass must be a no-op, or a
         # dropped `config_version` would rewrite the document under the user.
@@ -443,6 +449,164 @@ class LiveShapedMigrationTests(unittest.TestCase):
             },
         )
         self.assertEqual(v20_request.fingerprint, v19_request.fingerprint)
+
+
+class LiveEnergyImportTests(unittest.TestCase):
+    """The live shape plus the live Energy preferences, migrated to v21."""
+
+    _BREAKER = {
+        "sensor.jistic_zasuvky_pracovny_energy": [
+            "sensor.zasuvka_pracovna_verca_energy",
+            "sensor.zasuvka_pracovna_ondra_energy",
+        ],
+        "sensor.jistic_zasuvky_obyvak_a_loznice_energy": ["sensor.zasuvka_tv_energy"],
+        "sensor.jistic_zasuvky_spiz_a_jidelna_energy": ["sensor.zasuvka_lednicka_energy"],
+    }
+
+    def setUp(self) -> None:
+        self.before = _live_v19()
+        self.without_energy, _ids = migrate_config_document(self.before)
+        self.migrated, _ids = migrate_config_document(
+            self.before, LIVE_ENERGY_PREFERENCES
+        )
+
+    @staticmethod
+    def _power(meter: str) -> str:
+        return meter.removesuffix("_energy") + "_power"
+
+    def test_it_migrates_to_the_expected_tree(self) -> None:
+        devices = self.migrated["devices"]
+
+        # The P1 devices keep their place, ids and everything but a power sensor.
+        self.assertEqual(
+            [d["id"] for d in devices[:6]],
+            [d["id"] for d in self.without_energy["devices"]],
+        )
+        # Every Energy row P1 did not own follows, top-level or nested as Energy nests it.
+        self.assertEqual(
+            [(d["id"], [c["id"] for c in d.get("children", [])]) for d in devices[6:]],
+            [
+                ("jistic_indukce_energy", []),
+                ("jistic_kotel_energy", []),
+                ("jistic_trouba_energy", []),
+                (
+                    "jistic_zasuvky_pracovny_energy",
+                    ["zasuvka_pracovna_verca_energy", "zasuvka_pracovna_ondra_energy"],
+                ),
+                ("jistic_zasuvky_obyvak_a_loznice_energy", ["zasuvka_tv_energy"]),
+                ("jistic_zasuvky_spiz_a_jidelna_energy", ["zasuvka_lednicka_energy"]),
+            ],
+        )
+        for device, _parent in iter_devices({"devices": devices[6:]}):
+            meter = device["consumption"]["energy_entity_id"]
+            with self.subTest(device=device["id"]):
+                self.assertEqual(
+                    device["consumption"],
+                    {"energy_entity_id": meter, "power_entity_id": self._power(meter)},
+                )
+                self.assertNotIn("schedulable", device)
+                self.assertNotIn("controls", device)
+
+    def test_the_ac_breaker_gains_its_power_sensor_and_nothing_else(self) -> None:
+        before = self.without_energy["devices"][5]
+        after = self.migrated["devices"][5]
+
+        self.assertEqual(
+            after,
+            {
+                **before,
+                "consumption": {
+                    "energy_entity_id": _AC_METER,
+                    "power_entity_id": "sensor.jistic_klimatizace_power",
+                },
+            },
+        )
+
+    def test_a_schedulable_owner_keeps_identity_flags_and_controls(self) -> None:
+        before = self.without_energy["devices"][2]
+        after = self.migrated["devices"][2]
+
+        self.assertEqual(after["id"], "pool-filtration")
+        self.assertEqual(
+            after,
+            {
+                **before,
+                "consumption": {
+                    **before["consumption"],
+                    "power_entity_id": "sensor.jistic_bazen_filtrace_power",
+                },
+            },
+        )
+
+    def test_nothing_is_duplicated(self) -> None:
+        meters = [
+            meter
+            for device, _parent in iter_devices(self.migrated)
+            if (meter := own_meter(device)) is not None
+        ]
+        ids = [device.get("id") for device, _parent in iter_devices(self.migrated)]
+
+        self.assertEqual(len(meters), len(set(meters)))
+        self.assertEqual(len(ids), len(set(ids)))
+        energy_meters = {
+            row["stat_consumption"] for row in LIVE_ENERGY_PREFERENCES["device_consumption"]
+        }
+        self.assertLessEqual(energy_meters, set(meters))
+
+    def test_running_it_twice_is_a_no_op(self) -> None:
+        twice, ids = migrate_config_document(self.migrated, LIVE_ENERGY_PREFERENCES)
+
+        self.assertEqual(twice, self.migrated)
+        self.assertEqual(ids, [])
+
+    def test_the_carved_set_is_unchanged(self) -> None:
+        # Imported devices are passive, so the house baseline is fit exactly as before.
+        self.assertEqual(
+            read_carved_meters(self.migrated), read_carved_meters(self.without_energy)
+        )
+
+    def test_a_row_nested_under_a_schedulable_device_is_skipped_and_logged(self) -> None:
+        plug = {
+            "stat_consumption": "sensor.zasuvka_bazen_energy",
+            "stat_rate": "sensor.zasuvka_bazen_power",
+            "included_in_stat": "sensor.jistic_bazen_filtrace_energy",
+        }
+        preferences = {
+            "device_consumption": [*LIVE_ENERGY_PREFERENCES["device_consumption"], plug]
+        }
+
+        with self.assertLogs(
+            "custom_components.helman.automation.migration", level="WARNING"
+        ) as logs:
+            migrated, _ids = migrate_config_document(self.before, preferences)
+
+        self.assertEqual(migrated, self.migrated)
+        self.assertIn("sensor.zasuvka_bazen_energy", logs.output[0])
+        self.assertIn("pool-filtration", logs.output[0])
+
+    def test_the_migrated_document_passes_validation(self) -> None:
+        def errors(document):
+            return [
+                (issue.path, issue.code)
+                for issue in validate_config_document(document).errors
+            ]
+
+        # The trimmed fixture carries errors of its own (a shortened inverter,
+        # no battery); the stored-config check above is the strict one. Here:
+        # the import fixes the one error v20 left, the parent's missing power
+        # sensor, and adds none.
+        self.assertIn(
+            ("devices[5].consumption.power_entity_id", "power_entity_required"),
+            errors(self.without_energy),
+        )
+        self.assertEqual(
+            errors(self.migrated),
+            [
+                error
+                for error in errors(self.without_energy)
+                if error[1] != "power_entity_required"
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -30,8 +30,8 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     """The house's top-level measured consumers, as the power card knows them.
 
     Each entry is ``{energy_entity_id, label, switch_entity_id, power_entity_id}``,
-    taken verbatim from the tree node: its ``id`` is the device's energy stat,
-    ``displayName`` the name the card shows, ``switchEntityId`` the control the card
+    taken verbatim from the tree node: its ``energyEntityId`` is the device's
+    meter, ``displayName`` the name the card shows, ``switchEntityId`` the control the card
     offers, and ``powerSensorId`` the live power sensor the card reads — each
     ``None`` when the tree resolved none, which is the card's own behaviour.
 
@@ -61,7 +61,7 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
             continue
         if any(child.get(flag) for flag in _SKIPPED_NODE_FLAGS):
             continue
-        energy_entity_id = child.get("id")
+        energy_entity_id = child.get("energyEntityId")
         if not _is_readable_entity_id(energy_entity_id):
             continue
         switch_entity_id = child.get("switchEntityId")

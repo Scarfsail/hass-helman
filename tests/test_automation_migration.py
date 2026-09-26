@@ -1925,5 +1925,106 @@ class DevicesTreeMigrationTests(unittest.TestCase):
         self.assertNotIn("devices", migrated)
 
 
+class EnergyImportMigrationTests(unittest.TestCase):
+    """v20 -> v21: Energy ``device_consumption`` is imported into ``devices`` once."""
+
+    _LOGGER = "custom_components.helman.automation.migration"
+
+    @staticmethod
+    def _migrate_from_v20(document, preferences=None):
+        migrated, _ids = migrate_config_document(
+            {"config_version": 20, **document}, preferences
+        )
+        return migrated
+
+    @staticmethod
+    def _rows(*rows):
+        return {"device_consumption": list(rows)}
+
+    def test_without_preferences_nothing_is_imported(self) -> None:
+        devices = [{"id": "boiler", "consumption": {"energy_entity_id": "sensor.boiler"}}]
+
+        migrated = self._migrate_from_v20({"devices": devices})
+
+        self.assertEqual(migrated["devices"], devices)
+
+    def test_a_document_without_devices_gets_the_imported_rows(self) -> None:
+        migrated = self._migrate_from_v20(
+            {}, self._rows({"stat_consumption": "sensor.oven_energy"})
+        )
+
+        self.assertEqual(
+            migrated["devices"],
+            [{"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}],
+        )
+
+    def test_a_document_without_devices_or_rows_grows_no_devices(self) -> None:
+        self.assertNotIn("devices", self._migrate_from_v20({}, self._rows()))
+
+    def test_a_devices_value_that_is_not_a_list_is_left_for_the_validator(self) -> None:
+        migrated = self._migrate_from_v20(
+            {"devices": {"oops": True}},
+            self._rows({"stat_consumption": "sensor.oven_energy"}),
+        )
+
+        self.assertEqual(migrated["devices"], {"oops": True})
+
+    def test_the_label_settings_are_kept(self) -> None:
+        house = {"power_sensor_label": "Power", "power_switch_label": "Switch"}
+
+        migrated = self._migrate_from_v20({"power_devices": {"house": dict(house)}})
+
+        self.assertEqual(migrated["power_devices"], {"house": house})
+
+    def test_conflicts_and_external_statistics_are_skipped_and_logged(self) -> None:
+        pump = {
+            "kind": "generic",
+            "id": "pump",
+            "schedulable": True,
+            "controls": {"switch": {"entity_id": "switch.pump"}},
+            "consumption": {"energy_entity_id": "sensor.pump_energy"},
+        }
+
+        with self.assertLogs(self._LOGGER, level="INFO") as logs:
+            migrated = self._migrate_from_v20(
+                {"devices": [pump]},
+                self._rows(
+                    {
+                        "stat_consumption": "sensor.plug_energy",
+                        "included_in_stat": "sensor.pump_energy",
+                    },
+                    {"stat_consumption": "tibber:energy"},
+                ),
+            )
+
+        self.assertEqual(migrated["devices"], [pump])
+        output = "\n".join(logs.output)
+        self.assertIn("WARNING", output)
+        self.assertIn("sensor.plug_energy", output)
+        self.assertIn("pump", output)
+        self.assertIn("tibber:energy", output)
+
+    def test_a_v19_document_runs_through_both_device_steps(self) -> None:
+        meter = "sensor.breaker_energy"
+        climate = {
+            "kind": "climate",
+            "controls": {"climate": {"entity_id": "climate.a"}},
+            "consumption": {"energy_entity_id": meter},
+        }
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 19,
+                "controllables": [{**climate, "id": "ac-a"}, {**climate, "id": "ac-b"}],
+            },
+            self._rows({"stat_consumption": meter, "stat_rate": "sensor.breaker_power"}),
+        )
+
+        self.assertEqual(
+            migrated["devices"][0]["consumption"],
+            {"energy_entity_id": meter, "power_entity_id": "sensor.breaker_power"},
+        )
+        self.assertEqual(len(migrated["devices"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
