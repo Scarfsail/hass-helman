@@ -1064,6 +1064,26 @@ def _validate_controllables_config(
             )
             continue
 
+        if parent is not None and own_meter(raw_device) is None:
+            # A meterless child's share sensor is named after its slugified
+            # id, so two ids that slugify alike (``ac-room``, ``ac_room``)
+            # would publish into one entity. Checked before any kind is
+            # skipped: every meterless child gets a share sensor.
+            slug = share_sensor_slug(peek_controllable_id(raw_device) or "")
+            if slug in share_slugs:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.id",
+                    code="share_sensor_collision",
+                    message=(
+                        f"{path}.id names the same share sensor as "
+                        f"{share_slugs[slug]}; choose an id that differs in "
+                        "more than punctuation or case"
+                    ),
+                )
+            else:
+                share_slugs[slug] = path
+
         if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(
                 section=section,
@@ -1140,23 +1160,6 @@ def _validate_controllables_config(
         _validate_device_children(raw_device, path=path, report=report)
 
         if parent is not None and own_meter(raw_device) is None:
-            # A meterless child's share sensor is named after its slugified
-            # id, so two ids that slugify alike (``ac-room``, ``ac_room``)
-            # would publish into one entity.
-            slug = share_sensor_slug(peek_controllable_id(raw_device) or "")
-            if slug in share_slugs:
-                report.add_error(
-                    section=section,
-                    path=f"{path}.id",
-                    code="share_sensor_collision",
-                    message=(
-                        f"{path}.id names the same share sensor as "
-                        f"{share_slugs[slug]}; choose an id that differs in "
-                        "more than punctuation or case"
-                    ),
-                )
-            else:
-                share_slugs[slug] = path
             if running_signal(raw_device) is None:
                 report.add_error(
                     section=section,

@@ -1432,6 +1432,18 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         self.assertIn(("devices[1].children[1].id", "share_sensor_collision"), errors)
 
+    def test_a_share_collision_with_an_unsupported_kind_is_rejected(self) -> None:
+        # A preserved future kind is skipped by the rest of validation, but
+        # still gets a share sensor at runtime.
+        breaker = _ac_breaker()
+        breaker["children"][0]["id"] = "ac-room"
+        breaker["children"][0]["kind"] = "future_kind"
+        breaker["children"][1]["id"] = "ac_room"
+
+        errors, _ = self._codes(breaker)
+
+        self.assertIn(("devices[1].children[1].id", "share_sensor_collision"), errors)
+
     def test_a_meterless_child_needs_a_running_signal(self) -> None:
         breaker = _ac_breaker()
         breaker["children"].append({"id": "mystery", "schedulable": True})
