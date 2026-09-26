@@ -1166,6 +1166,57 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(result, ScheduleExecutionUnavailableError)
         self.assertFalse(storage.schedule_document["executionEnabled"])
 
+    async def test_overlapping_enable_reports_disabled_after_first_rolls_back(
+        self,
+    ) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        coordinator._automation_triggers.request_immediate = AsyncMock()
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+        first_done = asyncio.Event()
+        attempts = 0
+
+        async def _first_fails_follow_up_succeeds(*, reason: str) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                first_entered.set()
+                await release_first.wait()
+                raise ScheduleExecutionUnavailableError("charger stalled")
+            # The follow-up runs only after the first attempt's rollback.
+            await first_done.wait()
+
+        executor.async_reconcile_and_wait = _first_fails_follow_up_succeeds
+        first = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.wait_for(first_entered.wait(), timeout=1)
+        second = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.sleep(0)
+
+        release_first.set()
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await first
+        first_done.set()
+
+        self.assertFalse(await asyncio.wait_for(second, timeout=1))
+        self.assertFalse(storage.schedule_document["executionEnabled"])
+        coordinator._automation_triggers.request_immediate.assert_not_awaited()
+
     async def test_enable_overtaken_by_disable_reports_disabled_without_trigger(
         self,
     ) -> None:

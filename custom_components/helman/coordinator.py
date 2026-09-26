@@ -3307,6 +3307,9 @@ class HelmanCoordinator:
             await self._async_persist_execution_disabled_locked(
                 reference_time=reference_time
             )
+            # The rollback is itself a flag transition: an overlapping enable
+            # still waiting must report the persisted state, not success.
+            self._schedule_execution_generation += 1
             self._schedule_executor.reset_runtime()
 
     @staticmethod
