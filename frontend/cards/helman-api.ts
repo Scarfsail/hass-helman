@@ -62,6 +62,8 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
     controllableIds: string[];
     /** A house child's meter; null for every other node. */
     energyEntityId: string | null;
+    /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
+    isEstimated: boolean;
 }
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────

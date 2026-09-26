@@ -17,7 +17,7 @@ a meter, and a device's display name. The per-kind runtime readers stay in
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from typing import Any
 
 from .spec import (
@@ -173,6 +173,28 @@ def running_signal(device: Device) -> tuple[str, str] | None:
         if isinstance(entity_id, str) and entity_id.strip():
             return entity_id.strip(), activity
     return None
+
+
+#: What "running" means for each running signal: a switch is on, a climate
+#: entity is heating or cooling. Named once so a shared meter's members are
+#: judged exactly as a lone appliance of the same kind would be.
+SWITCH_ACTIVE_STATES: tuple[str, ...] = ("on",)
+CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
+
+
+def running_active_states(activity: str) -> tuple[str, ...]:
+    """The active states of a :func:`running_signal`'s ``"switch" | "climate"``.
+
+    With :func:`is_active_state`, the one definition of "running" for a
+    meterless child: the shared-meter history split and the live share power
+    both ask it, so the trained and the live split cannot disagree.
+    """
+    return SWITCH_ACTIVE_STATES if activity == "switch" else CLIMATE_ACTIVE_STATES
+
+
+def is_active_state(value: Any, active_states: Collection[str]) -> bool:
+    """Whether a state value is one of ``active_states`` (lower-case)."""
+    return isinstance(value, str) and value.strip().lower() in active_states
 
 
 def read_controllable_kinds_by_id(

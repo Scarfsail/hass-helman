@@ -115,10 +115,11 @@ class _FakeEntry:
 def _load_entity_translation_keys() -> set[str]:
     """Every ``_attr_translation_key`` ``async_setup_entry`` actually produces.
 
-    Built with one node carrying an unmeasured child, one source, so the
-    dynamic families (unmeasured, source ratio) are exercised too -- the
-    unmeasured sensor contributes no translation key (its name is resolved,
-    not translated), and is excluded by construction, not by an assertion.
+    Built with one node carrying an unmeasured child, one share node and one
+    source, so the dynamic families (unmeasured, share, source ratio) are
+    exercised too -- the unmeasured and share sensors contribute no translation
+    key (their names are resolved, not translated), and are excluded by
+    construction, not by an assertion.
     """
     sensor_module = _load_sensor_module()
     coordinator = SimpleNamespace(
@@ -136,6 +137,9 @@ def _load_entity_translation_keys() -> set[str]:
         ),
         collect_qualifying_nodes=Mock(
             return_value={"house": "sensor.house_power"}
+        ),
+        collect_share_nodes=Mock(
+            return_value={"klima-obyvak": ("sensor.helman_share_power_klima_obyvak", "Klima")}
         ),
         config={},
         set_sensors=Mock(),

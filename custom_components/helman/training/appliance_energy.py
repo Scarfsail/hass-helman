@@ -12,9 +12,8 @@ from homeassistant.util import dt as dt_util
 
 from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
+from ..controllables.config import running_active_states
 from ..recorder_hourly_series import (
-    CLIMATE_ACTIVE_STATES,
-    SWITCH_ACTIVE_STATES,
     estimate_average_hourly_energy_for_shared_meter,
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
@@ -44,11 +43,7 @@ class SharedMeterMember:
         cls, controllable_id: str, entity_id: str, activity: str
     ) -> SharedMeterMember:
         """A member from its running signal: a ``switch`` or a ``climate``."""
-        return cls(
-            controllable_id,
-            entity_id,
-            SWITCH_ACTIVE_STATES if activity == "switch" else CLIMATE_ACTIVE_STATES,
-        )
+        return cls(controllable_id, entity_id, running_active_states(activity))
 
 
 @dataclass(frozen=True)

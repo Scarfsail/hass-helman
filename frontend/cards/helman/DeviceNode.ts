@@ -30,6 +30,7 @@ export class DeviceNode {
     public powerHistory: number[] = [];
     public historyBuckets: number;
     public isUnmeasured: boolean = false; // Indicates if this node represents unmeasured power
+    public isEstimated?: boolean; // A meterless child's share of its parent's power, not a reading
     // A shiftable house consumer — a configured deferrable controllable. Paints the
     // box in the shared lighter house shade; a property of the device, not of when
     // it happened to run.

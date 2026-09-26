@@ -10,10 +10,12 @@ the tree is touched.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,6 +27,7 @@ for _name, _path in [
     _pkg.__path__ = [str(_path)]
     sys.modules[_name] = _pkg
 
+from custom_components.helman import tree_builder  # noqa: E402
 from custom_components.helman.tree_builder import HelmanTreeBuilder  # noqa: E402
 
 
@@ -64,6 +67,51 @@ def _house_children(devices):
     reg = _Registry()
     children = builder._build_house_children(reg, reg, {})
     return {node.id: node for node in children}
+
+
+def _built_house_children(devices):
+    """The house's children as ``build`` serialises them, remainders included."""
+    config = {
+        "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "devices": devices,
+    }
+    with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
+            mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):
+        tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
+    (house,) = tree["consumers"]
+    return {node["id"]: node for node in house["children"]}
+
+
+def _breaker(*, metered_child=False):
+    """The AC breaker: a passive meter owner split by four schedulable ACs."""
+    children = [
+        {
+            "id": f"ac-{index}",
+            "kind": "climate",
+            "schedulable": True,
+            "controls": {"climate": {"entity_id": f"climate.ac_{index}"}},
+        }
+        for index in range(4)
+    ]
+    if metered_child:
+        children.insert(
+            0,
+            {
+                "id": "heater",
+                "consumption": {
+                    "energy_entity_id": "sensor.heater_energy",
+                    "power_entity_id": "sensor.heater_power",
+                },
+            },
+        )
+    return {
+        "id": "breaker",
+        "consumption": {
+            "energy_entity_id": "sensor.jistic_klimatizace_energy",
+            "power_entity_id": "sensor.jistic_klimatizace_power",
+        },
+        "children": children,
+    }
 
 
 class TestHouseChildDeferrability(unittest.TestCase):
@@ -128,25 +176,17 @@ class TestHouseChildControllableId(unittest.TestCase):
         # Nothing the roster does not name is given an id to look a schedule up by.
         self.assertEqual(nodes["sensor.fridge_energy"].controllable_ids, [])
 
-    def test_a_shared_meter_is_one_node_naming_every_controllable_behind_it(self):
-        # Four air conditioners on one breaker meter: one node, one badge, and
-        # the badge has to cover all four schedules.
+    def test_a_shared_meter_s_children_carry_their_own_schedule_ids(self):
+        # Four air conditioners on one breaker meter: a badge on each, keyed by
+        # its own id; the passive breaker names none.
         meter = "sensor.jistic_klimatizace_energy"
-        breaker = {
-            "id": "breaker",
-            "consumption": {"energy_entity_id": meter},
-            "children": [
-                {"id": f"ac-{index}", "kind": "climate", "schedulable": True}
-                for index in range(4)
-            ],
-        }
-        nodes = _house_children([breaker])
+        breaker = _house_children([_breaker()])[meter].to_dict()
 
-        self.assertEqual(list(nodes), [meter])
-        self.assertTrue(nodes[meter].deferrable)
+        self.assertTrue(breaker["deferrable"])
+        self.assertEqual(breaker["controllableIds"], [])
         self.assertEqual(
-            nodes[meter].to_dict()["controllableIds"],
-            ["ac-0", "ac-1", "ac-2", "ac-3"],
+            [(c["id"], c["controllableIds"], c["deferrable"]) for c in breaker["children"]],
+            [(f"ac-{index}", [f"ac-{index}"], True) for index in range(4)],
         )
 
     def test_a_roster_entry_with_no_id_is_deferrable_with_no_controllable(self):
@@ -163,6 +203,29 @@ class TestHouseChildControllableId(unittest.TestCase):
         )
 
         self.assertEqual(nodes["sensor.boiler_energy"].controllable_ids, [])
+
+
+class TestCarveOutTintFollowsOwnEnergy(unittest.TestCase):
+    """A carved meter carves its own energy; the tint goes where that shows."""
+
+    METER = "sensor.jistic_klimatizace_energy"
+    REMAINDER = "sensor_jistic_klimatizace_energy_unmeasured"
+
+    def test_with_a_metered_child_the_remainder_is_marked_not_the_aggregate(self):
+        breaker = _built_house_children([_breaker(metered_child=True)])[self.METER]
+        children = {c["id"]: c for c in breaker["children"]}
+
+        self.assertFalse(breaker["deferrable"])
+        self.assertTrue(children[self.REMAINDER]["deferrable"])
+        # The sub-metered heater is not schedulable demand.
+        self.assertFalse(children["sensor.heater_energy"]["deferrable"])
+
+    def test_without_metered_children_the_parent_keeps_the_mark(self):
+        breaker = _built_house_children([_breaker()])[self.METER]
+        children = {c["id"]: c for c in breaker["children"]}
+
+        self.assertTrue(breaker["deferrable"])
+        self.assertFalse(children[self.REMAINDER]["deferrable"])
 
 
 if __name__ == "__main__":

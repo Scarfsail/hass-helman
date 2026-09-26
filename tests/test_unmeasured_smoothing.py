@@ -85,7 +85,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         published: list[float] = []
         for offset in jitter:
             states[HOUSE] = str(4000 + offset)
-            published.append(c._compute_all_unmeasured_powers()["house"])
+            published.append(c._compute_derived_powers()[0]["house"])
 
         # Warm-up aside, the row stays on screen and reports the real remainder.
         settled = published[len(jitter) // 2:]
@@ -98,7 +98,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         states = {HOUSE: "3900", CIRCUIT_A: "3000", CIRCUIT_B: "900"}
         c = _make_coordinator(states)
         for _ in range(20):
-            value = c._compute_all_unmeasured_powers()["house"]
+            value = c._compute_derived_powers()[0]["house"]
         self.assertEqual(value, 0.0)
 
     def test_sustained_step_is_followed(self):
@@ -107,11 +107,11 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         states = {HOUSE: "3900", CIRCUIT_A: "3000", CIRCUIT_B: "900"}
         c = _make_coordinator(states)
         for _ in range(20):
-            c._compute_all_unmeasured_powers()
+            c._compute_derived_powers()
 
         states[HOUSE] = "5900"
         for _ in range(15):  # _UNMEASURED_SMOOTHING_WINDOW_S at a 1 s tick
-            value = c._compute_all_unmeasured_powers()["house"]
+            value = c._compute_derived_powers()[0]["house"]
         self.assertAlmostEqual(value, 2000.0, delta=1.0)
 
     def test_window_is_reset_when_the_tree_is_rebuilt(self):
@@ -121,7 +121,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         c._power_sensor_ids = [HOUSE, CIRCUIT_A, CIRCUIT_B]
         c._source_ratio_entity_ids = {}
         for _ in range(10):
-            c._compute_all_unmeasured_powers()
+            c._compute_derived_powers()
         self.assertTrue(c._unmeasured_raw_history)
 
         c._init_buffers(TREE)
