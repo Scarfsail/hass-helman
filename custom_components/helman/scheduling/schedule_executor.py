@@ -338,14 +338,28 @@ class InverterExecutor:
         self._runtime.last_runtime_action_kind = action_kind
 
 
+@dataclass
+class _ReconcileRequest:
+    """One coalesced reconcile: why it was asked for, and who awaits it."""
+
+    reason: str
+    waiters: list[asyncio.Future[None]] = field(default_factory=list)
+
+
 class ScheduleExecutor:
     def __init__(
         self,
         hass: HomeAssistant,
         dependencies: ScheduleExecutorDependencies,
+        *,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._hass = hass
         self._dependencies = dependencies
+        # The execution clock. Read after the execution lock is taken, so a
+        # request that waited behind a slow attempt still runs the slot that is
+        # current when it actually starts.
+        self._now = now or dt_util.now
         # The gate every hardware write goes through. It reads the persisted
         # flag fresh on each call, so a schedule saved by anyone -- the user,
         # automation, a restore -- takes effect immediately.
@@ -358,9 +372,18 @@ class ScheduleExecutor:
         self._runtime = ScheduleExecutionRuntime()
         self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
         self._appliances_executor = AppliancesExecutor(self._actuator)
+        # Serializes every hardware-touching path -- reconcile and explicit
+        # restore. The schedule lock is only ever taken inside it, briefly, to
+        # snapshot the document; never the other way round.
+        self._execution_lock = asyncio.Lock()
         self._unsub_interval: Callable[[], None] | None = None
-        self._reconcile_tasks: set[asyncio.Task[Any]] = set()
+        # The coalesced reconcile worker: at most one attempt running and one
+        # merged follow-up pending, however many ticks, saves and enable
+        # requests arrive while hardware is slow.
+        self._worker_task: asyncio.Task[None] | None = None
+        self._pending_request: _ReconcileRequest | None = None
         self._stopped = True
+        self._unloaded = False
 
     @property
     def runtime(self) -> ScheduleExecutionRuntime:
@@ -374,22 +397,16 @@ class ScheduleExecutor:
         self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
 
     async def async_start(self) -> None:
+        if self._unloaded:
+            return
         self._stopped = False
         if self._unsub_interval is not None:
             return
 
         @callback
         def _handle_interval_tick(now: datetime) -> None:
-            if self._stopped:
-                return
-            task = self._hass.async_create_task(
-                self.async_reconcile_safely(
-                    reason="interval",
-                    reference_time=now,
-                )
-            )
-            self._reconcile_tasks.add(task)
-            task.add_done_callback(self._reconcile_tasks.discard)
+            del now
+            self.request_reconcile(reason="interval")
 
         self._unsub_interval = async_track_time_interval(
             self._hass,
@@ -403,17 +420,105 @@ class ScheduleExecutor:
             self._unsub_interval()
             self._unsub_interval = None
 
-        tasks = tuple(self._reconcile_tasks)
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._reconcile_tasks.clear()
+        pending = self._pending_request
+        self._pending_request = None
+        if pending is not None:
+            for waiter in pending.waiters:
+                waiter.cancel()
+
+        worker = self._worker_task
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        self._worker_task = None
 
         self.reset_runtime()
 
     async def async_unload(self) -> None:
+        # Final: a startup callback racing the unload must not bring the
+        # interval back on a coordinator that is going away.
+        self._unloaded = True
         await self.async_stop()
+
+    def request_reconcile(self, *, reason: str) -> None:
+        """Ask the worker for a reconcile and return without waiting for it."""
+        self._queue_reconcile(reason=reason, wait=False)
+
+    async def async_reconcile_and_wait(self, *, reason: str) -> None:
+        """Ask the worker for a reconcile and wait for the attempt serving it.
+
+        Joins the same queue as every background request rather than running
+        its own, and raises that attempt's error.
+        """
+        waiter = self._queue_reconcile(reason=reason, wait=True)
+        if waiter is not None:
+            await waiter
+
+    def _queue_reconcile(
+        self,
+        *,
+        reason: str,
+        wait: bool,
+    ) -> asyncio.Future[None] | None:
+        if self._stopped:
+            return None
+        # A request arriving mid-attempt merges into the single follow-up, which
+        # reads the time and the schedule afresh when it starts.
+        if self._pending_request is None:
+            self._pending_request = _ReconcileRequest(reason=reason)
+        waiter: asyncio.Future[None] | None = None
+        if wait:
+            waiter = asyncio.get_running_loop().create_future()
+            self._pending_request.waiters.append(waiter)
+        # ``done()`` rather than ``None``: an eagerly started worker can drain
+        # the queue and finish before its task is even assigned here.
+        if self._worker_task is None or self._worker_task.done():
+            # A background task: a worker waiting on stalled hardware must not
+            # hold up Home Assistant's startup or shutdown.
+            self._worker_task = self._hass.async_create_background_task(
+                self._async_run_reconcile_worker(),
+                "helman schedule reconcile worker",
+            )
+        return waiter
+
+    async def _async_run_reconcile_worker(self) -> None:
+        while self._pending_request is not None:
+            request = self._pending_request
+            self._pending_request = None
+            try:
+                error = await self._async_run_reconcile_request(request)
+            except asyncio.CancelledError:
+                for waiter in request.waiters:
+                    waiter.cancel()
+                raise
+            for waiter in request.waiters:
+                if waiter.done():
+                    continue
+                if error is None:
+                    waiter.set_result(None)
+                else:
+                    waiter.set_exception(error)
+
+    async def _async_run_reconcile_request(
+        self,
+        request: _ReconcileRequest,
+    ) -> Exception | None:
+        try:
+            await self.async_reconcile(reason=request.reason)
+        except ScheduleError as err:
+            # A waiting caller reports the failure itself; otherwise -- no
+            # waiter, or every waiter gone -- it is logged here, once per
+            # distinct error.
+            if all(waiter.done() for waiter in request.waiters):
+                self._log_reconcile_failure(err, reason=request.reason)
+            return err
+        except Exception as err:
+            _LOGGER.exception(
+                "Schedule execution reconcile failed unexpectedly during %s",
+                request.reason,
+            )
+            return err
+        return None
 
     async def async_reconcile(
         self,
@@ -423,167 +528,171 @@ class ScheduleExecutor:
     ) -> None:
         del reason
 
-        request_now = reference_time or dt_util.now()
-        # Reality check before execution: if the plan is stale and conditions
-        # have changed since it was built, a re-plan is triggered and we defer
-        # this cycle. Execution itself never re-checks conditions — it always
-        # trusts the plan's condition_met. Done outside the lock (it doesn't
-        # touch the schedule; the re-plan it may trigger needs the lock later).
-        check_reality = self._dependencies.check_reality_and_maybe_replan
-        if check_reality is not None and await check_reality(request_now):
-            return
-        async with self._dependencies.schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
-            if not schedule_document.execution_enabled:
-                self.reset_runtime()
+        async with self._execution_lock:
+            request_now = reference_time or self._now()
+            # Reality check before execution: if the plan is stale and
+            # conditions have changed since it was built, a re-plan is queued and
+            # we defer this cycle. Execution itself never re-checks conditions —
+            # it always trusts the plan's condition_met. It only queues the
+            # re-plan, so it never waits on the locks that re-plan needs.
+            check_reality = self._dependencies.check_reality_and_maybe_replan
+            if check_reality is not None and await check_reality(request_now):
                 return
-
-            # Execute only committed actions: candidate actions (placed by
-            # optimizers whose execution condition is not met) are stripped so
-            # they are neither applied nor treated as the last scheduled state.
-            # They remain in the stored document for display and promotion.
-            committed_document = strip_candidate_actions(schedule_document)
-
-            current_slot_id = format_slot_id(build_horizon_start(request_now))
-            active_slot = find_active_slot(
-                stored_slots=committed_document.slots,
-                reference_time=request_now,
-            )
-            active_action = (
-                EMPTY_SCHEDULE_ACTION
-                if active_slot is None
-                else inverter_action(active_slot.controllables)
-            )
-            active_actions = (
-                {} if active_slot is None else appliance_actions(active_slot.controllables)
-            )
-            last_scheduled_actions = _build_last_scheduled_appliance_actions(
-                stored_slots=committed_document.slots,
-                reference_time=request_now,
-            )
-
-            inverter_runtime: InverterRuntimeStatus | None = None
-            first_error: ScheduleError | None = None
-            if active_action.kind == SCHEDULE_ACTION_EMPTY:
-                cached_runtime = self._inverter_executor.build_cached_empty_runtime(
-                    active_slot_id=current_slot_id
+            # The schedule lock covers the snapshot only: reads, saves and the
+            # execution toggle must stay responsive while hardware is slow.
+            async with self._dependencies.schedule_lock:
+                schedule_document = await self._load_pruned_schedule_document_locked(
+                    reference_time=request_now
                 )
-                if cached_runtime is not None:
-                    inverter_runtime = cached_runtime
-                elif _empty_inverter_action_requires_slot_stop(self._runtime):
-                    control_config = self._dependencies.read_schedule_control_config()
-                    if control_config is None:
-                        inverter_runtime = InverterRuntimeStatus(
-                            action_kind="slot_stop",
-                            outcome="failed",
-                            executed_action=NORMAL_SCHEDULE_ACTION,
-                            reason="scheduled",
-                            error_code="not_configured",
-                        )
-                        first_error = ScheduleNotConfiguredError(
-                            "Schedule control config is required to restore normal mode "
-                            "after an inverter schedule override"
-                        )
-                    else:
-                        inverter_result = (
-                            await self._inverter_executor.async_cleanup_empty_slot(
-                                control_config=control_config,
-                                active_slot_id=current_slot_id,
-                            )
-                        )
-                        inverter_runtime = inverter_result.runtime
-                        if inverter_result.error is not None:
-                            first_error = inverter_result.error
-                else:
-                    inverter_runtime = self._inverter_executor.build_empty_noop_runtime(
-                        active_slot_id=current_slot_id
-                    )
-            else:
+            await self._async_execute_snapshot(
+                schedule_document=schedule_document,
+                request_now=request_now,
+            )
+
+    async def _async_execute_snapshot(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        request_now: datetime,
+    ) -> None:
+        if not schedule_document.execution_enabled:
+            self.reset_runtime()
+            return
+
+        # Execute only committed actions: candidate actions (placed by
+        # optimizers whose execution condition is not met) are stripped so
+        # they are neither applied nor treated as the last scheduled state.
+        # They remain in the stored document for display and promotion.
+        committed_document = strip_candidate_actions(schedule_document)
+
+        current_slot_id = format_slot_id(build_horizon_start(request_now))
+        active_slot = find_active_slot(
+            stored_slots=committed_document.slots,
+            reference_time=request_now,
+        )
+        active_action = (
+            EMPTY_SCHEDULE_ACTION
+            if active_slot is None
+            else inverter_action(active_slot.controllables)
+        )
+        active_actions = (
+            {} if active_slot is None else appliance_actions(active_slot.controllables)
+        )
+        last_scheduled_actions = _build_last_scheduled_appliance_actions(
+            stored_slots=committed_document.slots,
+            reference_time=request_now,
+        )
+
+        inverter_runtime: InverterRuntimeStatus | None = None
+        first_error: ScheduleError | None = None
+        if active_action.kind == SCHEDULE_ACTION_EMPTY:
+            cached_runtime = self._inverter_executor.build_cached_empty_runtime(
+                active_slot_id=current_slot_id
+            )
+            if cached_runtime is not None:
+                inverter_runtime = cached_runtime
+            elif _empty_inverter_action_requires_slot_stop(self._runtime):
                 control_config = self._dependencies.read_schedule_control_config()
                 if control_config is None:
                     inverter_runtime = InverterRuntimeStatus(
-                        action_kind="apply",
+                        action_kind="slot_stop",
                         outcome="failed",
-                        executed_action=active_action,
+                        executed_action=NORMAL_SCHEDULE_ACTION,
                         reason="scheduled",
                         error_code="not_configured",
                     )
                     first_error = ScheduleNotConfiguredError(
-                        "Schedule control config is required to execute the schedule"
+                        "Schedule control config is required to restore normal mode "
+                        "after an inverter schedule override"
                     )
                 else:
-                    inverter_result = await self._inverter_executor.async_execute(
-                        control_config=control_config,
-                        action=active_action,
-                        active_slot_id=current_slot_id,
-                        reference_time=request_now,
-                        read_battery_state=self._dependencies.read_battery_state,
+                    inverter_result = (
+                        await self._inverter_executor.async_cleanup_empty_slot(
+                            control_config=control_config,
+                            active_slot_id=current_slot_id,
+                        )
                     )
                     inverter_runtime = inverter_result.runtime
                     if inverter_result.error is not None:
                         first_error = inverter_result.error
+            else:
+                inverter_runtime = self._inverter_executor.build_empty_noop_runtime(
+                    active_slot_id=current_slot_id
+                )
+        else:
+            control_config = self._dependencies.read_schedule_control_config()
+            if control_config is None:
+                inverter_runtime = InverterRuntimeStatus(
+                    action_kind="apply",
+                    outcome="failed",
+                    executed_action=active_action,
+                    reason="scheduled",
+                    error_code="not_configured",
+                )
+                first_error = ScheduleNotConfiguredError(
+                    "Schedule control config is required to execute the schedule"
+                )
+            else:
+                inverter_result = await self._inverter_executor.async_execute(
+                    control_config=control_config,
+                    action=active_action,
+                    active_slot_id=current_slot_id,
+                    reference_time=request_now,
+                    read_battery_state=self._dependencies.read_battery_state,
+                )
+                inverter_runtime = inverter_result.runtime
+                if inverter_result.error is not None:
+                    first_error = inverter_result.error
 
-            appliance_result = await self._appliances_executor.async_execute(
-                registry=self._dependencies.read_appliances_registry(),
-                active_slot_id=current_slot_id,
-                active_actions=active_actions,
-                last_scheduled_actions=last_scheduled_actions,
-                previous_memories=self._runtime.appliance_memories,
-                reference_time=request_now,
-            )
-            if first_error is None:
-                first_error = appliance_result.first_error
+        appliance_result = await self._appliances_executor.async_execute(
+            registry=self._dependencies.read_appliances_registry(),
+            active_slot_id=current_slot_id,
+            active_actions=active_actions,
+            last_scheduled_actions=last_scheduled_actions,
+            previous_memories=self._runtime.appliance_memories,
+            reference_time=request_now,
+        )
+        if first_error is None:
+            first_error = appliance_result.first_error
 
-            self._runtime.appliance_memories = appliance_result.memories
-            self._runtime.execution_status = ScheduleExecutionStatus(
-                active_slot_id=current_slot_id,
-                active_slot_runtime=ActiveSlotRuntimeStatus(
-                    inverter=inverter_runtime,
-                    appliances=appliance_result.runtimes,
-                    reconciled_at=self._format_reconciled_at(request_now),
-                ),
-            )
-            if first_error is not None:
-                raise first_error
+        self._runtime.appliance_memories = appliance_result.memories
+        self._runtime.execution_status = ScheduleExecutionStatus(
+            active_slot_id=current_slot_id,
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                inverter=inverter_runtime,
+                appliances=appliance_result.runtimes,
+                reconciled_at=self._format_reconciled_at(request_now),
+            ),
+        )
+        if first_error is not None:
+            raise first_error
 
-            self._runtime.last_error = None
+        self._runtime.last_error = None
 
-    async def async_reconcile_safely(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
-        try:
-            await self.async_reconcile(
-                reason=reason,
-                reference_time=reference_time,
-            )
-        except ScheduleError as err:
-            error_key = f"{err.code}:{err}"
-            if self._runtime.last_error == error_key:
-                return
+    def _log_reconcile_failure(self, err: ScheduleError, *, reason: str) -> None:
+        error_key = f"{err.code}:{err}"
+        if self._runtime.last_error == error_key:
+            return
 
-            context = self._build_failure_log_context()
-            _LOGGER.warning(
-                "Schedule execution reconcile failed during %s%s: %s (%s)",
-                reason,
-                f" [{context}]" if context else "",
-                err,
-                err.code,
-            )
-            self._runtime.last_error = error_key
+        context = self._build_failure_log_context()
+        _LOGGER.warning(
+            "Schedule execution reconcile failed during %s%s: %s (%s)",
+            reason,
+            f" [{context}]" if context else "",
+            err,
+            err.code,
+        )
+        self._runtime.last_error = error_key
 
     async def async_restore_normal(self, *, reason: str) -> None:
         del reason
 
-        async with self._dependencies.schedule_lock:
-            reference_time = dt_util.now()
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
+        async with self._execution_lock:
+            reference_time = self._now()
+            async with self._dependencies.schedule_lock:
+                schedule_document = await self._load_pruned_schedule_document_locked(
+                    reference_time=reference_time
+                )
             control_config = self._dependencies.read_schedule_control_config()
             if control_config is None:
                 raise ScheduleNotConfiguredError(

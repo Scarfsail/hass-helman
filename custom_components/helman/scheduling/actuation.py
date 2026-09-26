@@ -9,19 +9,26 @@ gate -- the executors hold an actuator instead of a ``HomeAssistant``, so
 
 The gate reads the persisted flag fresh on every call rather than caching it,
 and fails closed when it cannot be read.
+
+Every call is also bounded: a service that never returns would otherwise hold
+the executor's execution lock forever and stall every later reconcile.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .schedule import ScheduleError
+from .schedule import ScheduleError, ScheduleExecutionUnavailableError
 
 _LOGGER = logging.getLogger(__name__)
+# Shared by every hardware write. ``blocking=True`` waits for the target
+# integration to finish, which a stalled charger or cloud API may never do.
+SERVICE_CALL_TIMEOUT_SECONDS = 30.0
 
 
 class ScheduleExecutionDisabledError(ScheduleError):
@@ -39,9 +46,11 @@ class ScheduleActuator:
         hass: HomeAssistant,
         *,
         is_execution_enabled: Callable[[], bool],
+        service_call_timeout_seconds: float = SERVICE_CALL_TIMEOUT_SECONDS,
     ) -> None:
         self._hass = hass
         self._is_execution_enabled = is_execution_enabled
+        self._service_call_timeout_seconds = service_call_timeout_seconds
 
     def read_state(self, entity_id: str) -> Any:
         """Read an entity state. Always allowed -- reading touches nothing."""
@@ -72,9 +81,22 @@ class ScheduleActuator:
                 f"Schedule execution is disabled; refusing to call "
                 f"{domain}.{service} for {data.get('entity_id')}"
             )
-        await self._hass.services.async_call(
-            domain,
-            service,
-            dict(data),
-            blocking=True,
-        )
+        timeout = asyncio.timeout(self._service_call_timeout_seconds)
+        try:
+            async with timeout:
+                await self._hass.services.async_call(
+                    domain,
+                    service,
+                    dict(data),
+                    blocking=True,
+                )
+        except TimeoutError as err:
+            # A TimeoutError raised by the target integration itself is its own
+            # failure, not Helman's bound expiring.
+            if not timeout.expired():
+                raise
+            raise ScheduleExecutionUnavailableError(
+                f"Timed out calling {domain}.{service} for "
+                f"'{data.get('entity_id')}' after "
+                f"{self._service_call_timeout_seconds:g} seconds"
+            ) from err

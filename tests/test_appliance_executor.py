@@ -83,8 +83,17 @@ from custom_components.helman.scheduling.actuation import (  # noqa: E402
 )
 
 
-def _actuator(hass: "FakeHass", *, enabled: bool = True) -> ScheduleActuator:
-    return ScheduleActuator(hass, is_execution_enabled=lambda: enabled)
+def _actuator(
+    hass: "FakeHass",
+    *,
+    enabled: bool = True,
+    service_call_timeout_seconds: float = 30.0,
+) -> ScheduleActuator:
+    return ScheduleActuator(
+        hass,
+        is_execution_enabled=lambda: enabled,
+        service_call_timeout_seconds=service_call_timeout_seconds,
+    )
 
 
 class FakeState:
@@ -106,6 +115,8 @@ class FakeServices:
         self._hass = hass
         self.calls: list[tuple[str, str, dict, bool]] = []
         self.error: Exception | None = None
+        # (domain, service) pairs that never return -- a stalled integration.
+        self.stalled: set[tuple[str, str]] = set()
 
     async def async_call(
         self,
@@ -118,6 +129,8 @@ class FakeServices:
         if self.error is not None:
             raise self.error
         self.calls.append((domain, service, data, blocking))
+        if (domain, service) in self.stalled:
+            await asyncio.Event().wait()
         entity_id = data["entity_id"]
         if domain == "switch" and service == "turn_on":
             if self._hass.auto_turn_on:
@@ -468,6 +481,80 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_runtime.outcome, "success")
         self.assertIsNotNone(second_memory)
         self.assertTrue(second_memory.last_enabled)
+
+    async def test_stalled_ev_switch_call_times_out_and_stays_retryable(self) -> None:
+        hass = FakeHass({"switch.ev_nabijeni": FakeState("off")})
+        hass.services.stalled.add(("switch", "turn_on"))
+        executor = ApplianceExecutor(
+            _actuator(hass, service_call_timeout_seconds=0.01),
+            EvChargerDriver(),
+        )
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action={"charge": True, "vehicleId": "kona"},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(runtime.outcome, "failed")
+        self.assertEqual(runtime.error_code, "execution_unavailable")
+        # The switch wrapper keeps the actuator's diagnostics: service, target
+        # and how long it waited.
+        self.assertIn("switch.turn_on", runtime.message)
+        self.assertIn("switch.ev_nabijeni", runtime.message)
+        self.assertIn("0.01 seconds", runtime.message)
+        # A timed-out service call stops that path: no charge-state polling.
+        self.assertEqual(len(hass.services.calls), 1)
+        self.assertIsNone(memory)
+
+        hass.services.stalled.clear()
+        retry_runtime, retry_memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action={"charge": True, "vehicleId": "kona"},
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(retry_runtime.outcome, "success")
+        self.assertIsNotNone(retry_memory)
+
+    async def test_stalled_ev_select_call_times_out_with_service_diagnostics(
+        self,
+    ) -> None:
+        hass = FakeHass(
+            {
+                "switch.ev_nabijeni": FakeState("on"),
+                "select.solax_ev_charger_charger_use_mode": FakeState(
+                    "ECO",
+                    attributes={"options": ["Stop", "Fast", "ECO"]},
+                ),
+            }
+        )
+        hass.services.stalled.add(("select", "select_option"))
+        executor = ApplianceExecutor(
+            _actuator(hass, service_call_timeout_seconds=0.01),
+            EvChargerDriver(),
+        )
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action={"charge": True, "vehicleId": "kona", "useMode": "Fast"},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(runtime.outcome, "failed")
+        self.assertIn("select.select_option", runtime.message)
+        self.assertIn("select.solax_ev_charger_charger_use_mode", runtime.message)
+        self.assertIn("0.01 seconds", runtime.message)
+        self.assertIsNone(memory)
 
     async def test_generic_on_turns_on_switch(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("off")})

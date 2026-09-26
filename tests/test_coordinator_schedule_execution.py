@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -245,9 +246,13 @@ from custom_components.helman.appliances import build_appliances_runtime_registr
 from custom_components.helman.automation.compute_inputs import (  # noqa: E402
     CustomConditionGroupResult,
 )
+from custom_components.helman import coordinator as coordinator_module  # noqa: E402
 from custom_components.helman.coordinator import (  # noqa: E402
     HelmanCoordinator,
     _condition_met_map,
+)
+from custom_components.helman.scheduling import (  # noqa: E402
+    schedule_executor as schedule_executor_module,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
@@ -409,10 +414,37 @@ class FakeBus:
         self.fired.append((event_type, dict(event_data or {})))
 
 
+class FakeServices:
+    """Hardware service calls. ``release`` parks every call until it fires."""
+
+    def __init__(self, hass: "FakeHass") -> None:
+        self._hass = hass
+        self.calls: list[tuple[str, str, dict]] = []
+        self.release: asyncio.Event | None = None
+        self.entered = asyncio.Event()
+
+    async def async_call(
+        self, domain: str, service: str, data: dict, *, blocking: bool
+    ) -> None:
+        self.calls.append((domain, service, data))
+        if self.release is not None:
+            self.entered.set()
+            await self.release.wait()
+        if domain == "switch" and service == "turn_on":
+            self._hass.states._states[data["entity_id"]].state = "on"
+
+
 class FakeHass:
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
         self.states = FakeStates(states or {})
         self.bus = FakeBus()
+        self.services = FakeServices(self)
+
+    def async_create_task(self, coro):
+        return asyncio.create_task(coro)
+
+    def async_create_background_task(self, coro, name):
+        return asyncio.create_task(coro, name=name)
 
 
 class FakeStorage:
@@ -440,8 +472,8 @@ class FakeExecutor:
         self.stop_calls = 0
         self.unload_calls = 0
         self.reset_runtime_calls = 0
-        self.reconcile_calls: list[tuple[str, datetime | None]] = []
-        self.safe_reconcile_calls: list[tuple[str, datetime | None]] = []
+        self.reconcile_calls: list[str] = []
+        self.requested_reconciles: list[str] = []
         self.restore_calls: list[str] = []
         self.reconcile_error: Exception | None = None
         self.restore_error: Exception | None = None
@@ -460,25 +492,15 @@ class FakeExecutor:
         self.events.append("unload")
         self.unload_calls += 1
 
-    async def async_reconcile(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
+    async def async_reconcile_and_wait(self, *, reason: str) -> None:
         self.events.append(f"reconcile:{reason}")
-        self.reconcile_calls.append((reason, reference_time))
+        self.reconcile_calls.append(reason)
         if self.reconcile_error is not None:
             raise self.reconcile_error
 
-    async def async_reconcile_safely(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
-        self.events.append(f"safe_reconcile:{reason}")
-        self.safe_reconcile_calls.append((reason, reference_time))
+    def request_reconcile(self, *, reason: str) -> None:
+        self.events.append(f"request_reconcile:{reason}")
+        self.requested_reconciles.append(reason)
 
     async def async_restore_normal(self, *, reason: str) -> None:
         self.events.append(f"restore:{reason}")
@@ -814,7 +836,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(executor.events[:2], ["start", "reconcile:enable_request"])
+        self.assertEqual(executor.events[:2], ["reconcile:enable_request"])
 
     async def test_enable_moves_the_battery_forecast_schedule_signature(self) -> None:
         # Enabling execution does not blow the cache away; it changes the
@@ -872,9 +894,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
+        # The executor keeps running, as after a disable: its tick still drives
+        # the reality check. Only the runtime status is dropped.
         self.assertEqual(
             executor.events,
-            ["start", "reconcile:enable_request", "stop"],
+            ["reconcile:enable_request", "reset_runtime"],
         )
         self.assertEqual(len(captured.output), 1)
         self.assertIn("Failed to enable schedule execution", captured.output[0])
@@ -910,7 +934,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(executor.events, ["start", "reconcile:enable_request"])
+        self.assertEqual(executor.events, ["reconcile:enable_request"])
         self.assertEqual(len(captured.output), 1)
         self.assertIn(
             "Failed to reconcile already-enabled schedule execution",
@@ -947,7 +971,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         # The executor keeps running (its tick still drives the reality check);
         # only the runtime status is dropped.
-        self.assertEqual(executor.events, ["start", "reset_runtime"])
+        self.assertEqual(executor.events, ["reset_runtime"])
 
     async def test_disable_moves_the_battery_forecast_schedule_signature(self) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
@@ -1005,7 +1029,177 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         # The executor keeps running (its tick still drives the reality check);
         # only the runtime status is dropped.
-        self.assertEqual(executor.events, ["start", "reset_runtime"])
+        self.assertEqual(executor.events, ["reset_runtime"])
+
+    async def test_disable_during_blocked_enable_completes_without_rollback(
+        self,
+    ) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        reconcile_entered = asyncio.Event()
+        release_reconcile = asyncio.Event()
+
+        async def _blocked_reconcile(*, reason: str) -> None:
+            reconcile_entered.set()
+            await release_reconcile.wait()
+            raise ScheduleExecutionUnavailableError("charger stalled")
+
+        executor.async_reconcile_and_wait = _blocked_reconcile
+        enable = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.wait_for(reconcile_entered.wait(), timeout=1)
+
+        # Neither lock is held while the enable request waits on hardware.
+        self.assertFalse(coordinator._schedule_execution_lock.locked())
+        self.assertFalse(coordinator._schedule_lock.locked())
+        enabled = await asyncio.wait_for(
+            coordinator.set_schedule_execution(
+                enabled=False, reference_time=REFERENCE_TIME
+            ),
+            timeout=1,
+        )
+
+        self.assertFalse(enabled)
+        self.assertFalse(storage.schedule_document["executionEnabled"])
+
+        release_reconcile.set()
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await enable
+        self.assertFalse(storage.schedule_document["executionEnabled"])
+        # The old enable's rollback was fenced off: only the disable touched it.
+        self.assertEqual(executor.events.count("reset_runtime"), 1)
+
+    async def test_old_enable_failure_does_not_roll_back_a_newer_enable(self) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        reconcile_entered = asyncio.Event()
+        release_reconcile = asyncio.Event()
+        attempts = 0
+
+        async def _first_blocks_then_fails(*, reason: str) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1:
+                return
+            reconcile_entered.set()
+            await release_reconcile.wait()
+            raise ScheduleExecutionUnavailableError("charger stalled")
+
+        executor.async_reconcile_and_wait = _first_blocks_then_fails
+        old_enable = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.wait_for(reconcile_entered.wait(), timeout=1)
+        await coordinator.set_schedule_execution(
+            enabled=False, reference_time=REFERENCE_TIME
+        )
+        self.assertTrue(
+            await coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+
+        release_reconcile.set()
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await old_enable
+
+        self.assertTrue(storage.schedule_document["executionEnabled"])
+
+    async def test_repeated_enable_does_not_fence_off_the_first_rollback(
+        self,
+    ) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        reconcile_entered = asyncio.Event()
+        release_reconcile = asyncio.Event()
+
+        async def _blocked_then_failing(*, reason: str) -> None:
+            reconcile_entered.set()
+            await release_reconcile.wait()
+            raise ScheduleExecutionUnavailableError("charger stalled")
+
+        executor.async_reconcile_and_wait = _blocked_then_failing
+        first = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.wait_for(reconcile_entered.wait(), timeout=1)
+        # A double click: the flag is already on, so this decides nothing new.
+        second = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.sleep(0)
+
+        release_reconcile.set()
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            results = await asyncio.gather(first, second, return_exceptions=True)
+
+        for result in results:
+            self.assertIsInstance(result, ScheduleExecutionUnavailableError)
+        self.assertFalse(storage.schedule_document["executionEnabled"])
+
+    async def test_enable_overtaken_by_disable_reports_disabled_without_trigger(
+        self,
+    ) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+        coordinator._automation_triggers.request_immediate = AsyncMock()
+        reconcile_entered = asyncio.Event()
+        release_reconcile = asyncio.Event()
+
+        async def _blocked_reconcile(*, reason: str) -> None:
+            reconcile_entered.set()
+            await release_reconcile.wait()
+
+        executor.async_reconcile_and_wait = _blocked_reconcile
+        enable = asyncio.create_task(
+            coordinator.set_schedule_execution(
+                enabled=True, reference_time=REFERENCE_TIME
+            )
+        )
+        await asyncio.wait_for(reconcile_entered.wait(), timeout=1)
+        await coordinator.set_schedule_execution(
+            enabled=False, reference_time=REFERENCE_TIME
+        )
+
+        release_reconcile.set()
+        self.assertFalse(await asyncio.wait_for(enable, timeout=1))
+        self.assertFalse(storage.schedule_document["executionEnabled"])
+        coordinator._automation_triggers.request_immediate.assert_not_awaited()
 
     async def test_schedule_executor_battery_state_logs_detailed_issue_once(self) -> None:
         storage = FakeStorage(
@@ -1098,7 +1292,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             executor.events,
-            ["start", "safe_reconcile:schedule_updated"],
+            ["request_reconcile:schedule_updated"],
         )
 
     async def test_set_schedule_moves_the_battery_forecast_schedule_signature(
@@ -1148,7 +1342,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator._async_run_post_schedule_write_side_effects.assert_awaited_once_with(
             reason="schedule_updated",
-            reference_time=REFERENCE_TIME,
         )
 
     async def test_persist_automation_result_preserves_execution_enabled(self) -> None:
@@ -1229,17 +1422,16 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_persist_automation_result_defers_side_effects_until_after_unlock(
         self,
     ) -> None:
-        coordinator, _storage, _executor = self._build_coordinator(
+        coordinator, _storage, executor = self._build_coordinator(
             schedule_document={"executionEnabled": True, "slots": {}}
         )
         events: list[tuple[str, bool]] = []
 
-        async def reconcile(*, reason: str, reference_time: datetime | None = None) -> None:
+        def request_reconcile(*, reason: str) -> None:
             self.assertEqual(reason, "automation_updated")
-            self.assertEqual(reference_time, REFERENCE_TIME)
             events.append(("reconcile", coordinator._schedule_lock.locked()))
 
-        coordinator._async_reconcile_schedule_execution = reconcile
+        executor.request_reconcile = request_reconcile
 
         async with coordinator._schedule_lock:
             changed = await coordinator._persist_automation_result_locked(
@@ -1258,7 +1450,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         await coordinator._async_run_post_schedule_write_side_effects(
             reason="automation_updated",
-            reference_time=REFERENCE_TIME,
         )
 
         self.assertEqual(events, [("reconcile", False)])
@@ -1905,6 +2096,158 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(compute_inputs.condition_met_by_optimizer_id, {})
         self.assertEqual(compute_inputs.custom_condition_results_by_optimizer_id, {})
+
+class ScheduleExecutionStartupTests(unittest.IsolatedAsyncioTestCase):
+    """Setup registers execution; hardware runs only once HA has started."""
+
+    def _build(self) -> tuple[HelmanCoordinator, FakeExecutor]:
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            }
+        )
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+        executor = FakeExecutor()
+        coordinator._schedule_executor = executor
+        return coordinator, executor
+
+    async def test_cold_start_defers_execution_until_home_assistant_started(
+        self,
+    ) -> None:
+        coordinator, executor = self._build()
+        started_callbacks: list = []
+
+        with patch.object(
+            coordinator_module,
+            "async_at_started",
+            side_effect=lambda hass, cb: started_callbacks.append(cb) or (lambda: None),
+        ):
+            coordinator._schedule_startup_schedule_execution()
+
+        self.assertEqual(executor.events, [])
+        self.assertEqual(len(coordinator._unsub_listeners), 1)
+
+        started_callbacks[0](coordinator._hass)
+        await asyncio.gather(*coordinator._refresh_tasks)
+
+        self.assertEqual(executor.events, ["start", "request_reconcile:startup"])
+
+    async def test_reload_in_running_home_assistant_starts_at_once(self) -> None:
+        coordinator, executor = self._build()
+
+        with patch.object(
+            coordinator_module,
+            "async_at_started",
+            side_effect=lambda hass, cb: cb(hass) or (lambda: None),
+        ):
+            coordinator._schedule_startup_schedule_execution()
+        await asyncio.gather(*coordinator._refresh_tasks)
+
+        self.assertEqual(executor.events, ["start", "request_reconcile:startup"])
+
+
+class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
+    """A stalled EV command must not block reads, saves or the toggle.
+
+    Uses the real executor and actuator; only the service call is parked.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "garage-ev": {
+                            "charge": True,
+                            "vehicleId": "kona",
+                            "useMode": "Fast",
+                        },
+                    },
+                },
+            }
+        )
+        self.hass = FakeHass(
+            {
+                "switch.ev_nabijeni": FakeState("off"),
+                "select.solax_ev_charger_charger_use_mode": FakeState(
+                    "Fast", attributes={"options": ["Fast", "ECO"]}
+                ),
+            }
+        )
+        self.coordinator = HelmanCoordinator(self.hass, self.storage)
+        self.coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+        self.executor = schedule_executor_module.ScheduleExecutor(
+            self.hass,
+            self.coordinator._schedule_executor._dependencies,
+            now=lambda: REFERENCE_TIME,
+        )
+        self.coordinator._schedule_executor = self.executor
+        with patch.object(
+            schedule_executor_module,
+            "async_track_time_interval",
+            return_value=lambda: None,
+        ):
+            await self.executor.async_start()
+
+    async def asyncTearDown(self) -> None:
+        await self.executor.async_unload()
+
+    async def test_reads_saves_and_disable_complete_while_ev_command_stalls(
+        self,
+    ) -> None:
+        self.hass.services.release = asyncio.Event()
+        self.executor.request_reconcile(reason="startup")
+        await asyncio.wait_for(self.hass.services.entered.wait(), timeout=1)
+
+        async with asyncio.timeout(1):
+            schedule = await self.coordinator.get_schedule(
+                reference_time=REFERENCE_TIME
+            )
+            await self.coordinator._async_prepare_forecast_pipeline_inputs(
+                started_at=REFERENCE_TIME
+            )
+            await self.coordinator.set_schedule(
+                slots=[
+                    ScheduleSlot(
+                        id=CURRENT_SLOT_ID,
+                        controllables={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "ECO",
+                                "ecoGear": "6A",
+                            },
+                        },
+                    )
+                ],
+                reference_time=REFERENCE_TIME,
+            )
+            enabled = await self.coordinator.set_schedule_execution(
+                enabled=False, reference_time=REFERENCE_TIME
+            )
+
+        self.assertTrue(schedule["executionEnabled"])
+        self.assertFalse(enabled)
+        self.assertFalse(self.storage.schedule_document["executionEnabled"])
+        # The save merged into the single pending follow-up.
+        self.assertIsNotNone(self.executor._pending_request)
+
+        self.hass.services.release.set()
+        await asyncio.wait_for(self.executor._worker_task, timeout=1)
+
+        # Only the command already in flight reached hardware; the follow-up
+        # read the persisted disable and wrote nothing (no use-mode select).
+        self.assertEqual(
+            [call[:2] for call in self.hass.services.calls],
+            [("switch", "turn_on")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

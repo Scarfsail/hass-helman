@@ -644,7 +644,7 @@ class _FakeCoordinator:
         self.snapshot_calls: list[dict[str, object]] = []
         self.persist_calls: list[dict[str, object]] = []
         self.saved_documents: list[ScheduleDocument] = []
-        self.post_write_calls: list[tuple[str, datetime, bool]] = []
+        self.post_write_calls: list[tuple[str, bool]] = []
         self.recorded_explanations: list[object] = []
         #: The hysteresis store, faked: what the previous run left behind, and
         #: what this run asked to write back (#264).
@@ -756,11 +756,8 @@ class _FakeCoordinator:
         self,
         *,
         reason: str,
-        reference_time: datetime,
     ) -> None:
-        self.post_write_calls.append(
-            (reason, reference_time, self._schedule_lock.locked())
-        )
+        self.post_write_calls.append((reason, self._schedule_lock.locked()))
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return self._control_config
@@ -1172,7 +1169,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             coordinator.post_write_calls,
-            [("automation_updated", REFERENCE_TIME, False)],
+            [("automation_updated", False)],
         )
 
     async def test_run_skips_cleanup_write_when_disabled_schedule_is_already_clean(self) -> None:
@@ -1232,7 +1229,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             coordinator.post_write_calls,
-            [("automation_updated", REFERENCE_TIME, False)],
+            [("automation_updated", False)],
         )
         self.assertEqual(len(coordinator.snapshot_calls), 2)
         self.assertEqual(
