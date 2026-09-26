@@ -110,12 +110,14 @@ def import_energy_preferences(
     conflicts: list[EnergyImportConflict] = []
     placed: set[int] = set()
     for device, parent_meter in new_devices:
-        blocker = _schedulable_container(device, included_in, owners)
-        if blocker is not None:
+        blocked = _blocking_container(device, included_in, owners)
+        if blocked is not None:
+            blocker, reason = blocked
             conflicts.append(
                 EnergyImportConflict(
                     energy_entity_id=device["consumption"]["energy_entity_id"],
                     device_id=peek_controllable_id(blocker),
+                    reason=reason,
                 )
             )
             continue
@@ -124,19 +126,6 @@ def import_energy_preferences(
         # parent to go under; the row stays at the top level.
         if parent is not None and _nested_in(parent, device, included_in, owners):
             parent = None
-        if (
-            parent is not None
-            and "power_entity_id" not in device["consumption"]
-            and any(own_meter(child) is None for child in device_children(parent))
-        ):
-            conflicts.append(
-                EnergyImportConflict(
-                    energy_entity_id=device["consumption"]["energy_entity_id"],
-                    device_id=peek_controllable_id(parent),
-                    reason="power_required",
-                )
-            )
-            continue
         children = parent.setdefault("children", []) if parent is not None else None
         (children if isinstance(children, list) else imported).append(device)
         placed.add(id(device))
@@ -162,16 +151,19 @@ def _in_subtree(device: Mapping[str, Any], root: Mapping[str, Any]) -> bool:
     )
 
 
-def _schedulable_container(
+def _blocking_container(
     device: Mapping[str, Any],
     included_in: Mapping[int, str | None],
     owners: Mapping[str, Mapping[str, Any]],
-) -> Mapping[str, Any] | None:
-    """The schedulable device whose meter contains ``device``'s, if any.
+) -> tuple[Mapping[str, Any], str] | None:
+    """The existing device that cannot take ``device``'s branch, and why.
 
-    Follows Energy's nesting up through the imported rows. It stops at the
-    first existing device: that is where the row is placed, and a schedulable
-    one cannot take it.
+    Follows Energy's nesting up through the imported rows to the first
+    existing device, which is where the branch would be placed. It cannot take
+    it when it is schedulable (a leaf), or when it has meterless children and
+    the imported row directly beneath it has no power (the live split needs
+    every metered sibling's). Every row in a refused branch is refused with it:
+    the existing meter already counts all of them.
     """
     seen: set[int] = set()
     while (parent_meter := included_in.get(id(device))) is not None:
@@ -179,8 +171,12 @@ def _schedulable_container(
         if parent is None or id(parent) in seen:
             return None
         if is_schedulable(parent):
-            return parent
+            return parent, "schedulable"
         if id(parent) not in included_in:
+            if "power_entity_id" not in device["consumption"] and any(
+                own_meter(child) is None for child in device_children(parent)
+            ):
+                return parent, "power_required"
             return None
         seen.add(id(device))
         device = parent

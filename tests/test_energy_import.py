@@ -154,6 +154,30 @@ class EnergyImportTests(unittest.TestCase):
             [EnergyImportConflict("sensor.plug_energy", "breaker", "power_required")],
         )
 
+    def test_rows_inside_a_refused_row_are_refused_with_it(self) -> None:
+        # The lamp sits inside the refused plug: it is reported too, never
+        # attached to a row that is not in the tree.
+        breaker = {
+            "id": "breaker",
+            "consumption": {"energy_entity_id": "sensor.breaker_energy"},
+            "children": [{"id": "ac", "kind": "climate", "schedulable": True}],
+        }
+
+        result = _import(
+            [breaker],
+            _row("sensor.plug_energy", None, "sensor.breaker_energy"),
+            _row("sensor.lamp_energy", "sensor.lamp_power", "sensor.plug_energy"),
+        )
+
+        self.assertEqual([c["id"] for c in result.devices[0]["children"]], ["ac"])
+        self.assertEqual(
+            result.conflicts,
+            [
+                EnergyImportConflict("sensor.plug_energy", "breaker", "power_required"),
+                EnergyImportConflict("sensor.lamp_energy", "breaker", "power_required"),
+            ],
+        )
+
     def test_a_nesting_cycle_leaves_both_rows_at_the_top_level(self) -> None:
         result = _import(
             [],
