@@ -1,0 +1,56 @@
+{
+  "device_consumption": [
+    {
+      "stat_consumption": "sensor.jistic_indukce_energy",
+      "stat_rate": "sensor.jistic_indukce_power"
+    },
+    {
+      "stat_consumption": "sensor.jistic_kotel_energy",
+      "stat_rate": "sensor.jistic_kotel_power"
+    },
+    {
+      "stat_consumption": "sensor.jistic_trouba_energy",
+      "stat_rate": "sensor.jistic_trouba_power"
+    },
+    {
+      "stat_consumption": "sensor.jistic_zasuvky_pracovny_energy",
+      "stat_rate": "sensor.jistic_zasuvky_pracovny_power"
+    },
+    {
+      "stat_consumption": "sensor.zasuvka_pracovna_verca_energy",
+      "stat_rate": "sensor.zasuvka_pracovna_verca_power",
+      "included_in_stat": "sensor.jistic_zasuvky_pracovny_energy"
+    },
+    {
+      "stat_consumption": "sensor.zasuvka_pracovna_ondra_energy",
+      "stat_rate": "sensor.zasuvka_pracovna_ondra_power",
+      "included_in_stat": "sensor.jistic_zasuvky_pracovny_energy"
+    },
+    {
+      "stat_consumption": "sensor.jistic_zasuvky_obyvak_a_loznice_energy",
+      "stat_rate": "sensor.jistic_zasuvky_obyvak_a_loznice_power"
+    },
+    {
+      "stat_consumption": "sensor.zasuvka_tv_energy",
+      "stat_rate": "sensor.zasuvka_tv_power",
+      "included_in_stat": "sensor.jistic_zasuvky_obyvak_a_loznice_energy"
+    },
+    {
+      "stat_consumption": "sensor.jistic_zasuvky_spiz_a_jidelna_energy",
+      "stat_rate": "sensor.jistic_zasuvky_spiz_a_jidelna_power"
+    },
+    {
+      "stat_consumption": "sensor.zasuvka_lednicka_energy",
+      "stat_rate": "sensor.zasuvka_lednicka_power",
+      "included_in_stat": "sensor.jistic_zasuvky_spiz_a_jidelna_energy"
+    },
+    {
+      "stat_consumption": "sensor.jistic_bazen_filtrace_energy",
+      "stat_rate": "sensor.jistic_bazen_filtrace_power"
+    },
+    {
+      "stat_consumption": "sensor.jistic_klimatizace_energy",
+      "stat_rate": "sensor.jistic_klimatizace_power"
+    }
+  ]
+}

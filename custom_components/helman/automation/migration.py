@@ -1,7 +1,9 @@
 """One-way migration of stored automation configs to the unified shape.
 
-Pure ``dict -> dict``: no Home Assistant, no storage, no logging side effects,
-so its tests run on the host and every rule is table-checkable.
+Pure ``dict -> dict``: no Home Assistant and no storage, so its tests run on the
+host and every rule is table-checkable. What a step needs from Home Assistant —
+Energy preferences, for v20 -> v21 — is an argument. The only side effect is
+the v21 step logging the Energy rows it could not import.
 
 Runs on **load only**. The save path rejects the old shape instead of rewriting
 it (see ``validate_config_document``): hand-editing is a save-path concern, and
@@ -10,11 +12,16 @@ silently rewriting a user's YAML under them is worse than refusing it.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import partial
 from typing import Any
 
 from ..const import CONFIG_DOCUMENT_VERSION, DAY_CLASSIFICATIONS
+from ..controllables.energy_import import import_energy_preferences, meter_device_id
+
+_LOGGER = logging.getLogger(__name__)
 
 #: Keys no reader has ever read: each carried exactly one legal value, or (for
 #: `release`) named a decision the optimizer computes rather than takes as
@@ -52,8 +59,12 @@ def needs_migration(document: Mapping[str, Any] | None) -> bool:
 
 def migrate_config_document(
     document: Mapping[str, Any] | None,
+    energy_preferences: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Return ``(migrated_document, migrated_optimizer_ids)``.
+
+    ``energy_preferences`` are Home Assistant's Energy preferences, which the
+    v20 -> v21 step imports into ``devices``; ``None`` imports nothing.
 
     The document is returned unchanged (and the id list empty) when it is
     already at the current version. Optimizer order is preserved verbatim —
@@ -74,9 +85,15 @@ def migrate_config_document(
     if version >= CONFIG_DOCUMENT_VERSION:
         return (migrated, [])
 
+    # The one step that takes an argument is bound here; the table holds the
+    # pure document-to-document steps.
+    migrations = {
+        **_MIGRATIONS,
+        20: partial(_migrate_v20_to_v21, energy_preferences=energy_preferences),
+    }
     migrated_ids: list[str] = []
     while version < CONFIG_DOCUMENT_VERSION:
-        migrated, ids = _MIGRATIONS[version](migrated)
+        migrated, ids = migrations[version](migrated)
         migrated_ids = ids or migrated_ids
         version += 1
     return (migrated, migrated_ids)
@@ -1125,7 +1142,7 @@ def _migrate_v19_to_v20(document: dict[str, Any]) -> tuple[dict[str, Any], list[
             continue
         if index != group[0]:
             continue
-        parent_id = _unique_id(meter.partition(".")[2] or meter, taken_ids)
+        parent_id = meter_device_id(meter, taken_ids)
         devices.append(
             {
                 "id": parent_id,
@@ -1174,13 +1191,46 @@ def _without_meter(entry: dict[str, Any]) -> dict[str, Any]:
     return child
 
 
-def _unique_id(base: str, taken_ids: set[str]) -> str:
-    """``base``, or ``base_2``, ``base_3``... — the first no device holds yet."""
-    candidate, suffix = base, 2
-    while candidate in taken_ids:
-        candidate, suffix = f"{base}_{suffix}", suffix + 1
-    taken_ids.add(candidate)
-    return candidate
+def _migrate_v20_to_v21(
+    document: dict[str, Any],
+    energy_preferences: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Energy ``device_consumption`` imported into ``devices``, once.
+
+    From here on the device list is the only source for the card, and Energy
+    preferences are never read at runtime. Each row the list does not already
+    cover becomes a passive device (see
+    :func:`..controllables.energy_import.import_energy_preferences`); a device
+    already owning a row's meter only gains a missing ``power_entity_id``.
+    Existing devices are not restructured.
+
+    A row Energy nests where the tree cannot hold it (under a schedulable
+    device's meter, or as a power-less sibling of meterless children) is a
+    conflict and is skipped: the parent's meter already contains that energy,
+    so totals stay correct. Conflicts and external statistics are logged.
+
+    A ``devices`` value that is not a list is left for the validator to report.
+    """
+    devices = document.get("devices", [])
+    if not isinstance(devices, list):
+        return (document, [])
+    result = import_energy_preferences(devices, energy_preferences)
+    for statistic in result.external_statistics:
+        _LOGGER.info(
+            "Energy device %s is an external statistic; not imported as a device",
+            statistic,
+        )
+    for conflict in result.conflicts:
+        _LOGGER.warning(
+            "Energy device %s cannot be nested under device %s (%s); not imported, "
+            "since that device's meter already counts it",
+            conflict.energy_entity_id,
+            conflict.device_id,
+            conflict.reason,
+        )
+    if "devices" in document or result.devices:
+        document["devices"] = result.devices
+    return (document, [])
 
 
 _MIGRATIONS = {
@@ -1203,6 +1253,7 @@ _MIGRATIONS = {
     17: _migrate_v17_to_v18,
     18: _migrate_v18_to_v19,
     19: _migrate_v19_to_v20,
+    # 20 -> 21 needs the Energy preferences: bound in migrate_config_document.
 }
 
 

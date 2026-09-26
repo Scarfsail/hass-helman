@@ -45,6 +45,29 @@ class _DummyStore:
 storage_stub.Store = _DummyStore
 sys.modules["homeassistant.helpers.storage"] = storage_stub
 
+#: What the stubbed Energy manager hands out, and how often it was asked.
+ENERGY_PREFERENCES = {
+    "device_consumption": [{"stat_consumption": "sensor.oven_energy"}]
+}
+energy_requests: list[object] = []
+
+
+async def _async_get_manager(hass):
+    energy_requests.append(hass)
+    return types.SimpleNamespace(data=ENERGY_PREFERENCES)
+
+
+components_mod = types.ModuleType("homeassistant.components")
+components_mod.__path__ = []
+energy_mod = types.ModuleType("homeassistant.components.energy")
+energy_mod.__path__ = []
+energy_data_mod = types.ModuleType("homeassistant.components.energy.data")
+energy_data_mod.async_get_manager = _async_get_manager
+energy_mod.data = energy_data_mod
+sys.modules["homeassistant.components"] = components_mod
+sys.modules["homeassistant.components.energy"] = energy_mod
+sys.modules["homeassistant.components.energy.data"] = energy_data_mod
+
 from custom_components.helman.storage import HelmanStorage  # noqa: E402
 
 
@@ -80,8 +103,9 @@ class _StoredConfig(_FakeStore):
         return self._document
 
 
-def _load(document: dict) -> HelmanStorage:
+def _load(document: dict | None) -> HelmanStorage:
     storage = HelmanStorage.__new__(HelmanStorage)
+    storage._hass = object()
     storage._store = _StoredConfig(document)
     storage._snapshot_store = _FakeStore()
     storage._schedule_store = _FakeStore()
@@ -118,3 +142,31 @@ def test_loaded_documents_do_not_share_the_default_label_map() -> None:
     first.config["visualization"]["device_label_text"]["Room"] = {}
 
     assert second.config["visualization"]["device_label_text"] == {}
+
+
+def test_an_upgrade_imports_the_energy_devices() -> None:
+    energy_requests.clear()
+
+    storage = _load({"config_version": 20, "power_devices": {}})
+
+    assert len(energy_requests) == 1
+    assert storage.config["devices"] == [
+        {"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}
+    ]
+
+
+def test_a_fresh_install_starts_with_no_devices() -> None:
+    energy_requests.clear()
+
+    storage = _load(None)
+
+    assert energy_requests == []
+    assert "devices" not in storage.config
+
+
+def test_a_current_document_never_reads_energy() -> None:
+    energy_requests.clear()
+
+    _load({"config_version": 21})
+
+    assert energy_requests == []

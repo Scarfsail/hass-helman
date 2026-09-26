@@ -60,6 +60,8 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
      * configured controllable, and for a controllable that declares no id.
      */
     controllableIds: string[];
+    /** A house child's meter; null for every other node. */
+    energyEntityId: string | null;
 }
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────
