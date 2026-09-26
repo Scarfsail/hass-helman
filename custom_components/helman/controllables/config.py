@@ -446,6 +446,16 @@ def _control_entity_ids(device: Device) -> list[Any]:
     ]
 
 
+def share_sensor_slug(device_id: str) -> str:
+    """The object-id part of a meterless child's share sensor.
+
+    Lower case, every run of anything but ``a-z0-9`` one underscore, so two ids
+    differing only in punctuation or case slug alike -- which validation
+    rejects, since they would publish into one entity.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", device_id.lower()).strip("_")
+
+
 def clean_name(name: str, pattern: str | None) -> str:
     """``name`` with ``power_sensor_name_cleaner_regex`` removed; unchanged on a bad pattern."""
     if pattern:

@@ -251,6 +251,8 @@ export class PowerDevice extends LitElement {
                                 .compact=${this.device.compact ?? false}
                                 .valueKind=${this.device.valueKind ?? "power"}
                                 .estimated=${this.device.isEstimated ?? false}
+                                .unavailable=${this.device.isEstimated === true
+                                    && this.hass?.states[this.device.powerSensorId ?? ""]?.state === "unavailable"}
                                 .currentParentPower=${this.currentParentPower}
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
                             ></power-device-power-display>

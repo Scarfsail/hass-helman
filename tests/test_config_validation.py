@@ -1423,6 +1423,15 @@ class DeviceTreeValidationTests(unittest.TestCase):
             {(issue.path, issue.code) for issue in report.errors},
         )
 
+    def test_meterless_ids_that_name_one_share_sensor_are_rejected(self) -> None:
+        breaker = _ac_breaker()
+        breaker["children"][0]["id"] = "ac-room"
+        breaker["children"][1]["id"] = "ac_room"
+
+        errors, _ = self._codes(breaker)
+
+        self.assertIn(("devices[1].children[1].id", "share_sensor_collision"), errors)
+
     def test_a_meterless_child_needs_a_running_signal(self) -> None:
         breaker = _ac_breaker()
         breaker["children"].append({"id": "mystery", "schedulable": True})

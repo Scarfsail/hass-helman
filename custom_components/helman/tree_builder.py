@@ -7,7 +7,6 @@ from typing import Literal
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
-from homeassistant.util import slugify
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .visualization import read_visualization
@@ -20,6 +19,7 @@ from .controllables.config import (
     peek_controllable_kind,
     read_carved_meters,
     read_shared_meters,
+    share_sensor_slug,
     resolve_device_name,
     running_signal,
 )
@@ -29,7 +29,7 @@ from .power_polarity import consumer_value_type, source_value_type
 
 def share_power_entity_id(device_id: str) -> str:
     """The Helman sensor publishing a meterless child's share of its parent's power."""
-    return f"sensor.helman_share_power_{slugify(device_id)}"
+    return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
 
 
 @dataclass

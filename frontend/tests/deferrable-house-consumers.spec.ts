@@ -40,6 +40,7 @@ interface FakeNode {
     isEstimated?: boolean;
     isUnmeasured?: boolean;
     powerValue?: number;
+    powerSensorId?: string;
     childrenCollapsed?: boolean;
     children?: FakeNode[];
 }
@@ -359,6 +360,49 @@ test.describe("deferrable house consumers on the power card", () => {
             { label: "AC living room", value: "≈400 W", badgeColor: AUTOMATION_COLOR },
             { label: "AC bedroom", value: "≈0 W", badgeColor: USER_COLOR },
         ]);
+    });
+
+    test("an unavailable share reads as unknown, not as zero", async ({ page }) => {
+        // An input to the breaker's own power is down, so the coordinator
+        // publishes the share unavailable; the history engine would read 0 W.
+        await page.evaluate(() => {
+            (window.__fakeHass as any).states = {
+                "sensor.helman_share_power_ac_living_room": { state: "unavailable", attributes: {} },
+            };
+        });
+        await mountRows(page, [
+            {
+                id: "sensor.breaker_energy",
+                name: "AC breaker",
+                powerValue: 400,
+                childrenCollapsed: false,
+                children: [
+                    {
+                        id: "ac-living-room",
+                        name: "AC living room",
+                        isEstimated: true,
+                        powerSensorId: "sensor.helman_share_power_ac_living_room",
+                        powerValue: 400,
+                    },
+                ],
+            },
+        ]);
+
+        const value = await page.evaluate(async () => {
+            const el = document.querySelector("power-devices-container") as any;
+            await el.updateComplete;
+            const parent = el.shadowRoot.querySelector("power-device") as any;
+            await parent.updateComplete;
+            const container = parent.shadowRoot.querySelector("power-devices-container") as any;
+            await container.updateComplete;
+            const row = container.shadowRoot.querySelector("power-device") as any;
+            await row.updateComplete;
+            const display = row.shadowRoot.querySelector("power-device-power-display") as any;
+            await display.updateComplete;
+            return (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim();
+        });
+
+        expect(value).toBe("≈ —");
     });
 });
 
