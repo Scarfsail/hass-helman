@@ -24,16 +24,26 @@ _DEVICE_FIELDS = ("name", "icon")
 
 def device_field(path: Sequence[PathSegment]) -> str | None:
     """``name`` or ``icon`` when ``path`` is ``devices.<i>(.children.<j>)*.<field>``."""
-    if len(path) < 3 or len(path) % 2 == 0 or path[0] != "devices":
+    prefix_length = device_prefix_length(path)
+    if prefix_length is None or len(path) != prefix_length + 1:
         return None
     if path[-1] not in _DEVICE_FIELDS:
         return None
-    for position, segment in enumerate(path[1:-1], start=1):
-        if position % 2 == 1 and not _is_index(segment):
-            return None
-        if position % 2 == 0 and segment != "children":
-            return None
     return str(path[-1])
+
+
+def device_prefix_length(path: Sequence[PathSegment]) -> int | None:
+    """Length of the ``devices.<i>(.children.<j>)*`` prefix, at any depth."""
+    if len(path) < 2 or path[0] != "devices" or not _is_index(path[1]):
+        return None
+    length = 2
+    while (
+        length + 1 < len(path)
+        and path[length] == "children"
+        and _is_index(path[length + 1])
+    ):
+        length += 2
+    return length
 
 
 def evaluate_device_field(request: InspectionRequest) -> Inspection:

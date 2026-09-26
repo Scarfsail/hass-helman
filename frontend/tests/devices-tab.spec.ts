@@ -400,6 +400,31 @@ test("nested children render and edit in place", async ({ page }) => {
     expect(devices[1].children[0]).toEqual(klima("klima_obyvak"));
 });
 
+test("changing a child kind clears controls that could hide its new running signal", async ({ page }) => {
+    const study = structuredClone(STUDY);
+    (study.children[1] as Device).controls.switch.entity_id = "switch.lamp";
+    await mountEditor(page, [INVERTER, BREAKER, study, BOILER]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => {
+        const picker = window.__own("lamp", "select.device-kind")[0] as HTMLSelectElement;
+        picker.value = "climate";
+        picker.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    });
+    await expect.poll(async () => (await config(page))[2].children[1].kind).toBe("climate");
+    expect((await config(page))[2].children[1]).not.toHaveProperty("controls");
+    await page.evaluate(() => {
+        const group = window.__own("lamp", "helman-entity-group").find(
+            (element) => (element as HTMLElement & { path: string[] }).path.includes("climate"),
+        );
+        group?.shadowRoot?.querySelector("ha-entity-picker")?.dispatchEvent(new CustomEvent("value-changed", {
+            detail: { value: "climate.lamp" }, bubbles: true, composed: true,
+        }));
+    });
+    await expect.poll(async () => (await config(page))[2].children[1].controls).toEqual({
+        climate: { entity_id: "climate.lamp" },
+    });
+});
+
 test("the parent picker lists only non-schedulable meter owners", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");

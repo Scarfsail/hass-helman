@@ -934,6 +934,29 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         )
 
 
+    def test_a_deep_device_meter_keeps_history_and_its_house_requirement(self):
+        leaf = {"id": "plug", "schedulable": True, "consumption": {"energy_entity_id": "sensor.plug_energy"}}
+        config = {"devices": [{"children": [{"children": [leaf]}]}]}
+        hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
+        path = ("devices", 0, "children", 0, "children", 0, "consumption", "energy_entity_id")
+        _, inspection = self.inspect_twice(hass, config, path)
+        fact = _fact(inspection, "history")
+        self.assertIsNotNone(fact)
+        self.assertEqual(fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS)
+        self.assertIn(list(path), inspection["dependsOn"])
+
+    def test_deep_device_activity_controls_keep_history(self):
+        for control, entity_id in [("switch", "switch.plug"), ("climate", "climate.room")]:
+            with self.subTest(control=control):
+                leaf = {"controls": {control: {"entity_id": entity_id}}}
+                config = {"devices": [{"children": [{"children": [leaf]}]}]}
+                hass = _ProbingHass({entity_id: _State("on")})
+                path = ("devices", 0, "children", 0, "children", 0, "controls", control, "entity_id")
+                _, inspection = self.inspect_twice(hass, config, path)
+                self.assertIsNotNone(_fact(inspection, "history"))
+                self.assertIn(list(path), inspection["dependsOn"])
+
+
 class TestHistoryCache(_HistoryTestCase):
     """The recorder is asked once a minute, not once every two seconds."""
 

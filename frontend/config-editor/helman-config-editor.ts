@@ -4251,7 +4251,9 @@ export class HelmanConfigEditorPanel
           class="device-kind"
           @change=${(event: Event) =>
             this._applyMutation((draft) => {
-              setValueAtPath(draft, [...path, "kind"], (event.currentTarget as HTMLSelectElement).value);
+              const nextKind = (event.currentTarget as HTMLSelectElement).value;
+              if (nextKind !== kind) unsetValueAtPath(draft, [...path, "controls"]);
+              setValueAtPath(draft, [...path, "kind"], nextKind);
               this._seedDeviceProjection(draft, path);
             })}
         >
