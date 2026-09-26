@@ -803,8 +803,9 @@ class HelmanCoordinator:
         # Guards execution-flag transitions only; never held while the executor
         # or hardware is awaited.
         self._schedule_execution_lock = asyncio.Lock()
-        # Bumped by every flag transition, so a failed enable only rolls the
-        # flag back when no newer enable/disable decision has been made since.
+        # Bumped by every flag transition -- enable, disable, and a failed
+        # enable's rollback -- so a failed enable only rolls the flag back when
+        # no newer transition has been made since.
         self._schedule_execution_generation = 0
         self._schedule_executor = ScheduleExecutor(
             hass,
@@ -3261,16 +3262,21 @@ class HelmanCoordinator:
                     err.code,
                 )
             raise
-        if generation != self._schedule_execution_generation:
-            # A disable landed while this enable waited for hardware; report the
-            # flag as it is now persisted and do not announce an enable.
-            return self._load_schedule_document().execution_enabled
-        if not was_enabled:
+        # Report the flag as persisted, not as requested: a disable or another
+        # enable's rollback may have landed while this one waited on hardware.
+        enabled_now = self._load_schedule_document().execution_enabled
+        # Announce only the enable that made the transition, and only if no
+        # newer transition has superseded it.
+        if (
+            enabled_now
+            and not was_enabled
+            and generation == self._schedule_execution_generation
+        ):
             await self._automation_triggers.request_immediate(
                 reason="execution_enabled",
                 reference_time=request_now,
             )
-        return True
+        return enabled_now
 
     async def _async_persist_execution_disabled_locked(
         self,

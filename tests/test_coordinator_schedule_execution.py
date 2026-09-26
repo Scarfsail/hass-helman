@@ -1179,6 +1179,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._automation_triggers.request_immediate = AsyncMock()
         first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
         release_first = asyncio.Event()
         first_done = asyncio.Event()
         attempts = 0
@@ -1190,7 +1191,10 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 first_entered.set()
                 await release_first.wait()
                 raise ScheduleExecutionUnavailableError("charger stalled")
-            # The follow-up runs only after the first attempt's rollback.
+            second_entered.set()
+            # Pin the order where the follow-up finishes after the rollback;
+            # the executor itself does not guarantee it. Whatever the order,
+            # the caller must report the persisted flag.
             await first_done.wait()
 
         executor.async_reconcile_and_wait = _first_fails_follow_up_succeeds
@@ -1205,7 +1209,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 enabled=True, reference_time=REFERENCE_TIME
             )
         )
-        await asyncio.sleep(0)
+        # The second request has taken its snapshot (flag already on) and is
+        # waiting on its own attempt before the first one fails.
+        await asyncio.wait_for(second_entered.wait(), timeout=1)
 
         release_first.set()
         with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
