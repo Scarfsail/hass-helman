@@ -295,6 +295,52 @@ class TreeFromDevicesTests(unittest.TestCase):
         )
 
 
+class PowerlessParentTests(unittest.TestCase):
+    def test_a_parent_without_power_gets_no_remainder_but_its_children_do(self) -> None:
+        # An energy-only Energy parent: nothing to subtract its children from.
+        config = {
+            **_upgrade(),
+            "devices": [
+                {
+                    "id": "garage",
+                    "consumption": {"energy_entity_id": "sensor.garage_energy"},
+                    "children": [
+                        {
+                            "id": "workshop",
+                            "consumption": {
+                                "energy_entity_id": "sensor.workshop_energy",
+                                "power_entity_id": "sensor.workshop_power",
+                            },
+                            "children": [
+                                {
+                                    "id": "saw",
+                                    "consumption": {
+                                        "energy_entity_id": "sensor.saw_energy",
+                                        "power_entity_id": "sensor.saw_power",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        (garage,) = [
+            node
+            for node in _house(_build(config))["children"]
+            if not node["isUnmeasured"]
+        ]
+
+        self.assertEqual(
+            [child["id"] for child in garage["children"]], ["sensor.workshop_energy"]
+        )
+        (workshop,) = garage["children"]
+        self.assertEqual(
+            [child["isUnmeasured"] for child in workshop["children"]], [False, True]
+        )
+
+
 class MissingEntityTests(unittest.TestCase):
     """A selected entity that is missing keeps its row and is reported, never replaced."""
 

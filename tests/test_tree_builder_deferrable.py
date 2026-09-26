@@ -88,6 +88,7 @@ class TestHouseChildDeferrability(unittest.TestCase):
 
     def test_the_flag_reaches_the_wire_and_the_remainder_defaults_false(self):
         kitchen = _controllable("kitchen", "sensor.kitchen_energy", schedulable=False)
+        kitchen["consumption"]["power_entity_id"] = "sensor.kitchen_power"
         kitchen["children"] = [_controllable("dishwasher", "sensor.dishwasher_energy")]
         nodes = _house_children([kitchen])
         kitchen = nodes["sensor.kitchen_energy"]

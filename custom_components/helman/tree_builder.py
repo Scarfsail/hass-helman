@@ -359,7 +359,10 @@ class HelmanTreeBuilder:
     def _add_unmeasured_nodes(self, node: DeviceNodeDTO, unmeasured_title: str) -> None:
         if not node.children:
             return
-        if not node.is_virtual:
+        # A remainder is the parent's power minus its children's: a metered
+        # device without a power sensor (an energy-only Energy row) has none,
+        # but its children may still have remainders of their own.
+        if not node.is_virtual and node.power_sensor_id:
             slug = node.id.replace(".", "_")
             # The tree node's own ``id`` keeps the historical dot-to-underscore
             # slug -- it is only a frontend list key. ``power_sensor_id`` is the
