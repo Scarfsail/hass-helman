@@ -69,6 +69,13 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
+  deviceKind,
+  isCarvedMeterOwner,
+  isSchedulable,
+  iterDevices,
+  ownMeter,
+} from "../cards/shared/config/devices";
+import {
   configDefaultHint,
   configDefaultValue,
   fetchConfigDefaults,
@@ -1718,7 +1725,7 @@ export class HelmanConfigEditorPanel
     try {
       await loadHaYamlEditor();
       if (!this._config) return;
-      const value = this._getValue(["controllables", index]) as JsonValue;
+      const value = this._getValue(["devices", index]) as JsonValue;
       this._controllableModes = { ...this._controllableModes, [index]: "yaml" };
       this._controllableYamlValues = { ...this._controllableYamlValues, [index]: value };
       const nextErrors = { ...this._controllableYamlErrors };
@@ -1759,12 +1766,12 @@ export class HelmanConfigEditorPanel
    */
   private _moveControllable(fromIndex: number, toIndex: number): void {
     this._resetControllableModes();
-    this._moveListItem(["controllables"], fromIndex, toIndex);
+    this._moveListItem(["devices"], fromIndex, toIndex);
   }
 
   private _removeControllable(index: number): void {
     this._resetControllableModes();
-    this._removeListItem(["controllables"], index);
+    this._removeListItem(["devices"], index);
   }
 
   private _resetControllableModes(): void {
@@ -1787,7 +1794,7 @@ export class HelmanConfigEditorPanel
     }
     try {
       const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, ["controllables", index], cloneJson(parsed.value));
+      setValueAtPath(nextConfig, ["devices", index], cloneJson(parsed.value));
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
@@ -1808,7 +1815,7 @@ export class HelmanConfigEditorPanel
     return renderItemYamlEditor(this, {
       id: `controllable-${index}`,
       value: (this._controllableYamlValues[index] ??
-        this._getValue(["controllables", index])) as JsonValue,
+        this._getValue(["devices", index])) as JsonValue,
       error: this._controllableYamlErrors[index],
       onChange: (detail) => this._handleControllableYamlChanged(index, detail),
     });
@@ -2648,41 +2655,38 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The house meter, plus one row per controllable's own energy meter.
+   * The house meter, plus one row per carved meter.
    *
-   * `controllables.*.consumption.energy_entity_id` is the same path a
-   * controllable's picker already reads elsewhere in the editor — this is a
-   * second, read-only view of it, not a second control. Each row also carries
-   * that controllable's own `history_lookback_days` (really
-   * `consumption.projection.lookback_days`), a *different* per-appliance
-   * setting that happens to read the same entity: it governs only that one
-   * appliance's own consumption projection, never the house trainer.
+   * `devices.*.consumption.energy_entity_id` is the same path a device's
+   * picker already reads elsewhere in the editor — this is a second, read-only
+   * view of it, not a second control. Children are walked too: the AC breaker
+   * is carved for the air conditioners behind it.
    */
   private _houseConsumptionDepthRows(): TrainingDepthRow[] {
-    const controllables = asJsonArray(this._getValue(["controllables"])) ?? [];
     return [
       {
         label: this._t("editor.training_depth.house_meter"),
         path: ["power_devices", "house", "forecast", "total_energy_entity_id"],
         roleKey: "editor.training_depth.role_house_meter",
       },
-      ...controllables.flatMap((controllable, index): TrainingDepthRow[] => {
-        const entry = asJsonObject(controllable) ?? {};
-        // The trainer's list, not the config's: `read_deferrable_consumers`
-        // refuses the inverter (validation denies it a `consumption` block at
-        // all) and honours `deferrable: false`, so a row for either would
-        // claim the house window governs a meter it never reads.
-        const consumption = asJsonObject(entry.consumption) ?? {};
-        const deferrable = consumption.deferrable !== false;
-        if (this._stringValue(entry.kind) === "inverter" || !deferrable) return [];
+      ...iterDevices(this._config).flatMap(({ device, parent, path }, index): TrainingDepthRow[] => {
+        // The trainer's list, not the config's: `read_carved_meters` keeps
+        // only a meter whose demand is all schedulable, so a row for any
+        // other would claim the house window governs a meter it never reads.
+        // A carved meter's metered children are read too: its own energy is
+        // the meter minus theirs.
+        const read =
+          isCarvedMeterOwner(device) ||
+          (parent !== null && isCarvedMeterOwner(parent) && ownMeter(device) !== "");
+        if (!read) return [];
         const name =
-          this._stringValue(entry.name) ||
-          this._stringValue(entry.id) ||
+          this._stringValue(device.name) ||
+          this._stringValue(device.id) ||
           `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`;
         return [
           {
             label: name,
-            path: ["controllables", index, "consumption", "energy_entity_id"],
+            path: [...path, "consumption", "energy_entity_id"],
             roleKey: "editor.training_depth.role_controllable",
           },
         ];
@@ -2753,52 +2757,53 @@ export class HelmanConfigEditorPanel
    *
    * A `history_average` appliance reads its meter and its switch or climate
    * entity -- the second is how training knows when it ran, so a deep meter
-   * over a shallow switch still yields no estimate. A meter shared by generic
-   * and climate appliances is read once over the longest lookback among the
-   * sharers that learn, and every sharer's activity divides it, a `fixed` one
-   * included. Mirrors `ApplianceEnergyTrainingRequest` and `read_shared_meters`.
+   * over a shallow switch still yields no estimate. A meterless child reads its
+   * parent's meter, and that meter is read once for all of the parent's
+   * meterless children, over the longest lookback among those that learn;
+   * every one of them divides it, a `fixed` one included. Mirrors
+   * `ApplianceEnergyTrainingRequest` and `read_shared_meters`.
    *
-   * A second, read-only view of settings that live on each controllable --
-   * the same kind of view `_houseConsumptionDepthRows` gives those meters.
+   * A second, read-only view of settings that live on each device -- the same
+   * kind of view `_houseConsumptionDepthRows` gives those meters.
    */
   private _applianceEnergyDepthDevices(): ApplianceEnergyDepthDevice[] {
-    const controllables = (asJsonArray(this._getValue(["controllables"])) ?? []).map(
-      (controllable, index) => {
-        const entry = asJsonObject(controllable) ?? {};
-        const consumption = asJsonObject(entry.consumption) ?? {};
-        const projection = asJsonObject(consumption.projection) ?? {};
-        const kind = this._stringValue(entry.kind);
-        const lookback = projection.lookback_days;
-        return {
-          index,
-          id: this._stringValue(entry.id),
-          name:
-            this._stringValue(entry.name) ||
-            this._stringValue(entry.id) ||
-            `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
-          meter: this._stringValue(consumption.energy_entity_id),
-          // Only these two kinds share a meter or learn from history.
-          activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
-          learns: projection.strategy === "history_average",
-          fixedKwh: projection.hourly_energy_kwh,
-          // The backend trains on 30 days when the key is absent.
-          lookback: typeof lookback === "number" ? lookback : 30,
-        };
-      },
-    );
-    const sharers = new Map<string, typeof controllables>();
-    for (const item of controllables) {
-      if (!item.meter || !item.activity) continue;
-      sharers.set(item.meter, [...(sharers.get(item.meter) ?? []), item]);
-    }
-    const sharedLookback = (meter: string): number | null => {
-      const members = sharers.get(meter) ?? [];
-      const learners = members.filter((member) => member.learns);
-      if (members.length < 2 || learners.length === 0) return null;
+    const items = iterDevices(this._config).map(({ device, parent, path }, index) => {
+      const consumption = asJsonObject(device.consumption) ?? {};
+      const projection = asJsonObject(consumption.projection) ?? {};
+      const kind = deviceKind(device);
+      const lookback = projection.lookback_days;
+      const drawsFromParent = parent !== null && !ownMeter(device);
+      return {
+        index,
+        id: this._stringValue(device.id),
+        name:
+          this._stringValue(device.name) ||
+          this._stringValue(device.id) ||
+          `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
+        path,
+        parent: drawsFromParent ? parent : null,
+        // Its effective meter: a meterless child reads its parent's.
+        meterPath: [
+          ...(drawsFromParent ? path.slice(0, -2) : path),
+          "consumption",
+          "energy_entity_id",
+        ],
+        // Only these two kinds have a running signal or learn from history.
+        activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
+        learns: isSchedulable(device) && projection.strategy === "history_average",
+        fixedKwh: projection.hourly_energy_kwh,
+        // The backend trains on 30 days when the key is absent.
+        lookback: typeof lookback === "number" ? lookback : 30,
+      };
+    });
+    const sharedLookback = (parent: JsonObject | null): number | null => {
+      if (!parent) return null;
+      const learners = items.filter((item) => item.parent === parent && item.learns);
+      if (learners.length === 0) return null;
       return Math.max(...learners.map((member) => member.lookback));
     };
-    return controllables.flatMap((item): ApplianceEnergyDepthDevice[] => {
-      const shared = item.meter ? sharedLookback(item.meter) : null;
+    return items.flatMap((item): ApplianceEnergyDepthDevice[] => {
+      const shared = sharedLookback(item.parent);
       // A fixed sharer learns nothing, but when it ran still splits the meter.
       if (!item.learns && shared === null) return [];
       const days = shared ?? item.lookback;
@@ -2808,7 +2813,7 @@ export class HelmanConfigEditorPanel
         requiredDays: days,
       });
       const activity = item.activity
-        ? [entity(item.activity, ["controllables", item.index, "controls", item.activity, "entity_id"])]
+        ? [entity(item.activity, [...item.path, "controls", item.activity, "entity_id"])]
         : [];
       return [
         {
@@ -2818,12 +2823,7 @@ export class HelmanConfigEditorPanel
           learns: item.learns,
           fixedKwh: item.fixedKwh,
           lookbackDays: days,
-          entities: item.learns
-            ? [
-                entity("meter", ["controllables", item.index, "consumption", "energy_entity_id"]),
-                ...activity,
-              ]
-            : activity,
+          entities: item.learns ? [entity("meter", item.meterPath), ...activity] : activity,
         },
       ];
     });
@@ -3360,7 +3360,9 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderControllablesTab(): TemplateResult {
-    const controllables = asJsonArray(this._getValue(["controllables"])) ?? [];
+    // Top-level devices only; children are kept untouched in the draft and
+    // edited through YAML until the Devices tab lands.
+    const controllables = asJsonArray(this._getValue(["devices"])) ?? [];
     // The inverter is a singleton: config validation rejects a second one, so
     // the button that would author it is not offered once one exists.
     const hasInverter = controllables.some(
@@ -3679,7 +3681,7 @@ export class HelmanConfigEditorPanel
 
   private _renderControllableCard(controllable: unknown, index: number): TemplateResult {
     const applianceObject = asJsonObject(controllable) ?? {};
-    const kind = this._stringValue(applianceObject.kind);
+    const kind = deviceKind(applianceObject);
     if (kind === INVERTER_CONTROLLABLE_KIND) {
       return this._renderInverterControllable(applianceObject, index);
     }
@@ -3712,7 +3714,7 @@ export class HelmanConfigEditorPanel
     controllable: JsonObject,
     index: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["controllables", index];
+    const basePath: PathSegment[] = ["devices", index];
     const modePath: PathSegment[] = [...basePath, "controls", "mode"];
     const controllableName =
       this._stringValue(controllable.name) || this._t("editor.dynamic.inverter");
@@ -3826,7 +3828,7 @@ export class HelmanConfigEditorPanel
     appliance: JsonObject,
     index: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["controllables", index];
+    const basePath: PathSegment[] = ["devices", index];
     const useModes = objectEntries(
       this._getValue([...basePath, "controls", "use_mode", "values"]),
     );
@@ -3871,6 +3873,7 @@ export class HelmanConfigEditorPanel
                   ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
                   ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="ev_charger" disabled /></div>
+                  ${this._renderSchedulableToggle(basePath)}
                   ${this._renderRequiredNumberField([...basePath, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
                 </div>`,
               )}
@@ -3954,7 +3957,7 @@ export class HelmanConfigEditorPanel
     appliance: JsonObject,
     index: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["controllables", index];
+    const basePath: PathSegment[] = ["devices", index];
     const consumptionPath: PathSegment[] = [...basePath, "consumption"];
     const projectionStrategy =
       this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
@@ -3964,6 +3967,7 @@ export class HelmanConfigEditorPanel
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const isYaml = this._getControllableMode(index) === "yaml";
+    const schedulable = isSchedulable(appliance);
 
     return html`
       <details class="list-card ${isYaml ? "scope-yaml" : ""}">
@@ -3993,9 +3997,12 @@ export class HelmanConfigEditorPanel
                 this._t("editor.sections.identity_and_limits"),
                 html`<div class="field-grid">
                   ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
+                  ${schedulable
+                    ? this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")
+                    : this._renderOptionalTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
                   ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="generic" disabled /></div>
+                  ${this._renderSchedulableToggle(basePath)}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -4007,20 +4014,23 @@ export class HelmanConfigEditorPanel
                     {
                       includeDomains: ["switch"],
                       helpKey: "editor.help.appliance_switch_entity",
-                      required: true,
+                      required: schedulable,
                     },
                   )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
                 this._t("editor.sections.consumption"),
-                this._renderConsumptionSection(consumptionPath, {
-                  noteKey: "editor.notes.generic_appliance_projection",
-                  controllableId: this._stringValue(this._getValue(["controllables", index, "id"])),
-                  projectionStrategy,
-                  onStrategyChange: (strategy) =>
-                    this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                }),
+                // A passive device has no demand to project: only its meter.
+                schedulable
+                  ? this._renderConsumptionSection(consumptionPath, {
+                      noteKey: "editor.notes.generic_appliance_projection",
+                      controllableId: this._stringValue(this._getValue(["devices", index, "id"])),
+                      projectionStrategy,
+                      onStrategyChange: (strategy) =>
+                        this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                    })
+                  : this._renderConsumptionSection(consumptionPath),
               )}
             `}
         </div>
@@ -4032,7 +4042,7 @@ export class HelmanConfigEditorPanel
     appliance: JsonObject,
     index: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["controllables", index];
+    const basePath: PathSegment[] = ["devices", index];
     const consumptionPath: PathSegment[] = [...basePath, "consumption"];
     const projectionStrategy =
       this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
@@ -4042,6 +4052,7 @@ export class HelmanConfigEditorPanel
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const isYaml = this._getControllableMode(index) === "yaml";
+    const schedulable = isSchedulable(appliance);
 
     return html`
       <details class="list-card ${isYaml ? "scope-yaml" : ""}">
@@ -4071,9 +4082,12 @@ export class HelmanConfigEditorPanel
                 this._t("editor.sections.identity_and_limits"),
                 html`<div class="field-grid">
                   ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
+                  ${schedulable
+                    ? this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")
+                    : this._renderOptionalTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
                   ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="climate" disabled /></div>
+                  ${this._renderSchedulableToggle(basePath)}
                 </div>`,
               )}
               ${this._renderSimpleSection(
@@ -4085,20 +4099,23 @@ export class HelmanConfigEditorPanel
                     {
                       includeDomains: ["climate"],
                       helpKey: "editor.help.appliance_climate_entity",
-                      required: true,
+                      required: schedulable,
                     },
                   )}
                 </div>`,
               )}
               ${this._renderSimpleSection(
                 this._t("editor.sections.consumption"),
-                this._renderConsumptionSection(consumptionPath, {
-                  noteKey: "editor.notes.climate_appliance_projection",
-                  controllableId: this._stringValue(this._getValue(["controllables", index, "id"])),
-                  projectionStrategy,
-                  onStrategyChange: (strategy) =>
-                    this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                }),
+                // A passive device has no demand to project: only its meter.
+                schedulable
+                  ? this._renderConsumptionSection(consumptionPath, {
+                      noteKey: "editor.notes.climate_appliance_projection",
+                      controllableId: this._stringValue(this._getValue(["devices", index, "id"])),
+                      projectionStrategy,
+                      onStrategyChange: (strategy) =>
+                        this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                    })
+                  : this._renderConsumptionSection(consumptionPath),
               )}
             `}
         </div>
@@ -4107,13 +4124,26 @@ export class HelmanConfigEditorPanel
   }
 
   /**
+   * The one flag a device carries: may Helman plan and run it.
+   *
+   * Off by default, as in the backend. Children keep their own flags and are
+   * edited through YAML until the Devices tab lands.
+   */
+  private _renderSchedulableToggle(basePath: PathSegment[]): TemplateResult {
+    return this._renderBooleanField(
+      [...basePath, "schedulable"],
+      "editor.fields.schedulable",
+      false,
+      "editor.help.schedulable",
+    );
+  }
+
+  /**
    * The energy meter and what it is used for — the sibling of the Controls
    * section. `projection` is nested inside because a demand estimate is a
-   * statement about consumption, not about how the device is driven.
-   *
-   * The usage options only appear once a meter is picked: with no meter there
-   * is nothing to defer against and no history to average, so the choices
-   * would configure nothing.
+   * statement about consumption, not about how the device is driven. Whether
+   * the meter is carved out of the house baseline is not a setting here: it
+   * follows `schedulable`.
    */
   private _renderConsumptionSection(
     consumptionPath: PathSegment[],
@@ -4126,9 +4156,6 @@ export class HelmanConfigEditorPanel
     } = {},
   ): TemplateResult {
     const { noteKey, controllableId, projectionStrategy, onStrategyChange } = options;
-    const hasMeter = Boolean(
-      this._stringValue(this._getValue([...consumptionPath, "energy_entity_id"])),
-    );
     const projectionPath: PathSegment[] = [...consumptionPath, "projection"];
 
     return html`
@@ -4142,20 +4169,12 @@ export class HelmanConfigEditorPanel
               includeDomains: ["sensor"],
               helperKey: "editor.helpers.consumption_energy_entity",
               helpKey: "editor.help.consumption_energy_entity",
+              // Every device this tab edits is top-level, and a top-level
+              // device owns a meter; only a child may draw from its parent's.
+              required: true,
             },
           )}
         </div>
-        ${hasMeter
-          ? html`
-              <div class="field-grid">
-                ${this._renderBooleanField(
-                  [...consumptionPath, "deferrable"],
-                  "editor.fields.consumption_deferrable",
-                  true,
-                )}
-              </div>
-            `
-          : nothing}
         ${onStrategyChange
           ? html`
               <div class="field-grid">
@@ -5375,24 +5394,29 @@ export class HelmanConfigEditorPanel
     });
   }
 
+  /** Every device id in the draft tree: ids are unique across all of it. */
+  private _deviceIds(): string[] {
+    return iterDevices(this._config)
+      .map(({ device }) => this._stringValue(device.id))
+      .filter((value) => value.length > 0);
+  }
+
   private _handleAddInverter = (): void => {
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["controllables"],
+        ["devices"],
         createInverterControllableDraft(this._t("editor.dynamic.inverter")),
       );
     });
   };
 
   private _handleAddEvCharger = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
-      .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
-      .filter((value) => value.length > 0);
+    const existingIds = this._deviceIds();
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["controllables"],
+        ["devices"],
         createApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.ev_charger", { index: existingIds.length + 1 }),
@@ -5403,13 +5427,11 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddClimateAppliance = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
-      .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
-      .filter((value) => value.length > 0);
+    const existingIds = this._deviceIds();
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["controllables"],
+        ["devices"],
         createClimateApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.climate_appliance", {
@@ -5421,13 +5443,11 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddGenericAppliance = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
-      .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
-      .filter((value) => value.length > 0);
+    const existingIds = this._deviceIds();
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["controllables"],
+        ["devices"],
         createGenericApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.generic_appliance", {
@@ -5439,7 +5459,7 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddVehicle(applianceIndex: number): void {
-    const vehiclePath: PathSegment[] = ["controllables", applianceIndex, "vehicles"];
+    const vehiclePath: PathSegment[] = ["devices", applianceIndex, "vehicles"];
     const existingIds = (asJsonArray(this._getValue(vehiclePath)) ?? [])
       .map((vehicle) => this._stringValue(asJsonObject(vehicle)?.id))
       .filter((value) => value.length > 0);
@@ -5493,7 +5513,7 @@ export class HelmanConfigEditorPanel
 
     this._applyMutation((draft) => {
       const basePath: PathSegment[] = [
-        "controllables",
+        "devices",
         applianceIndex,
         "consumption",
         "projection",
@@ -5504,7 +5524,7 @@ export class HelmanConfigEditorPanel
       }
 
       // Only the window is seeded. The meter lives on the consumption block
-      // now, where it may already have been picked for the deferrable split
+      // now, where it may already have been picked for the baseline split
       // alone — writing it from here would either clobber that or invent an
       // empty one.
       const existingLookbackDays = getValueAtPath(draft, [...basePath, "lookback_days"]);

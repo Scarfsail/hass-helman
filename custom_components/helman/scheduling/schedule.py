@@ -21,7 +21,7 @@ from ..schedule_action_metadata import (
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..controllables.config import (
     CONTROLLABLE_ID_INVERTER,
-    find_inverter_controllable,
+    find_inverter_device,
 )
 from ..const import (
     SCHEDULE_ACTION_EMPTY,
@@ -61,7 +61,7 @@ LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: Not an index: the inverter is a singleton found by kind, so its position in
 #: the list is not stable and would only mislead.
 _INVERTER_CONTROL_PATH = (
-    f"controllables[{CONTROLLABLE_ID_INVERTER}].controls.mode"
+    f"devices[{CONTROLLABLE_ID_INVERTER}].controls.mode"
 )
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 
@@ -534,12 +534,13 @@ def _read_inverter_mode_control(
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     """``controls.mode`` and its ``options`` for the inverter controllable.
 
-    Since config version 7 the inverter is one entry in ``controllables:``
-    rather than a section of its own, so this is where the old
+    Since config version 7 the inverter is one entry in the device list
+    (``devices:`` since version 20) rather than a section of its own, so this
+    is where the old
     ``scheduler.control`` / ``action_option_map`` pair is now read from. The
     returned dataclass is unchanged — only its source moved.
     """
-    inverter = find_inverter_controllable(config)
+    inverter = find_inverter_device(config)
     mode_config = _read_mapping(_read_mapping(inverter.get("controls")).get("mode"))
     return (mode_config, _read_mapping(mode_config.get("options")))
 

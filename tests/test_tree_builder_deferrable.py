@@ -1,9 +1,9 @@
-"""House children carry the deferrability of their controllable.
+"""House children carry the carve-out of the device that owns their meter.
 
 The power card marks the loads the optimizer may move in time, and it must do so
 from the same roster the house forecast carves out — no second list to keep in
 agreement. A house child's node id *is* its energy statistic, which is exactly
-what ``read_deferrable_consumers`` is keyed by, so the match is a dict lookup —
+what ``read_carved_meters`` is keyed by, so the match is a dict lookup —
 which also hands the node the controllable ids the schedule is stored under — and
 nothing else on the tree is touched.
 """
@@ -48,10 +48,11 @@ class _Hass:
             return None
 
 
-def _controllable(controllable_id, energy_entity_id, **consumption):
+def _controllable(controllable_id, energy_entity_id, *, schedulable=True):
     entry = {
         "name": (controllable_id or energy_entity_id).title(),
-        "consumption": {"energy_entity_id": energy_entity_id, **consumption},
+        "schedulable": schedulable,
+        "consumption": {"energy_entity_id": energy_entity_id},
     }
     if controllable_id is not None:
         entry["id"] = controllable_id
@@ -59,7 +60,7 @@ def _controllable(controllable_id, energy_entity_id, **consumption):
 
 
 def _house_children(controllables, stats, parent_of=None):
-    builder = HelmanTreeBuilder(_Hass(), {"controllables": controllables})
+    builder = HelmanTreeBuilder(_Hass(), {"devices": controllables})
     prefs = {
         "device_consumption": [
             {
@@ -86,9 +87,9 @@ class TestHouseChildDeferrability(unittest.TestCase):
         self.assertTrue(nodes["sensor.dishwasher_energy"].deferrable)
         self.assertFalse(nodes["sensor.fridge_energy"].deferrable)
 
-    def test_a_controllable_that_opted_out_is_not_marked(self):
+    def test_a_passive_device_is_not_marked(self):
         nodes = _house_children(
-            [_controllable("boiler", "sensor.boiler_energy", deferrable=False)],
+            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)],
             ["sensor.boiler_energy"],
         )
 
@@ -139,10 +140,15 @@ class TestHouseChildControllableId(unittest.TestCase):
         # Four air conditioners on one breaker meter: one node, one badge, and
         # the badge has to cover all four schedules.
         meter = "sensor.jistic_klimatizace_energy"
-        nodes = _house_children(
-            [_controllable(f"ac-{index}", meter) for index in range(4)],
-            [meter],
-        )
+        breaker = {
+            "id": "breaker",
+            "consumption": {"energy_entity_id": meter},
+            "children": [
+                {"id": f"ac-{index}", "kind": "climate", "schedulable": True}
+                for index in range(4)
+            ],
+        }
+        nodes = _house_children([breaker], [meter])
 
         self.assertEqual(list(nodes), [meter])
         self.assertTrue(nodes[meter].deferrable)
@@ -162,9 +168,9 @@ class TestHouseChildControllableId(unittest.TestCase):
         self.assertTrue(nodes["sensor.dryer_energy"].deferrable)
         self.assertEqual(nodes["sensor.dryer_energy"].controllable_ids, [])
 
-    def test_a_controllable_that_opted_out_carries_no_controllable_ids(self):
+    def test_a_passive_device_carries_no_controllable_ids(self):
         nodes = _house_children(
-            [_controllable("boiler", "sensor.boiler_energy", deferrable=False)],
+            [_controllable("boiler", "sensor.boiler_energy", schedulable=False)],
             ["sensor.boiler_energy"],
         )
 

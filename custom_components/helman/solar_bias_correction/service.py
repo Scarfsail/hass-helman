@@ -512,11 +512,16 @@ class SolarBiasCorrectionService:
             except Exception:
                 _LOGGER.exception("Failed to resolve house consumers for span aggregates")
                 breakdown_consumers = []
-        consumer_entities = [
-            consumer["energy_entity_id"]
-            for consumer in breakdown_consumers
-            if consumer.get("energy_entity_id")
-        ]
+        consumer_entities = list(
+            dict.fromkeys(
+                entity
+                for consumer in breakdown_consumers
+                for entity in (
+                    consumer["energy_entity_id"],
+                    *consumer["metered_children"],
+                )
+            )
+        )
 
         from ..recorder_statistics_span import (
             SpanStatistics,
@@ -560,8 +565,14 @@ class SolarBiasCorrectionService:
         # consumer's bucket total is arrived at exactly as the house total it is
         # subtracted from.
         consumer_kwh_by_entity = {
-            entity: _energy_by_bucket(span.energy_for(entity), bucket, local_tz)
-            for entity in consumer_entities
+            consumer["energy_entity_id"]: _energy_by_bucket(
+                self._consumer_own_energy(
+                    consumer, span.energy_kwh, slot=timedelta(hours=1)
+                ),
+                bucket,
+                local_tz,
+            )
+            for consumer in breakdown_consumers
         }
 
         import_price_config = self._grid_import_price_config()
@@ -1844,6 +1855,7 @@ class SolarBiasCorrectionService:
             _entity_id(self._battery_charge_energy_entity_id_provider),
             _entity_id(self._battery_discharge_energy_entity_id_provider),
             *(consumer["energy_entity_id"] for consumer in consumers),
+            *(child for consumer in consumers for child in consumer["metered_children"]),
         ]
         return [entity_id for entity_id in candidates if entity_id]
 
@@ -1865,9 +1877,36 @@ class SolarBiasCorrectionService:
         )
 
     @staticmethod
+    def _consumer_own_energy(
+        consumer: dict,
+        energy_by_entity: dict[str, dict[datetime, float]],
+        *,
+        slot: timedelta,
+    ) -> dict[datetime, float]:
+        """A consumer's own energy per slot: its meter minus its metered children.
+
+        The forecast and the house trainer subtract a carved meter's own energy,
+        so the breakdown does too — otherwise a sub-meter that is a row of its
+        own would be taken out of the house twice.
+        """
+        # Imported here: the recorder module needs Home Assistant's recorder,
+        # which this module's import-time tests stub out.
+        from ..recorder_hourly_series import own_energy_changes
+
+        return own_energy_changes(
+            energy_by_entity.get(consumer["energy_entity_id"]) or {},
+            [
+                energy_by_entity.get(child) or {}
+                for child in consumer["metered_children"]
+            ],
+            slot=slot,
+        )
+
+    @staticmethod
     def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
         """Coerce a provider's list to
-        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, ids}]``.
+        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, ids,
+        metered_children}]``.
 
         Drops anything without a usable entity id and defaults a missing label to
         the entity id, so callers get a clean, deduplicable list. The switch and
@@ -1879,7 +1918,8 @@ class SolarBiasCorrectionService:
         ``ids`` are the controllable ids the roster carries for the meter — the
         keys the forecast's scheduled demand is reported under, several for a
         meter shared by several devices, and empty for a device the tree alone
-        knows about.
+        knows about. ``metered_children`` are the sub-meters behind a carved
+        meter, empty for everything else.
         """
         result: list[dict] = []
         for consumer in raw_consumers or []:
@@ -1892,6 +1932,7 @@ class SolarBiasCorrectionService:
             switch = consumer.get("switch_entity_id")
             power = consumer.get("power_entity_id")
             raw_ids = consumer.get("ids")
+            raw_children = consumer.get("metered_children")
             result.append(
                 {
                     "energy_entity_id": eid,
@@ -1905,6 +1946,13 @@ class SolarBiasCorrectionService:
                             raw_ids if isinstance(raw_ids, list) else ()
                         )
                         if isinstance(controllable_id, str) and controllable_id
+                    ],
+                    "metered_children": [
+                        child
+                        for child in (
+                            raw_children if isinstance(raw_children, list) else ()
+                        )
+                        if isinstance(child, str) and child
                     ],
                 }
             )
@@ -2054,7 +2102,9 @@ class SolarBiasCorrectionService:
                 return [], []
             slot_maps = [
                 self._consumer_slot_map(
-                    slot_energy_by_entity.get(consumer["energy_entity_id"]) or {},
+                    self._consumer_own_energy(
+                        consumer, slot_energy_by_entity, slot=timedelta(minutes=15)
+                    ),
                     target_date,
                 )
                 for consumer in consumers

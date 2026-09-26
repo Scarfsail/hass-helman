@@ -8,16 +8,13 @@ from typing import Any
 from .automation.config import AutomationConfigError, read_automation_config
 from .automation.optimizer import build_optimizer
 from .automation.spec import OPTIMIZER_SPECS
-from .appliances.config import build_appliances_runtime_registry
-from .appliances.climate_appliance import (
-    ClimateApplianceConfigError,
-    read_climate_appliance,
+from .appliances.config import (
+    build_appliances_runtime_registry,
+    read_device_appliance,
 )
-from .appliances.ev_charger import EvChargerConfigError, read_ev_charger_appliance
-from .appliances.generic_appliance import (
-    GenericApplianceConfigError,
-    read_generic_appliance,
-)
+from .appliances.climate_appliance import ClimateApplianceConfigError
+from .appliances.ev_charger import EvChargerConfigError
+from .appliances.generic_appliance import GenericApplianceConfigError
 from .battery_state import describe_battery_entity_config_issue
 from .grid_price_forecast_builder import (
     GridImportPriceConfigError,
@@ -25,24 +22,30 @@ from .grid_price_forecast_builder import (
 )
 from .controllables.config import (
     CONTROLLABLE_ID_INVERTER,
+    device_children,
+    is_schedulable,
+    iter_device_paths,
+    own_meter,
+    peek_controllable_kind,
     read_controllable_kinds_by_id,
+    read_schedulable_ids,
+    running_signal,
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
     CONTROLLABLE_SPECS,
     KNOWN_CONTROLLABLE_KINDS,
-    SHARED_METER_KINDS,
     appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
 from .const import SOLAR_BIAS_AGGREGATION_METHODS
 from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
 
-#: The config keys config version 7 retired. Named here so the save path can
-#: refuse them by name instead of silently ignoring a user's hand-edited YAML:
-#: migration runs on load only, and rewriting someone's document under them is
-#: worse than telling them what it is called now.
-_RETIRED_CONFIG_KEYS = ("appliances", "scheduler")
+#: The config keys config versions 7 and 20 retired. Named here so the save path
+#: can refuse them by name instead of silently ignoring a user's hand-edited
+#: YAML: migration runs on load only, and rewriting someone's document under
+#: them is worse than telling them what it is called now.
+_RETIRED_CONFIG_KEYS = ("appliances", "scheduler", "controllables")
 
 #: The top-level keys config version 18 moved under ``visualization``, plus
 #: ``training_time``, which moved under ``training``. Same reasoning as
@@ -997,18 +1000,18 @@ def _validate_controllables_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """One walk over ``controllables:``, covering all four kinds.
+    """One walk over the ``devices:`` tree, covering every kind and every level.
 
-    Replaces the pair of validators that grew from the old split — one for
-    ``appliances``, one for ``scheduler.control``. They enforced the same
-    rules with different words; the only genuinely kind-specific part left is
-    which reader turns an entry into a runtime object, and that is a dispatch
-    on ``kind``.
+    Walks through :func:`~.controllables.config.iter_device_paths`, the same
+    generator every runtime reader flattens the tree with, so the validator and
+    the readers cannot disagree about what is in it. Reported under the
+    ``controllables`` section, which is the editor tab the devices live on.
 
-    Three rules exist only because the list is now shared: the inverter is a
-    singleton, its id is reserved, and ids are unique across every kind, not
-    just among appliances. All three are what makes ``controllable_id`` usable
-    as an optimizer target.
+    Per device: its kind, its id (unique across the whole tree; ``inverter`` is
+    reserved), its ``consumption`` block, and — only when it is schedulable —
+    the per-kind runtime reader. Per parent: the rules that relate a device to
+    its children (see :func:`_validate_device_children`). Across the tree: a
+    meter belongs to exactly one device.
     """
     section = "controllables"
     for retired_key in _RETIRED_CONFIG_KEYS:
@@ -1019,28 +1022,27 @@ def _validate_controllables_config(
                 code="retired_config_key",
                 message=(
                     f"{retired_key!r} is no longer a config key; the inverter and "
-                    "the appliances are configured together under 'controllables'"
+                    "every other device are configured together under 'devices'"
                 ),
             )
 
-    raw_controllables = config.get("controllables")
-    if raw_controllables is None:
+    raw_devices = config.get("devices")
+    if raw_devices is None:
         return
-    if not isinstance(raw_controllables, list):
+    if not isinstance(raw_devices, list):
         report.add_error(
             section=section,
-            path="controllables",
+            path="devices",
             code="invalid_type",
-            message="controllables must be a list",
+            message="devices must be a list",
         )
         return
 
     seen_ids: set[str] = set()
-    meter_claimants: dict[str, list[tuple[str, str, bool]]] = {}
+    meter_owners: dict[str, list[str]] = {}
     seen_inverter = False
-    for index, raw_controllable in enumerate(raw_controllables):
-        path = f"controllables[{index}]"
-        if not isinstance(raw_controllable, Mapping):
+    for path, raw_device, parent in iter_device_paths(config):
+        if not isinstance(raw_device, Mapping):
             report.add_error(
                 section=section,
                 path=path,
@@ -1049,8 +1051,8 @@ def _validate_controllables_config(
             )
             continue
 
-        raw_kind = raw_controllable.get("kind")
-        if not _is_non_empty_string(raw_kind):
+        kind = peek_controllable_kind(raw_device)
+        if kind is None:
             report.add_error(
                 section=section,
                 path=f"{path}.kind",
@@ -1059,16 +1061,24 @@ def _validate_controllables_config(
             )
             continue
 
-        kind = raw_kind.strip()
         if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(
                 section=section,
                 path=path,
                 code="unsupported_kind",
                 message=(
-                    f"Controllable kind {kind!r} is preserved but not editable in "
+                    f"Device kind {kind!r} is preserved but not editable in "
                     "this version"
                 ),
+            )
+            continue
+
+        if kind == CONTROLLABLE_KIND_INVERTER and parent is not None:
+            report.add_error(
+                section=section,
+                path=path,
+                code="inverter_not_top_level",
+                message="the inverter is a top-level device; it cannot be a child",
             )
             continue
 
@@ -1081,32 +1091,67 @@ def _validate_controllables_config(
                 path=path,
                 code="duplicate_inverter",
                 message=(
-                    "only one controllable may be the inverter; Helman drives a "
+                    "only one device may be the inverter; Helman drives a "
                     "single battery inverter"
                 ),
             )
             continue
 
         if not _validate_controllable_id(
-            raw_controllable, path=path, kind=kind, seen_ids=seen_ids, report=report
+            raw_device, path=path, kind=kind, seen_ids=seen_ids, report=report
         ):
             continue
 
-        _validate_controllable_consumption(
-            raw_controllable,
+        _validate_device_consumption(
+            raw_device,
             path=path,
             kind=kind,
-            meter_claimants=meter_claimants,
+            is_child=parent is not None,
+            meter_owners=meter_owners,
             report=report,
         )
 
         if kind == CONTROLLABLE_KIND_INVERTER:
             seen_inverter = True
-            _validate_inverter_controllable(config, raw_controllable, path, report)
+            _validate_inverter_controllable(config, raw_device, path, report)
+            # The inverter is always schedulable, and schedulable devices are
+            # leaves.
+            if raw_device.get("children") is not None:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.children",
+                    code="inverter_with_children",
+                    message=f"{path} is the inverter and cannot have children",
+                )
             continue
 
+        schedulable = raw_device.get("schedulable")
+        if schedulable is not None and not isinstance(schedulable, bool):
+            report.add_error(
+                section=section,
+                path=f"{path}.schedulable",
+                code="invalid_type",
+                message=f"{path}.schedulable must be true or false",
+            )
+
+        _validate_device_children(raw_device, path=path, report=report)
+
+        if parent is not None and own_meter(raw_device) is None:
+            if running_signal(raw_device) is None:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.controls",
+                    code="running_signal_required",
+                    message=(
+                        f"{path} draws from its parent's meter, so it needs a "
+                        "switch or climate control to tell when it runs"
+                    ),
+                )
+
+        if not is_schedulable(raw_device):
+            continue
         try:
-            _read_supported_appliance(raw_controllable, path=path, kind=kind)
+            read_device_appliance(raw_device, parent, path=path)
         except (
             ClimateApplianceConfigError,
             EvChargerConfigError,
@@ -1119,92 +1164,139 @@ def _validate_controllables_config(
                 message=str(err),
             )
 
-    _validate_shared_meters(meter_claimants, report=report)
-
-
-def _validate_shared_meters(
-    meter_claimants: Mapping[str, list[tuple[str, str, bool]]],
-    *,
-    report: ValidationReport,
-) -> None:
-    """Rules for a meter named by more than one controllable.
-
-    Several devices behind one breaker meter are a real setup — four air
-    conditioners on one circuit — so a shared meter is valid. The house baseline
-    subtracts the meter once however many claim it, and ``history_average``
-    splits its energy evenly among the sharers running at the time. Two things
-    make that split impossible, and each is refused here rather than guessed at:
-
-    * a sharer with no way to tell when it runs. Only generic and climate
-      controllables have a switch or HVAC mode to read, and a device that cannot
-      be counted in the divisor would silently inflate everyone else's share;
-    * sharers that disagree on ``deferrable``. The meter is one row in the
-      house split — either carved out of the baseline or not — so one sharer
-      opting out while another opts in has no consistent meaning. A missing
-      value is ``True``, the same rule ``read_deferrable_consumers`` applies.
-
-    A ``fixed`` projection on a sharer is fine: it still runs, so it still counts
-    toward the divisor, it just does not learn from the result.
-    """
-    section = "controllables"
-    for entity_id, claimants in meter_claimants.items():
-        if len(claimants) < 2:
-            continue
-        for path, kind, _deferrable in claimants:
-            if kind in SHARED_METER_KINDS:
-                continue
+    for entity_id, paths in meter_owners.items():
+        for path in paths[1:]:
             report.add_error(
                 section=section,
                 path=f"{path}.consumption.energy_entity_id",
-                code="shared_meter_unsupported_kind",
+                code="duplicate_meter",
                 message=(
-                    f"energy meter {entity_id!r} is shared with another "
-                    "controllable; only generic and climate controllables can "
-                    "share a meter, because splitting it needs a switch or "
-                    "climate entity to tell when each device runs"
+                    f"energy meter {entity_id!r} already belongs to {paths[0]}; "
+                    "a meter belongs to exactly one device — put the devices "
+                    "behind it under that device as children without a meter"
                 ),
             )
-        if len({deferrable for _path, _kind, deferrable in claimants}) > 1:
-            for path, _kind, _deferrable in claimants:
-                report.add_error(
-                    section=section,
-                    path=f"{path}.consumption.deferrable",
-                    code="shared_meter_deferrable_mismatch",
-                    message=(
-                        f"every controllable sharing energy meter {entity_id!r} "
-                        "must agree on 'consumption.deferrable'; the meter is "
-                        "one row in the house split"
-                    ),
-                )
 
 
-def _validate_controllable_consumption(
-    raw_controllable: Mapping[str, Any],
+def _validate_device_children(
+    raw_device: Mapping[str, Any],
+    *,
+    path: str,
+    report: ValidationReport,
+) -> None:
+    """The rules that relate a device to its direct children.
+
+    * Only a meter owner can have children, so a meterless device is always a
+      leaf and its parent always owns a meter.
+    * A schedulable device is a leaf: its projection would count its children
+      again, and its training would read their energy.
+    * Meterless siblings are all schedulable or all passive — a mix would drop
+      the passive share from the forecast or count the schedulable ones twice.
+    * The live split needs power: a parent with meterless children, and each of
+      its metered children, names ``consumption.power_entity_id``.
+    """
+    section = "controllables"
+    raw_children = raw_device.get("children")
+    if raw_children is None:
+        return
+    if not isinstance(raw_children, list):
+        report.add_error(
+            section=section,
+            path=f"{path}.children",
+            code="invalid_type",
+            message=f"{path}.children must be a list",
+        )
+        return
+    children = device_children(raw_device)
+    if not children:
+        return
+
+    if own_meter(raw_device) is None:
+        report.add_error(
+            section=section,
+            path=f"{path}.children",
+            code="children_without_meter",
+            message=(
+                f"{path} has children but no energy meter; only a device that "
+                "owns a meter can have children"
+            ),
+        )
+    if is_schedulable(raw_device):
+        report.add_error(
+            section=section,
+            path=f"{path}.children",
+            code="schedulable_with_children",
+            message=(
+                f"{path} is schedulable, so it cannot have children; a "
+                "schedulable device is a leaf"
+            ),
+        )
+
+    meterless = [child for child in children if own_meter(child) is None]
+    if not meterless:
+        return
+    if len({is_schedulable(child) for child in meterless}) > 1:
+        report.add_error(
+            section=section,
+            path=f"{path}.children",
+            code="mixed_meterless_children",
+            message=(
+                f"the children of {path} without a meter of their own must be "
+                "all schedulable or all passive"
+            ),
+        )
+    for power_path, device in [
+        (path, raw_device),
+        *(
+            (f"{path}.children[{index}]", child)
+            for index, child in enumerate(raw_children)
+            if isinstance(child, Mapping) and own_meter(child) is not None
+        ),
+    ]:
+        consumption = device.get("consumption")
+        power = (
+            consumption.get("power_entity_id")
+            if isinstance(consumption, Mapping)
+            else None
+        )
+        if not _is_non_empty_string(power):
+            report.add_error(
+                section=section,
+                path=f"{power_path}.consumption.power_entity_id",
+                code="power_entity_required",
+                message=(
+                    f"{power_path} needs a power sensor: the live power of the "
+                    f"children of {path} without a meter is split from it"
+                ),
+            )
+
+
+def _validate_device_consumption(
+    raw_device: Mapping[str, Any],
     *,
     path: str,
     kind: str,
-    meter_claimants: dict[str, list[tuple[str, str, bool]]],
+    is_child: bool,
+    meter_owners: dict[str, list[str]],
     report: ValidationReport,
 ) -> None:
-    """The ``consumption`` block: the meter, and who may declare one.
+    """The ``consumption`` block: the meter, the power sensor, and who may declare one.
 
     The per-kind appliance readers already check the shape of
-    ``consumption.projection``, and the meter itself when a projection needs it.
-    What only this function can see is everything *across* entries and outside
-    the appliance kinds: a meter on an EV charger (which has no projection to
-    hang validation off), who claims each meter — collected into
-    ``meter_claimants`` so :func:`_validate_shared_meters` can judge sharing once
-    every entry has been seen — and a ``consumption`` block on the inverter.
+    ``consumption.projection`` on a schedulable device. What only this function
+    sees is everything outside them: the meter is required on every consuming
+    device except a child that draws from its parent's, who owns each meter —
+    collected into ``meter_owners`` so a meter named twice is reported once
+    every device has been seen — and a ``consumption`` block on the inverter.
 
     The inverter is refused the block outright rather than field by field. It is
     not house consumption — it is what moves energy in and out of the battery —
-    so a meter, a deferrable flag and a demand projection are all equally
-    meaningless on it, and one error saying so beats three saying almost the
-    same thing.
+    so a meter and a demand projection are equally meaningless on it, and one
+    error saying so beats several saying almost the same thing.
     """
     section = "controllables"
 
-    if "projection" in raw_controllable:
+    if "projection" in raw_device:
         report.add_error(
             section=section,
             path=f"{path}.projection",
@@ -1216,23 +1308,21 @@ def _validate_controllable_consumption(
             ),
         )
 
-    raw_consumption = raw_controllable.get("consumption")
-    if raw_consumption is None:
-        return
-
+    raw_consumption = raw_device.get("consumption")
     if kind == CONTROLLABLE_KIND_INVERTER:
-        report.add_error(
-            section=section,
-            path=f"{path}.consumption",
-            code="consumption_not_allowed",
-            message=(
-                "the inverter has no consumption of its own; it moves energy "
-                "rather than drawing it"
-            ),
-        )
+        if raw_consumption is not None:
+            report.add_error(
+                section=section,
+                path=f"{path}.consumption",
+                code="consumption_not_allowed",
+                message=(
+                    "the inverter has no consumption of its own; it moves energy "
+                    "rather than drawing it"
+                ),
+            )
         return
 
-    if not isinstance(raw_consumption, Mapping):
+    if raw_consumption is not None and not isinstance(raw_consumption, Mapping):
         report.add_error(
             section=section,
             path=f"{path}.consumption",
@@ -1240,33 +1330,39 @@ def _validate_controllable_consumption(
             message=f"{path}.consumption must be an object",
         )
         return
+    consumption = raw_consumption or {}
 
-    energy_entity_id = raw_consumption.get("energy_entity_id")
-    deferrable = raw_consumption.get("deferrable")
-    if deferrable is not None and not isinstance(deferrable, bool):
+    if "deferrable" in consumption:
         report.add_error(
             section=section,
             path=f"{path}.consumption.deferrable",
-            code="invalid_type",
-            message=f"{path}.consumption.deferrable must be true or false",
-        )
-    elif deferrable is True and energy_entity_id is None:
-        # Only an *explicit* true earns this: the user asked for something that
-        # will not happen. The default is silent — an appliance with a fixed
-        # projection and no meter is an ordinary config, not a half-finished
-        # one. Not an error either way: it configures nothing but breaks
-        # nothing, and a half-filled form mid-edit should not read as broken.
-        report.add_warning(
-            section=section,
-            path=f"{path}.consumption",
-            code="deferrable_without_meter",
+            code="unknown_key",
             message=(
-                f"{path} counts as a deferrable consumer only once "
-                "'consumption.energy_entity_id' names its energy meter"
+                f"{path}.consumption.deferrable is not a config key; the "
+                "baseline carve-out follows 'schedulable'"
             ),
         )
 
+    _validate_optional_entity_id(
+        report,
+        section,
+        f"{path}.consumption.power_entity_id",
+        consumption.get("power_entity_id"),
+        allowed_domains=("sensor",),
+    )
+
+    energy_entity_id = consumption.get("energy_entity_id")
     if energy_entity_id is None:
+        if not is_child:
+            report.add_error(
+                section=section,
+                path=f"{path}.consumption.energy_entity_id",
+                code="required",
+                message=(
+                    f"{path} needs an energy meter; only a child can draw from "
+                    "its parent's instead"
+                ),
+            )
         return
 
     _validate_optional_entity_id(
@@ -1279,9 +1375,7 @@ def _validate_controllable_consumption(
     if not _is_non_empty_string(energy_entity_id):
         return
 
-    meter_claimants.setdefault(energy_entity_id.strip(), []).append(
-        (path, kind, deferrable is not False)
-    )
+    meter_owners.setdefault(energy_entity_id.strip(), []).append(path)
 
 
 def _validate_controllable_id(
@@ -1292,18 +1386,19 @@ def _validate_controllable_id(
     seen_ids: set[str],
     report: ValidationReport,
 ) -> bool:
-    """Uniqueness plus the one reserved id. ``False`` stops further checks.
+    """Presence, uniqueness across the tree, and the one reserved id.
+
+    ``False`` stops further checks.
 
     The inverter must carry ``id: inverter`` — not merely may. Optimizers name
-    what they act on by controllable id, including the three that drive the
-    inverter, so an inverter entry with some other id (or none) would leave
-    ``target.controllable_id`` with nothing to resolve against. The alternative
-    was to resolve the inverter by *kind* at targeting time, which would make
-    ``controllable_id`` mean "an id, except sometimes a kind". The migration and
-    the "Add inverter" draft both always write it, so this only bites a
+    what they act on by device id, including the three that drive the
+    inverter, so an inverter with some other id (or none) would leave
+    ``target.controllable_id`` with nothing to resolve against. The migration
+    and the "Add inverter" draft both always write it, so this only bites a
     hand-authored document.
 
-    Every other kind must name itself, and the appliance readers already say so.
+    Every other device must name itself too: the id is the persistent key for
+    schedules, optimizer targets and training, passive devices included.
     """
     section = "controllables"
     raw_id = raw_controllable.get("id")
@@ -1315,13 +1410,19 @@ def _validate_controllable_id(
             path=f"{path}.id",
             code="required_controllable_id",
             message=(
-                f"the inverter controllable must have id "
-                f"{CONTROLLABLE_ID_INVERTER!r}; optimizers target it by that id"
+                f"the inverter must have id {CONTROLLABLE_ID_INVERTER!r}; "
+                "optimizers target it by that id"
             ),
         )
         return False
     if not _is_non_empty_string(raw_id):
-        return True
+        report.add_error(
+            section=section,
+            path=f"{path}.id",
+            code="required",
+            message=f"{path}.id must be a non-empty string",
+        )
+        return False
 
     controllable_id = raw_id.strip()
     if (
@@ -1333,7 +1434,7 @@ def _validate_controllable_id(
             path=f"{path}.id",
             code="reserved_controllable_id",
             message=(
-                f"controllable id {CONTROLLABLE_ID_INVERTER!r} is reserved for the "
+                f"device id {CONTROLLABLE_ID_INVERTER!r} is reserved for the "
                 "inverter"
             ),
         )
@@ -1344,7 +1445,7 @@ def _validate_controllable_id(
             section=section,
             path=f"{path}.id",
             code="duplicate_controllable_id",
-            message=f"duplicate controllable id {controllable_id!r}",
+            message=f"duplicate device id {controllable_id!r}",
         )
         return False
 
@@ -1428,6 +1529,7 @@ def _validate_automation_config(
     appliance_registry = build_appliances_runtime_registry(config)
     battery_issue = describe_battery_entity_config_issue(config)
     controllable_kinds_by_id = read_controllable_kinds_by_id(config)
+    schedulable_ids = read_schedulable_ids(config)
     # `enabled_*_optimizers` drops the disabled ones, so its index is not the
     # index the path has to address — and the two differ exactly when a
     # disabled optimizer exists, which is when
@@ -1473,7 +1575,11 @@ def _validate_automation_config(
                     ),
                 )
             if not _validate_optimizer_target(
-                optimizer, controllable_kinds_by_id, path=path, report=report
+                optimizer,
+                controllable_kinds_by_id,
+                schedulable_ids,
+                path=path,
+                report=report,
             ):
                 # Building would fail again on the same id, in the appliance
                 # registry's words this time. One finding per fault.
@@ -1668,6 +1774,7 @@ def _validate_requires_appliance(
 def _validate_optimizer_target(
     optimizer: Any,
     controllable_kinds_by_id: Mapping[str, str],
+    schedulable_ids: set[str],
     *,
     path: str,
     report: ValidationReport,
@@ -1688,6 +1795,11 @@ def _validate_optimizer_target(
     lands here as ``incompatible_target`` — the same rejection
     ``resolve_appliance_target`` already made at build time, moved to where the
     user can see it against the field they typed.
+
+    A third: the target must be ``schedulable``. Helman neither plans nor
+    executes a passive device, so an optimizer aimed at one would plan nothing
+    — and unsetting ``schedulable`` on a targeted device is refused here rather
+    than silently dropping the optimizer's target.
     """
     valid = True
     seen: set[str] = set()
@@ -1714,6 +1826,7 @@ def _validate_optimizer_target(
                 optimizer,
                 controllable_id,
                 controllable_kinds_by_id,
+                schedulable_ids,
                 path=id_path,
                 report=report,
             )
@@ -1726,6 +1839,7 @@ def _validate_target_member(
     optimizer: Any,
     controllable_id: str,
     controllable_kinds_by_id: Mapping[str, str],
+    schedulable_ids: set[str],
     *,
     path: str,
     report: ValidationReport,
@@ -1739,6 +1853,19 @@ def _validate_target_member(
             message=(
                 f"optimizer {optimizer.id!r} targets controllable "
                 f"{controllable_id!r}, which is not configured"
+            ),
+        )
+        return False
+
+    if controllable_id not in schedulable_ids:
+        report.add_error(
+            section="automation",
+            path=path,
+            code="target_not_schedulable",
+            message=(
+                f"optimizer {optimizer.id!r} targets device "
+                f"{controllable_id!r}, which is not schedulable; set "
+                "'schedulable: true' on it or retarget the optimizer"
             ),
         )
         return False
@@ -1776,21 +1903,6 @@ def _member_target_path(optimizer: Any, member_index: int, *, path: str) -> str:
 #: — whether the battery these two reason about is wired up at all — and
 #: ``export_price``, which drives the same inverter, does not need it.
 _BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "charge_from_grid"})
-
-
-def _read_supported_appliance(
-    raw_appliance: Mapping[str, Any],
-    *,
-    path: str,
-    kind: str,
-):
-    if kind == "climate":
-        return read_climate_appliance(raw_appliance, path=path)
-    if kind == "ev_charger":
-        return read_ev_charger_appliance(raw_appliance, path=path)
-    if kind == "generic":
-        return read_generic_appliance(raw_appliance, path=path)
-    raise ValueError(f"Unsupported editable appliance kind {kind!r}")
 
 
 def _validate_training_time(value: object, report: ValidationReport) -> None:

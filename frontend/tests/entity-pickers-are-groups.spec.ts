@@ -105,7 +105,7 @@ const CONFIG = {
         house_consumption: { min_history_days: 30 },
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
-    controllables: [
+    devices: [
         {
             kind: "inverter",
             id: "inverter",
@@ -114,6 +114,8 @@ const CONFIG = {
         },
         {
             kind: "ev_charger",
+            schedulable: true,
+            schedulable: true,
             id: "ev",
             name: "EV Charging",
             limits: { max_charging_power_kw: 11 },
@@ -137,6 +139,8 @@ const CONFIG = {
         },
         {
             kind: "generic",
+            schedulable: true,
+            schedulable: true,
             id: "boiler",
             name: "Boiler",
             controls: { switch: { entity_id: "switch.boiler" } },
@@ -147,6 +151,8 @@ const CONFIG = {
         },
         {
             kind: "climate",
+            schedulable: true,
+            schedulable: true,
             id: "hvac",
             name: "HVAC",
             controls: { climate: { entity_id: "climate.living_room" } },

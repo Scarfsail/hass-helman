@@ -234,7 +234,7 @@ export const EDITOR_SCOPES = {
     parentId: DOCUMENT_SCOPE_ID,
     tabId: "controllables",
     labelKey: "editor.tabs.controllables",
-    adapter: createPathScopeAdapter(["controllables"], {
+    adapter: createPathScopeAdapter(["devices"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),
@@ -434,7 +434,7 @@ export const EDITOR_SCOPES = {
     parentId: TAB_SCOPE_IDS.controllables,
     tabId: "controllables",
     labelKey: "editor.sections.configured_controllables",
-    adapter: createPathScopeAdapter(["controllables"], {
+    adapter: createPathScopeAdapter(["devices"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),

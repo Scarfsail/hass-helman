@@ -26,11 +26,12 @@ from .consumption_forecast_profiles import (
     HourOfWeekWinsorizedMeanProfile,
 )
 from .consumption_forecast_statistics import ForecastBand
-from .controllables.config import read_deferrable_consumers
+from .controllables.config import read_carved_meters
 from .recorder_hourly_series import (
     TodaySlotEnergyReader,
     get_local_current_slot_start,
     get_today_completed_local_slots,
+    own_energy_changes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ class ConsumptionForecastBuilder:
         min_history_days, training_window_days = read_house_training_window_config(
             self._config
         )
-        consumers_config = read_deferrable_consumers(self._config)
+        consumers_config = read_carved_meters(self._config)
         config_fingerprint = self._build_config_fingerprint(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
@@ -367,12 +368,29 @@ class ConsumptionForecastBuilder:
         reference_time: datetime,
     ) -> list[_ConsumerSlotHistoryData]:
         consumer_histories: list[_ConsumerSlotHistoryData] = []
+        # A carved sub-meter is read as its parent's child and as a consumer of
+        # its own; one read serves both.
+        read: dict[str, dict[datetime, float]] = {}
+
+        async def _slot_history(meter: str) -> dict[datetime, float]:
+            if meter not in read:
+                read[meter] = await self._query_slot_history(
+                    meter, reference_time=reference_time
+                )
+            return read[meter]
+
         for consumer in consumers_config:
             entity_id = consumer["energy_entity_id"]
             try:
-                values_by_slot = await self._query_slot_history(
-                    entity_id,
-                    reference_time=reference_time,
+                # The carved meter's own energy: its sub-meters' slots are
+                # subtracted, so nested meters never leave the baseline twice.
+                values_by_slot = own_energy_changes(
+                    await _slot_history(entity_id),
+                    [
+                        await _slot_history(child_entity_id)
+                        for child_entity_id in consumer.get("metered_children", ())
+                    ],
+                    slot=timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES),
                 )
             except Exception:
                 _LOGGER.warning(
@@ -559,11 +577,19 @@ class ConsumptionForecastBuilder:
             "training_window_days": training_window_days,
             "min_history_days": min_history_days,
             "model": HOUSE_FORECAST_MODEL_ID,
+            # A meter's sub-meters change what its own energy is, so a
+            # hierarchy change retrains. Present only when there are any, so a
+            # meter without sub-meters fingerprints as it always did.
             "deferrable_consumers": sorted(
                 [
                     {
                         "energy_entity_id": consumer["energy_entity_id"],
                         "label": consumer["label"],
+                        **(
+                            {"metered_children": sorted(consumer["metered_children"])}
+                            if consumer.get("metered_children")
+                            else {}
+                        ),
                     }
                     for consumer in consumers_config
                 ],

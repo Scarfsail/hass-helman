@@ -104,8 +104,8 @@ from .consumption_forecast_builder import (
     read_house_training_window_config,
 )
 from .controllables.config import (
-    read_deferrable_consumers,
-    read_scheduled_consumers,
+    read_carved_meters,
+    read_schedulable_consumers,
     read_shared_meters,
 )
 from .consumption_forecast_profiles import (
@@ -178,6 +178,7 @@ from .storage import HelmanStorage, TrainingArtifactsStore
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
+    SharedMeter,
     SharedMeterMember,
 )
 from .training.appliance_energy import health_for as appliance_energy_health_for
@@ -1338,24 +1339,23 @@ class HelmanCoordinator:
             forecast_cfg.get("total_energy_entity_id")
         )
 
-    def _get_house_deferrable_consumers(self) -> list[dict[str, str]]:
-        """The deferrable controllables feeding the house forecast.
+    def _get_house_deferrable_consumers(self) -> list[dict[str, Any]]:
+        """The carved meters feeding the house forecast.
 
         One derivation, shared: the inspector splits the house actual by
         exactly the consumers the forecast is trained on, because both ask
-        ``controllables`` the same question.
+        the ``devices`` tree the same question.
         """
-        return read_deferrable_consumers(self._active_config)
+        return read_carved_meters(self._active_config)
 
     def _get_house_scheduled_consumers(self) -> list[dict[str, Any]]:
-        """Every controllable the planner can schedule demand for, by id.
+        """Every device the planner can schedule demand for, by id.
 
         The forecast's itemisation names appliances from this rather than from
-        the deferrable roster: the planner schedules meterless controllables
-        too, and one that opted out of deferrability still gets scheduled — it
-        just is not deferrable, on either side of now.
+        the carved roster: a meterless child is scheduled under its own id
+        while its meter is carved under its parent's.
         """
-        return read_scheduled_consumers(self._active_config)
+        return read_schedulable_consumers(self._active_config)
 
     def _get_house_unmeasured_label(self) -> str | None:
         """The power card's own title for unmetered house load.
@@ -1499,7 +1499,7 @@ class HelmanCoordinator:
         min_history_days, training_window_days = read_house_training_window_config(
             self._active_config
         )
-        consumers_config = read_deferrable_consumers(self._active_config)
+        consumers_config = read_carved_meters(self._active_config)
         config_fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
@@ -1688,28 +1688,23 @@ class HelmanCoordinator:
         optimizer references: the same estimates feed the demand projection,
         which runs for anything holding a scheduled action however it got there.
 
-        Shared meters come from config, not from those appliances: a ``fixed``
-        sharer has no meter on its runtime at all, yet it still runs and so
-        still divides the meter. An id the registry cannot resolve to a generic
-        or climate runtime — a broken entry — drops out of the split rather than
-        failing the run; validation has already said what is wrong with it.
+        Shared meters come from the device tree, not from those appliances: a
+        meter owner's meterless children split its own energy, and each runs by
+        its own switch or climate entity — a ``fixed`` or passive child
+        included, since it still runs and so still divides the meter.
         """
-        shared_meters: dict[str, tuple[SharedMeterMember, ...]] = {}
-        for energy_entity_id, controllable_ids in read_shared_meters(
-            self._active_config
-        ).items():
-            members = tuple(
-                SharedMeterMember.for_appliance(appliance)
-                for controllable_id in controllable_ids
-                if isinstance(
-                    appliance := self._appliances_registry.get_appliance(
-                        controllable_id
-                    ),
-                    (GenericApplianceRuntime, ClimateApplianceRuntime),
-                )
+        shared_meters = {
+            energy_entity_id: SharedMeter(
+                members=tuple(
+                    SharedMeterMember.for_signal(*member)
+                    for member in shared["members"]
+                ),
+                metered_children=tuple(shared["metered_children"]),
             )
-            if members:
-                shared_meters[energy_entity_id] = members
+            for energy_entity_id, shared in read_shared_meters(
+                self._active_config
+            ).items()
+        }
         return ApplianceEnergyTrainingRequest(
             appliances=tuple(
                 appliance

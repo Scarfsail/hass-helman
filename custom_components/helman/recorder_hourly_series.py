@@ -1174,6 +1174,7 @@ async def estimate_average_hourly_energy_for_shared_meter(
     energy_entity_id: str,
     reference_time: datetime,
     lookback_days: int,
+    metered_children: Sequence[str] = (),
 ) -> dict[str, float | None]:
     """Each device's when-running estimate from one meter several devices share.
 
@@ -1182,7 +1183,11 @@ async def estimate_average_hourly_energy_for_shared_meter(
     one whose own estimate nobody wants — because each counts toward the divisor
     whenever it runs; leaving one out would hand its draw to the others.
 
-    One read of the meter and one read per distinct activity entity, all over
+    ``metered_children`` are the meters of the devices behind this one that
+    have their own; the members split the meter's *own* energy, what is left
+    once those are subtracted.
+
+    One read of each meter and one read per distinct activity entity, all over
     the same ``lookback_days`` window, which the caller picks for the whole
     meter. See :func:`_estimate_shared_meter_hourly_energy_kwh` for the split.
     """
@@ -1195,6 +1200,21 @@ async def estimate_average_hourly_energy_for_shared_meter(
         utc_end,
         no_attributes=default_unit is not None,
     )
+    children_states: list[tuple[list[Any], Any]] = []
+    for child_entity_id in metered_children:
+        child_unit = _live_energy_unit(hass, child_entity_id)
+        children_states.append(
+            (
+                await _async_read_state_changes(
+                    hass,
+                    child_entity_id,
+                    utc_start,
+                    utc_end,
+                    no_attributes=child_unit is not None,
+                ),
+                child_unit,
+            )
+        )
     states_by_entity: dict[str, list[Any]] = {}
     for _key, entity_id, _active_states in members:
         if entity_id not in states_by_entity:
@@ -1210,6 +1230,7 @@ async def estimate_average_hourly_energy_for_shared_meter(
         utc_start,
         utc_end,
         default_unit,
+        metered_children=children_states,
     )
 
 
@@ -2072,6 +2093,8 @@ def _estimate_shared_meter_hourly_energy_kwh(
     window_start: datetime,
     window_end: datetime,
     default_unit: Any,
+    *,
+    metered_children: Sequence[tuple[list[Any], Any]] = (),
 ) -> dict[str, float | None]:
     """Split one meter evenly among whichever members were running, per segment.
 
@@ -2093,6 +2116,12 @@ def _estimate_shared_meter_hourly_energy_kwh(
     always skipped them. A member's answer is ``None`` when it never ran or
     what it accumulated rounds to nothing, the same two "history did not
     answer" cases a lone device has.
+
+    What is split is the meter's *own* energy — see
+    :func:`own_energy_observations` — sampled at the segment boundaries, so a
+    meter with ``metered_children`` (each ``(states, default unit)``) hands its
+    members only what those children did not measure, and the exact
+    per-segment allocation is kept.
     """
     intervals_by_member = {
         key: _build_active_state_intervals(
@@ -2107,11 +2136,9 @@ def _estimate_shared_meter_hourly_energy_kwh(
     if not any(intervals_by_member.values()):
         return result
 
-    observations = _build_unwrapped_energy_observations(
-        _parse_energy_observations(
-            energy_states,
-            default_unit=default_unit,
-        )
+    observations = _parse_energy_observations(
+        energy_states,
+        default_unit=default_unit,
     )
     if not observations:
         return result
@@ -2128,8 +2155,14 @@ def _estimate_shared_meter_hourly_energy_kwh(
     # the staleness limit's "multiple of the interval" shape does not apply --
     # this estimator is out of scope for the carry-staleness rule and keeps
     # the plain carry-forward.
-    boundary_samples = _sample_energy_observations_at_boundaries(
-        observations,
+    own_deltas = own_energy_observations(
+        _observation_pairs(observations),
+        [
+            _observation_pairs(
+                _parse_energy_observations(states, default_unit=child_unit)
+            )
+            for states, child_unit in metered_children
+        ],
         boundaries,
     )
 
@@ -2152,13 +2185,8 @@ def _estimate_shared_meter_hourly_energy_kwh(
         if not running:
             continue
 
-        start_sample = boundary_samples.get(segment_start)
-        end_sample = boundary_samples.get(segment_end)
-        if start_sample is None or end_sample is None:
-            continue
-
-        delta = end_sample.value_kwh - start_sample.value_kwh
-        if delta < 0:
+        delta = own_deltas.get(segment_start)
+        if delta is None:
             continue
 
         duration_hours = (segment_end - segment_start).total_seconds() / 3600
@@ -2175,6 +2203,104 @@ def _estimate_shared_meter_hourly_energy_kwh(
             continue
         result[key] = round(energy_kwh[key] / active_hours[key], 4)
     return result
+
+
+def own_energy_observations(
+    meter: Sequence[tuple[datetime, float]],
+    metered_children: Sequence[Sequence[tuple[datetime, float]]],
+    timestamps: Sequence[datetime],
+) -> dict[datetime, float]:
+    """A meter's *own* energy between consecutive ``timestamps``.
+
+    Own energy is the meter's reading minus its metered children's readings:
+    what the meter measured that no sub-meter behind it did. Each argument is a
+    cumulative series of ``(instant, kWh)`` readings; every series is unwrapped
+    first (resets and glitches handled per meter, see
+    :func:`_build_unwrapped_energy_observations`), then sampled at the caller's
+    ``timestamps`` (sorted) by carrying the last reading forward — activity
+    transitions for a shared-meter split, slot boundaries for the baseline. The
+    answer is keyed by each interval's start. An interval is left out when the
+    meter has no reading at either end, or when the own delta is negative
+    beyond float noise (children reading ahead of their parent), the way a
+    negative meter delta always was. A child with no reading at either end
+    (a sub-meter newer than its parent, a statistics gap) subtracts nothing:
+    dropping the parent's interval instead would push its energy into whatever
+    the caller treats a missing interval as. Totals are the caller's to
+    aggregate, afterwards.
+
+    A meter with no metered children is its own energy, unchanged.
+    """
+    samples = [
+        _sample_energy_observations_at_boundaries(
+            _build_unwrapped_energy_observations(
+                [
+                    _EnergyObservation(updated_at=instant, value_kwh=value)
+                    for instant, value in sorted(series, key=lambda pair: pair[0])
+                ]
+            ),
+            list(timestamps),
+        )
+        for series in (meter, *metered_children)
+    ]
+    own: dict[datetime, float] = {}
+    for start, end in zip(timestamps, timestamps[1:]):
+        delta = 0.0
+        for index, sampled in enumerate(samples):
+            start_sample = sampled.get(start)
+            end_sample = sampled.get(end)
+            if start_sample is None or end_sample is None:
+                if index == 0:
+                    break
+                continue
+            change = end_sample.value_kwh - start_sample.value_kwh
+            delta += change if index == 0 else -change
+        else:
+            # Tolerance rather than zero: a sub-meter that measured everything
+            # leaves float noise, not a negative reading.
+            if delta >= -_ENERGY_TOLERANCE_KWH:
+                own[start] = max(delta, 0.0)
+    return own
+
+
+def own_energy_changes(
+    meter_changes: Mapping[datetime, float],
+    metered_children_changes: Sequence[Mapping[datetime, float]],
+    *,
+    slot: timedelta,
+) -> dict[datetime, float]:
+    """:func:`own_energy_observations` for callers that hold per-slot changes.
+
+    The baseline fit and the forecast actuals read ``{slot start: kWh}`` rather
+    than raw readings. With no metered children the meter's changes pass
+    through untouched. Otherwise each series is rebuilt as a cumulative one over
+    the meter's slots (a slot a child is missing subtracts nothing) and handed to the one own-energy definition, so there is no second
+    arithmetic for the same question.
+    """
+    if not metered_children_changes:
+        return dict(meter_changes)
+    slots = sorted(meter_changes)
+    boundaries = sorted({boundary for start in slots for boundary in (start, start + slot)})
+
+    def cumulative(changes: Mapping[datetime, float]) -> list[tuple[datetime, float]]:
+        total, series = 0.0, []
+        for start in slots:
+            series.append((start, total))
+            total += max(0.0, changes.get(start, 0.0))
+            series.append((start + slot, total))
+        return series
+
+    own = own_energy_observations(
+        cumulative(meter_changes),
+        [cumulative(changes) for changes in metered_children_changes],
+        boundaries,
+    )
+    return {start: own[start] for start in slots if start in own}
+
+
+def _observation_pairs(
+    observations: list[_EnergyObservation],
+) -> list[tuple[datetime, float]]:
+    return [(item.updated_at, item.value_kwh) for item in observations]
 
 
 def _build_active_state_intervals(

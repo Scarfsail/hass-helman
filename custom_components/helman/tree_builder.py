@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -12,7 +11,7 @@ from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .visualization import read_visualization
-from .controllables.config import read_deferrable_consumers
+from .controllables.config import clean_name, read_carved_meters
 from .power_polarity import consumer_value_type, source_value_type
 
 @dataclass
@@ -280,12 +279,12 @@ class HelmanTreeBuilder:
         device_consumption = prefs.get("device_consumption", [])
 
         # A house child's node id *is* its energy statistic, which is the same
-        # ``energy_entity_id`` the deferrable roster is keyed by — so the match
+        # ``energy_entity_id`` the carved roster is keyed by — so the match
         # needs no extra configuration and no second round-trip: the config is
         # already in hand and parsing it is pure in-memory work.
         deferrable_stats: dict[str, list[str]] = {
             c["energy_entity_id"]: c["ids"]
-            for c in read_deferrable_consumers(self._config)
+            for c in read_carved_meters(self._config)
         }
 
         ps_label_id = self._find_label_id(lbl_reg, power_sensor_label) if power_sensor_label else None
@@ -457,13 +456,9 @@ class HelmanTreeBuilder:
         return label.label_id if label else None
 
     def _clean_name(self, name: str) -> str:
-        pattern = self._visualization().get("power_sensor_name_cleaner_regex", "")
-        if pattern:
-            try:
-                return re.sub(pattern, "", name).strip()
-            except re.error:
-                pass
-        return name
+        return clean_name(
+            name, self._visualization().get("power_sensor_name_cleaner_regex", "")
+        )
 
     def _apply_label_badge_texts(self, labels: list[str], device_label_text: dict) -> list[str]:
         result = []

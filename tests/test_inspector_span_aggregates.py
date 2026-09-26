@@ -680,6 +680,46 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         self.assertIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
         self.assertIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
 
+    async def test_a_carved_meter_is_itemised_by_its_own_energy(self):
+        # The fridge is a sub-meter behind the washer's meter and a row of its
+        # own: the washer row is its meter minus the fridge, as the forecast
+        # subtracts it, so the fridge is not taken out of the house twice.
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.5),
+                ],
+                FRIDGE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=2.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=2.5),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+        service._house_deferrable_consumers_provider = lambda: [
+            {
+                "energy_entity_id": WASHER_METER,
+                "label": "Washer",
+                "ids": ["washer"],
+                "metered_children": [FRIDGE_METER],
+            }
+        ]
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+
+        (row,) = payload["days"]
+        breakdown = row["houseBreakdown"]
+        wh = {a["entityId"]: a["wh"] for a in breakdown["appliances"]}
+        self.assertEqual(wh, {WASHER_METER: 1000.0, FRIDGE_METER: 500.0})
+        self.assertEqual(breakdown["unmeasuredWh"], 8500.0)
+
     async def test_the_same_fold_one_granularity_up(self):
         # Two days of washer energy inside one month, so the month's figure has
         # to be their sum and not either day's.

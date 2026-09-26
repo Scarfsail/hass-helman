@@ -21,6 +21,7 @@ function learner(id: string, name: string, meter: string): Record<string, unknow
         id,
         name,
         kind: "generic",
+        schedulable: true,
         controls: { switch: { entity_id: `switch.${id}` } },
         consumption: {
             energy_entity_id: meter,
@@ -31,7 +32,7 @@ function learner(id: string, name: string, meter: string): Record<string, unknow
 
 const CONFIG = {
     config_version: 19,
-    controllables: [
+    devices: [
         learner("dishwasher", "Dishwasher", "sensor.dishwasher_energy"),
         learner("washer", "Laundry", "sensor.washer_energy"),
         learner("dryer", "Dryer", "sensor.dryer_energy"),
@@ -39,6 +40,7 @@ const CONFIG = {
             id: "pool",
             name: "Pool",
             kind: "generic",
+            schedulable: true,
             controls: { switch: { entity_id: "switch.pool" } },
             consumption: {
                 energy_entity_id: "sensor.pool_energy",

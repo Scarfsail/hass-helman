@@ -30,8 +30,9 @@ HistoryAverageAppliance = GenericApplianceRuntime | ClimateApplianceRuntime
 class SharedMeterMember:
     """One device behind a shared meter, as the split needs to see it.
 
-    Whatever its projection strategy: a ``fixed`` sharer learns nothing, but it
-    still runs, so it still takes its share of the meter while it does.
+    Whatever its projection strategy, and whether or not it is schedulable: a
+    ``fixed`` or passive member learns nothing, but it still runs, so it still
+    takes its share of the meter while it does.
     """
 
     controllable_id: str
@@ -39,10 +40,25 @@ class SharedMeterMember:
     active_states: tuple[str, ...]
 
     @classmethod
-    def for_appliance(cls, appliance: HistoryAverageAppliance) -> SharedMeterMember:
-        if isinstance(appliance, GenericApplianceRuntime):
-            return cls(appliance.id, appliance.switch_entity_id, SWITCH_ACTIVE_STATES)
-        return cls(appliance.id, appliance.climate_entity_id, CLIMATE_ACTIVE_STATES)
+    def for_signal(
+        cls, controllable_id: str, entity_id: str, activity: str
+    ) -> SharedMeterMember:
+        """A member from its running signal: a ``switch`` or a ``climate``."""
+        return cls(
+            controllable_id,
+            entity_id,
+            SWITCH_ACTIVE_STATES if activity == "switch" else CLIMATE_ACTIVE_STATES,
+        )
+
+
+@dataclass(frozen=True)
+class SharedMeter:
+    """A meter owner's meterless children, and the sub-meters beside them."""
+
+    members: tuple[SharedMeterMember, ...]
+    #: The owner's children with a meter of their own. The members split what
+    #: is left of the meter once these are subtracted — its own energy.
+    metered_children: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,13 +77,11 @@ class ApplianceEnergyTrainingRequest:
     """
 
     appliances: Sequence[HistoryAverageAppliance] = field(default_factory=tuple)
-    #: Meter entity id -> every device behind it, for meters two or more
-    #: controllables share. Read from config rather than from ``appliances``:
-    #: a ``fixed`` sharer is not in that list and has no meter on its runtime,
-    #: yet it still counts toward the divisor.
-    shared_meters: Mapping[str, tuple[SharedMeterMember, ...]] = field(
-        default_factory=dict
-    )
+    #: Meter entity id -> the devices drawing from it without a meter of their
+    #: own. Read from the device tree rather than from ``appliances``: a
+    #: ``fixed`` or passive member is not in that list, yet it still counts
+    #: toward the divisor.
+    shared_meters: Mapping[str, SharedMeter] = field(default_factory=dict)
 
     @property
     def fingerprint(self) -> str:
@@ -80,7 +94,10 @@ class ApplianceEnergyTrainingRequest:
 
         Who shares a meter changes the answer too: adding a fourth air
         conditioner to a breaker shrinks the other three's share, even though
-        none of their own entities moved.
+        none of their own entities moved. So does a sub-meter added behind it,
+        which takes its reading out of what the members split; it enters the
+        fingerprint only when present, so a meter without one fingerprints as
+        it always did.
         """
         parts = [
             "|".join((
@@ -98,10 +115,16 @@ class ApplianceEnergyTrainingRequest:
             + ",".join(
                 f"{member.controllable_id}={member.entity_id}"
                 for member in sorted(
-                    members, key=lambda item: (item.controllable_id, item.entity_id)
+                    shared.members,
+                    key=lambda item: (item.controllable_id, item.entity_id),
                 )
             )
-            for energy_entity_id, members in sorted(self.shared_meters.items())
+            + (
+                "|minus|" + ",".join(sorted(shared.metered_children))
+                if shared.metered_children
+                else ""
+            )
+            for energy_entity_id, shared in sorted(self.shared_meters.items())
         )
         return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
@@ -120,8 +143,9 @@ class ApplianceEnergyTrainingJob:
     average does not move between 10:00 and 10:15, so it belongs here, next to
     the house consumption fit, for exactly the reasons #24 moved that one.
 
-    A meter several devices share is read once for all of them and split
-    evenly among whichever were running — see
+    A meter with devices drawing from it (a parent's meterless children) is
+    read once for all of them, minus any sub-meters behind it, and its own
+    energy split evenly among whichever were running — see
     :func:`..recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh`.
 
     Never raises for a resolve failure: it records the outcome itself, and the
@@ -221,7 +245,7 @@ class ApplianceEnergyTrainingJob:
             try:
                 shared_estimates = await self._async_estimate_shared_meter(
                     energy_entity_id=energy_entity_id,
-                    members=request.shared_meters[energy_entity_id],
+                    shared=request.shared_meters[energy_entity_id],
                     appliances=appliances,
                     reference_time=reference_time,
                 )
@@ -295,7 +319,7 @@ class ApplianceEnergyTrainingJob:
         self,
         *,
         energy_entity_id: str,
-        members: Sequence[SharedMeterMember],
+        shared: SharedMeter,
         appliances: Sequence[HistoryAverageAppliance],
         reference_time: datetime,
     ) -> dict[str, float | None]:
@@ -311,9 +335,10 @@ class ApplianceEnergyTrainingJob:
             self._hass,
             members=[
                 (member.controllable_id, member.entity_id, member.active_states)
-                for member in members
+                for member in shared.members
             ],
             energy_entity_id=energy_entity_id,
+            metered_children=shared.metered_children,
             reference_time=reference_time,
             lookback_days=max(
                 appliance.history_lookback_days for appliance in appliances

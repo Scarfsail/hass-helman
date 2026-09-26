@@ -53,6 +53,7 @@ const SCHEMA = {
 
 const controllable = (id: string, name: string) => ({
     kind: "generic",
+    schedulable: true,
     id,
     name,
     controls: { switch: { entity_id: `switch.${id}` } },
@@ -64,7 +65,7 @@ const controllable = (id: string, name: string) => ({
 
 const CONFIG = {
     config_version: 7,
-    controllables: [controllable("boiler", "Boiler"), controllable("pump", "Pump")],
+    devices: [controllable("boiler", "Boiler"), controllable("pump", "Pump")],
     automation: {
         enabled: true,
         appliance_optimizers: [
@@ -206,7 +207,7 @@ async function openFirstOptimizer(page: Page): Promise<void> {
 }
 
 const controllableIds = (page: Page) =>
-    page.evaluate(() => window.__editorConfig().controllables.map((entry) => entry.id));
+    page.evaluate(() => window.__editorConfig().devices.map((entry) => entry.id));
 
 const optimizerIds = (page: Page) =>
     page.evaluate(() =>

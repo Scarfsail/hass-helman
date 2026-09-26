@@ -29,7 +29,7 @@ const GRID_KEY = GRID_PATH.join(".");
 const CONFIG = {
     config_version: 7,
     power_devices: { grid: { entities: { power: "sensor.grid_power" } } },
-    controllables: [],
+    devices: [],
 };
 
 /** One fact per severity, so every badge class is on screen to be measured. */

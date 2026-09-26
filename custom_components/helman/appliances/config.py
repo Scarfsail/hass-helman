@@ -5,8 +5,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..controllables.config import (
+    effective_meter,
+    is_schedulable,
+    iter_device_paths,
     peek_controllable_kind,
-    read_controllables,
+    read_devices,
 )
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .climate_appliance import ClimateApplianceConfigError, read_climate_appliance
@@ -26,32 +29,36 @@ def build_appliances_runtime_registry(
     *,
     logger: logging.Logger | None = None,
 ) -> AppliancesRuntimeRegistry:
-    """The appliance-kind controllables, as runtime objects.
+    """The schedulable appliance devices, as runtime objects.
 
-    Since config version 7 the appliance kinds share one ``controllables:``
-    list with the inverter. This registry stays appliance-only — projections,
-    demand and the appliance websocket commands are meaningless for the
-    inverter — so inverter entries are skipped rather than rejected. List
-    positions are kept in the reported paths, so an error names the entry the
-    user sees in the editor.
+    Since config version 20 the appliance kinds live in the ``devices:`` tree
+    with the inverter and every passive device. This registry holds only what
+    Helman may schedule — projections, demand and the appliance websocket
+    commands are meaningless for the inverter and for a passive device — so
+    those are skipped rather than rejected. Every level of the tree is walked:
+    a schedulable child is as much an appliance as a top-level device.
     """
     active_logger = logger or _LOGGER
-    appliances_config = _read_appliances_list(config, logger=active_logger)
-    if appliances_config is None:
+    if not _has_devices_list(config, logger=active_logger):
         return AppliancesRuntimeRegistry()
 
     appliances = []
     seen_appliance_ids: set[str] = set()
 
-    for index, raw_appliance in enumerate(appliances_config):
-        if peek_controllable_kind(raw_appliance) == CONTROLLABLE_KIND_INVERTER:
+    for path, device, parent in iter_device_paths(config):
+        if not isinstance(device, Mapping):
             continue
-        appliance_id = _peek_appliance_id(raw_appliance)
+        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
+            continue
+        if not is_schedulable(device):
+            continue
+        appliance_id = _peek_appliance_id(device)
 
         try:
-            appliance = _read_appliance_runtime(
-                raw_appliance,
-                path=f"controllables[{index}]",
+            appliance = read_device_appliance(
+                device,
+                parent,
+                path=path,
             )
         except (
             ClimateApplianceConfigError,
@@ -60,7 +67,7 @@ def build_appliances_runtime_registry(
         ) as err:
             _log_invalid_appliance(
                 logger=active_logger,
-                index=index,
+                path=path,
                 appliance_id=appliance_id,
                 message=str(err),
             )
@@ -69,7 +76,7 @@ def build_appliances_runtime_registry(
         if appliance.id in seen_appliance_ids:
             _log_invalid_appliance(
                 logger=active_logger,
-                index=index,
+                path=path,
                 appliance_id=appliance.id,
                 message=f"duplicate appliance id {appliance.id!r}",
             )
@@ -81,22 +88,42 @@ def build_appliances_runtime_registry(
     return AppliancesRuntimeRegistry.from_appliances(appliances)
 
 
-def _read_appliances_list(
+def _has_devices_list(
     config: Mapping[str, Any] | None,
     *,
     logger: logging.Logger,
-) -> list[Any] | None:
-    controllables = read_controllables(config)
-    if controllables is None:
-        return None
+) -> bool:
+    devices = read_devices(config)
+    if devices is None:
+        return False
 
-    if not isinstance(controllables, list):
-        logger.error(
-            "Ignoring controllables config: top-level 'controllables' must be a list"
-        )
-        return None
+    if not isinstance(devices, list):
+        logger.error("Ignoring devices config: top-level 'devices' must be a list")
+        return False
 
-    return controllables
+    return True
+
+
+def read_device_appliance(
+    device: Mapping[str, Any],
+    parent: Mapping[str, Any] | None,
+    *,
+    path: str,
+):
+    """One appliance device as its per-kind runtime object.
+
+    The per-kind readers see the device as they always have, with two things
+    filled in from the tree: the default ``generic`` kind, and the device's
+    effective meter — so a meterless child on ``history_average`` reads the
+    meter it draws from, its parent's.
+    """
+    view = dict(device)
+    view.setdefault("kind", _GENERIC_APPLIANCE_KIND)
+    meter = effective_meter(device, parent)
+    consumption = device.get("consumption")
+    if meter is not None and isinstance(consumption, Mapping):
+        view["consumption"] = {**consumption, "energy_entity_id": meter}
+    return _read_appliance_runtime(view, path=path)
 
 
 def _peek_appliance_id(value: object) -> str | None:
@@ -144,11 +171,11 @@ def _read_appliance_runtime(
 def _log_invalid_appliance(
     *,
     logger: logging.Logger,
-    index: int,
+    path: str,
     appliance_id: str | None,
     message: str,
 ) -> None:
-    location = f"controllables[{index}]"
+    location = path
     if appliance_id is not None:
         location += f" (id={appliance_id!r})"
     logger.error("Ignoring invalid appliance config at %s: %s", location, message)
