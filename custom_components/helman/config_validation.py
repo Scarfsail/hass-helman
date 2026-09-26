@@ -26,10 +26,12 @@ from .controllables.config import (
     is_schedulable,
     iter_device_paths,
     own_meter,
+    peek_controllable_id,
     peek_controllable_kind,
     read_controllable_kinds_by_id,
     read_schedulable_ids,
     running_signal,
+    share_sensor_slug,
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
@@ -1040,6 +1042,7 @@ def _validate_controllables_config(
 
     seen_ids: set[str] = set()
     meter_owners: dict[str, list[str]] = {}
+    share_slugs: dict[str, str] = {}
     seen_inverter = False
     for path, raw_device, parent in iter_device_paths(config):
         if not isinstance(raw_device, Mapping):
@@ -1060,6 +1063,26 @@ def _validate_controllables_config(
                 message=f"{path}.kind must be a non-empty string",
             )
             continue
+
+        if parent is not None and own_meter(raw_device) is None:
+            # A meterless child's share sensor is named after its slugified
+            # id, so two ids that slugify alike (``ac-room``, ``ac_room``)
+            # would publish into one entity. Checked before any kind is
+            # skipped: every meterless child gets a share sensor.
+            slug = share_sensor_slug(peek_controllable_id(raw_device) or "")
+            if slug in share_slugs:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.id",
+                    code="share_sensor_collision",
+                    message=(
+                        f"{path}.id names the same share sensor as "
+                        f"{share_slugs[slug]}; choose an id that differs in "
+                        "more than punctuation or case"
+                    ),
+                )
+            else:
+                share_slugs[slug] = path
 
         if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(

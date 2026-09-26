@@ -15,6 +15,11 @@ from homeassistant.components.recorder.history import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .controllables.config import (
+    CLIMATE_ACTIVE_STATES,
+    SWITCH_ACTIVE_STATES,
+    is_active_state,
+)
 from .energy_units import normalize_energy_to_kwh
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,13 +35,6 @@ _LOGGER = logging.getLogger(__name__)
 #: silently, which is why every function on this path takes it as an argument.
 _TRANSIENT_REBOUND_WINDOW = timedelta(minutes=30)
 _ENERGY_TOLERANCE_KWH = 1e-6
-
-#: What "running" means for each activity entity the when-active estimators
-#: read: a generic appliance's switch is on, a climate appliance is heating or
-#: cooling. Named once so a shared meter's members are judged exactly as a lone
-#: appliance of the same kind would be.
-SWITCH_ACTIVE_STATES: tuple[str, ...] = ("on",)
-CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
 
 #: How far a reading has to fall below the segment's maximum to be called a
 #: counter reset rather than a dip.
@@ -2327,7 +2325,7 @@ def _build_active_state_intervals(
         if updated_at > window_end:
             break
 
-        if _is_active_state(getattr(state, "state", None), normalized_active_states):
+        if is_active_state(getattr(state, "state", None), normalized_active_states):
             if active_start is None:
                 active_start = max(updated_at, window_start)
             continue
@@ -2344,10 +2342,6 @@ def _build_active_state_intervals(
         intervals.append((active_start, window_end))
 
     return intervals
-
-
-def _is_active_state(value: Any, active_states: set[str]) -> bool:
-    return isinstance(value, str) and value.strip().lower() in active_states
 
 
 def _get_local_day_start(reference_time: datetime) -> datetime:

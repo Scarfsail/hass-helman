@@ -8,7 +8,9 @@ are the point of the change — each asserted by name below:
 
 * a configured device name (and icon) replaces the cleaned sensor name,
 * a switch configured in ``controls`` appears,
-* an energy-only row is shown instead of dropped.
+* an energy-only row is shown instead of dropped,
+* a meterless child is a row of its own under its parent, reading its share of
+  the parent's own power, with a remainder beside it.
 
 ``fixtures/energy_path_house_tree.json`` is the house tree the Energy path built
 for this very fixture, captured from the builder as it was before the change
@@ -203,6 +205,7 @@ _COMPARED = (
     "deferrable",
     "controllableIds",
     "isUnmeasured",
+    "isEstimated",
 )
 
 
@@ -210,11 +213,16 @@ def _slim(nodes: list[dict]) -> dict[str, dict]:
     """``id -> node``, compared fields only; order is the card's business (it sorts by power)."""
     return {
         node["id"]: {
-            **{key: node[key] for key in _COMPARED},
+            # The Energy-path fixture predates ``isEstimated``: nothing was.
+            **{key: node.get(key, False) for key in _COMPARED},
             "children": _slim(node["children"]),
         }
         for node in nodes
     }
+
+
+AC_BREAKER = "sensor.jistic_klimatizace_energy"
+AC_ROOMS = ("obyvak", "bartik", "adelka", "loznice")
 
 
 class TreeFromDevicesTests(unittest.TestCase):
@@ -248,7 +256,47 @@ class TreeFromDevicesTests(unittest.TestCase):
             "deferrable": False,
             "controllableIds": [],
             "isUnmeasured": False,
+            "isEstimated": False,
             "children": {},
+        }
+        # The four air conditioners behind the AC breaker are rows of their own,
+        # each carrying its own schedule id, which the breaker no longer does;
+        # a remainder shows the breaker's standby.
+        breaker = expected[AC_BREAKER]
+        self.assertEqual(breaker["children"], {})
+        breaker["controllableIds"] = []
+        breaker["children"] = {
+            **{
+                f"klima-{room}": {
+                    "id": f"klima-{room}",
+                    "displayName": f"klima-{room}",
+                    "powerSensorId": f"sensor.helman_share_power_klima_{room}",
+                    "switchEntityId": f"climate.{room}",
+                    "icon": None,
+                    "labels": [],
+                    "labelBadgeTexts": [],
+                    "deferrable": True,
+                    "controllableIds": [f"klima-{room}"],
+                    "isUnmeasured": False,
+                    "isEstimated": True,
+                    "children": {},
+                }
+                for room in AC_ROOMS
+            },
+            "sensor_jistic_klimatizace_energy_unmeasured": {
+                "id": "sensor_jistic_klimatizace_energy_unmeasured",
+                "displayName": "Unmeasured power",
+                "powerSensorId": "sensor.helman_unmeasured_power_jistic_klimatizace_energy",
+                "switchEntityId": None,
+                "icon": None,
+                "labels": [],
+                "labelBadgeTexts": [],
+                "deferrable": False,
+                "controllableIds": [],
+                "isUnmeasured": True,
+                "isEstimated": False,
+                "children": {},
+            },
         }
 
         self.assertEqual(_slim(self.house["children"]), expected)
@@ -261,7 +309,7 @@ class TreeFromDevicesTests(unittest.TestCase):
 
         for node in walk(self.house["children"]):
             with self.subTest(node=node["id"]):
-                if node["isUnmeasured"]:
+                if node["isUnmeasured"] or node["isEstimated"]:
                     self.assertIsNone(node["energyEntityId"])
                 else:
                     self.assertEqual(node["energyEntityId"], node["id"])
@@ -281,17 +329,50 @@ class TreeFromDevicesTests(unittest.TestCase):
             ),
         )
 
-    def test_a_meterless_child_has_no_row_and_stays_on_its_parent(self) -> None:
-        breaker = next(
-            node
-            for node in self.house["children"]
-            if node["id"] == "sensor.jistic_klimatizace_energy"
+
+class SharedMeterRowsTests(unittest.TestCase):
+    """The AC breaker's four air conditioners are rows of their own."""
+
+    def setUp(self) -> None:
+        config = _upgrade()
+        breaker = next(d for d in config["devices"] if d.get("id") == "jistic_klimatizace_energy")
+        breaker["controls"] = {"switch": {"entity_id": "switch.jistic_klimatizace"}}
+        self.breaker = next(
+            node for node in _house(_build(config))["children"] if node["id"] == AC_BREAKER
         )
 
-        self.assertEqual(breaker["children"], [])
+    def test_the_parent_keeps_its_switch_and_measured_power_but_not_the_children_ids(self) -> None:
+        self.assertEqual(self.breaker["switchEntityId"], "switch.jistic_klimatizace")
+        self.assertEqual(self.breaker["powerSensorId"], "sensor.jistic_klimatizace_power")
+        self.assertFalse(self.breaker["isEstimated"])
+        self.assertEqual(self.breaker["controllableIds"], [])
+
+    def test_each_child_reads_its_share_with_its_climate_control_and_its_own_badge(self) -> None:
+        children = [c for c in self.breaker["children"] if c["isEstimated"]]
+
         self.assertEqual(
-            breaker["controllableIds"],
-            ["klima-obyvak", "klima-bartik", "klima-adelka", "klima-loznice"],
+            [
+                (c["id"], c["powerSensorId"], c["switchEntityId"], c["controllableIds"])
+                for c in children
+            ],
+            [
+                (
+                    f"klima-{room}",
+                    f"sensor.helman_share_power_klima_{room}",
+                    f"climate.{room}",
+                    [f"klima-{room}"],
+                )
+                for room in AC_ROOMS
+            ],
+        )
+        self.assertTrue(all(c["deferrable"] for c in children))
+
+    def test_an_unmeasured_remainder_sits_beside_them(self) -> None:
+        (remainder,) = [c for c in self.breaker["children"] if c["isUnmeasured"]]
+
+        self.assertEqual(
+            remainder["powerSensorId"],
+            "sensor.helman_unmeasured_power_jistic_klimatizace_energy",
         )
 
 

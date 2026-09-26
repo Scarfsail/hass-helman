@@ -12,6 +12,11 @@ export class PowerDevicePowerDisplay extends LitElement {
     /** Whether `powerValue` is watts or watt-hours. The share is a ratio either
      *  way, so only the formatting of the figure itself changes. */
     @property({ type: String }) public valueKind: ValueKind = "power";
+    /** The figure is an estimate (a share of a parent's meter), so it reads `≈`. */
+    @property({ type: Boolean }) public estimated = false;
+    /** The estimate cannot be made (an input to its parent's own power is
+     *  unavailable): show that, not a misleading `≈0 W`. */
+    @property({ type: Boolean }) public unavailable = false;
 
     private _showMoreInfo(entityId: string) {
         const event = new CustomEvent("show-more-info", {
@@ -66,10 +71,16 @@ export class PowerDevicePowerDisplay extends LitElement {
             ? () => this._showMoreInfo(this.powerSensorId!)
             : () => { }; // No-op if no sensor
 
+        if (this.unavailable) {
+            return html`<div class="powerDisplay ${this.powerSensorId ? 'has-sensor' : ''}" @click=${onPowerClick}>
+                            <div class="powerValue unavailable">≈ —</div>
+                        </div>`;
+        }
+
         const { value: powerValue, unit: powerUnit } = formatValue(currentPower, this.valueKind);
 
         return html`<div class="powerDisplay ${this.powerSensorId ? 'has-sensor' : ''}" @click=${onPowerClick}>
-                        <div class="powerValue">${powerValue} <span class="units">${powerUnit}</span></div>
+                        <div class="powerValue">${this.estimated ? "≈" : ""}${powerValue} <span class="units">${powerUnit}</span></div>
                         <div>${percentageDisplay}</div>
                     </div>`;
     }
