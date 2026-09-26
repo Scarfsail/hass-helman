@@ -44,10 +44,7 @@ import {
   asJsonArray,
   asJsonObject,
   cloneJson,
-  createApplianceDraft,
-  createClimateApplianceDraft,
   createInverterControllableDraft,
-  createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
   createOptimizerDraft,
@@ -69,10 +66,15 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
+  canHaveChildren,
+  deviceChildren,
+  deviceIdFor,
   deviceKind,
+  hasSwitch,
   isCarvedMeterOwner,
   isSchedulable,
   iterDevices,
+  meterlessChildren,
   ownMeter,
 } from "../cards/shared/config/devices";
 import {
@@ -103,7 +105,7 @@ import {
 } from "./config-editor-scopes";
 import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
-import { mdiAlertOutline } from "@mdi/js";
+import { mdiAlertOutline, mdiSineWave } from "@mdi/js";
 import {
   fetchOptimizerSchema,
   type OptimizerConfigBucket,
@@ -174,6 +176,7 @@ import type {
   ApplianceMetadataResponse,
   SaveConfigResponse,
   StatusMessage,
+  ValidationIssue,
   ValidationReport,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
@@ -191,6 +194,23 @@ const GENERIC_PROJECTION_STRATEGIES = [
 
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const INVERTER_CONTROLLABLE_KIND = "inverter";
+/** Reserved for the inverter; mirrors `CONTROLLABLE_ID_INVERTER` in Python. */
+const CONTROLLABLE_ID_INVERTER = "inverter";
+
+/** The kinds the Devices tab edits; anything else is shown read-only. */
+const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as const;
+
+const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
+type DeviceFilter = (typeof DEVICE_FILTERS)[number];
+
+/** A device's document path as validation reports it: `devices[1].children[0]`. */
+function validationPath(path: readonly PathSegment[]): string {
+  return path
+    .map((segment, index) =>
+      typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
+    )
+    .join("");
+}
 
 /** The two config buckets `automation` splits its optimizers into (#271, P1). */
 type OptimizerBucket = OptimizerConfigBucket;
@@ -342,9 +362,11 @@ export class HelmanConfigEditorPanel
     _scopeModes: { state: true },
     _scopeYamlValues: { state: true },
     _scopeYamlErrors: { state: true },
-    _controllableModes: { state: true },
-    _controllableYamlValues: { state: true },
-    _controllableYamlErrors: { state: true },
+    _deviceModes: { state: true },
+    _deviceYamlValues: { state: true },
+    _deviceYamlErrors: { state: true },
+    _deviceFilter: { state: true },
+    _addDeviceTarget: { state: true },
     _liveApplianceMetadata: { state: true },
     _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
@@ -957,6 +979,67 @@ export class HelmanConfigEditorPanel
       display: block;
     }
 
+    /* The Devices tab. A hidden card keeps its place in the sortable list, so
+       the list's indices stay the document's; the card styles set a display,
+       which would otherwise win over the hidden attribute. */
+    details.device-card[hidden] {
+      display: none;
+    }
+
+    .device-filter {
+      justify-self: start;
+    }
+
+    .device-icon {
+      flex-shrink: 0;
+      --mdc-icon-size: 20px;
+      color: var(--secondary-text-color);
+    }
+
+    .device-badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    .device-badge {
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.78rem;
+      border: 1px solid var(--divider-color);
+      color: var(--secondary-text-color);
+      white-space: nowrap;
+    }
+
+    .device-badge[data-badge="schedulable"] {
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+    }
+
+    .device-badge.error {
+      border-color: var(--error-color);
+      color: var(--error-color);
+    }
+
+    .device-badge.warning {
+      border-color: var(--warning-color, #ef6c00);
+      color: var(--warning-color, #ef6c00);
+    }
+
+    .device-issues {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .device-id {
+      font-family: var(--code-font-family, monospace);
+    }
+
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -1049,9 +1132,14 @@ export class HelmanConfigEditorPanel
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
   private _scopeYamlErrors: Partial<Record<ScopeId, string>> = {};
-  private _controllableModes: Partial<Record<number, EditorMode>> = {};
-  private _controllableYamlValues: Partial<Record<number, JsonValue>> = {};
-  private _controllableYamlErrors: Partial<Record<number, string>> = {};
+  /** Per-device Visual / YAML state, keyed by the device's path key. */
+  private _deviceModes: Partial<Record<string, EditorMode>> = {};
+  private _deviceYamlValues: Partial<Record<string, JsonValue>> = {};
+  private _deviceYamlErrors: Partial<Record<string, string>> = {};
+  /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
+  private _deviceFilter: DeviceFilter = "all";
+  /** The path key of the device list whose "Add device" picker is open. */
+  private _addDeviceTarget: string | null = null;
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
   // The names of the labels configured in Home Assistant, for the badge-text
   // picker. `null` means "not loaded" -- a registry that could not be read
@@ -1407,10 +1495,11 @@ export class HelmanConfigEditorPanel
               class=${this._activeTab === tab.id ? "active" : ""}
               @click=${() => {
                 this._activeTab = tab.id;
-                // The training tab's depth table asks about entities no
-                // mounted `helman-entity-group` announces -- nothing else
-                // triggers a poll on a plain tab switch, so this one does.
-                if (tab.id === "training") {
+                // The training tab's depth table and the devices tab's
+                // name and icon placeholders ask about paths no mounted
+                // `helman-entity-group` announces -- nothing else triggers a
+                // poll on a plain tab switch, so this one does.
+                if (tab.id === "training" || tab.id === "devices") {
                   this._requestEntityInspection();
                 }
               }}
@@ -1496,11 +1585,8 @@ export class HelmanConfigEditorPanel
           TAB_SCOPE_IDS.automation,
           this._renderAutomationTab(),
         );
-      case "controllables":
-        return this._renderTabScope(
-          TAB_SCOPE_IDS.controllables,
-          this._renderControllablesTab(),
-        );
+      case "devices":
+        return this._renderTabScope(TAB_SCOPE_IDS.devices, this._renderDevicesTab());
       default:
         return html``;
     }
@@ -1706,31 +1792,32 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _getControllableMode(index: number): EditorMode {
-    return this._controllableModes[index] ?? "visual";
+  private _getDeviceMode(path: PathSegment[]): EditorMode {
+    return this._deviceModes[entityGroupKey(path)] ?? "visual";
   }
 
-  private _renderControllableModeToggle(index: number): TemplateResult {
-    return renderItemModeToggle(this, this._getControllableMode(index), (mode) => {
+  private _renderDeviceModeToggle(path: PathSegment[]): TemplateResult {
+    return renderItemModeToggle(this, this._getDeviceMode(path), (mode) => {
       if (mode === "yaml") {
-        void this._enterControllableYamlMode(index);
+        void this._enterDeviceYamlMode(path);
       } else {
-        this._exitControllableYamlMode(index);
+        this._exitDeviceYamlMode(path);
       }
     });
   }
 
-  private async _enterControllableYamlMode(index: number): Promise<void> {
-    if (this._getControllableMode(index) === "yaml") return;
+  private async _enterDeviceYamlMode(path: PathSegment[]): Promise<void> {
+    if (this._getDeviceMode(path) === "yaml") return;
+    const key = entityGroupKey(path);
     try {
       await loadHaYamlEditor();
       if (!this._config) return;
-      const value = this._getValue(["devices", index]) as JsonValue;
-      this._controllableModes = { ...this._controllableModes, [index]: "yaml" };
-      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: value };
-      const nextErrors = { ...this._controllableYamlErrors };
-      delete nextErrors[index];
-      this._controllableYamlErrors = nextErrors;
+      const value = this._getValue(path) as JsonValue;
+      this._deviceModes = { ...this._deviceModes, [key]: "yaml" };
+      this._deviceYamlValues = { ...this._deviceYamlValues, [key]: value };
+      const nextErrors = { ...this._deviceYamlErrors };
+      delete nextErrors[key];
+      this._deviceYamlErrors = nextErrors;
       this._message = null;
     } catch (error) {
       this._message = {
@@ -1740,84 +1827,87 @@ export class HelmanConfigEditorPanel
     }
   }
 
-  private _exitControllableYamlMode(index: number): void {
-    if (this._getControllableMode(index) !== "yaml" || this._controllableYamlErrors[index]) return;
-    const nextModes = { ...this._controllableModes };
-    delete nextModes[index];
-    const nextValues = { ...this._controllableYamlValues };
-    delete nextValues[index];
-    const nextErrors = { ...this._controllableYamlErrors };
-    delete nextErrors[index];
-    this._controllableModes = nextModes;
-    this._controllableYamlValues = nextValues;
-    this._controllableYamlErrors = nextErrors;
+  private _exitDeviceYamlMode(path: PathSegment[]): void {
+    const key = entityGroupKey(path);
+    if (this._getDeviceMode(path) !== "yaml" || this._deviceYamlErrors[key]) return;
+    const nextModes = { ...this._deviceModes };
+    delete nextModes[key];
+    const nextValues = { ...this._deviceYamlValues };
+    delete nextValues[key];
+    const nextErrors = { ...this._deviceYamlErrors };
+    delete nextErrors[key];
+    this._deviceModes = nextModes;
+    this._deviceYamlValues = nextValues;
+    this._deviceYamlErrors = nextErrors;
   }
 
   /**
-   * Move a controllable, and return the whole list to visual mode.
+   * Move a device within its list, and return every device to visual mode.
    *
-   * `_controllableModes`, `_controllableYamlValues` and `_controllableYamlErrors`
-   * are keyed by list index, so a move or a remove leaves them describing a
-   * different card than the one they were opened on -- which is what today's
-   * remove already does. Clearing all three is one rule that cannot go stale,
-   * where remapping every key through every move and remove would be a lot more
-   * code for a rare interaction. Nothing is lost but YAML text that does not
-   * parse yet: the draft already holds the last value that did.
+   * `_deviceModes`, `_deviceYamlValues` and `_deviceYamlErrors` are keyed by
+   * the device's path, so a move, a remove or a new parent leaves them
+   * describing a different card than the one they were opened on. Clearing all
+   * three is one rule that cannot go stale, where remapping every key through
+   * every move would be a lot more code for a rare interaction. Nothing is lost
+   * but YAML text that does not parse yet: the draft already holds the last
+   * value that did.
    */
-  private _moveControllable(fromIndex: number, toIndex: number): void {
-    this._resetControllableModes();
-    this._moveListItem(["devices"], fromIndex, toIndex);
+  private _moveDevice(listPath: PathSegment[], fromIndex: number, toIndex: number): void {
+    this._resetDeviceModes();
+    this._moveListItem(listPath, fromIndex, toIndex);
   }
 
-  private _removeControllable(index: number): void {
-    this._resetControllableModes();
-    this._removeListItem(["devices"], index);
+  /** Remove a device with its subtree; an emptied `children` list goes too. */
+  private _removeDevice(path: PathSegment[]): void {
+    this._resetDeviceModes();
+    this._removeListItem(path.slice(0, -1), path[path.length - 1] as number);
   }
 
-  private _resetControllableModes(): void {
-    this._controllableModes = {};
-    this._controllableYamlValues = {};
-    this._controllableYamlErrors = {};
+  private _resetDeviceModes(): void {
+    this._deviceModes = {};
+    this._deviceYamlValues = {};
+    this._deviceYamlErrors = {};
   }
 
-  private _handleControllableYamlChanged(
-    index: number,
+  private _handleDeviceYamlChanged(
+    path: PathSegment[],
     detail: YamlEditorValueChangedDetail,
   ): void {
+    const key = entityGroupKey(path);
     const parsed = parseItemYaml(detail);
     if (!parsed.ok) {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: detail.errorMsg ?? this._t(parsed.errorKey),
+      this._deviceYamlErrors = {
+        ...this._deviceYamlErrors,
+        [key]: detail.errorMsg ?? this._t(parsed.errorKey),
       };
       return;
     }
     try {
       const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, ["devices", index], cloneJson(parsed.value));
+      setValueAtPath(nextConfig, path, cloneJson(parsed.value));
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
       this._message = null;
-      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: parsed.value };
-      const nextErrors = { ...this._controllableYamlErrors };
-      delete nextErrors[index];
-      this._controllableYamlErrors = nextErrors;
+      this._deviceYamlValues = { ...this._deviceYamlValues, [key]: parsed.value };
+      const nextErrors = { ...this._deviceYamlErrors };
+      delete nextErrors[key];
+      this._deviceYamlErrors = nextErrors;
     } catch (error) {
-      this._controllableYamlErrors = {
-        ...this._controllableYamlErrors,
-        [index]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
+      this._deviceYamlErrors = {
+        ...this._deviceYamlErrors,
+        [key]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
       };
     }
   }
 
-  private _renderControllableYamlEditor(index: number): TemplateResult {
+  private _renderDeviceYamlEditor(path: PathSegment[]): TemplateResult {
+    const key = entityGroupKey(path);
     return renderItemYamlEditor(this, {
-      id: `controllable-${index}`,
-      value: (this._controllableYamlValues[index] ??
-        this._getValue(["devices", index])) as JsonValue,
-      error: this._controllableYamlErrors[index],
-      onChange: (detail) => this._handleControllableYamlChanged(index, detail),
+      id: `device-${key.replaceAll(".", "-")}`,
+      value: (this._deviceYamlValues[key] ?? this._getValue(path)) as JsonValue,
+      error: this._deviceYamlErrors[key],
+      onChange: (detail) => this._handleDeviceYamlChanged(path, detail),
     });
   }
 
@@ -2241,6 +2331,8 @@ export class HelmanConfigEditorPanel
         `,
         { initialOpen: false },
       )}
+
+      ${this._renderInverterSection()}
     `;
   }
 
@@ -2833,7 +2925,7 @@ export class HelmanConfigEditorPanel
    * What the appliance energy job learned for one controllable, or why not.
    *
    * The one reader of the job's `estimates` and appliance issues, shared by the
-   * Diagnostics table and the device's own Consumption settings so the two
+   * Diagnostics table and the device's own Projection settings so the two
    * cannot disagree. A device with no status yet, added in the draft and never
    * saved, or simply never trained, is `not_trained`.
    */
@@ -2858,7 +2950,7 @@ export class HelmanConfigEditorPanel
   private _trainingDepthTargets(): {
     key: string;
     path: PathSegment[];
-    ownEntity: boolean;
+    always: boolean;
   }[] {
     if (this._activeTab !== "training") return [];
     const rows = [
@@ -2869,7 +2961,8 @@ export class HelmanConfigEditorPanel
     return rows.map((row) => ({
       key: entityGroupKey(row.path),
       path: row.path,
-      ownEntity: row.ownEntity === true,
+      // Helman's own entity exists whatever the draft says.
+      always: row.ownEntity === true,
     }));
   }
 
@@ -3359,68 +3452,175 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderControllablesTab(): TemplateResult {
-    // Top-level devices only; children are kept untouched in the draft and
-    // edited through YAML until the Devices tab lands.
-    const controllables = asJsonArray(this._getValue(["devices"])) ?? [];
-    // The inverter is a singleton: config validation rejects a second one, so
-    // the button that would author it is not offered once one exists.
-    const hasInverter = controllables.some(
-      (controllable) =>
-        this._stringValue(asJsonObject(controllable)?.kind) === INVERTER_CONTROLLABLE_KIND,
+  /**
+   * The Devices tab: the `devices` tree as nested cards.
+   *
+   * A card renders its `children` with the same card, recursively. The inverter
+   * keeps its entry in the list but is edited under Power devices, so here it
+   * is a hidden placeholder that keeps the sortable list's indices equal to the
+   * document's -- which is also why the filter hides cards rather than dropping
+   * them.
+   */
+  private _renderDevicesTab(): TemplateResult {
+    const hasDevices = iterDevices(this._config).some(
+      ({ device }) => deviceKind(device) !== INVERTER_CONTROLLABLE_KIND,
     );
-
     return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.controllables.configured_controllables,
+        SECTION_SCOPE_IDS.devices.configured_devices,
         html`
-          <p class="inline-note">
-            ${this._t("editor.notes.controllables")}
-          </p>
-          ${controllables.length === 0
-            ? html`<div class="list-stack">
-                <div class="message info">${this._t("editor.empty.no_controllables")}</div>
-              </div>`
-            : renderSortableList({
-                items: controllables,
-                containerClass: "list-stack",
-                renderItem: (controllable, index) =>
-                  this._renderControllableCard(controllable, index),
-                onMove: (oldIndex, newIndex) => this._moveControllable(oldIndex, newIndex),
-              })}
-          <div class="section-footer">
-            ${hasInverter
-              ? nothing
-              : html`
-                  <button
-                    type="button"
-                    class="add-button"
-                    @click=${this._handleAddInverter}
-                  >
-                    ${this._t("editor.actions.add_inverter")}
-                  </button>
-                `}
-            <button type="button" class="add-button primary" @click=${this._handleAddEvCharger}>
-              ${this._t("editor.actions.add_ev_charger")}
-            </button>
-            <button
-              type="button"
-              class="add-button"
-              @click=${this._handleAddClimateAppliance}
-            >
-              ${this._t("editor.actions.add_climate_appliance")}
-            </button>
-            <button
-              type="button"
-              class="add-button"
-              @click=${this._handleAddGenericAppliance}
-            >
-              ${this._t("editor.actions.add_generic_appliance")}
-            </button>
-          </div>
+          <p class="inline-note">${this._t("editor.notes.devices")}</p>
+          ${hasDevices
+            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices"], null)}`
+            : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
+          ${this._renderAddDevice(["devices"], null)}
         `,
       )}
     `;
+  }
+
+  private _renderDeviceFilter(): TemplateResult {
+    return html`
+      <div
+        class="mode-toggle device-filter"
+        role="group"
+        aria-label=${this._t("editor.device_filter.label")}
+      >
+        ${DEVICE_FILTERS.map(
+          (filter) => html`
+            <button
+              type="button"
+              class=${this._deviceFilter === filter ? "active" : ""}
+              aria-pressed=${this._deviceFilter === filter}
+              @click=${() => {
+                this._deviceFilter = filter;
+              }}
+            >
+              ${this._t(`editor.device_filter.${filter}`)}
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
+  /** Whether the filter shows this device: it matches, or something under it does. */
+  private _deviceMatchesFilter(device: JsonObject): boolean {
+    if (this._deviceFilter === "all") return true;
+    return (
+      isSchedulable(device) === (this._deviceFilter === "schedulable") ||
+      deviceChildren(device).some((child) => this._deviceMatchesFilter(child))
+    );
+  }
+
+  private _renderDeviceList(listPath: PathSegment[], parent: JsonObject | null): TemplateResult {
+    return renderSortableList({
+      items: asJsonArray(this._getValue(listPath)) ?? [],
+      containerClass: "list-stack",
+      renderItem: (value, index) =>
+        this._renderDeviceItem(asJsonObject(value) ?? {}, [...listPath, index], parent),
+      onMove: (oldIndex, newIndex) => this._moveDevice(listPath, oldIndex, newIndex),
+    });
+  }
+
+  private _renderDeviceItem(
+    device: JsonObject,
+    path: PathSegment[],
+    parent: JsonObject | null,
+  ): TemplateResult {
+    const kind = deviceKind(device);
+    if (kind === INVERTER_CONTROLLABLE_KIND && parent === null) {
+      return html`<div class="device-placeholder" hidden></div>`;
+    }
+    if (!(EDITABLE_DEVICE_KINDS as readonly string[]).includes(kind)) {
+      return this._renderUnsupportedDevice(device, path);
+    }
+    return this._renderDeviceCard(device, path, parent);
+  }
+
+  /**
+   * "Add device": pick one entity, and the device is created from it.
+   *
+   * At the top level the entity is the new device's energy meter. Under a
+   * parent it is either the child's own meter (a sensor) or, for a child that
+   * draws from the parent's meter, the switch or climate entity that tells when
+   * it runs. The `id` is generated from the entity once and never edited.
+   */
+  private _renderAddDevice(listPath: PathSegment[], parent: JsonObject | null): TemplateResult {
+    const key = entityGroupKey(listPath);
+    const child = parent !== null;
+    if (this._addDeviceTarget !== key) {
+      return html`
+        <div class="section-footer">
+          <button
+            type="button"
+            class="add-button primary add-device"
+            @click=${() => {
+              this._addDeviceTarget = key;
+            }}
+          >
+            ${this._t(child ? "editor.actions.add_child_device" : "editor.actions.add_device")}
+          </button>
+        </div>
+      `;
+    }
+    return html`
+      <div class="field add-device-picker">
+        <label>
+          ${this._t(child ? "editor.fields.add_child_device_entity" : "editor.fields.add_device_entity")}
+        </label>
+        <ha-entity-picker
+          .hass=${this.hass}
+          .includeDomains=${child ? ["sensor", "switch", "climate"] : ["sensor"]}
+          @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+            this._addDevice(listPath, parent, event.detail?.value ?? "")}
+        ></ha-entity-picker>
+        <div class="helper">
+          ${this._t(child ? "editor.helpers.add_child_device" : "editor.helpers.add_device")}
+        </div>
+        <div class="section-footer">
+          <button
+            type="button"
+            class="add-button"
+            @click=${() => {
+              this._addDeviceTarget = null;
+            }}
+          >
+            ${this._t("editor.actions.cancel")}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _addDevice(listPath: PathSegment[], parent: JsonObject | null, rawEntityId: string): void {
+    const entityId = rawEntityId.trim();
+    if (!entityId) return;
+    const domain = entityId.split(".")[0];
+    const meterlessIds = parent !== null && domain !== "sensor"
+      ? iterDevices(this._config)
+          .filter((entry) => entry.parent !== null && !ownMeter(entry.device))
+          .map((entry) => this._stringValue(entry.device.id))
+      : [];
+    const id = deviceIdFor(entityId, [CONTROLLABLE_ID_INVERTER, ...this._deviceIds()], meterlessIds);
+    let device: JsonObject;
+    if (domain === "sensor" || parent === null) {
+      device = { id, consumption: { energy_entity_id: entityId } };
+    } else {
+      device =
+        domain === "climate"
+          ? { id, kind: "climate", controls: { climate: { entity_id: entityId } } }
+          : { id, controls: { switch: { entity_id: entityId } } };
+      // Meterless siblings are all schedulable or all passive.
+      if (meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
+        device.schedulable = true;
+        device.consumption = { projection: { strategy: "fixed" } };
+      }
+    }
+    this._addDeviceTarget = null;
+    this._applyMutation((draft) => {
+      appendListItem(draft, listPath, device);
+    });
   }
 
   private _renderDeviceLabelCategories(): TemplateResult[] {
@@ -3679,79 +3879,74 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderControllableCard(controllable: unknown, index: number): TemplateResult {
-    const applianceObject = asJsonObject(controllable) ?? {};
-    const kind = deviceKind(applianceObject);
-    if (kind === INVERTER_CONTROLLABLE_KIND) {
-      return this._renderInverterControllable(applianceObject, index);
-    }
-    if (kind === "ev_charger") {
-      return this._renderEvChargerAppliance(applianceObject, index);
-    }
-    if (kind === "climate") {
-      return this._renderClimateAppliance(applianceObject, index);
-    }
-    if (kind === "generic") {
-      return this._renderGenericAppliance(applianceObject, index);
-    }
-    return this._renderUnsupportedControllable(applianceObject, index);
+  /**
+   * The inverter, under Power devices.
+   *
+   * It keeps its entry in `devices` -- optimizers target it by id there -- but
+   * it is not a house consumer, so it is edited beside the other power devices
+   * rather than in the Devices tree. No projection section: the inverter has
+   * no demand of its own.
+   */
+  private _renderInverterSection(): TemplateResult {
+    const devices = asJsonArray(this._getValue(["devices"])) ?? [];
+    const index = devices.findIndex(
+      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
+    );
+    return this._renderSimpleSection(
+      this._t("editor.sections.inverter"),
+      index >= 0
+        ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", index])
+        : html`
+            <div class="message info">${this._t("editor.empty.no_inverter")}</div>
+            <div class="section-footer">
+              <button type="button" class="add-button" @click=${this._handleAddInverter}>
+                ${this._t("editor.actions.add_inverter")}
+              </button>
+            </div>
+          `,
+      { open: false, icon: mdiSineWave },
+    );
   }
 
-  /**
-   * The inverter, as a card in the same list as the appliances.
-   *
-   * These are the six fields the retired Scheduler tab held, moved verbatim
-   * apart from where they are written: `controls.mode.entity_id` and
-   * `controls.mode.options.*` instead of `scheduler.control.mode_entity_id`
-   * and `scheduler.control.action_option_map.*`. Nothing about the inverter
-   * asked to be edited on a tab of its own — the tab existed because the
-   * config did.
-   *
-   * No projection section: the inverter has no demand of its own, which is the
-   * one capability that genuinely separates it from the appliance kinds.
-   */
-  private _renderInverterControllable(
-    controllable: JsonObject,
-    index: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["devices", index];
-    const modePath: PathSegment[] = [...basePath, "controls", "mode"];
-    const controllableName =
-      this._stringValue(controllable.name) || this._t("editor.dynamic.inverter");
-    const controllableId =
-      this._stringValue(controllable.id) || this._t("editor.values.missing_id");
+  private _renderInverterCard(inverter: JsonObject, path: PathSegment[]): TemplateResult {
+    const modePath: PathSegment[] = [...path, "controls", "mode"];
+    const inverterName =
+      this._stringValue(inverter.name) || this._t("editor.dynamic.inverter");
+    const inverterId = this._stringValue(inverter.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getControllableMode(index) === "yaml";
+    const isYaml = this._getDeviceMode(path) === "yaml";
+    const issues = this._deviceIssues(path);
 
     return html`
-      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
+      <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
-              ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
-                <strong>${controllableName}</strong>
-                <span class="card-subtitle">${controllableId}</span>
+                <strong>${inverterName}</strong>
+                <span class="card-subtitle">${inverterId}</span>
               </div>
             </div>
+            <div class="device-badges">${this._renderIssueCountBadge(issues)}</div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderControllableModeToggle(index)}
+              ${this._renderDeviceModeToggle(path)}
               ${renderRemoveButton(this, {
-                onRemove: () => this._removeControllable(index),
+                onRemove: () => this._removeDevice(path),
               })}
             </div>
           </div>
         </summary>
         <div class="appliance-body">
+          ${this._renderDeviceIssues(issues)}
           ${isYaml
-            ? this._renderControllableYamlEditor(index)
+            ? this._renderDeviceYamlEditor(path)
             : html`
               ${this._renderSimpleSection(
                 this._t("editor.sections.identity"),
                 html`<div class="field-grid">
-                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.controllable_id", undefined, "editor.help.controllable_id")}
-                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.controllable_name", undefined, "editor.help.controllable_name")}
+                  ${this._renderRequiredTextField([...path, "id"], "editor.fields.controllable_id", undefined, "editor.help.controllable_id")}
+                  ${this._renderRequiredTextField([...path, "name"], "editor.fields.controllable_name", undefined, "editor.help.controllable_name")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="inverter" disabled /></div>
                 </div>`,
               )}
@@ -3789,443 +3984,598 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderUnsupportedControllable(
-    appliance: JsonObject,
-    index: number,
-  ): TemplateResult {
+  private _renderUnsupportedDevice(device: JsonObject, path: PathSegment[]): TemplateResult {
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const applianceName = this._stringValue(appliance.name) || this._tFormat("editor.dynamic.appliance", { index: index + 1 });
     const subtitle = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
-      kind: this._stringValue(appliance.kind) || this._t("editor.values.unknown"),
+      kind: this._stringValue(device.kind) || this._t("editor.values.unknown"),
     });
     return html`
-      <details class="list-card">
+      <details class="list-card device-card" ?hidden=${!this._deviceMatchesFilter(device)}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
               ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
-                <strong>${applianceName}</strong>
+                <strong>${this._deviceName(device, path)}</strong>
                 <span class="card-subtitle">${subtitle}</span>
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${renderRemoveButton(this, {
-                onRemove: () => this._removeControllable(index),
+                onRemove: () => this._removeDevice(path),
               })}
             </div>
           </div>
         </summary>
         <div class="appliance-body">
-          <pre class="raw-preview">${JSON.stringify(appliance, null, 2)}</pre>
+          ${this._renderDeviceIssues(this._deviceIssues(path))}
+          <pre class="raw-preview">${JSON.stringify(device, null, 2)}</pre>
         </div>
       </details>
     `;
   }
 
-  private _renderEvChargerAppliance(
-    appliance: JsonObject,
-    index: number,
+  /**
+   * One device of the tree, and -- through `_renderDeviceChildren` -- the
+   * devices under it, with this same card.
+   *
+   * The summary is the overview row: the resolved name and icon, what the
+   * device measures, whether it has a switch, whether it is schedulable, and
+   * how many validation issues point at it. The name and icon are the
+   * override when there is one, else what the backend resolves them to (see
+   * `_devicePlaceholder`).
+   */
+  private _renderDeviceCard(
+    device: JsonObject,
+    path: PathSegment[],
+    parent: JsonObject | null,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["devices", index];
-    const useModes = objectEntries(
-      this._getValue([...basePath, "controls", "use_mode", "values"]),
+    const kind = deviceKind(device);
+    const id = this._stringValue(device.id);
+    const schedulable = isSchedulable(device);
+    const meterless = parent !== null && !ownMeter(device);
+    const icon = this._stringValue(device.icon) || this._devicePlaceholder(path, "icon");
+    const issues = this._deviceIssues(path);
+    const isYaml = this._getDeviceMode(path) === "yaml";
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+
+    return html`
+      <details
+        class="list-card device-card ${isYaml ? "scope-yaml" : ""}"
+        data-device-id=${id}
+        ?hidden=${!this._deviceMatchesFilter(device)}
+      >
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${renderDragHandle(this)}
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              ${icon ? html`<ha-icon class="device-icon" .icon=${icon}></ha-icon>` : nothing}
+              <div class="card-title">
+                <strong>${this._deviceName(device, path)}</strong>
+                <span class="card-subtitle">${id || this._t("editor.values.missing_id")}</span>
+              </div>
+            </div>
+            <div class="device-badges">
+              ${this._renderDeviceBadges(device)}${this._renderIssueCountBadge(issues)}
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderDeviceModeToggle(path)}
+              ${renderRemoveButton(this, {
+                onRemove: () => this._removeDevice(path),
+              })}
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          ${this._renderDeviceIssues(issues)}
+          ${isYaml
+            ? this._renderDeviceYamlEditor(path)
+            : html`
+              ${this._renderSimpleSection(
+                this._t("editor.sections.identity"),
+                html`<div class="field-grid">
+                  ${this._renderOptionalTextField(
+                    [...path, "name"],
+                    "editor.fields.device_name",
+                    "editor.helpers.device_name",
+                    undefined,
+                    this._devicePlaceholder(path, "name") || id,
+                  )}
+                  ${this._renderOptionalIconField(
+                    [...path, "icon"],
+                    "editor.fields.device_icon",
+                    "editor.helpers.device_icon",
+                    this._devicePlaceholder(path, "icon"),
+                  )}
+                  <div class="field">
+                    <div class="field-label-row">
+                      <label>${this._t("editor.fields.device_id")}</label>
+                      ${this._renderHelpIcon("editor.fields.device_id", "editor.help.device_id")}
+                    </div>
+                    <input class="device-id" .value=${id} readonly />
+                  </div>
+                  ${this._renderDeviceKindField(path, kind)}
+                  ${this._renderDeviceParentField(path, parent)}
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.measurements"),
+                html`<div class="field-grid">
+                  ${this._renderEntityGroup(
+                    [...path, "consumption", "energy_entity_id"],
+                    "editor.fields.consumption_energy_entity",
+                    {
+                      includeDomains: ["sensor"],
+                      helperKey: meterless
+                        ? "editor.helpers.consumption_energy_entity_child"
+                        : "editor.helpers.consumption_energy_entity",
+                      helpKey: "editor.help.consumption_energy_entity",
+                      // Only a child may draw from its parent's meter.
+                      required: parent === null,
+                    },
+                  )}
+                  ${this._renderEntityGroup(
+                    [...path, "consumption", "power_entity_id"],
+                    "editor.fields.consumption_power_entity",
+                    {
+                      includeDomains: ["sensor"],
+                      helperKey: "editor.helpers.consumption_power_entity",
+                    },
+                  )}
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.controls"),
+                html`<div class="field-grid">
+                  ${this._renderSchedulableField(device, path, parent)}
+                  ${this._renderDeviceControls(kind, path, schedulable || meterless)}
+                </div>`,
+              )}
+              ${schedulable && kind !== "ev_charger"
+                ? this._renderProjectionSection(kind, path)
+                : nothing}
+              ${kind === "ev_charger" ? this._renderEvChargerSections(path) : nothing}
+              ${this._renderDeviceChildren(device, path)}
+            `}
+        </div>
+      </details>
+    `;
+  }
+
+  /** The derived badges of a device's overview row. */
+  private _renderDeviceBadges(device: JsonObject): TemplateResult[] {
+    const consumption = asJsonObject(device.consumption) ?? {};
+    const badges: [boolean, string][] = [
+      [!!ownMeter(device), "energy"],
+      [this._stringValue(consumption.power_entity_id) !== "", "power"],
+      [hasSwitch(device), "switch"],
+      [isSchedulable(device), "schedulable"],
+    ];
+    return badges
+      .filter(([shown]) => shown)
+      .map(
+        ([, key]) => html`
+          <span class="device-badge" data-badge=${key}>${this._t(`editor.device_badges.${key}`)}</span>
+        `,
+      );
+  }
+
+  private _renderIssueCountBadge(issues: ValidationIssue[]): TemplateResult | typeof nothing {
+    if (issues.length === 0) return nothing;
+    const hasError = issues.some((issue) => this._validation?.errors.includes(issue));
+    return html`
+      <span class="device-badge ${hasError ? "error" : "warning"}" data-badge="issues">
+        ${this._tFormat("editor.device_badges.issues", { count: issues.length })}
+      </span>
+    `;
+  }
+
+  /**
+   * The validation issues that point at this device itself.
+   *
+   * The backend reports a device's issues under its document path --
+   * `devices[1].children[2].controls` -- so a card owns every issue under its
+   * own path except those under one of its children, which their own cards
+   * show. `devices[1].children` itself (a rule about the children as a set) is
+   * the parent's.
+   */
+  private _deviceIssues(path: PathSegment[]): ValidationIssue[] {
+    if (!this._validation) return [];
+    const own = validationPath(path);
+    return [...this._validation.errors, ...this._validation.warnings].filter(
+      (issue) =>
+        (issue.path === own || issue.path.startsWith(`${own}.`)) &&
+        !issue.path.startsWith(`${own}.children[`),
     );
-    const ecoGears = objectEntries(
-      this._getValue([...basePath, "controls", "eco_gear", "values"]),
+  }
+
+  private _renderDeviceIssues(issues: ValidationIssue[]): TemplateResult | typeof nothing {
+    if (issues.length === 0) return nothing;
+    const errors = this._validation?.errors ?? [];
+    return html`
+      <ul class="device-issues">
+        ${issues.map(
+          (issue) => html`
+            <li class="message ${errors.includes(issue) ? "error" : "info"}">
+              <div class="issue-path">${issue.path}</div>
+              <div>${issue.message}</div>
+            </li>
+          `,
+        )}
+      </ul>
+    `;
+  }
+
+  /** The override when there is one, else the backend's resolved name, else the id. */
+  private _deviceName(device: JsonObject, path: PathSegment[]): string {
+    return (
+      this._stringValue(device.name) ||
+      this._devicePlaceholder(path, "name") ||
+      this._stringValue(device.id) ||
+      this._t("editor.values.missing_id")
     );
-    const vehicles = asJsonArray(this._getValue([...basePath, "vehicles"])) ?? [];
-    const applianceName =
-      this._stringValue(appliance.name) || this._tFormat("editor.dynamic.ev_charger", { index: index + 1 });
-    const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getControllableMode(index) === "yaml";
+  }
 
+  /**
+   * What the device's `name` or `icon` resolves to when left unset.
+   *
+   * Answered by the backend through the entity inspection poll -- see
+   * `_deviceIdentityTargets` -- so the cleaner regex and the fallback order
+   * live in one place, `resolve_device_name`. Empty until the first answer.
+   */
+  private _devicePlaceholder(path: PathSegment[], field: "name" | "icon"): string {
+    return this._stringValue(
+      this._entityInspections[entityGroupKey([...path, field])]?.draft?.placeholder,
+    );
+  }
+
+  /** Every device's name and icon path, for the shared poll, while the tab is open. */
+  private _deviceIdentityTargets(): { key: string; path: PathSegment[]; always: boolean }[] {
+    if (this._activeTab !== "devices") return [];
+    return iterDevices(this._config).flatMap(({ path }) =>
+      (["name", "icon"] as const).map((field) => {
+        const fieldPath = [...path, field];
+        return { key: entityGroupKey(fieldPath), path: fieldPath, always: true };
+      }),
+    );
+  }
+
+  private _renderDeviceKindField(path: PathSegment[], kind: string): TemplateResult {
     return html`
-      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${renderDragHandle(this)}
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${applianceName}</strong>
-                <span class="card-subtitle">${applianceId}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderControllableModeToggle(index)}
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removeControllable(index),
-              })}
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          ${isYaml
-            ? this._renderControllableYamlEditor(index)
-            : html`
-              ${this._renderSimpleSection(
-                this._t("editor.sections.identity_and_limits"),
-                html`<div class="field-grid">
-                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
-                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="ev_charger" disabled /></div>
-                  ${this._renderSchedulableToggle(basePath)}
-                  ${this._renderRequiredNumberField([...basePath, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.controls"),
-                html`<div class="field-grid">
-                  ${this._renderEntityGroup(
-                    [...basePath, "controls", "charge", "entity_id"],
-                    "editor.fields.charge_switch_entity",
-                    {
-                      includeDomains: ["switch"],
-                      helpKey: "editor.help.ev_charge_switch_entity",
-                      required: true,
-                    },
-                  )}
-                  ${this._renderEntityGroup(
-                    [...basePath, "controls", "use_mode", "entity_id"],
-                    "editor.fields.use_mode_entity",
-                    {
-                      includeDomains: ["input_select", "select"],
-                      helpKey: "editor.help.ev_use_mode_entity",
-                      required: true,
-                    },
-                  )}
-                  ${this._renderEntityGroup(
-                    [...basePath, "controls", "eco_gear", "entity_id"],
-                    "editor.fields.eco_gear_entity",
-                    {
-                      includeDomains: ["input_select", "select"],
-                      helpKey: "editor.help.ev_eco_gear_entity",
-                      required: true,
-                    },
-                  )}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.use_modes"),
-                html`<div class="list-stack">
-                  ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(basePath, modeKey, modeConfig))}
-                </div>
-                <div class="section-footer">
-                  <button type="button" class="add-button" @click=${() => this._handleAddUseMode(index)}>${this._t("editor.actions.add_use_mode")}</button>
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.eco_gears"),
-                html`<div class="list-stack">
-                  ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(basePath, gearKey, gearConfig))}
-                </div>
-                <div class="section-footer">
-                  <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(index)}>${this._t("editor.actions.add_eco_gear")}</button>
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.consumption"),
-                this._renderConsumptionSection([...basePath, "consumption"], {
-                  noteKey: "editor.notes.ev_charger_consumption",
-                }),
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.vehicles"),
-                html`${renderSortableList({
-                  items: vehicles,
-                  containerClass: "list-stack",
-                  renderItem: (vehicle, vehicleIndex) =>
-                    this._renderVehicle(basePath, vehicle, vehicleIndex),
-                  onMove: (oldIndex, newIndex) =>
-                    this._moveListItem([...basePath, "vehicles"], oldIndex, newIndex),
-                })}
-                <div class="section-footer">
-                  <button type="button" class="add-button" @click=${() => this._handleAddVehicle(index)}>${this._t("editor.actions.add_vehicle")}</button>
-                </div>`,
-              )}
-            `}
-        </div>
-      </details>
+      <div class="field">
+        <label>${this._t("editor.fields.kind")}</label>
+        <select
+          class="device-kind"
+          @change=${(event: Event) =>
+            this._applyMutation((draft) => {
+              setValueAtPath(draft, [...path, "kind"], (event.currentTarget as HTMLSelectElement).value);
+              this._seedDeviceProjection(draft, path);
+            })}
+        >
+          ${EDITABLE_DEVICE_KINDS.map(
+            (option) => html`
+              <option value=${option} ?selected=${option === kind}>
+                ${this._t(`editor.values.kind_${option}`)}
+              </option>
+            `,
+          )}
+        </select>
+      </div>
     `;
   }
 
-  private _renderGenericAppliance(
-    appliance: JsonObject,
-    index: number,
+  /**
+   * Where the device sits: at the top level or under a device.
+   *
+   * Offers only devices that can hold children (they own a meter and are not
+   * schedulable), never the device itself or anything under it, plus the
+   * current parent whatever it is, so the select never misstates it.
+   */
+  private _renderDeviceParentField(
+    path: PathSegment[],
+    parent: JsonObject | null,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["devices", index];
-    const consumptionPath: PathSegment[] = [...basePath, "consumption"];
-    const projectionStrategy =
-      this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
-    const applianceName =
-      this._stringValue(appliance.name) ||
-      this._tFormat("editor.dynamic.generic_appliance", { index: index + 1 });
-    const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getControllableMode(index) === "yaml";
-    const schedulable = isSchedulable(appliance);
-
+    const key = entityGroupKey(path);
+    const parentKey = parent ? entityGroupKey(path.slice(0, -2)) : "";
+    const candidates = iterDevices(this._config).filter((entry) => {
+      const candidateKey = entityGroupKey(entry.path);
+      if (candidateKey === key || candidateKey.startsWith(`${key}.`)) return false;
+      return candidateKey === parentKey || canHaveChildren(entry.device);
+    });
     return html`
-      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${renderDragHandle(this)}
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${applianceName}</strong>
-                <span class="card-subtitle">${applianceId}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderControllableModeToggle(index)}
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removeControllable(index),
-              })}
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          ${isYaml
-            ? this._renderControllableYamlEditor(index)
-            : html`
-              ${this._renderSimpleSection(
-                this._t("editor.sections.identity_and_limits"),
-                html`<div class="field-grid">
-                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-                  ${schedulable
-                    ? this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")
-                    : this._renderOptionalTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
-                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="generic" disabled /></div>
-                  ${this._renderSchedulableToggle(basePath)}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.controls"),
-                html`<div class="field-grid">
-                  ${this._renderEntityGroup(
-                    [...basePath, "controls", "switch", "entity_id"],
-                    "editor.fields.switch_entity",
-                    {
-                      includeDomains: ["switch"],
-                      helpKey: "editor.help.appliance_switch_entity",
-                      required: schedulable,
-                    },
-                  )}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.consumption"),
-                // A passive device has no demand to project: only its meter.
-                schedulable
-                  ? this._renderConsumptionSection(consumptionPath, {
-                      noteKey: "editor.notes.generic_appliance_projection",
-                      controllableId: this._stringValue(this._getValue(["devices", index, "id"])),
-                      projectionStrategy,
-                      onStrategyChange: (strategy) =>
-                        this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                    })
-                  : this._renderConsumptionSection(consumptionPath),
-              )}
-            `}
-        </div>
-      </details>
+      <div class="field">
+        <label>${this._t("editor.fields.parent")}</label>
+        <select
+          class="device-parent"
+          @change=${(event: Event) =>
+            this._moveDeviceUnder(path, (event.currentTarget as HTMLSelectElement).value)}
+        >
+          <option value="" ?selected=${parentKey === ""}>
+            ${this._t("editor.values.top_level")}
+          </option>
+          ${candidates.map((entry) => {
+            const candidateKey = entityGroupKey(entry.path);
+            return html`
+              <option value=${candidateKey} ?selected=${candidateKey === parentKey}>
+                ${this._deviceName(entry.device, entry.path)}
+              </option>
+            `;
+          })}
+        </select>
+        <div class="helper">${this._t("editor.helpers.parent")}</div>
+      </div>
     `;
   }
 
-  private _renderClimateAppliance(
-    appliance: JsonObject,
-    index: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["devices", index];
-    const consumptionPath: PathSegment[] = [...basePath, "consumption"];
-    const projectionStrategy =
-      this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
-    const applianceName =
-      this._stringValue(appliance.name) ||
-      this._tFormat("editor.dynamic.climate_appliance", { index: index + 1 });
-    const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getControllableMode(index) === "yaml";
-    const schedulable = isSchedulable(appliance);
-
-    return html`
-      <details class="list-card ${isYaml ? "scope-yaml" : ""}">
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${renderDragHandle(this)}
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${applianceName}</strong>
-                <span class="card-subtitle">${applianceId}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderControllableModeToggle(index)}
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removeControllable(index),
-              })}
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          ${isYaml
-            ? this._renderControllableYamlEditor(index)
-            : html`
-              ${this._renderSimpleSection(
-                this._t("editor.sections.identity_and_limits"),
-                html`<div class="field-grid">
-                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-                  ${schedulable
-                    ? this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")
-                    : this._renderOptionalTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
-                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="climate" disabled /></div>
-                  ${this._renderSchedulableToggle(basePath)}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.controls"),
-                html`<div class="field-grid">
-                  ${this._renderEntityGroup(
-                    [...basePath, "controls", "climate", "entity_id"],
-                    "editor.fields.climate_entity",
-                    {
-                      includeDomains: ["climate"],
-                      helpKey: "editor.help.appliance_climate_entity",
-                      required: schedulable,
-                    },
-                  )}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.consumption"),
-                // A passive device has no demand to project: only its meter.
-                schedulable
-                  ? this._renderConsumptionSection(consumptionPath, {
-                      noteKey: "editor.notes.climate_appliance_projection",
-                      controllableId: this._stringValue(this._getValue(["devices", index, "id"])),
-                      projectionStrategy,
-                      onStrategyChange: (strategy) =>
-                        this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                    })
-                  : this._renderConsumptionSection(consumptionPath),
-              )}
-            `}
-        </div>
-      </details>
-    `;
+  /** Move a device, with everything under it, to the end of another parent's children. */
+  private _moveDeviceUnder(path: PathSegment[], parentKey: string): void {
+    const currentParentKey = path.length > 2 ? entityGroupKey(path.slice(0, -2)) : "";
+    if (parentKey === currentParentKey) return;
+    const target = parentKey
+      ? iterDevices(this._config).find((entry) => entityGroupKey(entry.path) === parentKey)
+      : undefined;
+    const device = this._getValue(path);
+    if ((parentKey && !target) || device === undefined) return;
+    this._resetDeviceModes();
+    this._applyMutation((draft) => {
+      // Appended first: appending never shifts an existing index, so `path`
+      // still names the device when it is removed.
+      appendListItem(
+        draft,
+        target ? [...target.path, "children"] : ["devices"],
+        cloneJson(device as JsonValue),
+      );
+      removeListItem(draft, path.slice(0, -1), path[path.length - 1] as number);
+    });
   }
 
   /**
    * The one flag a device carries: may Helman plan and run it.
    *
-   * Off by default, as in the backend. Children keep their own flags and are
-   * edited through YAML until the Devices tab lands.
+   * A meterless child's siblings are all schedulable or all passive, so on one
+   * of them the toggle sets the whole set. A device with children cannot be
+   * schedulable (a schedulable device is a leaf), so there it is disabled --
+   * unless it is on, which only a hand edit can do, and then it may be turned off.
    */
-  private _renderSchedulableToggle(basePath: PathSegment[]): TemplateResult {
-    return this._renderBooleanField(
-      [...basePath, "schedulable"],
-      "editor.fields.schedulable",
-      false,
-      "editor.help.schedulable",
-    );
+  private _renderSchedulableField(
+    device: JsonObject,
+    path: PathSegment[],
+    parent: JsonObject | null,
+  ): TemplateResult {
+    const checked = isSchedulable(device);
+    const hasChildren = deviceChildren(device).length > 0;
+    const meterless = parent !== null && !ownMeter(device);
+    const siblings = meterless && parent ? meterlessChildren(parent).length : 0;
+    const note = hasChildren
+      ? this._t("editor.helpers.schedulable_has_children")
+      : siblings > 1
+        ? this._tFormat("editor.helpers.schedulable_siblings", { count: siblings })
+        : "";
+    return html`
+      <div class="field toggle-field schedulable-field">
+        <div class="field-label-row">
+          <ha-formfield .label=${this._t("editor.fields.schedulable")}>
+            <ha-switch
+              .checked=${checked}
+              ?disabled=${hasChildren && !checked}
+              @change=${(event: Event) =>
+                this._setSchedulable(
+                  path,
+                  meterless,
+                  (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+                )}
+            ></ha-switch>
+          </ha-formfield>
+          ${this._renderHelpIcon("editor.fields.schedulable", "editor.help.schedulable")}
+        </div>
+        <div class="helper">${this._t("editor.helpers.schedulable")}</div>
+        ${note ? html`<div class="helper schedulable-note">${note}</div>` : nothing}
+      </div>
+    `;
+  }
+
+  private _setSchedulable(path: PathSegment[], meterless: boolean, value: boolean): void {
+    const listPath = path.slice(0, -1);
+    const targets = meterless
+      ? (asJsonArray(this._getValue(listPath)) ?? []).flatMap((sibling, index) => {
+          const object = asJsonObject(sibling);
+          return object && !ownMeter(object) ? [[...listPath, index]] : [];
+        })
+      : [path];
+    this._applyMutation((draft) => {
+      for (const target of targets) {
+        if (value) {
+          setValueAtPath(draft, [...target, "schedulable"], true);
+          this._seedDeviceProjection(draft, target);
+        } else {
+          unsetValueAtPath(draft, [...target, "schedulable"]);
+        }
+      }
+    });
+  }
+
+  /** Persist the projection default shown for a newly schedulable device. */
+  private _seedDeviceProjection(draft: JsonObject, path: PathSegment[]): void {
+    const device = asJsonObject(getValueAtPath(draft, path));
+    if (!device || !isSchedulable(device) || deviceKind(device) === "ev_charger") return;
+    const strategyPath = [...path, "consumption", "projection", "strategy"];
+    if (getValueAtPath(draft, strategyPath) === undefined) {
+      setValueAtPath(draft, strategyPath, "fixed");
+    }
   }
 
   /**
-   * The energy meter and what it is used for — the sibling of the Controls
-   * section. `projection` is nested inside because a demand estimate is a
-   * statement about consumption, not about how the device is driven. Whether
-   * the meter is carved out of the house baseline is not a setting here: it
-   * follows `schedulable`.
+   * The kind's controls, always editable: a passive device may still have a
+   * switch, and a meterless child needs its switch or climate entity as the
+   * running signal its share of the parent's meter follows.
    */
-  private _renderConsumptionSection(
-    consumptionPath: PathSegment[],
-    options: {
-      noteKey?: string;
-      /** Whose learned energy to show on `history_average`. */
-      controllableId?: string;
-      projectionStrategy?: string;
-      onStrategyChange?: (strategy: string) => void;
-    } = {},
+  private _renderDeviceControls(
+    kind: string,
+    path: PathSegment[],
+    required: boolean,
   ): TemplateResult {
-    const { noteKey, controllableId, projectionStrategy, onStrategyChange } = options;
-    const projectionPath: PathSegment[] = [...consumptionPath, "projection"];
+    const controlsPath: PathSegment[] = [...path, "controls"];
+    if (kind === "climate") {
+      return this._renderEntityGroup(
+        [...controlsPath, "climate", "entity_id"],
+        "editor.fields.climate_entity",
+        { includeDomains: ["climate"], helpKey: "editor.help.appliance_climate_entity", required },
+      );
+    }
+    if (kind === "ev_charger") {
+      return html`
+        ${this._renderEntityGroup(
+          [...controlsPath, "charge", "entity_id"],
+          "editor.fields.charge_switch_entity",
+          { includeDomains: ["switch"], helpKey: "editor.help.ev_charge_switch_entity", required },
+        )}
+        ${this._renderEntityGroup(
+          [...controlsPath, "use_mode", "entity_id"],
+          "editor.fields.use_mode_entity",
+          { includeDomains: ["input_select", "select"], helpKey: "editor.help.ev_use_mode_entity", required },
+        )}
+        ${this._renderEntityGroup(
+          [...controlsPath, "eco_gear", "entity_id"],
+          "editor.fields.eco_gear_entity",
+          { includeDomains: ["input_select", "select"], helpKey: "editor.help.ev_eco_gear_entity", required },
+        )}
+        ${this._renderRequiredNumberField([...path, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
+      `;
+    }
+    return this._renderEntityGroup(
+      [...controlsPath, "switch", "entity_id"],
+      "editor.fields.switch_entity",
+      { includeDomains: ["switch"], helpKey: "editor.help.appliance_switch_entity", required },
+    );
+  }
 
+  /** The EV charger's own lists: use modes, eco gears and vehicles. */
+  private _renderEvChargerSections(path: PathSegment[]): TemplateResult {
+    const useModes = objectEntries(this._getValue([...path, "controls", "use_mode", "values"]));
+    const ecoGears = objectEntries(this._getValue([...path, "controls", "eco_gear", "values"]));
+    const vehicles = asJsonArray(this._getValue([...path, "vehicles"])) ?? [];
     return html`
-      <div class="section-content">
-        ${noteKey ? html`<p class="inline-note">${this._t(noteKey)}</p>` : nothing}
-        <div class="field-grid">
-          ${this._renderEntityGroup(
-            [...consumptionPath, "energy_entity_id"],
-            "editor.fields.consumption_energy_entity",
-            {
-              includeDomains: ["sensor"],
-              helperKey: "editor.helpers.consumption_energy_entity",
-              helpKey: "editor.help.consumption_energy_entity",
-              // Every device this tab edits is top-level, and a top-level
-              // device owns a meter; only a child may draw from its parent's.
-              required: true,
-            },
-          )}
+      ${this._renderSimpleSection(
+        this._t("editor.sections.use_modes"),
+        html`<div class="list-stack">
+          ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(path, modeKey, modeConfig))}
         </div>
-        ${onStrategyChange
-          ? html`
-              <div class="field-grid">
-                <div class="field">
-                  <div class="field-label-row">
-                    <label>${this._t("editor.fields.projection_strategy")}</label>
-                    ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
-                  </div>
-                  <select
-                    @change=${(event: Event) =>
-                      onStrategyChange((event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    ${GENERIC_PROJECTION_STRATEGIES.map(
-                      (option) => html`
-                        <option
-                          value=${option.value}
-                          ?selected=${option.value === (projectionStrategy ?? "fixed")}
-                        >${this._t(option.labelKey)}</option>
-                      `,
-                    )}
-                  </select>
-                </div>
-                ${this._renderRequiredNumberField(
-                  [...projectionPath, "hourly_energy_kwh"],
-                  projectionStrategy === "history_average"
-                    ? "editor.fields.fallback_hourly_energy_kwh"
-                    : "editor.fields.hourly_energy_kwh",
-                  undefined,
-                  "any",
-                  "editor.help.appliance_hourly_energy_kwh",
-                )}
-                ${projectionStrategy === "history_average"
-                  ? this._renderRequiredNumberField(
-                      [...projectionPath, "lookback_days"],
-                      "editor.fields.history_lookback_days",
-                      undefined,
-                      "1",
-                      "editor.help.appliance_history_lookback_days",
-                    )
-                  : nothing}
-              </div>
-              ${projectionStrategy === "history_average" && controllableId !== undefined
-                ? this._renderApplianceEnergyEstimateLine(
-                    controllableId,
-                    this._getValue([...projectionPath, "hourly_energy_kwh"]),
-                  )
-                : nothing}
-            `
-          : nothing}
-      </div>
+        <div class="section-footer">
+          <button type="button" class="add-button" @click=${() => this._handleAddUseMode(path)}>${this._t("editor.actions.add_use_mode")}</button>
+        </div>`,
+      )}
+      ${this._renderSimpleSection(
+        this._t("editor.sections.eco_gears"),
+        html`<div class="list-stack">
+          ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(path, gearKey, gearConfig))}
+        </div>
+        <div class="section-footer">
+          <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(path)}>${this._t("editor.actions.add_eco_gear")}</button>
+        </div>`,
+      )}
+      ${this._renderSimpleSection(
+        this._t("editor.sections.vehicles"),
+        html`${renderSortableList({
+          items: vehicles,
+          containerClass: "list-stack",
+          renderItem: (vehicle, vehicleIndex) => this._renderVehicle(path, vehicle, vehicleIndex),
+          onMove: (oldIndex, newIndex) =>
+            this._moveListItem([...path, "vehicles"], oldIndex, newIndex),
+        })}
+        <div class="section-footer">
+          <button type="button" class="add-button" @click=${() => this._handleAddVehicle(path)}>${this._t("editor.actions.add_vehicle")}</button>
+        </div>`,
+      )}
     `;
+  }
+
+  /**
+   * A schedulable device's demand projection. Whether its meter is carved out
+   * of the house baseline is not a setting here: it follows `schedulable`.
+   */
+  private _renderProjectionSection(kind: string, path: PathSegment[]): TemplateResult {
+    const projectionPath: PathSegment[] = [...path, "consumption", "projection"];
+    const strategy =
+      this._stringValue(this._getValue([...projectionPath, "strategy"])) || "fixed";
+    return this._renderSimpleSection(
+      this._t("editor.sections.projection"),
+      html`
+        <p class="inline-note">
+          ${this._t(
+            kind === "climate"
+              ? "editor.notes.climate_appliance_projection"
+              : "editor.notes.generic_appliance_projection",
+          )}
+        </p>
+        <div class="field-grid">
+          <div class="field">
+            <div class="field-label-row">
+              <label>${this._t("editor.fields.projection_strategy")}</label>
+              ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
+            </div>
+            <select
+              class="projection-strategy"
+              @change=${(event: Event) =>
+                this._handleProjectionStrategyChange(
+                  path,
+                  (event.currentTarget as HTMLSelectElement).value,
+                )}
+            >
+              ${GENERIC_PROJECTION_STRATEGIES.map(
+                (option) => html`
+                  <option value=${option.value} ?selected=${option.value === strategy}>
+                    ${this._t(option.labelKey)}
+                  </option>
+                `,
+              )}
+            </select>
+          </div>
+          ${this._renderRequiredNumberField(
+            [...projectionPath, "hourly_energy_kwh"],
+            strategy === "history_average"
+              ? "editor.fields.fallback_hourly_energy_kwh"
+              : "editor.fields.hourly_energy_kwh",
+            undefined,
+            "any",
+            "editor.help.appliance_hourly_energy_kwh",
+          )}
+          ${strategy === "history_average"
+            ? this._renderRequiredNumberField(
+                [...projectionPath, "lookback_days"],
+                "editor.fields.history_lookback_days",
+                undefined,
+                "1",
+                "editor.help.appliance_history_lookback_days",
+              )
+            : nothing}
+        </div>
+        ${strategy === "history_average"
+          ? this._renderApplianceEnergyEstimateLine(
+              this._stringValue(this._getValue([...path, "id"])),
+              this._getValue([...projectionPath, "hourly_energy_kwh"]),
+            )
+          : nothing}
+      `,
+    );
+  }
+
+  /** A device's children, and -- when it can hold them -- a way to add one. */
+  private _renderDeviceChildren(
+    device: JsonObject,
+    path: PathSegment[],
+  ): TemplateResult | typeof nothing {
+    const hasChildren = (asJsonArray(device.children) ?? []).length > 0;
+    const canParent = canHaveChildren(device);
+    if (!hasChildren && !canParent) return nothing;
+    return this._renderSimpleSection(
+      this._t("editor.sections.children"),
+      html`
+        ${hasChildren ? this._renderDeviceList([...path, "children"], device) : nothing}
+        ${canParent ? this._renderAddDevice([...path, "children"], device) : nothing}
+      `,
+    );
   }
 
   /**
@@ -4436,6 +4786,7 @@ export class HelmanConfigEditorPanel
     labelKey: string,
     helperKey?: string,
     helpKey?: string,
+    placeholder?: string,
   ): TemplateResult {
     return html`
       <div class="field">
@@ -4444,7 +4795,7 @@ export class HelmanConfigEditorPanel
           ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
         </div>
         <input
-          placeholder=${this.configDefaultHint(path)}
+          placeholder=${placeholder || this.configDefaultHint(path)}
           .value=${this._stringValue(this._getValue(path))}
           @change=${(event: Event) =>
             this._setOptionalString(path, (event.currentTarget as HTMLInputElement).value)}
@@ -4543,13 +4894,14 @@ export class HelmanConfigEditorPanel
     path: PathSegment[],
     labelKey: string,
     helperKey?: string,
+    placeholder?: string,
   ): TemplateResult {
     return html`
       <div class="field">
         <ha-selector
           .hass=${this.hass}
           .narrow=${this.narrow ?? false}
-          .selector=${APPLIANCE_ICON_SELECTOR}
+          .selector=${placeholder ? { icon: { placeholder } } : APPLIANCE_ICON_SELECTOR}
           .label=${this._t(labelKey)}
           .helper=${helperKey ? this._t(helperKey) : undefined}
           .required=${false}
@@ -4800,9 +5152,10 @@ export class HelmanConfigEditorPanel
       ...this._mountedEntityGroups().map((group) => ({
         key: group.key,
         path: group.path,
-        ownEntity: false,
+        always: false,
       })),
       ...this._trainingDepthTargets(),
+      ...this._deviceIdentityTargets(),
     ];
     const targets = candidates
       .filter((target) => {
@@ -4811,8 +5164,8 @@ export class HelmanConfigEditorPanel
         return true;
       })
       .filter(
-        ({ path, ownEntity }) =>
-          ownEntity ||
+        ({ path, always }) =>
+          always ||
           stringValue(this._getValue(path)) !== "" ||
           (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
       );
@@ -4834,7 +5187,7 @@ export class HelmanConfigEditorPanel
         type: "helman/inspect_entities",
         config: this._config,
         ...(saved ? { saved_config: saved } : {}),
-        // ``ownEntity`` is this element's own bookkeeping about which rows
+        // ``always`` is this element's own bookkeeping about which rows
         // survive the "is the picker set" filter. The request carries paths and
         // nothing else, so it is dropped here rather than sent and ignored.
         targets: targets.map(({ key, path }) => ({ key, path })),
@@ -4910,18 +5263,16 @@ export class HelmanConfigEditorPanel
       power_devices: { errors: 0, warnings: 0 },
       training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
-      controllables: { errors: 0, warnings: 0 },
+      devices: { errors: 0, warnings: 0 },
       visualization: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {
       for (const issue of this._validation.errors) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
-        counts[tabId].errors += 1;
+        counts[this._issueTab(issue)].errors += 1;
       }
       for (const issue of this._validation.warnings) {
-        const tabId = TAB_SECTIONS[issue.section] ?? "power_devices";
-        counts[tabId].warnings += 1;
+        counts[this._issueTab(issue)].warnings += 1;
       }
     }
 
@@ -4937,6 +5288,18 @@ export class HelmanConfigEditorPanel
     }
 
     return counts;
+  }
+
+  /** The tab an issue is shown on: the inverter's are on Power devices, where it is edited. */
+  private _issueTab(issue: ValidationIssue): TabId {
+    const devices = asJsonArray(this._getValue(["devices"])) ?? [];
+    const inverter = devices.findIndex(
+      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
+    );
+    if (inverter >= 0 && this._deviceIssues(["devices", inverter]).includes(issue)) {
+      return "power_devices";
+    }
+    return TAB_SECTIONS[issue.section] ?? "power_devices";
   }
 
   /** Adopt the stored document as the baseline, without touching the draft. */
@@ -5275,7 +5638,7 @@ export class HelmanConfigEditorPanel
       Object.values(this._scopeYamlErrors).some(
         (error) => typeof error === "string" && error.length > 0,
       ) ||
-      Object.values(this._controllableYamlErrors).some(
+      Object.values(this._deviceYamlErrors).some(
         (error) => typeof error === "string" && error.length > 0,
       )
     );
@@ -5294,9 +5657,10 @@ export class HelmanConfigEditorPanel
     this._scopeModes = {};
     this._scopeYamlValues = {};
     this._scopeYamlErrors = {};
-    this._controllableModes = {};
-    this._controllableYamlValues = {};
-    this._controllableYamlErrors = {};
+    this._deviceModes = {};
+    this._deviceYamlValues = {};
+    this._deviceYamlErrors = {};
+    this._addDeviceTarget = null;
   }
 
   private _omitScopeIds<T>(
@@ -5411,55 +5775,8 @@ export class HelmanConfigEditorPanel
     });
   };
 
-  private _handleAddEvCharger = (): void => {
-    const existingIds = this._deviceIds();
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["devices"],
-        createApplianceDraft(
-          existingIds,
-          this._tFormat("editor.dynamic.ev_charger", { index: existingIds.length + 1 }),
-          this._tFormat("editor.dynamic.vehicle", { index: 1 }),
-        ),
-      );
-    });
-  };
-
-  private _handleAddClimateAppliance = (): void => {
-    const existingIds = this._deviceIds();
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["devices"],
-        createClimateApplianceDraft(
-          existingIds,
-          this._tFormat("editor.dynamic.climate_appliance", {
-            index: existingIds.length + 1,
-          }),
-        ),
-      );
-    });
-  };
-
-  private _handleAddGenericAppliance = (): void => {
-    const existingIds = this._deviceIds();
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["devices"],
-        createGenericApplianceDraft(
-          existingIds,
-          this._tFormat("editor.dynamic.generic_appliance", {
-            index: existingIds.length + 1,
-          }),
-        ),
-      );
-    });
-  };
-
-  private _handleAddVehicle(applianceIndex: number): void {
-    const vehiclePath: PathSegment[] = ["devices", applianceIndex, "vehicles"];
+  private _handleAddVehicle(devicePath: PathSegment[]): void {
+    const vehiclePath: PathSegment[] = [...devicePath, "vehicles"];
     const existingIds = (asJsonArray(this._getValue(vehiclePath)) ?? [])
       .map((vehicle) => this._stringValue(asJsonObject(vehicle)?.id))
       .filter((value) => value.length > 0);
@@ -5475,49 +5792,29 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _handleAddUseMode(applianceIndex: number): void {
-    const path: PathSegment[] = [
-      "appliances",
-      applianceIndex,
-      "controls",
-      "use_mode",
-      "values",
-    ];
+  private _handleAddUseMode(devicePath: PathSegment[]): void {
+    const path: PathSegment[] = [...devicePath, "controls", "use_mode", "values"];
     const modeKey = createModeKey(objectEntries(this._getValue(path)).map(([key]) => key));
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...path, modeKey], createUseModeEntry());
     });
   }
 
-  private _handleAddEcoGear(applianceIndex: number): void {
-    const path: PathSegment[] = [
-      "appliances",
-      applianceIndex,
-      "controls",
-      "eco_gear",
-      "values",
-    ];
+  private _handleAddEcoGear(devicePath: PathSegment[]): void {
+    const path: PathSegment[] = [...devicePath, "controls", "eco_gear", "values"];
     const gearKey = createGearKey(objectEntries(this._getValue(path)).map(([key]) => key));
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...path, gearKey], createEcoGearEntry());
     });
   }
 
-  private _handleProjectedApplianceProjectionStrategyChange(
-    applianceIndex: number,
-    strategy: string,
-  ): void {
+  private _handleProjectionStrategyChange(devicePath: PathSegment[], strategy: string): void {
     if (!["fixed", "history_average"].includes(strategy)) {
       return;
     }
 
     this._applyMutation((draft) => {
-      const basePath: PathSegment[] = [
-        "devices",
-        applianceIndex,
-        "consumption",
-        "projection",
-      ];
+      const basePath: PathSegment[] = [...devicePath, "consumption", "projection"];
       setValueAtPath(draft, [...basePath, "strategy"], strategy);
       if (strategy !== "history_average") {
         return;

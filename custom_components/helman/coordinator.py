@@ -1131,6 +1131,11 @@ class HelmanCoordinator:
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
+            friendly_name=lambda entity_id: (
+                state.attributes.get("friendly_name")
+                if (state := self._hass.states.get(entity_id)) is not None
+                else None
+            ),
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.

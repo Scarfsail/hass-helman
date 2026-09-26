@@ -431,8 +431,30 @@ def resolve_device_name(
             continue
         friendly = friendly_name(entity_id.strip())
         if friendly:
-            return clean_name(friendly, cleaner_regex)
+            cleaned = clean_name(friendly, cleaner_regex)
+            if cleaned:
+                return cleaned
     return peek_controllable_id(device) or ""
+
+
+def resolve_device_icon(
+    device: Device,
+    *,
+    entity_icon: Callable[[str], str | None],
+) -> str | None:
+    """The icon a device's row shows: the ``icon`` override, else its power sensor's.
+
+    ``entity_icon`` maps an entity id to its ``icon`` state attribute or
+    ``None``, as :func:`resolve_device_name`'s ``friendly_name`` does for names.
+    """
+    icon = device.get("icon")
+    if isinstance(icon, str) and icon.strip():
+        return icon
+    consumption = device.get("consumption")
+    power = consumption.get("power_entity_id") if isinstance(consumption, Mapping) else None
+    if not isinstance(power, str) or not power.strip():
+        return None
+    return entity_icon(power.strip())
 
 
 def _control_entity_ids(device: Device) -> list[Any]:

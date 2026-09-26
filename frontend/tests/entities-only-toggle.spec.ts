@@ -78,7 +78,6 @@ const CONFIG = {
         {
             kind: "generic",
             schedulable: true,
-            schedulable: true,
             id: "boiler",
             name: "Boiler",
             controls: { switch: { entity_id: "switch.boiler" } },
@@ -90,11 +89,15 @@ const CONFIG = {
     ],
 };
 
-/** The same, for the tab whose entity groups live inside appliance cards. */
-const CONTROLLABLE_ENTITY_PATHS = [
-    "devices.0.controls.mode.entity_id",
+/**
+ * The same, for the tab whose entity groups live inside device cards. The
+ * inverter's mode entity is not here: the inverter is edited under Power
+ * devices.
+ */
+const DEVICE_ENTITY_PATHS = [
     "devices.1.controls.switch.entity_id",
     "devices.1.consumption.energy_entity_id",
+    "devices.1.consumption.power_entity_id",
 ].sort();
 
 const DAILY_ENERGY_ENTITIES =
@@ -123,6 +126,8 @@ const POWER_DEVICE_ENTITY_PATHS = [
     "power_devices.battery.entities.max_soc",
     "power_devices.grid.entities.power",
     "power_devices.grid.forecast.sell_price_entity_id",
+    // The inverter keeps its `devices` entry but is edited here.
+    "devices.0.controls.mode.entity_id",
 ].sort();
 
 async function mountEditor(page: Page): Promise<void> {
@@ -484,12 +489,12 @@ test.describe("entities-only toggle", () => {
         expect(await readOpenState()).toEqual(before);
     });
 
-    test("leaves the appliance cards on another tab as it found them", async ({
+    test("leaves the device cards on another tab as it found them", async ({
         page,
     }) => {
         await mountEditor(page);
-        await openTab(page, "Controllables");
-        // Appliance cards are `details.list-card`, and unlike a section card
+        await openTab(page, "Devices");
+        // Device cards are `details.list-card`, and unlike a section card
         // they carry no `open` binding at all -- nothing in a render would ever
         // put one back, so forcing them open has to be paired with a record of
         // what they were.
@@ -501,7 +506,7 @@ test.describe("entities-only toggle", () => {
         // was on screen when the snapshot would have been taken.
         await openTab(page, "Helman card");
         await setEntitiesOnly(page, true);
-        await openTab(page, "Controllables");
+        await openTab(page, "Devices");
         expect((await readCardOpenState(page)).every(([, open]) => open)).toBe(true);
 
         await setEntitiesOnly(page, false);
@@ -512,7 +517,7 @@ test.describe("entities-only toggle", () => {
         page,
     }) => {
         await mountEditor(page);
-        await openTab(page, "Controllables");
+        await openTab(page, "Devices");
         // In YAML mode the tab renders a code editor and no tab body at all,
         // so there is nothing on screen for the toggle to have opened.
         await setScopeMode(page, ".scope-toolbar", "YAML");
@@ -524,7 +529,7 @@ test.describe("entities-only toggle", () => {
         // so `:has()` finds no group inside one and the view would hide the
         // lot, coming up empty exactly where it promises completeness.
         await setScopeMode(page, ".scope-toolbar", "Visual");
-        expect(await visibleGroupPaths(page)).toEqual(CONTROLLABLE_ENTITY_PATHS);
+        expect(await visibleGroupPaths(page)).toEqual(DEVICE_ENTITY_PATHS);
     });
 
     test("keeps a section left in YAML mode, and its way back", async ({ page }) => {

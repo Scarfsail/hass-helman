@@ -7,8 +7,7 @@ import type { JsonObject, JsonValue, PathSegment } from "./types";
  * Mirrors `custom_components/helman/controllables/config.py`: the tree is
  * flattened depth first in document order, `kind` defaults to `generic`, and
  * only a device that says `schedulable: true` (or the inverter) may be planned
- * or targeted. Kept to what the editor needs until the Devices tab replaces the
- * top-level list.
+ * or targeted. Kept to what the editor needs.
  */
 
 /** One device, with its parent and where it sits in the document. */
@@ -49,7 +48,7 @@ export function ownMeter(device: JsonObject): string {
   return typeof meter === "string" ? meter.trim() : "";
 }
 
-function children(device: JsonObject): JsonObject[] {
+export function deviceChildren(device: JsonObject): JsonObject[] {
   return (asJsonArray(device.children) ?? []).flatMap((child) => {
     const object = asJsonObject(child);
     return object ? [object] : [];
@@ -58,7 +57,7 @@ function children(device: JsonObject): JsonObject[] {
 
 /** A meter owner's children that draw from its meter rather than their own. */
 export function meterlessChildren(device: JsonObject): JsonObject[] {
-  return children(device).filter((child) => !ownMeter(child));
+  return deviceChildren(device).filter((child) => !ownMeter(child));
 }
 
 /**
@@ -71,4 +70,44 @@ export function isCarvedMeterOwner(device: JsonObject): boolean {
   if (isSchedulable(device)) return true;
   const meterless = meterlessChildren(device);
   return meterless.length > 0 && meterless.every(isSchedulable);
+}
+
+/**
+ * Whether a device may hold children: it owns a meter and is not schedulable
+ * (a schedulable device is a leaf). What the parent picker offers.
+ */
+export function canHaveChildren(device: JsonObject): boolean {
+  return deviceKind(device) !== "inverter" && !!ownMeter(device) && !isSchedulable(device);
+}
+
+/** Whether `controls` names an entity the device is switched by. */
+export function hasSwitch(device: JsonObject): boolean {
+  const controls = asJsonObject(device.controls) ?? {};
+  return ["switch", "charge", "climate"].some((key) => {
+    const entityId = asJsonObject(controls[key])?.entity_id;
+    return typeof entityId === "string" && entityId.trim().length > 0;
+  });
+}
+
+/**
+ * The id a device added for `entityId` gets: the entity's object id, or `_2`,
+ * `_3`... on a clash. Mirrors `meter_device_id` in
+ * `custom_components/helman/controllables/energy_import.py`; generated once and
+ * never edited, so a later entity swap keeps schedules and targets.
+ */
+export function deviceIdFor(
+  entityId: string,
+  takenIds: Iterable<string>,
+  meterlessIds: Iterable<string> = [],
+): string {
+  const taken = new Set(takenIds);
+  // Share sensors normalize punctuation and case, just like share_sensor_slug.
+  const slug = (id: string) => id.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const takenSlugs = new Set(Array.from(meterlessIds, slug));
+  const base = entityId.split(".").slice(1).join(".") || entityId;
+  let candidate = base;
+  for (let suffix = 2; taken.has(candidate) || takenSlugs.has(slug(candidate)); suffix += 1) {
+    candidate = `${base}_${suffix}`;
+  }
+  return candidate;
 }

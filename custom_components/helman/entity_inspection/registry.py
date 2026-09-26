@@ -31,6 +31,7 @@ from ..solar_bias_correction.forecast_slot_history import (
     SOLAR_FORECAST_CURRENT_ENTITY,
 )
 from .context import InspectionRequest, PathSegment
+from .device import device_field, evaluate_device_field
 from .fallback import evaluate_entity_value
 from .history import (
     fixed_entity_history_evaluator,
@@ -129,7 +130,7 @@ EVALUATORS: dict[str, Evaluator] = {
     # alongside its meter, for a history_average appliance and for any sharer
     # of a meter one of those learns from. Measured, never judged here -- the
     # requirement is each appliance's own lookback, which the Training tab's
-    # depth table applies. Wrapped rather than replaced so the Controllables
+    # depth table applies. Wrapped rather than replaced so the Devices
     # tab keeps showing the switch or climate state it always has. A child's
     # control is keyed one level down, since the matcher is fixed-depth.
     "devices.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
@@ -204,8 +205,11 @@ def evaluator_for(
 
     Always answers: an unclaimed path gets :data:`FALLBACK_EVALUATOR` and no
     wildcards, because every entity in the configuration is worth a reading
-    even where there is nothing to make of it.
+    even where there is nothing to make of it. A device's ``name`` or ``icon``,
+    at any depth of the tree, is answered by :mod:`.device` first.
     """
+    if device_field(path) is not None:
+        return evaluate_device_field, ()
     for key, evaluator in EVALUATORS.items():
         wildcards = match_key(key, path)
         if wildcards is not None:

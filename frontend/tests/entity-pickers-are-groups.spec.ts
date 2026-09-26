@@ -27,7 +27,7 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const TABS = ["Power devices", "Controllables", "Automation", "Training", "Helman card"];
+const TABS = ["Power devices", "Devices", "Automation", "Training", "Helman card"];
 
 /**
  * Enough optimizer schema for the Automation tab to render something.
@@ -115,7 +115,6 @@ const CONFIG = {
         {
             kind: "ev_charger",
             schedulable: true,
-            schedulable: true,
             id: "ev",
             name: "EV Charging",
             limits: { max_charging_power_kw: 11 },
@@ -135,29 +134,32 @@ const CONFIG = {
                     limits: { battery_capacity_kwh: 60, max_charging_power_kw: 11 },
                 },
             ],
-            consumption: { energy_entity_id: "sensor.ev_energy_total" },
+            consumption: {
+                energy_entity_id: "sensor.ev_energy_total",
+                power_entity_id: "sensor.ev_power",
+            },
         },
         {
             kind: "generic",
-            schedulable: true,
             schedulable: true,
             id: "boiler",
             name: "Boiler",
             controls: { switch: { entity_id: "switch.boiler" } },
             consumption: {
                 energy_entity_id: "sensor.boiler_energy_total",
+                power_entity_id: "sensor.boiler_power",
                 projection: { strategy: "fixed", hourly_energy_kwh: 2 },
             },
         },
         {
             kind: "climate",
             schedulable: true,
-            schedulable: true,
             id: "hvac",
             name: "HVAC",
             controls: { climate: { entity_id: "climate.living_room" } },
             consumption: {
                 energy_entity_id: "sensor.hvac_energy_total",
+                power_entity_id: "sensor.hvac_power",
                 projection: { strategy: "fixed", hourly_energy_kwh: 1.5 },
             },
         },
@@ -421,7 +423,7 @@ test("a group in a nested shadow root is seen by the collector and the guard", a
 test("every picked entity shows the reading the backend sent for it", async ({ page }) => {
     await mountEditor(page);
     const seen: Record<string, string[]> = {};
-    for (const label of ["Power devices", "Controllables"]) {
+    for (const label of ["Power devices", "Devices"]) {
         await openTab(page, label);
         await expandEverything(page);
         // The poll is on a two-second timer, so the readings arrive a tick

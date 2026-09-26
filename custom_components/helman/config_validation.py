@@ -1007,7 +1007,7 @@ def _validate_controllables_config(
     Walks through :func:`~.controllables.config.iter_device_paths`, the same
     generator every runtime reader flattens the tree with, so the validator and
     the readers cannot disagree about what is in it. Reported under the
-    ``controllables`` section, which is the editor tab the devices live on.
+    ``devices`` section, which is the editor tab the devices live on.
 
     Per device: its kind, its id (unique across the whole tree; ``inverter`` is
     reserved), its ``consumption`` block, and — only when it is schedulable —
@@ -1015,7 +1015,7 @@ def _validate_controllables_config(
     its children (see :func:`_validate_device_children`). Across the tree: a
     meter belongs to exactly one device.
     """
-    section = "controllables"
+    section = "devices"
     for retired_key in _RETIRED_CONFIG_KEYS:
         if retired_key in config:
             report.add_error(
@@ -1218,7 +1218,7 @@ def _validate_device_children(
     * The live split needs power: a parent with meterless children, and each of
       its metered children, names ``consumption.power_entity_id``.
     """
-    section = "controllables"
+    section = "devices"
     raw_children = raw_device.get("children")
     if raw_children is None:
         return
@@ -1317,7 +1317,7 @@ def _validate_device_consumption(
     so a meter and a demand projection are equally meaningless on it, and one
     error saying so beats several saying almost the same thing.
     """
-    section = "controllables"
+    section = "devices"
 
     if "projection" in raw_device:
         report.add_error(
@@ -1423,7 +1423,7 @@ def _validate_controllable_id(
     Every other device must name itself too: the id is the persistent key for
     schedules, optimizer targets and training, passive devices included.
     """
-    section = "controllables"
+    section = "devices"
     raw_id = raw_controllable.get("id")
     if kind == CONTROLLABLE_KIND_INVERTER and (
         not _is_non_empty_string(raw_id) or raw_id.strip() != CONTROLLABLE_ID_INVERTER
@@ -1482,7 +1482,7 @@ def _validate_inverter_controllable(
     path: str,
     report: ValidationReport,
 ) -> None:
-    section = "controllables"
+    section = "devices"
     raw_controls = raw_controllable.get("controls")
     if raw_controls is None:
         return

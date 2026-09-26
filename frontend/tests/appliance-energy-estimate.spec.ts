@@ -6,7 +6,7 @@ import { resolve } from "node:path";
  *
  * `helman/training/status` carries the appliance job's adopted `estimates`,
  * and its per-appliance failures arrive as the job's issues. The Training
- * tab's appliance table and each device's own Consumption settings read both
+ * tab's appliance table and each device's own Projection settings read both
  * through one resolver, so this file stubs the status once and checks that
  * both places say the same thing for each device.
  */
@@ -124,7 +124,7 @@ async function mountEditor(page: Page): Promise<void> {
 }
 
 async function openTab(page: Page, label: string): Promise<void> {
-    await page.locator(".tabs button", { hasText: label }).click();
+    await page.locator(".tabs").getByRole("button", { name: label, exact: true }).click();
 }
 
 /** The Learned average cell of the appliance table's row for `name`. */
@@ -138,7 +138,7 @@ function learnedCell(page: Page, name: string) {
         .nth(1);
 }
 
-/** The read-only estimate line in a controllable card's Consumption settings. */
+/** The read-only estimate line in a device card's Projection settings. */
 function estimateLine(page: Page, name: string) {
     return page
         .locator("details.list-card", {
@@ -164,7 +164,7 @@ test("the appliance table shows each device's learned value or why it has none",
 
 test("a device on history_average shows the same value in its settings", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Controllables");
+    await openTab(page, "Devices");
 
     await expect(estimateLine(page, "Dishwasher")).toHaveText(
         "Learned from history: 1.12 kWh/h",
@@ -183,7 +183,7 @@ test("the strategy select opens on the configured strategy and names the kWh fie
     page,
 }) => {
     await mountEditor(page);
-    await openTab(page, "Controllables");
+    await openTab(page, "Devices");
 
     const card = (name: string) =>
         page.locator("details.list-card", {
@@ -192,8 +192,8 @@ test("the strategy select opens on the configured strategy and names the kWh fie
 
     // The select is committed before its options exist on first render, so
     // a `.value` binding fell back to the first option ("fixed").
-    await expect(card("Dishwasher").locator("select")).toHaveValue("history_average");
-    await expect(card("Pool").locator("select")).toHaveValue("fixed");
+    await expect(card("Dishwasher").locator("select.projection-strategy")).toHaveValue("history_average");
+    await expect(card("Pool").locator("select.projection-strategy")).toHaveValue("fixed");
 
     await expect(card("Dishwasher").locator("label", { hasText: "Fallback hourly energy kWh" })).toHaveCount(1);
     await expect(card("Pool").locator("label", { hasText: "Average hourly energy kWh" })).toHaveCount(1);

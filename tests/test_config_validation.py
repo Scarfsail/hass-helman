@@ -466,6 +466,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.errors, [])
 
+    def test_schedulable_devices_need_no_name_override(self) -> None:
+        for device in [_generic_appliance(), _climate_appliance()]:
+            with self.subTest(kind=device["kind"]):
+                del device["name"]
+                config = _valid_config()
+                config["devices"].append(device)
+                report = validate_config_document(config)
+                self.assertTrue(report.valid, report.errors)
+
     def test_appliance_runtime_optimizer_rejects_unknown_appliance_id(self) -> None:
         config = _valid_config()
         config["automation"] = {
