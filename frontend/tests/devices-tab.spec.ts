@@ -1053,6 +1053,18 @@ test("invalid import cannot be applied and empty state offers import", async ({
   expect(await config(page)).toEqual([]);
 });
 
+test("an up-to-date Energy preview cannot dirty an unchanged draft", async ({ page }) => {
+    const device = { id: "breaker", consumption: { energy_entity_id: "sensor.energy" } };
+    await mountEditor(page, [device]);
+    await openTab(page, "Devices");
+    await deviceResponse(page, "helman/preview_energy_import", importResponse([device], { additions: [] }));
+    await page.locator(".import-energy").click();
+    await expect(page.locator(".energy-import-preview")).toContainText("No changes to apply");
+    await expect(page.locator(".apply-energy-import")).toBeDisabled();
+    expect(await page.evaluate(() => (document.querySelector("helman-config-editor-panel") as any)._dirty)).toBe(false);
+    expect(await config(page)).toEqual([device]);
+});
+
 test("suggestions preserve a climate child's control and shared meter", async ({ page }) => {
     await mountEditor(page, [BREAKER]);
     await openTab(page, "Devices");

@@ -3527,6 +3527,10 @@ export class HelmanConfigEditorPanel
     if (!this._energyImport || this._energyImport.draft !== this._config)
       return nothing;
     const { preview } = this._energyImport;
+    const hasChanges =
+      preview.additions.length +
+      preview.powerEntities.length +
+      preview.nestingChanges.length > 0;
     return html`<div class="list-card energy-import-preview">
       <strong>${this._t("editor.import.preview")}</strong>
       <p>${this._t("editor.import.draft_only")}</p>
@@ -3538,16 +3542,17 @@ export class HelmanConfigEditorPanel
         ${preview.warnings.map((item) => html`<li class="message info">${item.energy_entity_id} → ${item.device_id}: ${item.message}</li>`)}
         ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
       </ul>
-      ${preview.additions.length + preview.powerEntities.length + preview.nestingChanges.length === 0 ? html`<p>${this._t("editor.import.no_changes")}</p>` : nothing}
+      ${!hasChanges ? html`<p>${this._t("editor.import.no_changes")}</p>` : nothing}
       <button
         class="apply-energy-import"
         type="button"
-        ?disabled=${!preview.validation.valid}
+        ?disabled=${!preview.validation.valid || !hasChanges}
         @click=${() => {
           if (
             !this._energyImport ||
             this._energyImport.draft !== this._config ||
-            !preview.validation.valid
+            !preview.validation.valid ||
+            !hasChanges
           )
             return;
           this._applyMutation((draft) => {
