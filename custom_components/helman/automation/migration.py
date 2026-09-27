@@ -1318,8 +1318,9 @@ def _migrate_v22_to_v23(
 
     Two candidates with an equal claim (a multi-channel meter's HA device) are
     not guessed between, and an entity chosen for two devices goes to neither:
-    this step runs once, and a wrong pick would be saved for good. An existing
-    value is never overwritten. Each backfill is logged, and so is a metered
+    this step runs once, and a wrong pick would be saved for good. Nor is an
+    entity another device already names. An existing value is never
+    overwritten. Each backfill is logged, and so is a metered
     device left without power.
     """
     if entity_suggestions is None:
@@ -1355,7 +1356,14 @@ def _migrate_v22_to_v23(
         )
         picks.append((device, power, switch))
 
+    # Entities another device already names are taken, whether configured
+    # before this step or picked by it for a second device.
     claimed = [entity for _device, *entities in picks for entity in entities if entity]
+    claimed += [
+        entity.strip()
+        for device, _parent in iter_devices(document)
+        for entity in _named_power_and_switch(device)
+    ]
     for device, power, switch in picks:
         device_id = device.get("id", own_meter(device))
         if power is not None and claimed.count(power) == 1:
@@ -1373,6 +1381,22 @@ def _migrate_v22_to_v23(
             }
             _LOGGER.info("Device %s switch backfilled: %s", device_id, switch)
     return (document, [])
+
+
+def _named_power_and_switch(device: Mapping[str, Any]) -> list[str]:
+    """The power sensor and switch-like controls ``device`` already names."""
+    consumption = device.get("consumption")
+    controls = device.get("controls")
+    named = [
+        consumption.get("power_entity_id") if isinstance(consumption, Mapping) else None,
+        *(
+            control.get("entity_id")
+            for key in ("switch", "charge")
+            if isinstance(controls, Mapping)
+            and isinstance(control := controls.get(key), Mapping)
+        ),
+    ]
+    return [entity for entity in named if isinstance(entity, str) and entity.strip()]
 
 
 def _sole_candidate(

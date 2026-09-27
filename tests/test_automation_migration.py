@@ -2258,6 +2258,19 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
 
         self.assertEqual(items, [boiler, twin])
 
+    def test_an_entity_another_device_already_names_is_not_picked(self) -> None:
+        configured = self._metered(
+            "channel_1",
+            "sensor.other_energy",
+            controls={"switch": {"entity_id": "switch.boiler"}},
+        )
+        configured["consumption"]["power_entity_id"] = "sensor.boiler_power"
+        boiler = self._metered("boiler", "sensor.boiler_energy")
+
+        items = self._migrate_from_v22([deepcopy(configured), boiler])
+
+        self.assertEqual(items, [configured, boiler])
+
     def test_only_a_generic_device_gains_a_switch(self) -> None:
         climate = {"climate": {"entity_id": "climate.boiler"}}
         device = self._metered(
