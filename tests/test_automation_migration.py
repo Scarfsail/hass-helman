@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2121,6 +2122,227 @@ class DevicesSectionMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["devices"], {"name_cleaner_regex": " Power$"})
         self.assertEqual(migrated["visualization"], {})
+
+
+class RegistryBackfillMigrationTests(unittest.TestCase):
+    """v22 -> v23: power sensor and switch backfilled from the meter's HA device."""
+
+    _LOGGER = "custom_components.helman.automation.migration"
+
+    #: ``meter -> suggestions``, shaped like ``suggest_entities``' result.
+    SUGGESTIONS = {
+        "sensor.boiler_energy": {
+            "power": [
+                {"entityId": "sensor.boiler_power", "reasons": [{"code": "label"}]},
+                {"entityId": "sensor.boiler_power_2", "reasons": []},
+            ],
+            "switch": [
+                {"entityId": "switch.boiler", "reasons": [{"code": "name_match"}]}
+            ],
+        },
+        "sensor.pump_energy": {
+            "power": [{"entityId": "sensor.pump_power", "reasons": []}],
+            "switch": [
+                {
+                    "entityId": "switch.pump",
+                    "reasons": [{"code": "same_device"}, {"code": "label", "value": "S"}],
+                }
+            ],
+        },
+        "sensor.plug_energy": {
+            "power": [],
+            "switch": [{"entityId": "switch.plug_led", "reasons": [{"code": "same_device"}]}],
+        },
+    }
+    #: Both channels of one multi-channel HA device see the same candidates.
+    SUGGESTIONS["sensor.channel_1_energy"] = SUGGESTIONS["sensor.channel_2_energy"] = {
+        "power": [
+            {"entityId": "sensor.channel_1_power", "reasons": []},
+            {"entityId": "sensor.channel_2_power", "reasons": []},
+        ],
+        "switch": [{"entityId": "switch.shelly", "reasons": [{"code": "label"}]}],
+    }
+
+    def _resolve(self, anchors, document):
+        self.requests.append((list(anchors), document))
+        return self.SUGGESTIONS.get(anchors[0], {"power": [], "switch": []})
+
+    def setUp(self) -> None:
+        self.requests = []
+
+    def _migrate_from_v22(self, items, resolver="default"):
+        migrated, _ids = migrate_config_document(
+            {"config_version": 22, "devices": {"items": items}},
+            None,
+            self._resolve if resolver == "default" else resolver,
+        )
+        return migrated["devices"]["items"]
+
+    @staticmethod
+    def _metered(device_id, meter, **extra):
+        return {"id": device_id, "consumption": {"energy_entity_id": meter}, **extra}
+
+    def test_power_and_switch_are_backfilled(self) -> None:
+        items = self._migrate_from_v22(
+            [self._metered("boiler", "sensor.boiler_energy")]
+        )
+
+        self.assertEqual(
+            items,
+            [
+                {
+                    "id": "boiler",
+                    "consumption": {
+                        "energy_entity_id": "sensor.boiler_energy",
+                        "power_entity_id": "sensor.boiler_power",
+                    },
+                    "controls": {"switch": {"entity_id": "switch.boiler"}},
+                }
+            ],
+        )
+        self.assertEqual(self.requests[0][0], ["sensor.boiler_energy"])
+
+    def test_existing_values_are_kept(self) -> None:
+        boiler = self._metered("boiler", "sensor.boiler_energy")
+        boiler["consumption"]["power_entity_id"] = "sensor.mine"
+        boiler["controls"] = {"switch": {"entity_id": "switch.mine"}}
+
+        self.assertEqual(self._migrate_from_v22([deepcopy(boiler)]), [boiler])
+
+    def test_an_ev_chargers_charge_control_counts_as_its_switch(self) -> None:
+        charger = self._metered(
+            "ev",
+            "sensor.boiler_energy",
+            kind="ev_charger",
+            controls={"charge": {"entity_id": "switch.ev_charge"}},
+        )
+
+        [item] = self._migrate_from_v22([charger])
+
+        self.assertEqual(item["controls"], {"charge": {"entity_id": "switch.ev_charge"}})
+        self.assertEqual(item["consumption"]["power_entity_id"], "sensor.boiler_power")
+
+    def test_other_controls_are_kept_beside_the_backfilled_switch(self) -> None:
+        climate = {"climate": {"entity_id": "climate.boiler"}}
+
+        [item] = self._migrate_from_v22(
+            [self._metered("boiler", "sensor.boiler_energy", controls=dict(climate))]
+        )
+
+        self.assertEqual(
+            item["controls"], {**climate, "switch": {"entity_id": "switch.boiler"}}
+        )
+
+    def test_a_switch_without_label_or_name_match_is_not_taken(self) -> None:
+        with self.assertLogs(self._LOGGER, level="INFO") as logs:
+            [item] = self._migrate_from_v22([self._metered("plug", "sensor.plug_energy")])
+
+        self.assertEqual(item, self._metered("plug", "sensor.plug_energy"))
+        self.assertIn(
+            "plug has a meter but no single power sensor", "\n".join(logs.output)
+        )
+
+    def test_equal_candidates_on_a_multi_channel_device_are_not_guessed(self) -> None:
+        channels = [
+            self._metered("channel_1", "sensor.channel_1_energy"),
+            self._metered("channel_2", "sensor.channel_2_energy"),
+        ]
+
+        self.assertEqual(self._migrate_from_v22(deepcopy(channels)), channels)
+
+    def test_an_entity_picked_for_two_devices_goes_to_neither(self) -> None:
+        boiler = self._metered("boiler", "sensor.boiler_energy")
+        twin = self._metered("twin", "sensor.boiler_energy")
+
+        items = self._migrate_from_v22([boiler, twin])
+
+        self.assertEqual(items, [boiler, twin])
+
+    def test_only_a_generic_device_gains_a_switch(self) -> None:
+        climate = {"climate": {"entity_id": "climate.boiler"}}
+        device = self._metered(
+            "boiler", "sensor.boiler_energy", kind="climate", controls=dict(climate)
+        )
+
+        [item] = self._migrate_from_v22([device])
+
+        self.assertEqual(item["controls"], climate)
+        self.assertEqual(item["consumption"]["power_entity_id"], "sensor.boiler_power")
+
+    def test_nested_children_are_backfilled(self) -> None:
+        pump = self._metered("pump", "sensor.pump_energy")
+        meterless = {"id": "lamp", "controls": {"switch": {"entity_id": "switch.lamp"}}}
+        parent = self._metered("boiler", "sensor.boiler_energy", children=[pump, meterless])
+
+        [item] = self._migrate_from_v22([parent])
+
+        child, lamp = item["children"]
+        self.assertEqual(child["consumption"]["power_entity_id"], "sensor.pump_power")
+        self.assertEqual(child["controls"], {"switch": {"entity_id": "switch.pump"}})
+        self.assertEqual(lamp, meterless)
+        self.assertEqual(
+            [anchors for anchors, _document in self.requests],
+            [["sensor.boiler_energy"], ["sensor.pump_energy"]],
+        )
+
+    def test_the_inverter_is_skipped(self) -> None:
+        inverter = self._metered("inverter", "sensor.boiler_energy", kind="inverter")
+
+        self.assertEqual(self._migrate_from_v22([deepcopy(inverter)]), [inverter])
+        self.assertEqual(self.requests, [])
+
+    def test_backfills_are_logged(self) -> None:
+        with self.assertLogs(self._LOGGER, level="INFO") as logs:
+            self._migrate_from_v22([self._metered("boiler", "sensor.boiler_energy")])
+
+        output = "\n".join(logs.output)
+        self.assertIn("boiler power sensor backfilled: sensor.boiler_power", output)
+        self.assertIn("boiler switch backfilled: switch.boiler", output)
+
+    def test_without_a_resolver_only_the_version_moves(self) -> None:
+        document = {
+            "config_version": 22,
+            "devices": {"items": [self._metered("boiler", "sensor.boiler_energy")]},
+        }
+
+        migrated, _ids = migrate_config_document(deepcopy(document))
+
+        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
+
+    def test_the_resolver_reads_the_labels_where_v22_moved_them(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 21,
+                "power_devices": {"house": {"power_switch_label": "Switch"}},
+                "devices": [self._metered("boiler", "sensor.boiler_energy")],
+            },
+            None,
+            self._resolve,
+        )
+
+        self.assertEqual(self.requests[0][1]["devices"]["power_switch_label"], "Switch")
+        self.assertIn("controls", migrated["devices"]["items"][0])
+
+    def test_a_v20_row_without_stat_rate_gains_power_through_the_chain(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {"config_version": 20},
+            {"device_consumption": [{"stat_consumption": "sensor.boiler_energy"}]},
+            self._resolve,
+        )
+
+        self.assertEqual(
+            migrated["devices"]["items"],
+            [
+                {
+                    "id": "boiler_energy",
+                    "consumption": {
+                        "energy_entity_id": "sensor.boiler_energy",
+                        "power_entity_id": "sensor.boiler_power",
+                    },
+                    "controls": {"switch": {"entity_id": "switch.boiler"}},
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

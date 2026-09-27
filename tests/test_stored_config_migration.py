@@ -660,6 +660,10 @@ class StoredV21LoadTests(unittest.TestCase):
             return {"device_consumption": [{"stat_consumption": "sensor.oven_energy"}]}
 
         self.storage._async_energy_preferences = energy_preferences
+        # The registry offers the washer nothing, so v23 backfills nothing.
+        self.storage._entity_suggestions = lambda: (
+            lambda anchors, document: {"power": [], "switch": []}
+        )
         asyncio.run(self.storage.async_load())
         self.config = self.storage.config
 

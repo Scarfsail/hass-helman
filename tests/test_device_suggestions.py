@@ -6,7 +6,9 @@ import pytest
 from custom_components.helman.controllables.suggestions import suggest_entities
 
 
-def entry(entity_id, device_class=None, labels=(), device_id="breaker"):
+def entry(
+    entity_id, device_class=None, labels=(), device_id="breaker", has_entity_name=False
+):
     return NS(
         entity_id=entity_id,
         domain=entity_id.split(".")[0],
@@ -17,6 +19,7 @@ def entry(entity_id, device_class=None, labels=(), device_id="breaker"):
         labels=labels,
         name=None,
         original_name=None,
+        has_entity_name=has_entity_name,
     )
 
 
@@ -162,3 +165,33 @@ def test_an_anchor_without_an_ha_device_falls_through_to_the_next():
         )
     assert seen_devices == ["shelly"]
     assert result["power"][0]["entityId"] == "sensor.shelly_power"
+
+
+def test_a_switch_named_after_its_device_matches_without_a_state():
+    # During setup there are no states yet; an entity named after its HA
+    # device has no name of its own in the registry.
+    energy = entry("sensor.boiler_energy", "energy")
+    switch = entry("switch.boiler", has_entity_name=True)
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=lambda entity_id: energy),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            return_value=[energy, switch],
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda id: NS(name="Boiler", name_by_user=None)),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)), ["sensor.boiler_energy"], {}
+        )
+    assert result["switch"][0]["name"] == "Boiler"
+    assert result["switch"][0]["reasons"][-1] == {"code": "name_match"}

@@ -4,10 +4,15 @@ import json
 import logging
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import partial
 from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
-from .automation.migration import migrate_config_document, needs_migration
+from .automation.migration import (
+    EntitySuggestions,
+    migrate_config_document,
+    needs_migration,
+)
 from .visualization import read_visualization
 from .const import (
     CONFIG_DOCUMENT_VERSION,
@@ -61,8 +66,8 @@ class HelmanStorage:
             "visualization": deepcopy(read_visualization(stored)),
         }
         # A fresh install has no document to upgrade, so it imports nothing
-        # from Energy and starts with an empty device list.
-        await self._async_migrate_config(import_energy=bool(stored))
+        # from Energy, backfills nothing and starts with an empty device list.
+        await self._async_migrate_config(upgrade=bool(stored))
         snapshot_document = await self._snapshot_store.async_load()
         if isinstance(snapshot_document, dict) and "house" in snapshot_document:
             self._snapshot = snapshot_document.get("house")
@@ -77,20 +82,22 @@ class HelmanStorage:
             self._solar_snapshot = None
         self._schedule_document = await self._schedule_store.async_load()
 
-    async def _async_migrate_config(self, *, import_energy: bool) -> None:
+    async def _async_migrate_config(self, *, upgrade: bool) -> None:
         """Bring a stored config up to the current document version, once.
 
         Persists only when something actually changed, so a config already at
         the current version never rewrites the store on every start. Energy
-        preferences are read only then: the upgrade to version 21 imports them.
+        preferences and the entity registry are read only then: the upgrade to
+        version 21 imports the former, the one to version 23 backfills devices
+        from the latter.
         """
         if not needs_migration(self._config):
             return
-        preferences = (
-            await self._async_energy_preferences() if import_energy else None
-        )
+        preferences = await self._async_energy_preferences() if upgrade else None
         migrated, migrated_optimizer_ids = migrate_config_document(
-            self._config, preferences
+            self._config,
+            preferences,
+            self._entity_suggestions() if upgrade else None,
         )
         # Not every step reshapes optimizers any more, so only name them when
         # some were actually rewritten.
@@ -115,6 +122,13 @@ class HelmanStorage:
 
         manager = await energy_data.async_get_manager(self._hass)
         return manager.data
+
+    def _entity_suggestions(self) -> EntitySuggestions:
+        # Imported here for the same reason as the Energy preferences: only an
+        # upgrade reads the registries.
+        from .controllables.suggestions import suggest_entities
+
+        return partial(suggest_entities, self._hass)
 
     @property
     def config(self) -> dict[str, Any]:

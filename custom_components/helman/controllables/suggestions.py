@@ -42,7 +42,8 @@ def suggest_entities(
     labels = lr.async_get(hass)
     section = read_devices_section(config)
     device = dr.async_get(hass).async_get(anchor.device_id)
-    device_name = ((device.name_by_user or device.name or "") if device else "").casefold()
+    device_display_name = (device.name_by_user or device.name or "") if device else ""
+    device_name = device_display_name.casefold()
     for entry in er.async_entries_for_device(registry, anchor.device_id):
         if entry.disabled_by is not None:
             continue
@@ -76,10 +77,14 @@ def suggest_entities(
         ):
             reasons.append({"code": "label", "value": wanted})
             score += 4
+        # Without a state (during setup) the registry gives the name: an
+        # entity named after its device carries no name of its own, and its
+        # display name is the device's.
         name = str(
             attrs.get("friendly_name")
             or entry.name
             or entry.original_name
+            or (entry.has_entity_name and device_display_name)
             or entry.entity_id
         )
         if field == "switch" and device_name and name.casefold() == device_name:

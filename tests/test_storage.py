@@ -68,6 +68,25 @@ sys.modules["homeassistant.components"] = components_mod
 sys.modules["homeassistant.components.energy"] = energy_mod
 sys.modules["homeassistant.components.energy.data"] = energy_data_mod
 
+#: What the stubbed entity suggestions hand out, and for which calls.
+SUGGESTIONS = {
+    "energy": [],
+    "power": [{"entityId": "sensor.oven_power", "reasons": []}],
+    "switch": [{"entityId": "switch.oven", "reasons": [{"code": "name_match"}]}],
+}
+suggestion_requests: list[tuple[object, list[str]]] = []
+
+
+def _suggest_entities(hass, anchor_entity_ids, config):
+    suggestion_requests.append((hass, list(anchor_entity_ids)))
+    return SUGGESTIONS
+
+
+suggestions_mod = types.ModuleType("custom_components.helman.controllables.suggestions")
+suggestions_mod.suggest_entities = _suggest_entities
+sys.modules["custom_components.helman.controllables.suggestions"] = suggestions_mod
+
+from custom_components.helman.const import CONFIG_DOCUMENT_VERSION  # noqa: E402
 from custom_components.helman.storage import HelmanStorage  # noqa: E402
 
 
@@ -150,8 +169,16 @@ def test_an_upgrade_imports_the_energy_devices() -> None:
     storage = _load({"config_version": 20, "power_devices": {}})
 
     assert len(energy_requests) == 1
+    # Imported by v21, then backfilled from the (stubbed) registry by v23.
     assert storage.config["devices"]["items"] == [
-        {"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}
+        {
+            "id": "oven_energy",
+            "consumption": {
+                "energy_entity_id": "sensor.oven_energy",
+                "power_entity_id": "sensor.oven_power",
+            },
+            "controls": {"switch": {"entity_id": "switch.oven"}},
+        }
     ]
 
 
@@ -167,6 +194,31 @@ def test_a_fresh_install_starts_with_no_devices() -> None:
 def test_a_current_document_never_reads_energy() -> None:
     energy_requests.clear()
 
-    _load({"config_version": 22})
+    suggestion_requests.clear()
+
+    _load({"config_version": CONFIG_DOCUMENT_VERSION})
 
     assert energy_requests == []
+    assert suggestion_requests == []
+
+
+def test_an_upgrade_backfills_power_and_switch_from_the_registry() -> None:
+    suggestion_requests.clear()
+    oven = {"id": "oven", "consumption": {"energy_entity_id": "sensor.oven_energy"}}
+
+    storage = _load({"config_version": 22, "devices": {"items": [oven]}})
+
+    assert [anchors for _hass, anchors in suggestion_requests] == [
+        ["sensor.oven_energy"]
+    ]
+    assert suggestion_requests[0][0] is storage._hass
+    expected = {
+        "id": "oven",
+        "consumption": {
+            "energy_entity_id": "sensor.oven_energy",
+            "power_entity_id": "sensor.oven_power",
+        },
+        "controls": {"switch": {"entity_id": "switch.oven"}},
+    }
+    assert storage.config["devices"]["items"] == [expected]
+    assert storage._store.saved[-1]["devices"]["items"] == [expected]
