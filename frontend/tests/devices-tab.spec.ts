@@ -1156,28 +1156,39 @@ test("Apply suggestions is disabled until the device has an entity to anchor on"
   await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
-test("an EV charger's charge switch anchors its suggestions", async ({ page }) => {
-  const ev = {
-    id: "garage-ev",
-    kind: "ev_charger",
-    controls: { charge: { entity_id: "switch.ev_charge" } },
-  };
-  await mountEditor(page, [ev]);
-  await openTab(page, "Devices");
-  await page.evaluate(() => {
-    window.__card("garage-ev")!.open = true;
+for (const [control, entityId] of [
+  ["charge", "switch.ev_charge"],
+  ["use_mode", "select.ev_mode"],
+] as const) {
+  test(`an EV charger's ${control} control anchors its suggestions and fills its meters`, async ({
+    page,
+  }) => {
+    const ev = {
+      id: "garage-ev",
+      kind: "ev_charger",
+      controls: { [control]: { entity_id: ` ${entityId} ` } },
+    };
+    await mountEditor(page, [ev]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => {
+      window.__card("garage-ev")!.open = true;
+    });
+    await deviceResponse(page, "helman/suggest_device_entities", {
+      energy: [candidate("sensor.ev_energy")],
+      power: [candidate("sensor.ev_power")],
+      switch: [],
+    });
+    await expect(page.locator(".apply-suggestions")).toBeEnabled();
+    await page.locator(".apply-suggestions").click();
+    // Trimmed, so the registry finds the entity's HA device.
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_id))
+      .toBe(entityId);
+    await expect
+      .poll(async () => (await config(page))[0].consumption)
+      .toEqual({ energy_entity_id: "sensor.ev_energy", power_entity_id: "sensor.ev_power" });
   });
-  await deviceResponse(page, "helman/suggest_device_entities", {
-    energy: [],
-    power: [],
-    switch: [],
-  });
-  await expect(page.locator(".apply-suggestions")).toBeEnabled();
-  await page.locator(".apply-suggestions").click();
-  await expect
-    .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_id))
-    .toBe("switch.ev_charge");
-});
+}
 
 test("a failed suggestion request shows a readable error that a retry clears", async ({
   page,

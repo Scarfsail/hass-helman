@@ -3640,13 +3640,17 @@ export class HelmanConfigEditorPanel
 
   /** The entity whose HA device suggestions come from; empty when there is none yet. */
   private _suggestionAnchor(device: JsonObject): string {
-    const control = asJsonObject(device.controls) ?? {};
+    // Any configured entity will do: suggestions come from its HA device, and
+    // every control of a kind (an EV charger's charge switch or mode select)
+    // sits on the device that also holds its meter.
+    const controls = Object.values(asJsonObject(device.controls) ?? {}).map((control) =>
+      this._stringValue(asJsonObject(control)?.entity_id).trim(),
+    );
     return (
       ownMeter(device) ||
-      this._stringValue(asJsonObject(device.consumption)?.power_entity_id) ||
-      this._stringValue(asJsonObject(control.switch)?.entity_id) ||
-      this._stringValue(asJsonObject(control.charge)?.entity_id) ||
-      this._stringValue(asJsonObject(control.climate)?.entity_id)
+      this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim() ||
+      controls.find(Boolean) ||
+      ""
     );
   }
 
