@@ -3645,6 +3645,7 @@ export class HelmanConfigEditorPanel
       ownMeter(device) ||
       this._stringValue(asJsonObject(device.consumption)?.power_entity_id) ||
       this._stringValue(asJsonObject(control.switch)?.entity_id) ||
+      this._stringValue(asJsonObject(control.charge)?.entity_id) ||
       this._stringValue(asJsonObject(control.climate)?.entity_id)
     );
   }

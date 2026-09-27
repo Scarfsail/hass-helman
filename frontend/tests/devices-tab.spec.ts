@@ -1156,6 +1156,29 @@ test("Apply suggestions is disabled until the device has an entity to anchor on"
   await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
+test("an EV charger's charge switch anchors its suggestions", async ({ page }) => {
+  const ev = {
+    id: "garage-ev",
+    kind: "ev_charger",
+    controls: { charge: { entity_id: "switch.ev_charge" } },
+  };
+  await mountEditor(page, [ev]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("garage-ev")!.open = true;
+  });
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [],
+    power: [],
+    switch: [],
+  });
+  await expect(page.locator(".apply-suggestions")).toBeEnabled();
+  await page.locator(".apply-suggestions").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_id))
+    .toBe("switch.ev_charge");
+});
+
 test("a failed suggestion request shows a readable error that a retry clears", async ({
   page,
 }) => {
