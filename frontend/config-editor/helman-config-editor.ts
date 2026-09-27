@@ -188,6 +188,12 @@ const USE_MODE_BEHAVIORS = [
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" },
 ];
 
+/**
+ * The projection a device gets when it becomes schedulable: the strategy the
+ * editor displays by default, and the figure the backend requires with it.
+ */
+const SEEDED_PROJECTION = { strategy: "fixed", hourly_energy_kwh: 1 } as const;
+
 const GENERIC_PROJECTION_STRATEGIES = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" },
@@ -3882,7 +3888,7 @@ export class HelmanConfigEditorPanel
       // Meterless siblings are all schedulable or all passive.
       if (meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
         device.schedulable = true;
-        device.consumption = { projection: { strategy: "fixed" } };
+        device.consumption = { projection: { ...SEEDED_PROJECTION } };
       }
     }
     this._addDeviceTarget = null;
@@ -4671,9 +4677,14 @@ export class HelmanConfigEditorPanel
   private _seedDeviceProjection(draft: JsonObject, path: PathSegment[]): void {
     const device = asJsonObject(getValueAtPath(draft, path));
     if (!device || !isSchedulable(device) || deviceKind(device) === "ev_charger") return;
-    const strategyPath = [...path, "consumption", "projection", "strategy"];
-    if (getValueAtPath(draft, strategyPath) === undefined) {
-      setValueAtPath(draft, strategyPath, "fixed");
+    const projectionPath = [...path, "consumption", "projection"];
+    // Configured fields stay; only missing ones are seeded. The backend needs
+    // `hourly_energy_kwh` for every strategy (a learner's fallback), so a
+    // partial projection gains it too.
+    for (const [key, value] of Object.entries(SEEDED_PROJECTION)) {
+      if (getValueAtPath(draft, [...projectionPath, key]) === undefined) {
+        setValueAtPath(draft, [...projectionPath, key], value);
+      }
     }
   }
 

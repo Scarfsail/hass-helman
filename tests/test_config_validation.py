@@ -52,6 +52,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.config_validation import validate_config_document
+from custom_components.helman.controllables.config import running_signal
 
 
 def _valid_config() -> dict:
@@ -1464,6 +1465,33 @@ class DeviceTreeValidationTests(unittest.TestCase):
         self.assertIn(
             ("devices[1].children[4].controls", "running_signal_required"), errors
         )
+
+    def test_an_ev_chargers_charge_switch_is_its_running_signal(self) -> None:
+        # The editor offers an EV charger as a meterless child and asks for its
+        # charge switch; that switch is what tells when it draws from the meter.
+        breaker = _ac_breaker()
+        breaker["children"].append(
+            {
+                "id": "garage-ev",
+                "kind": "ev_charger",
+                "controls": {"charge": {"entity_id": "switch.ev_charge"}},
+            }
+        )
+        for child in breaker["children"]:
+            child["schedulable"] = False
+
+        errors, _ = self._codes(breaker)
+
+        self.assertNotIn(
+            ("devices[1].children[4].controls", "running_signal_required"), errors
+        )
+        self.assertEqual(
+            running_signal(breaker["children"][4]), ("switch.ev_charge", "switch")
+        )
+        # Only an EV charger's charge control counts; on another kind it is not
+        # a control the device's reader knows.
+        generic = {"id": "x", "controls": {"charge": {"entity_id": "switch.x"}}}
+        self.assertIsNone(running_signal(generic))
 
     def test_mixed_schedulable_and_passive_meterless_siblings_are_rejected(
         self,

@@ -11,6 +11,7 @@ Nothing in this module infers, derives or guesses a switch.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 #: Tree node flags that never denote a real measured consumer.
@@ -26,10 +27,13 @@ def _is_readable_entity_id(value: Any) -> bool:
     return isinstance(value, str) and "." in value and ":" not in value
 
 
-def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
+def extract_house_device_consumers(
+    tree: Any, carved_meters: Collection[str] = ()
+) -> list[dict[str, Any]]:
     """The house's top-level measured consumers, as the power card knows them.
 
-    Each entry is ``{energy_entity_id, label, switch_entity_id, power_entity_id}``,
+    Each entry is ``{energy_entity_id, label, switch_entity_id, power_entity_id,
+    metered_children}``,
     taken verbatim from the tree node: its ``energyEntityId`` is the device's
     meter, ``displayName`` the name the card shows, ``switchEntityId`` the control the card
     offers, and ``powerSensorId`` the live power sensor the card reads — each
@@ -38,6 +42,11 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     Only top-level house children are returned. Nested sub-meters are already
     counted inside their parent's stat, so including them would double-count
     against the house total.
+
+    The exception is a nested meter in ``carved_meters``: the breakdown lists it
+    as a row of its own, so ``metered_children`` names the topmost such meters
+    beneath each entry, for its own energy to leave them out. The walk stops at
+    a carved meter, since that row already accounts for everything under it.
     """
     if not isinstance(tree, dict):
         return []
@@ -76,6 +85,21 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
                 "power_entity_id": (
                     power_entity_id if _is_readable_entity_id(power_entity_id) else None
                 ),
+                "metered_children": _carved_beneath(child, carved_meters),
             }
         )
     return result
+
+
+def _carved_beneath(node: dict[str, Any], carved_meters: Collection[str]) -> list[str]:
+    """The topmost carved meters anywhere beneath ``node``."""
+    found: list[str] = []
+    for child in node.get("children") or []:
+        if not isinstance(child, dict):
+            continue
+        meter = child.get("energyEntityId")
+        if isinstance(meter, str) and meter in carved_meters:
+            found.append(meter)
+        else:
+            found.extend(_carved_beneath(child, carved_meters))
+    return found

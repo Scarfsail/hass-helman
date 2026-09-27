@@ -346,7 +346,7 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
         kind: "climate",
         controls: { climate: { entity_id: "climate.kuchyn" } },
         schedulable: true,
-        consumption: { projection: { strategy: "fixed" } },
+        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
 });
 
@@ -355,7 +355,32 @@ test("new scheduling uses the displayed fixed projection without changing the se
     await openTab(page, "Devices");
     await addDevice(page, ".add-device", "sensor.washer_energy", -1);
     await setSchedulable(page, "washer_energy", true);
-    await expect.poll(async () => (await config(page)).at(-1)?.consumption.projection.strategy).toBe("fixed");
+    // The figure the backend requires comes with it, so the draft stays valid.
+    await expect.poll(async () => (await config(page)).at(-1)?.consumption.projection).toEqual({
+        strategy: "fixed",
+        hourly_energy_kwh: 1,
+    });
+});
+
+test("scheduling keeps a configured projection's figures and seeds the required fallback", async ({ page }) => {
+    const learner = {
+        id: "boiler",
+        consumption: {
+            energy_entity_id: "sensor.boiler_energy",
+            projection: { strategy: "history_average", lookback_days: 14 },
+        },
+    };
+    await mountEditor(page, [learner]);
+    await openTab(page, "Devices");
+    await setSchedulable(page, "boiler", true);
+    await expect.poll(async () => (await config(page))[0].schedulable).toBe(true);
+    // The backend requires hourly_energy_kwh for every strategy, so it is
+    // seeded; the configured strategy and lookback stay as they were.
+    expect((await config(page))[0].consumption.projection).toEqual({
+        strategy: "history_average",
+        lookback_days: 14,
+        hourly_energy_kwh: 1,
+    });
 });
 
 test("generated child ids avoid share sensor slug collisions", async ({ page }) => {
