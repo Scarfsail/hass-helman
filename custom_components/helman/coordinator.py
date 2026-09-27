@@ -1418,7 +1418,10 @@ class HelmanCoordinator:
         except Exception:
             _LOGGER.exception("Failed to read device tree for inspector breakdown")
             return []
-        return extract_house_device_consumers(tree)
+        return extract_house_device_consumers(
+            tree,
+            {meter["energy_entity_id"] for meter in read_carved_meters(self._active_config)},
+        )
 
     def _get_battery_soc_entity_id(self) -> str | None:
         entity_config = read_battery_entity_config(self._active_config)

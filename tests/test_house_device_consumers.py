@@ -67,6 +67,7 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                     "label": "sensor.dishwasher_energy",
                     "switch_entity_id": "switch.dishwasher",
                     "power_entity_id": "sensor.dishwasher_power",
+                    "metered_children": [],
                 }
             ],
         )
@@ -171,3 +172,32 @@ class TestHouseDeviceConsumers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_carved_meters_beneath_a_row_are_its_metered_children(self):
+        # A schedulable washer under a passive circuit is a breakdown row of its
+        # own, so the circuit's row must leave it out. Only the topmost carved
+        # meter counts: the one beneath it is already inside its row.
+        tree = _tree(
+            [
+                _node(
+                    "sensor.circuit_energy",
+                    children=[
+                        _node("sensor.lamp_energy"),
+                        _node(
+                            "sensor.room_energy",
+                            children=[
+                                _node(
+                                    "sensor.washer_energy",
+                                    children=[_node("sensor.inner_energy")],
+                                )
+                            ],
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        result = extract(tree, {"sensor.washer_energy", "sensor.inner_energy"})
+
+        self.assertEqual(result[0]["metered_children"], ["sensor.washer_energy"])
+        self.assertEqual(extract(tree)[0]["metered_children"], [])

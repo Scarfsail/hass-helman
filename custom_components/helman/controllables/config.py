@@ -159,14 +159,19 @@ def effective_meter(device: Device, parent: Device | None) -> str | None:
 def running_signal(device: Device) -> tuple[str, str] | None:
     """``(entity id, "switch" | "climate")`` telling when this device runs.
 
-    A meterless child's share of its parent's meter follows this entity.
-    ``None`` when the device names neither control.
+    A meterless child's share of its parent's meter follows this entity. An EV
+    charger's ``charge`` control is a switch, so it runs while that is on.
+    ``None`` when the device names none of these controls.
     """
     controls = device.get("controls")
     if not isinstance(controls, Mapping):
         return None
-    for activity in ("switch", CONTROLLABLE_KIND_CLIMATE):
-        control = controls.get(activity)
+    for key, activity in (
+        ("switch", "switch"),
+        ("charge", "switch"),
+        (CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_CLIMATE),
+    ):
+        control = controls.get(key)
         if not isinstance(control, Mapping):
             continue
         entity_id = control.get("entity_id")

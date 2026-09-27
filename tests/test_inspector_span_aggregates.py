@@ -720,6 +720,50 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wh, {WASHER_METER: 1000.0, FRIDGE_METER: 500.0})
         self.assertEqual(breakdown["unmeasuredWh"], 8500.0)
 
+    async def test_a_tree_row_leaves_out_a_carved_meter_nested_beneath_it(self):
+        # The washer is schedulable and sits under a passive circuit meter (the
+        # fridge's here). The circuit's tree row names it in metered_children,
+        # so its row is the circuit minus the washer and the washer is taken out
+        # of the house once.
+        _set_rows(
+            {
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=110.0),
+                ],
+                WASHER_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=6.0),
+                ],
+                FRIDGE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=2.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=5.0),
+                ],
+            }
+        )
+        service = _make_service_with_consumers()
+
+        async def _device_consumers():
+            return [
+                {
+                    "energy_entity_id": FRIDGE_METER,
+                    "label": "Circuit",
+                    "metered_children": [WASHER_METER],
+                }
+            ]
+
+        service._house_device_consumers_provider = _device_consumers
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-23", house_breakdown=True
+        )
+
+        (row,) = payload["days"]
+        breakdown = row["houseBreakdown"]
+        wh = {a["entityId"]: a["wh"] for a in breakdown["appliances"]}
+        self.assertEqual(wh, {WASHER_METER: 1000.0, FRIDGE_METER: 2000.0})
+        self.assertEqual(breakdown["unmeasuredWh"], 7000.0)
+
     async def test_the_same_fold_one_granularity_up(self):
         # Two days of washer energy inside one month, so the month's figure has
         # to be their sum and not either day's.
