@@ -304,3 +304,16 @@ def test_existing_error_on_a_device_shifted_by_a_move_does_not_block():
     # The move shifts "broken" from devices[2] to devices[1]; its error is still its own.
     assert result["devices"] == [{**b, "children": [a]}, broken]
     assert result["validation"]["valid"], result["validation"]
+
+
+def test_existing_error_on_a_device_without_an_id_does_not_block_a_move():
+    a = device("a", "sensor.a")
+    b = device("b", "sensor.b")
+    half_edited = {"kind": "generic"}
+    config = {"devices": [a, b, half_edited]}
+    assert not validate_config_document(config).valid
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.a", "sensor.b")]}
+    )
+    assert result["devices"] == [{**b, "children": [a]}, half_edited]
+    assert result["validation"]["valid"], result["validation"]

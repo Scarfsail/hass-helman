@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any
@@ -75,48 +74,15 @@ def preview_energy_import(
 def _new_errors_only(
     config: dict[str, Any], proposed: dict[str, Any]
 ) -> dict[str, Any]:
-    """The proposed draft's validation, minus errors the draft already had.
+    """The proposed draft's validation, limited to errors the import adds.
 
     Applying is refused only for errors the import introduces; the draft's own
-    errors are not the import's to fix, and Save still refuses them.
+    errors are not the import's to fix, and Save still refuses them. Errors are
+    compared by how often each code occurs, not by path: a move shifts index
+    paths and can change which of two devices an error is reported on.
     """
-    existing = Counter(
-        (_stable_path(issue.path, config), issue.code)
-        for issue in validate_config_document(config).errors
-    )
+    existing = Counter(issue.code for issue in validate_config_document(config).errors)
     report = validate_config_document(proposed).to_dict()
-    errors = []
-    for issue in report["errors"]:
-        key = (_stable_path(issue["path"], proposed), issue["code"])
-        if existing[key]:
-            existing[key] -= 1
-        else:
-            errors.append(issue)
+    added = Counter(issue["code"] for issue in report["errors"]) - existing
+    errors = [issue for issue in report["errors"] if added[issue["code"]]]
     return {**report, "valid": not errors, "errors": errors}
-
-
-_DEVICE_PREFIX = re.compile(r"^devices\[\d+\](?:\.children\[\d+\])*")
-
-
-def _stable_path(path: str, config: Mapping[str, Any]) -> str:
-    """``path`` with its device index prefix replaced by that device's id.
-
-    Index paths shift when the import moves a device; the id does not, so an
-    error the draft already had matches itself wherever the device now sits.
-    """
-    match = _DEVICE_PREFIX.match(path)
-    if match is None:
-        return path
-    items: Any = config.get("devices")
-    device: Any = None
-    for index in map(int, re.findall(r"\[(\d+)\]", match.group())):
-        if not isinstance(items, list) or index >= len(items):
-            return path
-        device = items[index]
-        if not isinstance(device, Mapping):
-            return path
-        items = device.get("children")
-    device_id = peek_controllable_id(device)
-    if device_id is None:
-        return path
-    return f"device:{device_id}{path[match.end():]}"
