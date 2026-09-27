@@ -1,0 +1,228 @@
+[
+ {
+  "id": "sensor.jistic_indukce_energy",
+  "displayName": "Jistic indukce",
+  "powerSensorId": "sensor.jistic_indukce_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": []
+ },
+ {
+  "id": "sensor.jistic_kotel_energy",
+  "displayName": "Jistic kotel",
+  "powerSensorId": "sensor.jistic_kotel_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": []
+ },
+ {
+  "id": "sensor.jistic_trouba_energy",
+  "displayName": "Jistic trouba",
+  "powerSensorId": "sensor.jistic_trouba_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": []
+ },
+ {
+  "id": "sensor.jistic_zasuvky_pracovny_energy",
+  "displayName": "Jistic zasuvky pracovny",
+  "powerSensorId": "sensor.jistic_zasuvky_pracovny_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": [
+   {
+    "id": "sensor.zasuvka_pracovna_verca_energy",
+    "displayName": "Zasuvka pracovna verca",
+    "powerSensorId": "sensor.zasuvka_pracovna_verca_power",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": false,
+    "children": []
+   },
+   {
+    "id": "sensor.zasuvka_pracovna_ondra_energy",
+    "displayName": "Zasuvka pracovna ondra",
+    "powerSensorId": "sensor.zasuvka_pracovna_ondra_power",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [
+     "Elektřina - Vypnout na noc"
+    ],
+    "labelBadgeTexts": [
+     "⏻😴"
+    ],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": false,
+    "children": []
+   },
+   {
+    "id": "sensor_jistic_zasuvky_pracovny_energy_unmeasured",
+    "displayName": "Unmeasured power",
+    "powerSensorId": "sensor.helman_unmeasured_power_jistic_zasuvky_pracovny_energy",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": true,
+    "children": []
+   }
+  ]
+ },
+ {
+  "id": "sensor.jistic_zasuvky_obyvak_a_loznice_energy",
+  "displayName": "Jistic zasuvky obyvak a loznice",
+  "powerSensorId": "sensor.jistic_zasuvky_obyvak_a_loznice_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": [
+   {
+    "id": "sensor.zasuvka_tv_energy",
+    "displayName": "Zasuvka tv",
+    "powerSensorId": "sensor.zasuvka_tv_power",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": false,
+    "children": []
+   },
+   {
+    "id": "sensor_jistic_zasuvky_obyvak_a_loznice_energy_unmeasured",
+    "displayName": "Unmeasured power",
+    "powerSensorId": "sensor.helman_unmeasured_power_jistic_zasuvky_obyvak_a_loznice_energy",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": true,
+    "children": []
+   }
+  ]
+ },
+ {
+  "id": "sensor.jistic_zasuvky_spiz_a_jidelna_energy",
+  "displayName": "Jistic zasuvky spiz a jidelna",
+  "powerSensorId": "sensor.jistic_zasuvky_spiz_a_jidelna_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": false,
+  "children": [
+   {
+    "id": "sensor.zasuvka_lednicka_energy",
+    "displayName": "Zasuvka lednicka",
+    "powerSensorId": "sensor.zasuvka_lednicka_power",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": false,
+    "children": []
+   },
+   {
+    "id": "sensor_jistic_zasuvky_spiz_a_jidelna_energy_unmeasured",
+    "displayName": "Unmeasured power",
+    "powerSensorId": "sensor.helman_unmeasured_power_jistic_zasuvky_spiz_a_jidelna_energy",
+    "switchEntityId": null,
+    "icon": null,
+    "labels": [],
+    "labelBadgeTexts": [],
+    "deferrable": false,
+    "controllableIds": [],
+    "isUnmeasured": true,
+    "children": []
+   }
+  ]
+ },
+ {
+  "id": "sensor.jistic_bazen_filtrace_energy",
+  "displayName": "Jistic bazen filtrace",
+  "powerSensorId": "sensor.jistic_bazen_filtrace_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": true,
+  "controllableIds": [
+   "pool-filtration"
+  ],
+  "isUnmeasured": false,
+  "children": []
+ },
+ {
+  "id": "sensor.jistic_klimatizace_energy",
+  "displayName": "Jistic klimatizace",
+  "powerSensorId": "sensor.jistic_klimatizace_power",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [
+   "Jističe - Technická zálohované z FV"
+  ],
+  "labelBadgeTexts": [
+   "🔋T"
+  ],
+  "deferrable": true,
+  "controllableIds": [
+   "klima-obyvak",
+   "klima-bartik",
+   "klima-adelka",
+   "klima-loznice"
+  ],
+  "isUnmeasured": false,
+  "children": []
+ },
+ {
+  "id": "house_unmeasured",
+  "displayName": "Unmeasured power",
+  "powerSensorId": "sensor.helman_unmeasured_power_house",
+  "switchEntityId": null,
+  "icon": null,
+  "labels": [],
+  "labelBadgeTexts": [],
+  "deferrable": false,
+  "controllableIds": [],
+  "isUnmeasured": true,
+  "children": []
+ }
+]

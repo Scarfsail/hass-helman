@@ -24,10 +24,11 @@ const CONFIG = {
     power_devices: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
-    controllables: [
+    devices: [
         {
             id: "dishwasher",
             name: "Dishwasher",
+            schedulable: true,
             consumption: {
                 energy_entity_id: "sensor.dishwasher_energy",
                 projection: { strategy: "history_average", lookback_days: 21 },

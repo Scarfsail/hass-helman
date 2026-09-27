@@ -141,7 +141,7 @@ export interface OptimizerConfigChangedDetail {
  * Every path the renderers build is absolute -- `optimizer-card.ts` roots its
  * card at `automation.<bucket>[index]`, `optimizer-condition-groups.ts` roots
  * the group list at the same place. More than tidiness keeps it that way: the
- * target picker reads the document's `controllables` list to name its options,
+ * target picker reads the document's `devices` tree to name its options,
  * and a group's param override renders the *master* params as its placeholders.
  * An element handed one optimizer in isolation would have to be handed those
  * too, under different names, and every path in the renderers would have to be

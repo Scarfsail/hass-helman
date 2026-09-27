@@ -13,7 +13,6 @@ from statistics import median
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
-from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers import entity_registry as er
@@ -104,9 +103,13 @@ from .consumption_forecast_builder import (
     read_house_training_window_config,
 )
 from .controllables.config import (
-    read_deferrable_consumers,
-    read_scheduled_consumers,
+    is_active_state,
+    iter_device_paths,
+    read_carved_meters,
+    read_schedulable_consumers,
     read_shared_meters,
+    resolve_device_name,
+    running_active_states,
 )
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
@@ -178,6 +181,7 @@ from .storage import HelmanStorage, TrainingArtifactsStore
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
+    SharedMeter,
     SharedMeterMember,
 )
 from .training.appliance_energy import health_for as appliance_energy_health_for
@@ -649,7 +653,6 @@ class HelmanCoordinator:
         self._storage = storage
         self._cached_tree: dict | None = None
         self._unsub_listeners: list = []
-        self._unsub_energy: Callable[[], None] | None = None
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors: dict[str, Any] = {}
@@ -658,6 +661,8 @@ class HelmanCoordinator:
         self._production_total_sensor = None
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
+        self._share_sensors: dict[str, Any] = {}
+        self._share_sensor_factory: Callable | None = None
         self._entry: Any = None
         self._removing_entity_ids: set[str] = set()
         self._active_config: dict[str, Any] = deepcopy(storage.config)
@@ -859,6 +864,10 @@ class HelmanCoordinator:
         self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
+        # Mapping: share node id (a meterless child's device id) → its share entity id
+        self._share_entity_id_map: dict[str, str] = {}
+        # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
+        self._share_running_signals: dict[str, tuple[str, str]] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
         self._virtual_sensor_ids: set[str] = set()
 
@@ -936,6 +945,20 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
+    @staticmethod
+    def collect_share_nodes(tree: dict) -> dict[str, tuple[str, str]]:
+        """Return {node_id: (share_entity_id, display_name)} for every meterless child's node."""
+        result: dict[str, tuple[str, str]] = {}
+
+        def walk(nodes: list) -> None:
+            for node in nodes:
+                if node.get("isEstimated") and node.get("powerSensorId"):
+                    result[node["id"]] = (node["powerSensorId"], node.get("displayName") or node["id"])
+                walk(node.get("children", []))
+
+        walk(tree.get("consumers", []))
+        return result
+
     def set_sensors(
         self,
         battery_time_to_full,
@@ -945,11 +968,13 @@ class HelmanCoordinator:
         production_total=None,
         source_ratio_sensors: dict | None = None,
         forecast_sensors: list[Any] | None = None,
+        share_sensors: dict | None = None,
     ) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
         self._battery_time_to_empty = battery_time_to_empty
         self._unmeasured_sensors = unmeasured_sensors
+        self._share_sensors = share_sensors or {}
         self._consumption_total_sensor = total_power
         self._production_total_sensor = production_total
         self._source_ratio_sensors = source_ratio_sensors or {}
@@ -960,11 +985,13 @@ class HelmanCoordinator:
         entry,
         async_add_entities: Callable,
         unmeasured_sensor_factory: Callable,
+        share_sensor_factory: Callable | None = None,
     ) -> None:
-        """Store the async_add_entities callback and sensor factory for dynamic entity management."""
+        """Store the async_add_entities callback and sensor factories for dynamic entity management."""
         self._entry = entry
         self._async_add_entities = async_add_entities
         self._unmeasured_sensor_factory = unmeasured_sensor_factory
+        self._share_sensor_factory = share_sensor_factory
 
     def register_sensor_ready(self) -> None:
         """No-op: sensors receive their first value on the next tick."""
@@ -1106,6 +1133,7 @@ class HelmanCoordinator:
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
+            friendly_name=self._entity_friendly_name,
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.
@@ -1115,11 +1143,6 @@ class HelmanCoordinator:
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
-            )
-        )
-        self._unsub_listeners.append(
-            self._hass.bus.async_listen(
-                "device_registry_updated", self._on_registry_updated
             )
         )
         self._unsub_listeners.append(
@@ -1134,15 +1157,6 @@ class HelmanCoordinator:
                 self._on_solar_bias_changed,
             )
         )
-
-        # Energy prefs use an internal listener API, not the event bus.
-        # Capture the returned unsubscribe callable for clean teardown.
-        async def _on_energy_updated() -> None:
-            self._cached_tree = None
-            await self._async_rebuild_subscriptions()
-
-        manager = await energy_data.async_get_manager(self._hass)
-        self._unsub_energy = manager.async_listen_updates(_on_energy_updated)
 
         # Build tree upfront to learn which power sensors to track
         tree = await self.get_device_tree()
@@ -1286,25 +1300,46 @@ class HelmanCoordinator:
             self._source_value_types = self._collect_source_value_types(tree)
             self._init_buffers(tree)
             self._start_tick()
-            await self._sync_unmeasured_sensors(tree)
+            await self._sync_derived_sensors(tree)
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
             )
 
-    async def _sync_unmeasured_sensors(self, tree: dict) -> None:
-        """Add/remove HelmanUnmeasuredPowerSensor entities to match the current tree."""
-        if self._async_add_entities is None or self._unmeasured_sensor_factory is None:
+    async def _sync_derived_sensors(self, tree: dict) -> None:
+        """Add/remove the unmeasured and share power entities to match the current tree."""
+        if self._async_add_entities is None:
             return
+        if self._unmeasured_sensor_factory is not None:
+            self._sync_node_sensors(
+                self._unmeasured_sensors,
+                {
+                    node_id: (parent_sensor_id,)
+                    for node_id, parent_sensor_id in self.collect_qualifying_nodes(tree).items()
+                },
+                self._unmeasured_sensor_factory,
+            )
+        if self._share_sensor_factory is not None:
+            self._sync_node_sensors(
+                self._share_sensors,
+                self.collect_share_nodes(tree),
+                self._share_sensor_factory,
+            )
 
-        qualifying = self.collect_qualifying_nodes(tree)  # {node_id: parent_sensor_id}
-        new_ids = set(qualifying.keys())
-        existing_ids = set(self._unmeasured_sensors.keys())
+    def _sync_node_sensors(
+        self,
+        sensors: dict[str, Any],
+        wanted: dict[str, tuple],
+        factory: Callable,
+    ) -> None:
+        """Make ``sensors`` hold one entity per ``wanted`` node, built by ``factory(node_id, *args)``."""
+        new_ids = set(wanted.keys())
+        existing_ids = set(sensors.keys())
 
         # Remove stale entities from HA and entity registry
         ent_reg = er.async_get(self._hass)
         for node_id in existing_ids - new_ids:
-            sensor = self._unmeasured_sensors.pop(node_id)
+            sensor = sensors.pop(node_id)
             entity_id = sensor.entity_id
             if entity_id:
                 # Track the removal so _on_registry_updated skips the rebuild loop
@@ -1314,11 +1349,8 @@ class HelmanCoordinator:
         # Add new entities to HA
         to_add = new_ids - existing_ids
         if to_add:
-            new_sensors = {
-                node_id: self._unmeasured_sensor_factory(node_id, qualifying[node_id])
-                for node_id in to_add
-            }
-            self._unmeasured_sensors.update(new_sensors)
+            new_sensors = {node_id: factory(node_id, *wanted[node_id]) for node_id in to_add}
+            sensors.update(new_sensors)
             self._async_add_entities(list(new_sensors.values()))
 
     async def get_device_tree(self) -> dict:
@@ -1338,24 +1370,23 @@ class HelmanCoordinator:
             forecast_cfg.get("total_energy_entity_id")
         )
 
-    def _get_house_deferrable_consumers(self) -> list[dict[str, str]]:
-        """The deferrable controllables feeding the house forecast.
+    def _get_house_deferrable_consumers(self) -> list[dict[str, Any]]:
+        """The carved meters feeding the house forecast.
 
         One derivation, shared: the inspector splits the house actual by
         exactly the consumers the forecast is trained on, because both ask
-        ``controllables`` the same question.
+        the ``devices`` tree the same question.
         """
-        return read_deferrable_consumers(self._active_config)
+        return read_carved_meters(self._active_config)
 
     def _get_house_scheduled_consumers(self) -> list[dict[str, Any]]:
-        """Every controllable the planner can schedule demand for, by id.
+        """Every device the planner can schedule demand for, by id.
 
         The forecast's itemisation names appliances from this rather than from
-        the deferrable roster: the planner schedules meterless controllables
-        too, and one that opted out of deferrability still gets scheduled — it
-        just is not deferrable, on either side of now.
+        the carved roster: a meterless child is scheduled under its own id
+        while its meter is carved under its parent's.
         """
-        return read_scheduled_consumers(self._active_config)
+        return read_schedulable_consumers(self._active_config)
 
     def _get_house_unmeasured_label(self) -> str | None:
         """The power card's own title for unmetered house load.
@@ -1387,7 +1418,10 @@ class HelmanCoordinator:
         except Exception:
             _LOGGER.exception("Failed to read device tree for inspector breakdown")
             return []
-        return extract_house_device_consumers(tree)
+        return extract_house_device_consumers(
+            tree,
+            {meter["energy_entity_id"] for meter in read_carved_meters(self._active_config)},
+        )
 
     def _get_battery_soc_entity_id(self) -> str | None:
         entity_config = read_battery_entity_config(self._active_config)
@@ -1499,7 +1533,7 @@ class HelmanCoordinator:
         min_history_days, training_window_days = read_house_training_window_config(
             self._active_config
         )
-        consumers_config = read_deferrable_consumers(self._active_config)
+        consumers_config = read_carved_meters(self._active_config)
         config_fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
@@ -1688,28 +1722,23 @@ class HelmanCoordinator:
         optimizer references: the same estimates feed the demand projection,
         which runs for anything holding a scheduled action however it got there.
 
-        Shared meters come from config, not from those appliances: a ``fixed``
-        sharer has no meter on its runtime at all, yet it still runs and so
-        still divides the meter. An id the registry cannot resolve to a generic
-        or climate runtime — a broken entry — drops out of the split rather than
-        failing the run; validation has already said what is wrong with it.
+        Shared meters come from the device tree, not from those appliances: a
+        meter owner's meterless children split its own energy, and each runs by
+        its own switch or climate entity — a ``fixed`` or passive child
+        included, since it still runs and so still divides the meter.
         """
-        shared_meters: dict[str, tuple[SharedMeterMember, ...]] = {}
-        for energy_entity_id, controllable_ids in read_shared_meters(
-            self._active_config
-        ).items():
-            members = tuple(
-                SharedMeterMember.for_appliance(appliance)
-                for controllable_id in controllable_ids
-                if isinstance(
-                    appliance := self._appliances_registry.get_appliance(
-                        controllable_id
-                    ),
-                    (GenericApplianceRuntime, ClimateApplianceRuntime),
-                )
+        shared_meters = {
+            energy_entity_id: SharedMeter(
+                members=tuple(
+                    SharedMeterMember.for_signal(*member)
+                    for member in shared["members"]
+                ),
+                metered_children=tuple(shared["metered_children"]),
             )
-            if members:
-                shared_meters[energy_entity_id] = members
+            for energy_entity_id, shared in read_shared_meters(
+                self._active_config
+            ).items()
+        }
         return ApplianceEnergyTrainingRequest(
             appliances=tuple(
                 appliance
@@ -2390,7 +2419,7 @@ class HelmanCoordinator:
         The card filters this against live entity state, so it reacts to state
         changes without asking the backend again.
         """
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         return build_controllable_entities(
             control_config=self._read_schedule_control_config(),
             registry=self._appliances_registry,
@@ -2422,16 +2451,43 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    def _refresh_climate_appliance_capabilities(self) -> None:
+    def _entity_friendly_name(self, entity_id: str) -> str | None:
+        state = self._hass.states.get(entity_id)
+        name = state.attributes.get("friendly_name") if state is not None else None
+        return name if isinstance(name, str) else None
+
+    def _refresh_appliance_metadata(self) -> None:
+        """Resolve identity and climate capabilities from currently available states."""
+        config = getattr(self, "_active_config", None)
+        devices = {
+            device["id"].strip(): device
+            for _path, device, _parent in iter_device_paths(config)
+            if isinstance(device, Mapping) and isinstance(device.get("id"), str)
+        }
+        visualization = config.get("visualization") if isinstance(config, Mapping) else None
+        cleaner = (
+            visualization.get("power_sensor_name_cleaner_regex")
+            if isinstance(visualization, Mapping)
+            else None
+        )
         refreshed_appliances = []
         changed = False
 
         for appliance in self._appliances_registry.appliances:
-            if not isinstance(appliance, ClimateApplianceRuntime):
-                refreshed_appliances.append(appliance)
-                continue
-
-            refreshed_appliance = self._resolve_climate_appliance_capabilities(appliance)
+            refreshed_appliance = appliance
+            device = devices.get(appliance.id)
+            if device is not None:
+                name = resolve_device_name(
+                    device,
+                    friendly_name=self._entity_friendly_name,
+                    cleaner_regex=cleaner if isinstance(cleaner, str) else None,
+                )
+                if name != appliance.name:
+                    refreshed_appliance = replace(refreshed_appliance, name=name)
+            if isinstance(refreshed_appliance, ClimateApplianceRuntime):
+                refreshed_appliance = self._resolve_climate_appliance_capabilities(
+                    refreshed_appliance
+                )
             refreshed_appliances.append(refreshed_appliance)
             if refreshed_appliance != appliance:
                 changed = True
@@ -2480,7 +2536,7 @@ class HelmanCoordinator:
         )
 
     async def _async_normalize_schedule_document(self) -> None:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         raw_document = self._storage.schedule_document
         if raw_document is None:
             return
@@ -2544,7 +2600,7 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> tuple[ScheduleDocument, ScheduleDocument]:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         loaded_document = self._load_schedule_document()
         schedule_document = normalize_schedule_document_for_registry(
             loaded_document,
@@ -2657,7 +2713,7 @@ class HelmanCoordinator:
             )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         return build_appliances_response(self._appliances_registry)
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
@@ -3016,7 +3072,7 @@ class HelmanCoordinator:
         return round(total / 1000.0, 4)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
-        self._refresh_climate_appliance_capabilities()
+        self._refresh_appliance_metadata()
         request_now = dt_util.now()
         canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
             reference_time=request_now
@@ -5319,12 +5375,12 @@ class HelmanCoordinator:
 
     @staticmethod
     def _collect_virtual_sensor_ids(tree: dict) -> set[str]:
-        """Collect powerSensorId values for unmeasured virtual nodes (computed by tick)."""
+        """Collect powerSensorId values for unmeasured and share nodes (computed by tick)."""
         ids: set[str] = set()
 
         def walk(nodes: list) -> None:
             for node in nodes:
-                if node.get("isUnmeasured") and node.get("powerSensorId"):
+                if (node.get("isUnmeasured") or node.get("isEstimated")) and node.get("powerSensorId"):
                     ids.add(node["powerSensorId"])
                 walk(node.get("children", []))
 
@@ -5359,6 +5415,17 @@ class HelmanCoordinator:
         self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
 
         self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
+        self._share_entity_id_map = {
+            node_id: entity_id
+            for node_id, (entity_id, _name) in self.collect_share_nodes(tree).items()
+        }
+        # The very members the shared-meter history split reads, with the same
+        # running signal each, so the live split cannot pick other devices.
+        self._share_running_signals = {
+            member_id: (entity_id, activity)
+            for shared in read_shared_meters(self._active_config).values()
+            for member_id, entity_id, activity in shared["members"]
+        }
         # The smoothing windows belong to the tree they were filled from: a rebuild
         # can drop or re-parent a node, and a stale window would then smooth the
         # new node's remainder with readings from a different set of children.
@@ -5411,15 +5478,22 @@ class HelmanCoordinator:
                 dq.append(self._read_power(entity_id, "default"))
 
         # Step 2: Compute virtual sensor values and record into _power_history
-        # Unmeasured powers (one per qualifying parent node)
-        unmeasured_map = self._compute_all_unmeasured_powers()
-        for node_id, watts in unmeasured_map.items():
-            entity_id = self._unmeasured_entity_id_map.get(node_id)
-            if entity_id and entity_id in self._power_history:
-                self._power_history[entity_id].append(watts)
-            sensor = self._unmeasured_sensors.get(node_id)
-            if sensor is not None:
-                sensor.update_value(watts)
+        # Unmeasured powers (one per qualifying parent node) and shares (one per
+        # meterless child). ``None`` is unavailable: the sensor says so, and the
+        # history bucket — which only holds numbers — records 0 W, as the card
+        # shows an unavailable sensor.
+        unmeasured_map, share_map = self._compute_derived_powers()
+        for watts_by_node, entity_ids, sensors in (
+            (unmeasured_map, self._unmeasured_entity_id_map, self._unmeasured_sensors),
+            (share_map, self._share_entity_id_map, self._share_sensors),
+        ):
+            for node_id, watts in watts_by_node.items():
+                entity_id = entity_ids.get(node_id)
+                if entity_id and entity_id in self._power_history:
+                    self._power_history[entity_id].append(watts if watts is not None else 0.0)
+                sensor = sensors.get(node_id)
+                if sensor is not None:
+                    sensor.update_value(watts)
 
         # Total power (consumption side)
         total = self._compute_consumption_total()
@@ -5511,16 +5585,21 @@ class HelmanCoordinator:
         }
 
     def _read_power(self, entity_id: str | None, value_type: str) -> float:
-        """Read a power sensor's current value from hass.states."""
+        """Read a power sensor's current value from hass.states; 0 W when it has none."""
+        watts = self._read_power_or_none(entity_id, value_type)
+        return watts if watts is not None else 0.0
+
+    def _read_power_or_none(self, entity_id: str | None, value_type: str) -> float | None:
+        """Read a power sensor's current value; ``None`` when missing or unavailable."""
         if not entity_id:
-            return 0.0
+            return None
         state = self._hass.states.get(entity_id)
         if state is None or state.state in ("unavailable", "unknown", "none"):
-            return 0.0
+            return None
         try:
             raw = float(state.state)
         except ValueError:
-            return 0.0
+            return None
         if value_type == "positive":
             return max(0.0, raw)
         if value_type == "negative":
@@ -5624,37 +5703,107 @@ class HelmanCoordinator:
             total += self._normalize_source_value(raw, node.get("valueType", "default"))
         return total
 
-    def _compute_all_unmeasured_powers(self) -> dict[str, float]:
-        """Return {node_id → unmeasured_watts} for every parent that has an unmeasured node."""
-        result: dict[str, float] = {}
-        self._traverse_for_unmeasured(self._cached_tree.get("consumers", []), result)
-        return result
+    def _compute_derived_powers(
+        self,
+    ) -> tuple[dict[str, float | None], dict[str, float | None]]:
+        """``({parent node id: remainder W}, {share node id: share W})`` for this tick.
 
-    def _traverse_for_unmeasured(self, nodes: list, result: dict) -> None:
+        Both come from each parent's own power, one way: the remainder is own
+        power minus the shares, so the two always add up to it. ``None`` is
+        unavailable.
+        """
+        unmeasured: dict[str, float | None] = {}
+        shares: dict[str, float | None] = {}
+        self._traverse_for_unmeasured(
+            self._cached_tree.get("consumers", []), unmeasured, shares
+        )
+        return unmeasured, shares
+
+    def _traverse_for_unmeasured(self, nodes: list, unmeasured: dict, shares: dict) -> None:
         for node in nodes:
             children = node.get("children", [])
             if children and not node.get("isVirtual"):
                 has_unmeasured = any(c.get("isUnmeasured") for c in children)
-                if has_unmeasured:
-                    parent_power = self._read_power(
-                        node.get("powerSensorId"), node.get("valueType", "default")
-                    )
-                    measured_sum = sum(
-                        self._read_power(c.get("powerSensorId"), c.get("valueType", "default"))
-                        for c in children
-                        if not c.get("isVirtual")
-                        and not c.get("isUnmeasured")
-                        and c.get("powerSensorId")
-                    )
-                    result[node["id"]] = self._smooth_unmeasured(
-                        node["id"], parent_power - measured_sum
-                    )
-            self._traverse_for_unmeasured(children, result)
+                share_nodes = [c for c in children if c.get("isEstimated")]
+                # Shares without a remainder: a parent with no power sensor. Its
+                # own power cannot be read, so its shares publish unavailable.
+                if has_unmeasured or share_nodes:
+                    own = self._own_power(node, children, strict=bool(share_nodes))
+                    node_shares = self._split_own_power(own, share_nodes)
+                    shares.update(node_shares)
+                    if has_unmeasured:
+                        unmeasured[node["id"]] = (
+                            None
+                            if own is None
+                            else max(0.0, own - sum(node_shares.values()))
+                        )
+            self._traverse_for_unmeasured(children, unmeasured, shares)
+
+    def _own_power(self, node: dict, children: list, *, strict: bool) -> float | None:
+        """A node's reading minus its metered children's, smoothed and floored at zero.
+
+        Only metered children are subtracted: the remainder and the estimated
+        share nodes are derived from this value, so subtracting them would feed
+        it back into itself.
+
+        ``strict`` for a parent its meterless children split: every input must
+        read, else own power is ``None`` — never a figure computed with the
+        missing input as 0 W. Otherwise (the house, a breaker with only
+        sub-meters) an unreadable input counts 0 W and a child without a power
+        sensor is skipped, as the remainder always did.
+        """
+        metered = [
+            c
+            for c in children
+            if not c.get("isVirtual")
+            and not c.get("isUnmeasured")
+            and not c.get("isEstimated")
+        ]
+        if strict:
+            readings = [
+                self._read_power_or_none(n.get("powerSensorId"), n.get("valueType", "default"))
+                for n in (node, *metered)
+            ]
+            if any(reading is None for reading in readings):
+                return None
+            raw = readings[0] - sum(readings[1:])
+        else:
+            raw = self._read_power(
+                node.get("powerSensorId"), node.get("valueType", "default")
+            ) - sum(
+                self._read_power(c.get("powerSensorId"), c.get("valueType", "default"))
+                for c in metered
+                if c.get("powerSensorId")
+            )
+        return self._smooth_unmeasured(node["id"], raw)
+
+    def _split_own_power(
+        self, own: float | None, share_nodes: list
+    ) -> dict[str, float | None]:
+        """Own power split evenly among the running meterless children; 0 W for the rest."""
+        if own is None:
+            return {n["id"]: None for n in share_nodes}
+        running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
+        return {
+            n["id"]: own / len(running) if n["id"] in running else 0.0
+            for n in share_nodes
+        }
+
+    def _is_share_running(self, device_id: str) -> bool:
+        """Whether a meterless child runs now, by the predicate its history split uses."""
+        signal = self._share_running_signals.get(device_id)
+        if signal is None:
+            return False
+        entity_id, activity = signal
+        state = self._hass.states.get(entity_id)
+        return is_active_state(
+            getattr(state, "state", None), running_active_states(activity)
+        )
 
     def _smooth_unmeasured(self, node_id: str, raw_watts: float) -> float:
-        """Median of the last few raw remainders, floored at zero.
+        """Median of the last few raw own-power readings, floored at zero.
 
-        The remainder is a difference between readings taken at different
+        Own power is a difference between readings taken at different
         moments: the house meter reports several times a second, each circuit
         meter only every 7-18 s. Its jitter is therefore of the same order as
         the remainder itself once the circuits cover most of the house, and
@@ -5706,6 +5855,7 @@ class HelmanCoordinator:
         self._battery_time_to_empty = None
         self._unmeasured_sensors = {}
         self._unmeasured_raw_history = {}
+        self._share_sensors = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
         self._source_ratio_sensors = {}
@@ -5713,6 +5863,7 @@ class HelmanCoordinator:
         self._solar_forecast_sensors = []
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None
+        self._share_sensor_factory = None
         self._entry = None
         self._removing_entity_ids.clear()
         self._power_history.clear()
@@ -5722,10 +5873,6 @@ class HelmanCoordinator:
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()
-
-        if self._unsub_energy is not None:
-            self._unsub_energy()
-            self._unsub_energy = None
 
     def _create_tracked_refresh_task(
         self,

@@ -58,9 +58,14 @@ from custom_components.helman.automation.spec import (  # noqa: E402
     OPTIMIZER_SPECS,
 )
 from custom_components.helman.controllables.config import (  # noqa: E402
-    read_deferrable_consumers,
-    read_scheduled_consumers,
+    effective_meter,
+    find_inverter_device,
+    iter_devices,
+    read_carved_meters,
+    read_controllable_kinds_by_id,
+    read_schedulable_consumers,
     read_shared_meters,
+    resolve_device_name,
 )
 from custom_components.helman.controllables.spec import (  # noqa: E402
     CONTROLLABLE_SPECS,
@@ -86,7 +91,7 @@ _RUNTIME_TYPE_BY_KIND = {
 def _config() -> dict:
     """One installation with an inverter and one appliance of every kind."""
     return {
-        "controllables": [
+        "devices": [
             {
                 "kind": "inverter",
                 "id": "inverter",
@@ -107,6 +112,7 @@ def _config() -> dict:
             },
             {
                 "kind": "climate",
+                "schedulable": True,
                 "id": "living-room-hvac",
                 "name": "Living Room HVAC",
                 "controls": {"climate": {"entity_id": "climate.living_room"}},
@@ -116,6 +122,7 @@ def _config() -> dict:
             },
             {
                 "kind": "ev_charger",
+                "schedulable": True,
                 "id": "garage-ev",
                 "name": "Garage EV",
                 "limits": {"max_charging_power_kw": 11.0},
@@ -149,6 +156,7 @@ def _config() -> dict:
             },
             {
                 "kind": "generic",
+                "schedulable": True,
                 "id": "dishwasher",
                 "name": "Dishwasher",
                 "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -341,7 +349,7 @@ class ControllableEntitiesPayloadTests(unittest.TestCase):
     def test_appliances_keep_the_order_they_were_configured_in(self) -> None:
         """Grouping by kind would reorder the card's lanes."""
         config = _config()
-        config["controllables"][1:] = list(reversed(config["controllables"][1:]))
+        config["devices"][1:] = list(reversed(config["devices"][1:]))
         payload = build_controllable_entities(
             control_config=read_schedule_control_config(config),
             registry=build_appliances_runtime_registry(config),
@@ -365,7 +373,7 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
     @staticmethod
     def _v6_config() -> dict:
         """The same installation as :func:`_config`, in the pre-v7 shape."""
-        controllables = _config()["controllables"]
+        controllables = _config()["devices"]
         inverter, *appliances = controllables
         mode = inverter["controls"]["mode"]
         return {
@@ -382,7 +390,7 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
     def test_the_migrated_document_matches_the_v7_authored_one(self) -> None:
         migrated, _ids = migrate_config_document(self._v6_config())
 
-        self.assertEqual(migrated["controllables"], _config()["controllables"])
+        self.assertEqual(migrated["devices"], _config()["devices"])
 
     def test_the_inverter_runtime_survives_the_migration(self) -> None:
         migrated, _ids = migrate_config_document(self._v6_config())
@@ -414,250 +422,278 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
         )
 
 
-class DeferrableConsumerReaderTests(unittest.TestCase):
-    """``read_deferrable_consumers``: which controllables the house forecast
-    carves out of its baseline, and what each one is called."""
+def _device(device_id, *, meter=None, name=None, schedulable=None, kind=None, **extra):
+    device = {"id": device_id, **extra}
+    if kind is not None:
+        device["kind"] = kind
+    if name is not None:
+        device["name"] = name
+    if schedulable is not None:
+        device["schedulable"] = schedulable
+    if meter is not None:
+        device.setdefault("consumption", {})["energy_entity_id"] = meter
+    return device
 
-    @staticmethod
-    def _entry(controllable_id, *, meter=None, name=None, deferrable=None, kind="generic"):
-        entry = {"kind": kind, "id": controllable_id}
-        if name is not None:
-            entry["name"] = name
-        consumption = {}
-        if meter is not None:
-            consumption["energy_entity_id"] = meter
-        if deferrable is not None:
-            consumption["deferrable"] = deferrable
-        if consumption:
-            entry["consumption"] = consumption
-        return entry
 
-    def test_a_metered_controllable_is_deferrable_by_default(self) -> None:
-        consumers = read_deferrable_consumers(
-            {
-                "controllables": [
-                    self._entry("pool", meter="sensor.pool_energy", name="Pool pump")
-                ]
-            }
-        )
+def _switched(device_id, **kwargs):
+    """A meterless child, running by its own switch."""
+    return _device(
+        device_id,
+        controls={"switch": {"entity_id": f"switch.{device_id}"}},
+        **kwargs,
+    )
+
+
+def _ac_breaker():
+    """Four schedulable climate children behind one passive breaker meter."""
+    return _device(
+        "jistic_klimatizace_energy",
+        meter="sensor.jistic_klimatizace_energy",
+        children=[
+            _device(
+                ac_id,
+                kind="climate",
+                schedulable=True,
+                controls={"climate": {"entity_id": f"climate.{ac_id}"}},
+            )
+            for ac_id in ("ac-1", "ac-2", "ac-3", "ac-4")
+        ],
+    )
+
+
+def _study():
+    """A passive breaker with a schedulable sub-metered plug and a meterless lamp."""
+    return _device(
+        "study",
+        meter="sensor.study_energy",
+        children=[
+            _device("plug", meter="sensor.plug_energy", schedulable=True),
+            _switched("lamp"),
+        ],
+    )
+
+
+class DeviceTreeReaderTests(unittest.TestCase):
+    """The ``devices`` tree, flattened, and what is derived from it."""
+
+    def test_the_tree_flattens_in_document_order_with_parents(self) -> None:
+        config = {"devices": [_device("a"), _study(), _device("z")]}
 
         self.assertEqual(
-            consumers,
+            [
+                (device["id"], None if parent is None else parent["id"])
+                for device, parent in iter_devices(config)
+            ],
+            [
+                ("a", None),
+                ("study", None),
+                ("plug", "study"),
+                ("lamp", "study"),
+                ("z", None),
+            ],
+        )
+
+    def test_a_config_without_devices_yields_nothing(self) -> None:
+        for config in ({}, None, {"devices": "nonsense"}):
+            with self.subTest(config=config):
+                self.assertEqual(list(iter_devices(config)), [])
+                self.assertEqual(read_carved_meters(config), [])
+                self.assertEqual(read_schedulable_consumers(config), [])
+                self.assertEqual(read_shared_meters(config), {})
+
+    def test_the_effective_meter_falls_back_to_the_parents(self) -> None:
+        study = _study()
+        plug, lamp = study["children"]
+
+        self.assertEqual(effective_meter(plug, study), "sensor.plug_energy")
+        self.assertEqual(effective_meter(lamp, study), "sensor.study_energy")
+        self.assertIsNone(effective_meter(_device("x"), None))
+
+    def test_children_are_indexed_by_id_with_the_default_kind(self) -> None:
+        self.assertEqual(
+            read_controllable_kinds_by_id({"devices": [_study()]}),
+            {"study": "generic", "plug": "generic", "lamp": "generic"},
+        )
+
+    def test_the_inverter_is_found_at_the_top_level(self) -> None:
+        inverter = _device("inverter", kind="inverter")
+
+        self.assertIs(find_inverter_device({"devices": [_study(), inverter]}), inverter)
+        self.assertEqual(find_inverter_device({"devices": [_study()]}), {})
+
+
+class CarvedMeterReaderTests(unittest.TestCase):
+    """``read_carved_meters``: whose own energy leaves the house baseline."""
+
+    def test_a_schedulable_leaf_is_carved_under_its_own_id(self) -> None:
+        config = {
+            "devices": [
+                _device("pool", meter="sensor.pool_energy", name="Pool pump", schedulable=True)
+            ]
+        }
+
+        self.assertEqual(
+            read_carved_meters(config),
             [
                 {
                     "energy_entity_id": "sensor.pool_energy",
                     "label": "Pool pump",
                     "ids": ["pool"],
+                    "metered_children": [],
                 }
             ],
         )
 
-    def test_the_controllable_ids_ride_along_where_declared(self) -> None:
-        """The key the forecast's scheduled demand is reported under.
+    def test_a_passive_leaf_is_not_carved(self) -> None:
+        config = {"devices": [_device("fridge", meter="sensor.fridge_energy")]}
 
-        Without it a scheduled appliance could not be resolved back to the meter
-        and the name the measured breakdown gives it, and the same device would
-        read as two different rows either side of now. An entry that declares no
-        id contributes no id: it can never be scheduled, so nothing keys off it.
-        """
-        config = {
-            "controllables": [
-                self._entry("pool", meter="sensor.pool_energy", name="Pool pump"),
-                {
-                    "kind": "generic",
-                    "name": "Anonymous",
-                    "consumption": {"energy_entity_id": "sensor.anon"},
-                },
-            ]
-        }
+        self.assertEqual(read_carved_meters(config), [])
 
+    def test_a_parent_of_schedulable_meterless_children_is_carved_for_them(
+        self,
+    ) -> None:
+        """The live AC breaker: one row, labelled by the meter, naming all four."""
         self.assertEqual(
-            [c["ids"] for c in read_deferrable_consumers(config)],
-            [["pool"], []],
-        )
-
-    def test_only_an_explicit_false_opts_a_device_out(self) -> None:
-        config = {
-            "controllables": [
-                self._entry("a", meter="sensor.a", name="A", deferrable=False),
-                self._entry("b", meter="sensor.b", name="B", deferrable=True),
-                # Neither None nor a bad value shrinks the list: the default is
-                # what a controllable means, not what it happens to say.
-                self._entry("c", meter="sensor.c", name="C", deferrable="yes"),
-            ]
-        }
-
-        self.assertEqual(
-            [c["energy_entity_id"] for c in read_deferrable_consumers(config)],
-            ["sensor.b", "sensor.c"],
-        )
-
-    def test_the_inverter_is_never_a_deferrable_consumer(self) -> None:
-        config = {
-            "controllables": [
-                self._entry(
-                    "inverter", meter="sensor.inverter", name="Inverter", kind="inverter"
-                )
-            ]
-        }
-
-        self.assertEqual(read_deferrable_consumers(config), [])
-
-    def test_a_controllable_without_a_meter_contributes_nothing(self) -> None:
-        config = {"controllables": [self._entry("rail", name="Towel rail")]}
-
-        self.assertEqual(read_deferrable_consumers(config), [])
-
-    def test_order_follows_the_list_and_a_shared_meter_is_one_entry(self) -> None:
-        """A shared meter is subtracted once, named by the meter, and lists
-        every controllable behind it in config order."""
-        config = {
-            "controllables": [
-                self._entry("b", meter="sensor.b", name="B"),
-                self._entry("a", meter="sensor.a", name="A"),
-                self._entry("b2", meter="sensor.b", name="B again"),
-            ]
-        }
-
-        self.assertEqual(
-            read_deferrable_consumers(config),
-            [
-                {"energy_entity_id": "sensor.b", "label": "sensor.b", "ids": ["b", "b2"]},
-                {"energy_entity_id": "sensor.a", "label": "A", "ids": ["a"]},
-            ],
-        )
-
-    def test_read_shared_meters_names_only_meters_with_several_claimants(self) -> None:
-        config = {
-            "controllables": [
-                self._entry("b", meter="sensor.b"),
-                self._entry("a", meter="sensor.a"),
-                # An opt-out still ran and still drew from the meter, so it
-                # still shares it.
-                self._entry("b2", meter="sensor.b", deferrable=False),
-            ]
-        }
-
-        self.assertEqual(read_shared_meters(config), {"sensor.b": ["b", "b2"]})
-
-    def test_a_kind_that_may_not_share_is_not_counted_as_a_sharer(self) -> None:
-        """Only the kinds validation lets share a meter divide one.
-
-        An entry of an unknown kind is preserved but never validated, so nothing
-        refused it the meter. Counting it would make the meter read as shared
-        while the split had no way to tell when it ran, handing its energy to
-        the one sharer that can be read.
-        """
-        config = {
-            "controllables": [
-                self._entry("ac", meter="sensor.breaker", kind="climate"),
-                self._entry("future", meter="sensor.breaker", kind="something_new"),
-            ]
-        }
-
-        self.assertEqual(read_shared_meters(config), {})
-
-    def test_an_unnamed_device_is_labelled_by_its_meter(self) -> None:
-        config = {"controllables": [self._entry("x", meter="sensor.x")]}
-
-        self.assertEqual(read_deferrable_consumers(config)[0]["label"], "sensor.x")
-
-    def test_a_config_without_controllables_yields_nothing(self) -> None:
-        self.assertEqual(read_deferrable_consumers({}), [])
-        self.assertEqual(read_deferrable_consumers(None), [])
-        self.assertEqual(read_deferrable_consumers({"controllables": "nonsense"}), [])
-
-
-class ScheduledConsumerReaderTests(unittest.TestCase):
-    """``read_scheduled_consumers``: everything the planner can schedule demand
-    for, which is a wider list than the deferrable one and keyed differently."""
-
-    _entry = staticmethod(DeferrableConsumerReaderTests._entry)
-
-    def test_a_meterless_controllable_still_gets_a_row(self) -> None:
-        """The difference that matters against ``read_deferrable_consumers``.
-
-        There is nothing to subtract from the house baseline for a device with
-        no meter, so the deferrable roster drops it — but the planner schedules
-        it all the same, and its forecast row has to be named after something.
-        """
-        config = {
-            "controllables": [
-                {
-                    "kind": "ev_charger",
-                    "id": "ev",
-                    "name": "EV charger",
-                    # Projected, and so scheduled, without ever being metered.
-                    "consumption": {
-                        "projection": {"strategy": "fixed", "hourly_energy_kwh": 7.0}
-                    },
-                }
-            ]
-        }
-
-        self.assertEqual(
-            read_scheduled_consumers(config),
+            read_carved_meters({"devices": [_ac_breaker()]}),
             [
                 {
-                    "id": "ev",
-                    "label": "EV charger",
-                    "energy_entity_id": None,
-                    "deferrable": True,
+                    "energy_entity_id": "sensor.jistic_klimatizace_energy",
+                    "label": "sensor.jistic_klimatizace_energy",
+                    "ids": ["ac-1", "ac-2", "ac-3", "ac-4"],
+                    "metered_children": [],
                 }
             ],
         )
 
-    def test_the_opt_out_is_carried_rather_than_filtered_on(self) -> None:
-        """A device that opted out is still scheduled; it is just not shiftable.
-
-        Filtering it out here, as the deferrable roster does, would leave its
-        forecast row unnamed and assumed deferrable — the same appliance reading
-        as two different things either side of now.
-        """
-        config = {
-            "controllables": [
-                self._entry("a", meter="sensor.a", name="A", deferrable=False),
-                self._entry("b", meter="sensor.b", name="B"),
-            ]
-        }
-
-        self.assertEqual(
-            [(c["id"], c["deferrable"]) for c in read_scheduled_consumers(config)],
-            [("a", False), ("b", True)],
+    def test_a_passive_meterless_sibling_set_is_never_carved(self) -> None:
+        breaker = _device(
+            "breaker",
+            meter="sensor.breaker_energy",
+            children=[_switched("lamp"), _switched("radio")],
         )
 
-    def test_an_entry_with_no_id_is_skipped(self) -> None:
-        """Nothing can be scheduled against it, so nothing keys off it."""
-        config = {
-            "controllables": [
-                {"kind": "generic", "name": "Anonymous", "consumption": {}},
-                self._entry("pool", meter="sensor.pool_energy", name="Pool pump"),
-            ]
-        }
+        self.assertEqual(read_carved_meters({"devices": [breaker]}), [])
 
-        self.assertEqual([c["id"] for c in read_scheduled_consumers(config)], ["pool"])
+    def test_nested_meters_are_carved_once_each(self) -> None:
+        """The study: the plug is carved on its own; the breaker only if its
+        meterless children are all schedulable — here the lamp is passive."""
+        self.assertEqual(
+            [
+                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                for meter in read_carved_meters({"devices": [_study()]})
+            ],
+            [("sensor.plug_energy", ["plug"], [])],
+        )
 
-    def test_an_unnamed_device_is_labelled_by_its_id(self) -> None:
-        """Not by its meter: the row is identified by the controllable here."""
-        config = {"controllables": [self._entry("x", meter="sensor.x")]}
+        study = _study()
+        study["children"][1]["schedulable"] = True
+        self.assertEqual(
+            [
+                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                for meter in read_carved_meters({"devices": [study]})
+            ],
+            [
+                ("sensor.study_energy", ["lamp"], ["sensor.plug_energy"]),
+                ("sensor.plug_energy", ["plug"], []),
+            ],
+        )
 
-        self.assertEqual(read_scheduled_consumers(config)[0]["label"], "x")
+    def test_the_inverter_is_never_carved(self) -> None:
+        config = {"devices": [_device("inverter", kind="inverter", meter="sensor.x")]}
+
+        self.assertEqual(read_carved_meters(config), [])
+
+
+class SharedMeterReaderTests(unittest.TestCase):
+    """``read_shared_meters``: who splits a meter, from the tree alone."""
+
+    def test_a_meters_meterless_children_split_it_passive_ones_included(self) -> None:
+        config = {"devices": [_study()]}
+
+        self.assertEqual(
+            read_shared_meters(config),
+            {
+                "sensor.study_energy": {
+                    "members": [("lamp", "switch.lamp", "switch")],
+                    "metered_children": ["sensor.plug_energy"],
+                }
+            },
+        )
+
+    def test_each_member_runs_by_its_own_control(self) -> None:
+        shared = read_shared_meters({"devices": [_ac_breaker()]})
+
+        self.assertEqual(
+            shared["sensor.jistic_klimatizace_energy"]["members"],
+            [(ac_id, f"climate.{ac_id}", "climate") for ac_id in ("ac-1", "ac-2", "ac-3", "ac-4")],
+        )
+
+    def test_a_meter_without_meterless_children_is_not_shared(self) -> None:
+        study = _study()
+        del study["children"][1]
+
+        self.assertEqual(read_shared_meters({"devices": [study]}), {})
+
+
+class SchedulableConsumerReaderTests(unittest.TestCase):
+    """``read_schedulable_consumers``: everything the planner can schedule demand for."""
+
+    def test_only_schedulable_devices_are_listed_at_every_level(self) -> None:
+        config = {"devices": [_device("fridge", meter="sensor.fridge"), _ac_breaker(), _study()]}
+
+        self.assertEqual(
+            [consumer["id"] for consumer in read_schedulable_consumers(config)],
+            ["ac-1", "ac-2", "ac-3", "ac-4", "plug"],
+        )
+
+    def test_a_meterless_child_names_its_effective_meter_and_carve_out(self) -> None:
+        consumers = read_schedulable_consumers({"devices": [_ac_breaker()]})
+
+        self.assertEqual(
+            consumers[0],
+            {
+                "id": "ac-1",
+                "label": "ac-1",
+                "energy_entity_id": "sensor.jistic_klimatizace_energy",
+                "deferrable": True,
+            },
+        )
 
     def test_the_inverter_is_never_a_scheduled_consumer(self) -> None:
-        config = {
-            "controllables": [
-                self._entry(
-                    "inverter", meter="sensor.inverter", name="Inverter", kind="inverter"
-                )
-            ]
-        }
+        config = {"devices": [_device("inverter", kind="inverter", meter="sensor.x")]}
 
-        self.assertEqual(read_scheduled_consumers(config), [])
+        self.assertEqual(read_schedulable_consumers(config), [])
 
-    def test_a_config_without_controllables_yields_nothing(self) -> None:
-        self.assertEqual(read_scheduled_consumers({}), [])
-        self.assertEqual(read_scheduled_consumers(None), [])
-        self.assertEqual(read_scheduled_consumers({"controllables": "nonsense"}), [])
+
+class DeviceNameTests(unittest.TestCase):
+    """``resolve_device_name``: one backend place for what every surface shows."""
+
+    _NAMES = {
+        "sensor.study_power": "Study breaker power",
+        "sensor.study_energy": "Study breaker energy",
+        "switch.lamp": "Lamp switch",
+    }
+
+    def _resolve(self, device, regex=r"\s+(power|energy|switch)$"):
+        return resolve_device_name(
+            device, friendly_name=self._NAMES.get, cleaner_regex=regex
+        )
+
+    def test_the_override_wins(self) -> None:
+        self.assertEqual(self._resolve({**_study(), "name": "Study"}), "Study")
+
+    def test_power_then_energy_then_control_each_cleaned(self) -> None:
+        study = _study()
+        study["consumption"]["power_entity_id"] = "sensor.study_power"
+        self.assertEqual(self._resolve(study), "Study breaker")
+
+        del study["consumption"]["power_entity_id"]
+        self.assertEqual(self._resolve(study), "Study breaker")
+
+        self.assertEqual(self._resolve(_switched("lamp")), "Lamp")
+
+    def test_the_id_when_nothing_resolves(self) -> None:
+        self.assertEqual(self._resolve(_device("ghost", meter="sensor.gone")), "ghost")
 
 
 if __name__ == "__main__":

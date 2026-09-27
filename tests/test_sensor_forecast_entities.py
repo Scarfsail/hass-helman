@@ -148,6 +148,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(
             get_device_tree=AsyncMock(return_value={"sources": [], "consumers": []}),
             collect_qualifying_nodes=Mock(return_value={}),
+            collect_share_nodes=Mock(return_value={}),
             config={},
             set_sensors=Mock(),
             set_entity_factory=Mock(),

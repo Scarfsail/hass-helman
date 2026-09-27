@@ -62,6 +62,7 @@ async def async_setup_entry(
 
     tree = await coordinator.get_device_tree()
     qualifying_nodes = coordinator.collect_qualifying_nodes(tree)
+    share_nodes = coordinator.collect_share_nodes(tree)
 
     battery_entities = (
         coordinator.config.get("power_devices", {})
@@ -78,6 +79,10 @@ async def async_setup_entry(
     unmeasured_sensors: dict[str, HelmanUnmeasuredPowerSensor] = {
         node_id: HelmanUnmeasuredPowerSensor(coordinator, entry, hass, node_id, parent_sensor_id)
         for node_id, parent_sensor_id in qualifying_nodes.items()
+    }
+    share_sensors: dict[str, HelmanSharePowerSensor] = {
+        node_id: HelmanSharePowerSensor(coordinator, entry, node_id, entity_id, name)
+        for node_id, (entity_id, name) in share_nodes.items()
     }
     total_power = HelmanConsumptionTotalSensor(coordinator, entry)
     production_total = HelmanProductionTotalSensor(coordinator, entry)
@@ -107,6 +112,7 @@ async def async_setup_entry(
         production_total=production_total,
         source_ratio_sensors=source_ratio_sensors,
         forecast_sensors=forecast_entities,
+        share_sensors=share_sensors,
     )
     coordinator.set_entity_factory(
         entry,
@@ -114,11 +120,15 @@ async def async_setup_entry(
         lambda node_id, parent_id: HelmanUnmeasuredPowerSensor(
             coordinator, entry, hass, node_id, parent_id
         ),
+        lambda node_id, entity_id, name: HelmanSharePowerSensor(
+            coordinator, entry, node_id, entity_id, name
+        ),
     )
 
     async_add_entities(
         [battery_time_to_full, battery_time_to_empty]
         + list(unmeasured_sensors.values())
+        + list(share_sensors.values())
         + [total_power, production_total]
         + list(source_ratio_sensors.values())
         + forecast_entities
@@ -224,7 +234,64 @@ class HelmanBatteryTimeSensor(_HelmanDeviceEntity):
             self.async_write_ha_state()
 
 
-class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
+class _HelmanDerivedPowerSensor(_HelmanDeviceEntity):
+    """A power figure the coordinator derives from a parent's own power each tick.
+
+    ``update_value(None)`` publishes ``unavailable``: own power is unknown when
+    one of its inputs is, and a figure computed with that input as 0 W would be
+    wrong, not merely stale.
+    """
+
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "W"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(entry)
+        self._coordinator = coordinator
+        self._value: float | None = None
+        self._unavailable = False
+        self._emitted = False
+        self._last_emit_value: float | None = None
+        self._last_emit_ts = 0.0
+
+    @property
+    def available(self) -> bool:
+        return self.hass is not None and not self._unavailable
+
+    @property
+    def native_value(self) -> float | None:
+        return round(self._value) if self._value is not None else None
+
+    async def async_added_to_hass(self) -> None:
+        self._coordinator.register_sensor_ready()
+
+    def _should_emit(self, watts: float | None) -> bool:
+        if not self._emitted:
+            return True
+        last = self._last_emit_value
+        if watts is None or last is None:
+            return (watts is None) != (last is None)
+        if abs(watts - last) >= _HYSTERESIS_W:
+            return True
+        if time.monotonic() - self._last_emit_ts >= _HYSTERESIS_MAX_GAP_S:
+            return True
+        return False
+
+    def update_value(self, watts: float | None) -> None:
+        if not self._should_emit(watts):
+            return
+        self._value = watts
+        self._unavailable = watts is None
+        self._emitted = True
+        self._last_emit_value = watts
+        self._last_emit_ts = time.monotonic()
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+
+class HelmanUnmeasuredPowerSensor(_HelmanDerivedPowerSensor):
     """The one entity a static ``translation_key`` cannot name.
 
     Its name describes another entity's contents -- the source that this
@@ -234,11 +301,6 @@ class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
     device continues to supply the ``Helman`` prefix.
     """
 
-    _attr_should_poll = False
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = "W"
-
     def __init__(
         self,
         coordinator,
@@ -247,8 +309,7 @@ class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
         node_id: str,
         parent_sensor_id: str | None,
     ) -> None:
-        super().__init__(entry)
-        self._coordinator = coordinator
+        super().__init__(coordinator, entry)
         self._parent_sensor_id = parent_sensor_id
         slug = _unmeasured_slug(node_id)
         self.entity_id = f"sensor.helman_unmeasured_power_{slug}"
@@ -260,11 +321,10 @@ class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
         if not parent_name:
             parent_name = node_id.replace("_", " ").title()
         self._attr_name = f"Unmeasured — {parent_name}"
-        self._value: float | None = None
 
     @property
     def available(self) -> bool:
-        if not self.hass or not self._parent_sensor_id:
+        if not super().available or not self._parent_sensor_id:
             return False
         state = self.hass.states.get(self._parent_sensor_id)
         if state is None or state.state in ("unavailable", "unknown", "none"):
@@ -275,33 +335,27 @@ class HelmanUnmeasuredPowerSensor(_HelmanDeviceEntity):
             return False
         return True
 
-    @property
-    def native_value(self) -> float | None:
-        return round(self._value) if self._value is not None else None
 
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
+class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
+    """A meterless child's share of its parent's own power.
 
-    def _should_emit(self, watts: float) -> bool:
-        last = getattr(self, "_last_emit_value", None)
-        last_ts = getattr(self, "_last_emit_ts", 0.0)
-        now = time.monotonic()
-        if last is None:
-            return True
-        if abs(watts - last) >= _HYSTERESIS_W:
-            return True
-        if now - last_ts >= _HYSTERESIS_MAX_GAP_S:
-            return True
-        return False
+    The parent's own power split evenly among its running meterless children
+    while this one runs, else 0 W. Named after the device, whose name the tree
+    has already resolved.
+    """
 
-    def update_value(self, watts: float) -> None:
-        if not self._should_emit(watts):
-            return
-        self._value = watts
-        self._last_emit_value = watts
-        self._last_emit_ts = time.monotonic()
-        if self.hass is not None:
-            self.async_write_ha_state()
+    def __init__(
+        self,
+        coordinator,
+        entry: ConfigEntry,
+        device_id: str,
+        entity_id: str,
+        device_name: str,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self.entity_id = entity_id
+        self._attr_unique_id = f"{entry.entry_id}_share_power_{device_id}"
+        self._attr_name = f"Share — {device_name}"
 
 
 class HelmanConsumptionTotalSensor(_HelmanDeviceEntity):

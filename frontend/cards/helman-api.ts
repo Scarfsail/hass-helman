@@ -1,3 +1,4 @@
+import type { HomeAssistantLike, JsonObject, ValidationReport } from "./shared/config/types";
 /**
  * Backend API types for the helman integration.
  *
@@ -60,6 +61,10 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
      * configured controllable, and for a controllable that declares no id.
      */
     controllableIds: string[];
+    /** A house child's meter; null for every other node. */
+    energyEntityId: string | null;
+    /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
+    isEstimated: boolean;
 }
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────
@@ -714,4 +719,61 @@ export interface AutomationRunPayload {
     cleanup?: { reason: string; actionsStripped: number };
     failure?: { stage: string; message: string; unexpected: boolean };
     trace?: AutomationTraceDTO;
+}
+
+/** Explicit device suggestions preserve every candidate, including ambiguity. */
+export interface DeviceEntityCandidate {
+  entityId: string;
+  name: string;
+  /** Why it was suggested, as a code the editor translates. */
+  reasons: { code: string; value?: string }[];
+  rank: number;
+}
+export type DeviceSuggestions = Record<
+  "energy" | "power" | "switch",
+  DeviceEntityCandidate[]
+>;
+export interface EnergyImportPreview {
+  devices: JsonObject[];
+  additions: {
+    deviceId: string;
+    parentId: string | null;
+    energyEntityId: string;
+    powerEntityId: string | null;
+  }[];
+  powerEntities: { deviceId: string; entityId: string }[];
+  nestingChanges: {
+    deviceId: string;
+    fromParentId: string | null;
+    parentId: string | null;
+  }[];
+  skippedRows: {
+    energy_entity_id: string;
+    device_id: string | null;
+    reason: string;
+  }[];
+  warnings: {
+    energy_entity_id: string;
+    device_id: string | null;
+    reason: string;
+  }[];
+  validation: ValidationReport;
+}
+export function fetchDeviceSuggestions(
+  hass: HomeAssistantLike,
+  /** Tried in order; the first with an HA device is used. */
+  anchorEntityIds: string[],
+  config: object,
+): Promise<DeviceSuggestions> {
+  return hass.callWS({
+    type: "helman/suggest_device_entities",
+    anchor_entity_ids: anchorEntityIds,
+    config,
+  });
+}
+export function fetchEnergyImportPreview(
+  hass: HomeAssistantLike,
+  config: object,
+): Promise<EnergyImportPreview> {
+  return hass.callWS({ type: "helman/preview_energy_import", config });
 }

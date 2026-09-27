@@ -22,7 +22,7 @@ const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_i
 const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
 const GRID_PATH = ["power_devices", "grid", "entities", "power"];
 const BATTERY_PATH = ["power_devices", "battery", "entities", "capacity"];
-const CONTROLLABLE_PATH = ["controllables", 0, "consumption", "energy_entity_id"];
+const CONTROLLABLE_PATH = ["devices", 0, "consumption", "energy_entity_id"];
 const FORECAST_SOURCE_PATH = [
     "power_devices",
     "solar",
@@ -64,10 +64,11 @@ const CONFIG = {
         grid: { entities: { power: "sensor.grid_power" } },
         battery: { entities: { capacity: "sensor.battery_capacity" } },
     },
-    controllables: [
+    devices: [
         {
             id: "dishwasher",
             name: "Dishwasher",
+            schedulable: true,
             consumption: {
                 energy_entity_id: "sensor.dishwasher_energy",
                 projection: { strategy: "history_average", lookback_days: 21 },
@@ -456,16 +457,16 @@ test("the table fits a narrow viewport instead of scrolling sideways", async ({ 
 });
 
 test("a controllable the house trainer skips gets no row", async ({ page }) => {
-    // `read_deferrable_consumers` refuses the inverter and honours
-    // `deferrable: false`, so neither meter is read by the house window -- and
-    // a row would claim otherwise.
+    // `read_carved_meters` refuses the inverter and a passive device, so
+    // neither meter is read by the house window -- and a row would claim
+    // otherwise.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.controllables.push({
+    config.devices.push({
         id: "fridge",
         name: "Fridge",
-        consumption: { energy_entity_id: "sensor.fridge_energy", deferrable: false },
+        consumption: { energy_entity_id: "sensor.fridge_energy" },
     });
-    config.controllables.push({
+    config.devices.push({
         id: "inverter",
         name: "Inverter",
         kind: "inverter",
@@ -479,6 +480,41 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     expect(allRows.length).toBe(8);
     expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
     expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
+});
+
+test("a carved meter's metered child gets a row, since the trainer reads it", async ({
+    page,
+}) => {
+    // The breaker is carved (its meterless child is schedulable), and its own
+    // energy is its meter minus the plug's -- so the house window reads both.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices.push({
+        id: "breaker",
+        name: "Breaker",
+        consumption: { energy_entity_id: "sensor.breaker_energy" },
+        children: [
+            {
+                id: "plug",
+                name: "Plug",
+                consumption: { energy_entity_id: "sensor.plug_energy" },
+            },
+            {
+                id: "heater",
+                name: "Heater",
+                schedulable: true,
+                controls: { switch: { entity_id: "switch.heater" } },
+            },
+        ],
+    });
+
+    await mountEditor(page, config);
+    const tables = await waitForRows(page, 7);
+    const allRows = tables.flat();
+
+    expect(allRows.length).toBe(10);
+    expect(allRows.some((row) => row[0].includes("Breaker"))).toBe(true);
+    expect(allRows.some((row) => row[0].includes("Plug"))).toBe(true);
+    expect(allRows.some((row) => row[0].includes("Heater"))).toBe(false);
 });
 
 test("a row with both tables shallow is marked, on the row rather than a cell", async ({
@@ -533,7 +569,7 @@ function applianceRows(page: Page) {
 
 test("an appliance row judges depth against its own lookback", async ({ page }) => {
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.controllables[0].consumption.projection.lookback_days = 40;
+    config.devices[0].consumption.projection.lookback_days = 40;
     await mountEditor(page, config);
 
     // One device, one row: its meter (33 d) is short of its own 40 days, while
@@ -563,11 +599,12 @@ test("an appliance's activity entity is judged against the lookback training rea
     // read over the longest learning sharer's lookback, and a fixed sharer's
     // activity still divides it; a fixed appliance on its own meter reads nothing.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.controllables = [
+    config.devices = [
         {
             id: "dishwasher",
             name: "Dishwasher",
             kind: "generic",
+            schedulable: true,
             controls: { switch: { entity_id: "switch.dishwasher" } },
             consumption: {
                 energy_entity_id: "sensor.dishwasher_energy",
@@ -575,29 +612,37 @@ test("an appliance's activity entity is judged against the lookback training rea
             },
         },
         {
-            id: "ac_living",
-            name: "Living AC",
-            kind: "climate",
-            controls: { climate: { entity_id: "climate.living" } },
-            consumption: {
-                energy_entity_id: "sensor.ac_breaker",
-                projection: { strategy: "history_average", lookback_days: 14 },
-            },
-        },
-        {
-            id: "ac_bedroom",
-            name: "Bedroom AC",
-            kind: "climate",
-            controls: { climate: { entity_id: "climate.bedroom" } },
-            consumption: {
-                energy_entity_id: "sensor.ac_breaker",
-                projection: { strategy: "fixed", hourly_energy_kwh: 1 },
-            },
+            // The breaker owns the meter; the two ACs behind it draw from it.
+            id: "ac_breaker",
+            consumption: { energy_entity_id: "sensor.ac_breaker" },
+            children: [
+                {
+                    id: "ac_living",
+                    name: "Living AC",
+                    kind: "climate",
+                    schedulable: true,
+                    controls: { climate: { entity_id: "climate.living" } },
+                    consumption: {
+                        projection: { strategy: "history_average", lookback_days: 14 },
+                    },
+                },
+                {
+                    id: "ac_bedroom",
+                    name: "Bedroom AC",
+                    kind: "climate",
+                    schedulable: true,
+                    controls: { climate: { entity_id: "climate.bedroom" } },
+                    consumption: {
+                        projection: { strategy: "fixed", hourly_energy_kwh: 1 },
+                    },
+                },
+            ],
         },
         {
             id: "pool",
             name: "Pool",
             kind: "generic",
+            schedulable: true,
             controls: { switch: { entity_id: "switch.pool" } },
             consumption: {
                 energy_entity_id: "sensor.pool_energy",
@@ -607,11 +652,11 @@ test("an appliance's activity entity is judged against the lookback training rea
     ];
     await mountEditor(page, config, {
         ...DEPTHS,
-        "controllables.0.consumption.energy_entity_id": { raw_states: 33, statistics: 33 },
-        "controllables.0.controls.switch.entity_id": { raw_states: 5, statistics: 0 },
-        "controllables.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
-        "controllables.1.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
-        "controllables.2.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
+        "devices.0.consumption.energy_entity_id": { raw_states: 33, statistics: 33 },
+        "devices.0.controls.switch.entity_id": { raw_states: 5, statistics: 0 },
+        "devices.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.1.children.0.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.1.children.1.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
     });
 
     // One row per device (#321): the pool reads nothing, so it is absent.
@@ -656,12 +701,111 @@ test("an appliance's activity entity is judged against the lookback training rea
     );
     expect(requestedKeys).toEqual(
         expect.arrayContaining([
-            "controllables.0.consumption.energy_entity_id",
-            "controllables.0.controls.switch.entity_id",
-            "controllables.1.consumption.energy_entity_id",
-            "controllables.1.controls.climate.entity_id",
-            "controllables.2.controls.climate.entity_id",
+            "devices.0.consumption.energy_entity_id",
+            "devices.0.controls.switch.entity_id",
+            "devices.1.consumption.energy_entity_id",
+            "devices.1.children.0.controls.climate.entity_id",
+            "devices.1.children.1.controls.climate.entity_id",
         ]),
     );
-    expect(requestedKeys).not.toContain("controllables.3.controls.switch.entity_id");
+    expect(requestedKeys).not.toContain("devices.2.controls.switch.entity_id");
+});
+
+test("an EV charger sharing a meter is judged by its charge switch", async ({ page }) => {
+    // The backend splits a shared meter by each sharer's running signal, and an
+    // EV charger's is its charge switch, so that history's depth is shown too.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices = [
+        {
+            id: "garage_breaker",
+            consumption: { energy_entity_id: "sensor.garage_breaker" },
+            children: [
+                {
+                    id: "garage_heater",
+                    name: "Garage heater",
+                    kind: "generic",
+                    schedulable: true,
+                    controls: { switch: { entity_id: "switch.garage_heater" } },
+                    consumption: {
+                        projection: { strategy: "history_average", lookback_days: 14 },
+                    },
+                },
+                {
+                    id: "garage_ev",
+                    name: "Garage EV",
+                    kind: "ev_charger",
+                    schedulable: true,
+                    controls: { charge: { entity_id: "switch.ev_charge" } },
+                },
+            ],
+        },
+    ];
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.0.children.1.controls.charge.entity_id": { raw_states: 3, statistics: 0 },
+    });
+
+    const ev = applianceRows(page).filter({ hasText: "Garage EV" });
+    await expect(ev.locator("td:first-child .training-depth-entity-id")).toHaveText([
+        "switch.ev_charge",
+    ]);
+    await expect(ev).toHaveClass(/training-depth-warn/);
+    const requestedKeys = await page.evaluate(() =>
+        ((window as any).__inspectRequests.at(-1)?.targets ?? []).map((target: any) => target.key),
+    );
+    expect(requestedKeys).toContain("devices.0.children.1.controls.charge.entity_id");
+});
+
+test("a learner on a shared meter also lists its metered siblings' meters", async ({ page }) => {
+    // Training splits the parent's own energy, its meter minus its metered
+    // children, so a shallow sub-meter distorts the estimate as much as the
+    // parent's meter would.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices = [
+        {
+            id: "garage_breaker",
+            consumption: {
+                energy_entity_id: "sensor.garage_breaker",
+                power_entity_id: "sensor.garage_breaker_power",
+            },
+            children: [
+                {
+                    id: "garage_heater",
+                    name: "Garage heater",
+                    kind: "generic",
+                    schedulable: true,
+                    controls: { switch: { entity_id: "switch.garage_heater" } },
+                    consumption: {
+                        projection: { strategy: "history_average", lookback_days: 14 },
+                    },
+                },
+                {
+                    id: "garage_plug",
+                    name: "Garage plug",
+                    consumption: {
+                        energy_entity_id: "sensor.garage_plug",
+                        power_entity_id: "sensor.garage_plug_power",
+                    },
+                },
+            ],
+        },
+    ];
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.0.children.1.consumption.energy_entity_id": { raw_states: 4, statistics: 4 },
+        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+    });
+
+    const heater = applianceRows(page).filter({ hasText: "Garage heater" });
+    await expect(heater.locator("td:first-child .training-depth-entity-id")).toHaveText([
+        "sensor.garage_breaker",
+        "sensor.garage_plug",
+        "switch.garage_heater",
+    ]);
+    // The shallow sub-meter is what marks the row.
+    await expect(heater).toHaveClass(/training-depth-warn/);
+    await expect(heater.locator("td").nth(3)).toContainText("sub-meter 4 d");
 });

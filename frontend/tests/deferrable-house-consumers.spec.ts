@@ -37,6 +37,11 @@ interface FakeNode {
     deferrable?: boolean;
     controllableIds?: string[];
     customLabelTexts?: string[];
+    isEstimated?: boolean;
+    isUnmeasured?: boolean;
+    powerValue?: number;
+    powerSensorId?: string;
+    childrenCollapsed?: boolean;
     children?: FakeNode[];
 }
 
@@ -303,6 +308,105 @@ test.describe("deferrable house consumers on the power card", () => {
         // automation beside a controllable with nothing planned is automation.
         expect(rows.map((r) => r.badgeColor)).toEqual([MIXED_COLOR, AUTOMATION_COLOR]);
     });
+
+    test("a shared meter's children are rows under it, each an estimate with its own badge", async ({ page }) => {
+        // The AC breaker: its meterless children read their share sensors, so
+        // their figures are estimates, and each carries its own schedule id.
+        await mountRows(page, [
+            {
+                id: "sensor.breaker_energy",
+                name: "AC breaker",
+                deferrable: true,
+                powerValue: 400,
+                childrenCollapsed: false,
+                children: [
+                    { id: "dishwasher", name: "AC living room", deferrable: true, controllableIds: ["dishwasher"], isEstimated: true, powerValue: 400 },
+                    { id: "boiler", name: "AC bedroom", deferrable: true, controllableIds: ["boiler"], isEstimated: true, powerValue: 0 },
+                    { id: "sensor_breaker_energy_unmeasured", name: "Unmeasured", isUnmeasured: true, powerValue: 0 },
+                ],
+            },
+        ]);
+        await page.waitForFunction(() => window.__wsSeen.length >= 3);
+
+        const children = await page.evaluate(async () => {
+            const el = document.querySelector("power-devices-container") as any;
+            await el.updateComplete;
+            const parent = el.shadowRoot.querySelector("power-device") as any;
+            await parent.updateComplete;
+            const container = parent.shadowRoot.querySelector("power-devices-container") as any;
+            await container.updateComplete;
+            const out = [];
+            for (const row of [...container.shadowRoot.querySelectorAll("power-device")] as any[]) {
+                await row.updateComplete;
+                const content = row.shadowRoot.querySelector(".deviceContent");
+                const display = content.querySelector("power-device-power-display");
+                await display.updateComplete;
+                const info = content.querySelector("power-device-info");
+                if (info) await info.updateComplete;
+                const badge = info?.shadowRoot?.querySelector("helman-schedule-badge");
+                if (badge) await badge.updateComplete;
+                const icon = badge?.shadowRoot?.querySelector("ha-icon") ?? null;
+                out.push({
+                    label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),
+                    value: (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+                    badgeColor: icon ? icon.style.color : null,
+                });
+            }
+            return out;
+        });
+
+        // The unmeasured remainder is 0 W, so it has no row.
+        expect(children).toEqual([
+            { label: "AC living room", value: "≈400 W", badgeColor: AUTOMATION_COLOR },
+            { label: "AC bedroom", value: "≈0 W", badgeColor: USER_COLOR },
+        ]);
+    });
+
+    // An input to the breaker's own power is down (unavailable), the sensor has
+    // not published yet (unknown), or it is disabled (missing): the history
+    // engine would read each as 0 W.
+    for (const [label, state] of [["unavailable", "unavailable"], ["unknown", "unknown"], ["missing", null]] as const) {
+        test(`a share that is ${label} reads as unknown, not as zero`, async ({ page }) => {
+            await page.evaluate((shareState) => {
+                (window.__fakeHass as any).states = shareState === null ? {} : {
+                    "sensor.helman_share_power_ac_living_room": { state: shareState, attributes: {} },
+                };
+            }, state);
+            await mountRows(page, [
+                {
+                    id: "sensor.breaker_energy",
+                    name: "AC breaker",
+                    powerValue: 400,
+                    childrenCollapsed: false,
+                    children: [
+                        {
+                            id: "ac-living-room",
+                            name: "AC living room",
+                            isEstimated: true,
+                            powerSensorId: "sensor.helman_share_power_ac_living_room",
+                            powerValue: 400,
+                        },
+                    ],
+                },
+            ]);
+
+            const value = await page.evaluate(async () => {
+                const el = document.querySelector("power-devices-container") as any;
+                await el.updateComplete;
+                const parent = el.shadowRoot.querySelector("power-device") as any;
+                await parent.updateComplete;
+                const container = parent.shadowRoot.querySelector("power-devices-container") as any;
+                await container.updateComplete;
+                const row = container.shadowRoot.querySelector("power-device") as any;
+                await row.updateComplete;
+                const display = row.shadowRoot.querySelector("power-device-power-display") as any;
+                await display.updateComplete;
+                return (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim();
+            });
+
+            expect(value).toBe("≈ —");
+        });
+    }
 });
 
 declare global {

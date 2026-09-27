@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 from homeassistant.helpers import storage
@@ -35,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 class HelmanStorage:
     def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
         self._store = storage.Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._config: dict[str, Any] = {}
         self._snapshot_store = storage.Store(
@@ -58,7 +60,9 @@ class HelmanStorage:
             # it lets a relocated value beat a default.
             "visualization": deepcopy(read_visualization(stored)),
         }
-        await self._async_migrate_config()
+        # A fresh install has no document to upgrade, so it imports nothing
+        # from Energy and starts with an empty device list.
+        await self._async_migrate_config(import_energy=bool(stored))
         snapshot_document = await self._snapshot_store.async_load()
         if isinstance(snapshot_document, dict) and "house" in snapshot_document:
             self._snapshot = snapshot_document.get("house")
@@ -73,15 +77,21 @@ class HelmanStorage:
             self._solar_snapshot = None
         self._schedule_document = await self._schedule_store.async_load()
 
-    async def _async_migrate_config(self) -> None:
+    async def _async_migrate_config(self, *, import_energy: bool) -> None:
         """Bring a stored config up to the current document version, once.
 
         Persists only when something actually changed, so a config already at
-        the current version never rewrites the store on every start.
+        the current version never rewrites the store on every start. Energy
+        preferences are read only then: the upgrade to version 21 imports them.
         """
         if not needs_migration(self._config):
             return
-        migrated, migrated_optimizer_ids = migrate_config_document(self._config)
+        preferences = (
+            await self._async_energy_preferences() if import_energy else None
+        )
+        migrated, migrated_optimizer_ids = migrate_config_document(
+            self._config, preferences
+        )
         # Not every step reshapes optimizers any more, so only name them when
         # some were actually rewritten.
         if migrated_optimizer_ids:
@@ -97,6 +107,14 @@ class HelmanStorage:
             )
         self._config = migrated
         await self._store.async_save(migrated)
+
+    async def _async_energy_preferences(self) -> Mapping[str, Any] | None:
+        # Imported here, not at module level: nothing else in Helman reads
+        # Energy preferences, and only an upgrade needs them.
+        from homeassistant.components.energy import data as energy_data
+
+        manager = await energy_data.async_get_manager(self._hass)
+        return manager.data
 
     @property
     def config(self) -> dict[str, Any]:

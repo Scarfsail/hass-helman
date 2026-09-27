@@ -65,22 +65,15 @@ class _Hass:
 
 
 def _build(config: dict) -> dict:
-    """Run the real async build with the registries and energy prefs stubbed out.
+    """Run the real async build with the registries stubbed out.
 
     None of them have any bearing on ``value_type``; they are only what stands
     between this test and the code path that assigns it.
     """
     builder = HelmanTreeBuilder(_Hass(), config)
-    manager = types.SimpleNamespace(data=None)
-
-    async def _manager(_hass):
-        return manager
-
     registry = types.SimpleNamespace(async_get=lambda *_a, **_k: None, entities={})
     with (
-        mock.patch.object(tree_builder_module.energy_data, "async_get_manager", _manager),
         mock.patch.object(tree_builder_module.er, "async_get", lambda _h: registry),
-        mock.patch.object(tree_builder_module.dr, "async_get", lambda _h: registry),
         mock.patch.object(tree_builder_module.lr, "async_get", lambda _h: registry),
     ):
         return asyncio.run(builder.build())

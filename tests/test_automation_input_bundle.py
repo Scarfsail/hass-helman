@@ -146,6 +146,8 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     sys.modules[battery_state_mod.__name__] = battery_state_mod
 
     recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
+
+    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
     recorder_slots_mod.get_local_current_slot_start = (
         lambda reference_time, *, interval_minutes: reference_time.replace(
             minute=(reference_time.minute // interval_minutes) * interval_minutes,
@@ -545,7 +547,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"controllables": []}
+            {"devices": []}
         )
         coordinator._automation_input_bundle = None
         house_forecast = _make_house_forecast()
@@ -620,9 +622,10 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "controllables": [
+                "devices": [
                     {
                         "kind": "generic",
+                        "schedulable": True,
                         "id": "dishwasher",
                         "name": "Dishwasher",
                         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -635,6 +638,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                     },
                     {
                         "kind": "climate",
+                        "schedulable": True,
                         "id": "living-room-hvac",
                         "name": "Living Room HVAC",
                         "controls": {
@@ -653,6 +657,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                     },
                     {
                         "kind": "ev_charger",
+                        "schedulable": True,
                         "id": "garage-ev",
                         "name": "Garage EV",
                         "limits": {"max_charging_power_kw": 11.0},
@@ -709,9 +714,10 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "controllables": [
+                "devices": [
                     {
                         "kind": "generic",
+                        "schedulable": True,
                         "id": "dishwasher",
                         "name": "Dishwasher",
                         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -726,6 +732,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                     },
                     {
                         "kind": "climate",
+                        "schedulable": True,
                         "id": "living-room-hvac",
                         "name": "Living Room HVAC",
                         "controls": {
@@ -744,6 +751,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                     },
                     {
                         "kind": "generic",
+                        "schedulable": True,
                         "id": "pool-pump",
                         "name": "Pool Pump",
                         "controls": {"switch": {"entity_id": "switch.pool_pump"}},
@@ -1017,9 +1025,10 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     """What the coordinator hands the batched reader, and what it does with the answer."""
 
     APPLIANCES = {
-        "controllables": [
+        "devices": [
             {
                 "kind": "generic",
+                "schedulable": True,
                 "id": "pool-filtration",
                 "name": "Pool",
                 "controls": {"switch": {"entity_id": "switch.pool"}},
@@ -1033,6 +1042,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
             },
             {
                 "kind": "generic",
+                "schedulable": True,
                 "id": "dishwasher",
                 "name": "Dishwasher",
                 "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -1046,6 +1056,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
             },
             {
                 "kind": "generic",
+                "schedulable": True,
                 "id": "unreferenced",
                 "name": "Unreferenced",
                 "controls": {"switch": {"entity_id": "switch.unreferenced"}},
@@ -1224,9 +1235,10 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         # The request reads shared meters from the config and the appliances
         # from the registry built off it, so both see the same document.
         coordinator._active_config = {
-            "controllables": appliances if appliances is not None else [
+            "devices": appliances if appliances is not None else [
                 {
                     "kind": "generic",
+                    "schedulable": True,
                     "id": "dishwasher",
                     "name": "Dishwasher",
                     "controls": {"switch": {"entity_id": "switch.dishwasher"}},
@@ -1250,36 +1262,52 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         return coordinator._read_appliance_energy_training_request().fingerprint
 
     def test_a_fixed_sharer_of_a_meter_is_in_the_split_but_not_resolved(self) -> None:
-        """The request's shared meters come from config, fixed sharers included.
+        """The request's shared meters come from the tree, fixed children included.
 
-        A ``fixed`` runtime carries no meter, so only the config can say it sits
+        A ``fixed`` runtime reads no meter, so only the tree can say it sits
         behind the breaker too — and it has to be counted when it runs.
         """
         def _ac(controllable_id, strategy):
             projection = {"strategy": strategy, "hourly_energy_kwh": 1.5}
             return {
                 "kind": "climate",
+                "schedulable": True,
                 "id": controllable_id,
                 "name": controllable_id,
                 "controls": {"climate": {"entity_id": f"climate.{controllable_id}"}},
-                "consumption": {
-                    "energy_entity_id": "sensor.jistic_klimatizace_energy",
-                    "projection": projection,
-                },
+                "consumption": {"projection": projection},
             }
 
         coordinator = self._make_coordinator(
             section=None,
-            appliances=[_ac("ac_1", "history_average"), _ac("ac_2", "fixed")],
+            appliances=[
+                {
+                    "id": "breaker",
+                    "consumption": {
+                        "energy_entity_id": "sensor.jistic_klimatizace_energy"
+                    },
+                    "children": [
+                        _ac("ac_1", "history_average"),
+                        _ac("ac_2", "fixed"),
+                    ],
+                }
+            ],
         )
 
         request = coordinator._read_appliance_energy_training_request()
 
         self.assertEqual([a.id for a in request.appliances], ["ac_1"])
+        # The meterless child trains on its effective meter, its parent's.
+        self.assertEqual(
+            request.appliances[0].history_energy_entity_id,
+            "sensor.jistic_klimatizace_energy",
+        )
+        shared = request.shared_meters["sensor.jistic_klimatizace_energy"]
+        self.assertEqual(shared.metered_children, ())
         self.assertEqual(
             [
                 (m.controllable_id, m.entity_id, m.active_states)
-                for m in request.shared_meters["sensor.jistic_klimatizace_energy"]
+                for m in shared.members
             ],
             [
                 ("ac_1", "climate.ac_1", ("heat", "cool")),
@@ -1350,6 +1378,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             appliances=[
                 {
                     "kind": "generic",
+                    "schedulable": True,
                     "id": "pool-pump",
                     "name": "Pool Pump",
                     "controls": {"switch": {"entity_id": "switch.pool_pump"}},

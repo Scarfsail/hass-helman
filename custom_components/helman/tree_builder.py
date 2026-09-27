@@ -1,19 +1,37 @@
 from __future__ import annotations
 
-import re
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .visualization import read_visualization
-from .controllables.config import read_deferrable_consumers
+from .controllables.config import (
+    Device,
+    is_schedulable,
+    iter_devices,
+    own_meter,
+    peek_controllable_id,
+    peek_controllable_kind,
+    read_carved_meters,
+    read_shared_meters,
+    share_sensor_slug,
+    resolve_device_icon,
+    resolve_device_name,
+    running_signal,
+)
+from .controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .power_polarity import consumer_value_type, source_value_type
+
+
+def share_power_entity_id(device_id: str) -> str:
+    """The Helman sensor publishing a meterless child's share of its parent's power."""
+    return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
+
 
 @dataclass
 class DeviceNodeDTO:
@@ -38,17 +56,24 @@ class DeviceNodeDTO:
     children: list["DeviceNodeDTO"] = field(default_factory=list)
     ratio_sensor_id: str | None = None
     source_type: str | None = None
-    # A house child whose energy statistic is a deferrable controllable, so the
-    # card can mark the load the optimizer is free to move in time. Every other
-    # node — sources, unmeasured remainders, virtual groups — is never deferrable.
+    # A house node whose load is carved out of the house baseline, so the card
+    # can mark the load the optimizer is free to move in time: a carved meter's
+    # node, its meterless children, or — when the carved meter also has metered
+    # children — its remainder instead of its node, since only the meter's own
+    # energy is carved. Sources and virtual groups are never deferrable.
     deferrable: bool = False
-    # The controllables this node's energy statistic belongs to, as the
-    # deferrable roster names them, so the card can look the node's schedule up.
-    # Several when the statistic is a meter shared by several devices — the node
-    # stays one, and its badge covers all of them. Empty for a deferrable entry
-    # that declares no controllable, and for every node that is not a deferrable
-    # house child at all.
+    # The schedulable device this node is, so the card can look its schedule
+    # up: a schedulable meter owner's id, or a meterless child's own. Empty for
+    # every other node.
     controllable_ids: list[str] = field(default_factory=list)
+    # The device's meter, for a metered house child; ``None`` for every other
+    # node. The node ``id`` happens to be the same entity (it keeps the
+    # unmeasured sensor ids stable), but readers of the meter read it here.
+    energy_entity_id: str | None = None
+    # A meterless child's share of its parent's own power: an estimate, not a
+    # reading, so the card marks it ``≈`` and the own-power subtraction never
+    # counts it.
+    is_estimated: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +100,8 @@ class DeviceNodeDTO:
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
             "controllableIds": self.controllable_ids,
+            "energyEntityId": self.energy_entity_id,
+            "isEstimated": self.is_estimated,
         }
 
 
@@ -98,11 +125,7 @@ class HelmanTreeBuilder:
         house_config = power_devices.get("house")
 
         ent_reg = er.async_get(self._hass)
-        dev_reg = dr.async_get(self._hass)
         lbl_reg = lr.async_get(self._hass)
-
-        manager = await energy_data.async_get_manager(self._hass)
-        prefs = manager.data
 
         # --- Sources ---
         sources: list[DeviceNodeDTO] = []
@@ -139,9 +162,14 @@ class HelmanTreeBuilder:
 
         if house_config and house_config.get("entities", {}).get("power"):
             house_children = self._build_house_children(
-                prefs, ent_reg, dev_reg, lbl_reg, house_config, device_label_text
-            ) if prefs else []
+                ent_reg, lbl_reg, device_label_text
+            )
             unmeasured_title = house_config.get("unmeasured_power_title", "Unmeasured power")
+            own_carved = {
+                carve["energy_entity_id"]
+                for carve in read_carved_meters(self._config)
+                if carve["metered_children"]
+            }
             house_node = DeviceNodeDTO(
                 id="house",
                 display_name="",
@@ -164,7 +192,7 @@ class HelmanTreeBuilder:
                 sort_children_by_power=True,
                 children=house_children,
             )
-            self._add_unmeasured_nodes(house_node, unmeasured_title)
+            self._add_unmeasured_nodes(house_node, unmeasured_title, own_carved)
             consumers.append(house_node)
 
         if battery_config and battery_config.get("entities", {}).get("power"):
@@ -266,30 +294,23 @@ class HelmanTreeBuilder:
 
     def _build_house_children(
         self,
-        prefs: dict,
         ent_reg: er.EntityRegistry,
-        dev_reg: dr.DeviceRegistry,
         lbl_reg: lr.LabelRegistry,
-        house_config: dict,
         device_label_text: dict,
     ) -> list[DeviceNodeDTO]:
-        power_sensor_label: str | None = house_config.get("power_sensor_label")
-        power_switch_label: str | None = house_config.get("power_switch_label")
-        unmeasured_title: str = house_config.get("unmeasured_power_title", "Unmeasured power")
+        """One node per device, nested as the ``devices`` tree nests them.
 
-        device_consumption = prefs.get("device_consumption", [])
-
-        # A house child's node id *is* its energy statistic, which is the same
-        # ``energy_entity_id`` the deferrable roster is keyed by — so the match
-        # needs no extra configuration and no second round-trip: the config is
-        # already in hand and parsing it is pure in-memory work.
-        deferrable_stats: dict[str, list[str]] = {
-            c["energy_entity_id"]: c["ids"]
-            for c in read_deferrable_consumers(self._config)
+        Everything is read from the device, never inferred: a selected entity
+        that is missing keeps its row, and the entity inspection reports it.
+        A meterless child is an estimated node under its parent, reading its
+        share sensor — for exactly the children ``read_shared_meters`` splits
+        the meter among, which is what the coordinator publishes shares for.
+        """
+        carved: dict[str, dict] = {
+            carve["energy_entity_id"]: carve for carve in read_carved_meters(self._config)
         }
-
-        ps_label_id = self._find_label_id(lbl_reg, power_sensor_label) if power_sensor_label else None
-        sw_label_id = self._find_label_id(lbl_reg, power_switch_label) if power_switch_label else None
+        shared = read_shared_meters(self._config)
+        cleaner_regex = self._visualization().get("power_sensor_name_cleaner_regex", "")
 
         # Pre-group entities by device_id for efficient lookup
         entities_by_device: dict[str, list] = {}
@@ -297,97 +318,61 @@ class HelmanTreeBuilder:
             if entity.device_id:
                 entities_by_device.setdefault(entity.device_id, []).append(entity)
 
-        device_map: dict[str, DeviceNodeDTO] = {}
+        def labels_for(entity_id: str | None) -> list[str]:
+            """Labels from every entity on ``entity_id``'s HA device."""
+            ent_entry = ent_reg.async_get(entity_id) if entity_id else None
+            if not ent_entry or not ent_entry.device_id:
+                return []
+            label_ids: set[str] = set()
+            for entity in entities_by_device.get(ent_entry.device_id, []):
+                label_ids.update(entity.labels)
+            return [
+                label_entry.name
+                for label_id in label_ids
+                if (label_entry := lbl_reg.async_get_label(label_id))
+            ]
 
-        for dc in device_consumption:
-            stat_entity_id = dc.get("stat_consumption") if isinstance(dc, dict) else dc.stat_consumption
-            if not stat_entity_id:
+        tree: list[DeviceNodeDTO] = []
+        nodes: dict[int, DeviceNodeDTO] = {}
+        for device, parent in iter_devices(self._config):
+            if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
                 continue
-
-            # stat_rate is the power sensor — use it directly when available
-            stat_rate = dc.get("stat_rate") if isinstance(dc, dict) else getattr(dc, "stat_rate", None)
-            power_sensor_id: str | None = stat_rate or None
-            switch_entity_id: str | None = None
-            labels: list[str] = []
-            label_badge_texts: list[str] = []
-
-            # Device lookup: needed for switch, labels, and power fallback
-            ent_entry = ent_reg.async_get(stat_entity_id)
-            if ent_entry and ent_entry.device_id:
-                device = dev_reg.async_get(ent_entry.device_id)
-                if device:
-                    device_entities = entities_by_device.get(ent_entry.device_id, [])
-
-                    # Fallback: find power entity via device_class if stat_rate absent
-                    if not power_sensor_id:
-                        power_entities = [
-                            e for e in device_entities
-                            if (state := self._hass.states.get(e.entity_id))
-                            and state.attributes.get("device_class") == "power"
-                        ]
-                        power_entity = None
-                        if len(power_entities) > 1 and ps_label_id:
-                            power_entity = next(
-                                (e for e in power_entities if ps_label_id in e.labels), None
-                            )
-                        if not power_entity and power_entities:
-                            power_entity = power_entities[0]
-                        if power_entity:
-                            power_sensor_id = power_entity.entity_id
-
-                    # Find switch entity
-                    switch_entities = [e for e in device_entities if e.entity_id.startswith("switch.")]
-                    switch_entity = None
-                    if switch_entities and sw_label_id:
-                        switch_entity = next(
-                            (e for e in switch_entities if sw_label_id in e.labels), None
+            parent_node = nodes.get(id(parent)) if parent is not None else None
+            meter = own_meter(device)
+            if meter is None:
+                if parent_node is not None:
+                    share_node = self._make_share_node(
+                        device, parent_node, shared, carved, cleaner_regex
+                    )
+                    if share_node is not None:
+                        # Its HA device is the running signal's: an AC's
+                        # climate entity, a plug's switch.
+                        share_node.labels = labels_for(share_node.switch_entity_id)
+                        share_node.label_badge_texts = self._apply_label_badge_texts(
+                            share_node.labels, device_label_text
                         )
-                    if not switch_entity and switch_entities:
-                        dev_name = device.name_by_user or device.name or ""
-                        switch_entity = next(
-                            (
-                                e for e in switch_entities
-                                if (s := self._hass.states.get(e.entity_id))
-                                and s.attributes.get("friendly_name") == dev_name
-                            ),
-                            None,
-                        )
-                    switch_entity_id = switch_entity.entity_id if switch_entity else None
-
-                    # Collect labels from all entities on this device
-                    label_ids: set[str] = set()
-                    for entity in device_entities:
-                        label_ids.update(entity.labels)
-                    for label_id in label_ids:
-                        label_entry = lbl_reg.async_get_label(label_id)
-                        if label_entry:
-                            labels.append(label_entry.name)
-                    label_badge_texts = self._apply_label_badge_texts(labels, device_label_text)
-
-            if not power_sensor_id:
+                        parent_node.children.append(share_node)
                 continue
+            power_sensor_id = _consumption_entity(device, "power_entity_id")
+            icon = resolve_device_icon(device, entity_icon=self._entity_icon)
 
-            # Display name from power sensor state
-            power_state = self._hass.states.get(power_sensor_id)
-            raw_name = (
-                power_state.attributes.get("friendly_name") or power_sensor_id
-                if power_state
-                else power_sensor_id
-            )
-            display_name = self._clean_name(raw_name)
-            icon = power_state.attributes.get("icon") if power_state else None
+            labels = labels_for(meter)
 
             node = DeviceNodeDTO(
-                id=stat_entity_id,
-                display_name=display_name,
+                id=meter,
+                display_name=resolve_device_name(
+                    device,
+                    friendly_name=self._friendly_name,
+                    cleaner_regex=cleaner_regex,
+                ),
                 power_sensor_id=power_sensor_id,
-                switch_entity_id=switch_entity_id,
+                switch_entity_id=_switch_entity(device),
                 is_source=False,
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type="default",
                 labels=labels,
-                label_badge_texts=label_badge_texts,
+                label_badge_texts=self._apply_label_badge_texts(labels, device_label_text),
                 source_config=None,
                 icon=icon,
                 compact=False,
@@ -396,30 +381,96 @@ class HelmanTreeBuilder:
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
-                deferrable=stat_entity_id in deferrable_stats,
-                controllable_ids=list(deferrable_stats.get(stat_entity_id, ())),
+                # A carved meter with metered children carves only its own
+                # energy, which its remainder shows, not this aggregate.
+                deferrable=meter in carved and not carved[meter]["metered_children"],
+                controllable_ids=(
+                    list(carved[meter]["ids"])
+                    if meter in carved and is_schedulable(device)
+                    else []
+                ),
+                energy_entity_id=meter,
             )
-            device_map[stat_entity_id] = node
-
-        # Assemble tree (parent-child from included_in_stat)
-        tree: list[DeviceNodeDTO] = []
-        for dc in device_consumption:
-            stat_entity_id = dc.get("stat_consumption") if isinstance(dc, dict) else dc.stat_consumption
-            node = device_map.get(stat_entity_id)
-            if not node:
-                continue
-            included_in = dc.get("included_in_stat") if isinstance(dc, dict) else getattr(dc, "included_in_stat", None)
-            if included_in and included_in in device_map:
-                device_map[included_in].children.append(node)
-            else:
-                tree.append(node)
+            nodes[id(device)] = node
+            (parent_node.children if parent_node is not None else tree).append(node)
 
         return tree
 
-    def _add_unmeasured_nodes(self, node: DeviceNodeDTO, unmeasured_title: str) -> None:
+    def _make_share_node(
+        self,
+        device: Device,
+        parent_node: DeviceNodeDTO,
+        shared: dict[str, dict],
+        carved: dict[str, dict],
+        cleaner_regex: str,
+    ) -> DeviceNodeDTO | None:
+        """A meterless child's row: its share of the parent's own power.
+
+        ``None`` for a child the meter is not split among (no id, no running
+        signal — validation reports both).
+        """
+        parent_meter = parent_node.energy_entity_id
+        device_id = peek_controllable_id(device)
+        members = shared.get(parent_meter, {}).get("members", ())
+        if device_id is None or device_id not in {member[0] for member in members}:
+            return None
+        return DeviceNodeDTO(
+            id=device_id,
+            display_name=resolve_device_name(
+                device,
+                friendly_name=self._friendly_name,
+                cleaner_regex=cleaner_regex,
+            ),
+            power_sensor_id=share_power_entity_id(device_id),
+            # The running signal is the control the row offers: a switch, or
+            # the climate entity of an air conditioner.
+            switch_entity_id=running_signal(device)[0],
+            is_source=False,
+            is_unmeasured=False,
+            is_virtual=False,
+            value_type="default",
+            labels=[],
+            label_badge_texts=[],
+            source_config=None,
+            icon=resolve_device_icon(device, entity_icon=self._entity_icon),
+            compact=False,
+            show_additional_info=False,
+            children_full_width=True,
+            hide_children=False,
+            hide_children_indicator=False,
+            sort_children_by_power=False,
+            # The carve covers the meter's own energy, which these children split.
+            deferrable=parent_meter in carved,
+            controllable_ids=[device_id] if is_schedulable(device) else [],
+            is_estimated=True,
+        )
+
+    def _friendly_name(self, entity_id: str) -> str | None:
+        state = self._hass.states.get(entity_id)
+        return state.attributes.get("friendly_name") if state else None
+
+    def _entity_icon(self, entity_id: str) -> str | None:
+        state = self._hass.states.get(entity_id)
+        return state.attributes.get("icon") if state else None
+
+    def _add_unmeasured_nodes(
+        self,
+        node: DeviceNodeDTO,
+        unmeasured_title: str,
+        own_carved: Collection[str] = frozenset(),
+    ) -> None:
+        """Add a remainder under every measured node with children.
+
+        ``own_carved`` are the carved meters with metered children: only their
+        own energy is carved, and their remainder is where it shows, so it is
+        the remainder the card marks deferrable.
+        """
         if not node.children:
             return
-        if not node.is_virtual:
+        # A remainder is the parent's power minus its children's: a metered
+        # device without a power sensor (an energy-only Energy row) has none,
+        # but its children may still have remainders of their own.
+        if not node.is_virtual and node.power_sensor_id:
             slug = node.id.replace(".", "_")
             # The tree node's own ``id`` keeps the historical dot-to-underscore
             # slug -- it is only a frontend list key. ``power_sensor_id`` is the
@@ -446,24 +497,11 @@ class HelmanTreeBuilder:
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
+                deferrable=node.energy_entity_id in own_carved,
             )
             node.children.append(unmeasured)
         for child in node.children:
-            self._add_unmeasured_nodes(child, unmeasured_title)
-
-    def _find_label_id(self, lbl_reg: lr.LabelRegistry, label_name: str) -> str | None:
-        """Find a label ID by its display name."""
-        label = lbl_reg.async_get_label_by_name(label_name)
-        return label.label_id if label else None
-
-    def _clean_name(self, name: str) -> str:
-        pattern = self._visualization().get("power_sensor_name_cleaner_regex", "")
-        if pattern:
-            try:
-                return re.sub(pattern, "", name).strip()
-            except re.error:
-                pass
-        return name
+            self._add_unmeasured_nodes(child, unmeasured_title, own_carved)
 
     def _apply_label_badge_texts(self, labels: list[str], device_label_text: dict) -> list[str]:
         result = []
@@ -472,3 +510,22 @@ class HelmanTreeBuilder:
                 if label_name in labels:
                     result.append(badge_text)
         return result
+
+
+def _consumption_entity(device: Device, key: str) -> str | None:
+    consumption = device.get("consumption")
+    value = consumption.get(key) if isinstance(consumption, Mapping) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _switch_entity(device: Device) -> str | None:
+    """The switch the card offers: ``controls.switch``, else ``controls.charge``."""
+    controls = device.get("controls")
+    if not isinstance(controls, Mapping):
+        return None
+    for control_key in ("switch", "charge"):
+        control = controls.get(control_key)
+        entity_id = control.get("entity_id") if isinstance(control, Mapping) else None
+        if isinstance(entity_id, str) and entity_id.strip():
+            return entity_id.strip()
+    return None

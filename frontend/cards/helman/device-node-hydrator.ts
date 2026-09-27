@@ -6,6 +6,7 @@ export function hydrateNode(dto: DeviceNodeDTO, historyBuckets: number): DeviceN
     node.isSource = dto.isSource;
     node.sourceType = dto.sourceType;
     node.isUnmeasured = dto.isUnmeasured;
+    node.isEstimated = dto.isEstimated;
     node.deferrable = dto.deferrable;
     node.controllableIds = dto.controllableIds;
     node.valueType = dto.valueType;

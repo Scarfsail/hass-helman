@@ -53,6 +53,7 @@ const SCHEMA = {
 
 const controllable = (id: string, name: string) => ({
     kind: "generic",
+    schedulable: true,
     id,
     name,
     controls: { switch: { entity_id: `switch.${id}` } },
@@ -64,7 +65,7 @@ const controllable = (id: string, name: string) => ({
 
 const CONFIG = {
     config_version: 7,
-    controllables: [controllable("boiler", "Boiler"), controllable("pump", "Pump")],
+    devices: [controllable("boiler", "Boiler"), controllable("pump", "Pump")],
     automation: {
         enabled: true,
         appliance_optimizers: [
@@ -90,7 +91,7 @@ const CONFIG = {
 };
 
 interface DraftDocument {
-    controllables: { id: string }[];
+    devices: { id: string }[];
     automation: {
         appliance_optimizers: {
             id: string;
@@ -147,7 +148,7 @@ async function mountEditor(page: Page): Promise<void> {
 async function openTab(page: Page, label: string): Promise<void> {
     await page
         .locator("helman-config-editor-panel")
-        .getByRole("button", { name: label })
+        .getByRole("button", { name: label, exact: true })
         .click();
 }
 
@@ -206,16 +207,16 @@ async function openFirstOptimizer(page: Page): Promise<void> {
 }
 
 const controllableIds = (page: Page) =>
-    page.evaluate(() => window.__editorConfig().controllables.map((entry) => entry.id));
+    page.evaluate(() => window.__editorConfig().devices.map((entry) => entry.id));
 
 const optimizerIds = (page: Page) =>
     page.evaluate(() =>
         window.__editorConfig().automation.appliance_optimizers.map((entry) => entry.id),
     );
 
-test("the controllables list reorders from its own ha-sortable", async ({ page }) => {
+test("the devices list reorders from its own ha-sortable", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Controllables");
+    await openTab(page, "Devices");
 
     await moveItem(page, "list-stack", 0, 1);
 
@@ -275,7 +276,7 @@ test("a condition group move stays inside its own card", async ({ page }) => {
 
 test("removing an entry asks first, and cancelling keeps it", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Controllables");
+    await openTab(page, "Devices");
 
     let accept = false;
     page.on("dialog", (dialog) => void (accept ? dialog.accept() : dialog.dismiss()));
@@ -293,17 +294,17 @@ test("removing an entry asks first, and cancelling keeps it", async ({ page }) =
     await expect.poll(() => controllableIds(page)).toEqual(["pump"]);
 });
 
-test("moving a controllable edited as YAML returns it to visual mode", async ({ page }) => {
+test("moving a device edited as YAML returns it to visual mode", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Controllables");
+    await openTab(page, "Devices");
 
     const panel = page.locator("helman-config-editor-panel");
     const firstCard = panel.locator(".list-card").first();
     await firstCard.locator(".mode-toggle button", { hasText: "YAML" }).click();
     await expect(firstCard).toHaveClass(/scope-yaml/);
 
-    // The per-card YAML state is keyed by list index, so a move would leave it
-    // describing a different card. One rule: any move clears all of it.
+    // The per-card YAML state is keyed by the device's path, so a move would
+    // leave it describing a different card. One rule: any move clears all of it.
     await moveItem(page, "list-stack", 0, 1);
 
     await expect.poll(() => controllableIds(page)).toEqual(["pump", "boiler"]);

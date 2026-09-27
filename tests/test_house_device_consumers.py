@@ -34,6 +34,7 @@ def _tree(children):
 def _node(node_id, **overrides):
     node = {
         "id": node_id,
+        "energyEntityId": node_id,
         "displayName": node_id,
         "switchEntityId": None,
         "isUnmeasured": False,
@@ -66,8 +67,23 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                     "label": "sensor.dishwasher_energy",
                     "switch_entity_id": "switch.dishwasher",
                     "power_entity_id": "sensor.dishwasher_power",
+                    "metered_children": [],
                 }
             ],
+        )
+
+    def test_the_meter_is_read_from_energy_entity_id_not_the_node_id(self):
+        # The node id is only the card's list key; the meter is its own field.
+        tree = _tree(
+            [
+                _node("row-key", energyEntityId="sensor.dishwasher_energy"),
+                _node("sensor.no_meter_energy", energyEntityId=None),
+            ]
+        )
+
+        self.assertEqual(
+            [c["energy_entity_id"] for c in extract(tree)],
+            ["sensor.dishwasher_energy"],
         )
 
     def test_no_power_sensor_on_the_card_means_none_here(self):
@@ -152,6 +168,35 @@ class TestHouseDeviceConsumers(unittest.TestCase):
     def test_malformed_trees_yield_nothing(self):
         for tree in (None, {}, {"consumers": None}, {"consumers": []}, "nonsense"):
             self.assertEqual(extract(tree), [], tree)
+
+    def test_carved_meters_beneath_a_row_are_its_metered_children(self):
+        # A schedulable washer under a passive circuit is a breakdown row of its
+        # own, so the circuit's row must leave it out. Only the topmost carved
+        # meter counts: the one beneath it is already inside its row.
+        tree = _tree(
+            [
+                _node(
+                    "sensor.circuit_energy",
+                    children=[
+                        _node("sensor.lamp_energy"),
+                        _node(
+                            "sensor.room_energy",
+                            children=[
+                                _node(
+                                    "sensor.washer_energy",
+                                    children=[_node("sensor.inner_energy")],
+                                )
+                            ],
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        result = extract(tree, {"sensor.washer_energy", "sensor.inner_energy"})
+
+        self.assertEqual(result[0]["metered_children"], ["sensor.washer_energy"])
+        self.assertEqual(extract(tree)[0]["metered_children"], [])
 
 
 if __name__ == "__main__":

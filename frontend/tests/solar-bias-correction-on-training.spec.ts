@@ -25,7 +25,7 @@ const CONFIG = {
             },
         },
     },
-    controllables: [],
+    devices: [],
     training: {
         solar_bias: {
             min_history_days: 10,

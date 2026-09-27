@@ -76,7 +76,8 @@ def _make_coordinator(battery_power: str, polarity: str | None):
     c._production_total_sensor = None
     c._unmeasured_sensors = {}
     c._cached_tree = TREE
-    c._compute_all_unmeasured_powers = lambda: {}
+    c._share_sensors = {}
+    c._compute_derived_powers = lambda: ({}, {})
     c._compute_consumption_total = lambda: 1000.0
     c._compute_production_total = lambda: 1000.0
 

@@ -407,7 +407,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // served to the editor as `controllableKinds` — so the picker cannot
         // offer a target config validation would then reject. A `charge_hold`
         // drives the inverter and nothing else, so the boiler sitting right
-        // beside it in the same `controllables` list must not be on offer.
+        // beside it in the same `devices` list must not be on offer.
         await mountPanel(page, {
             payload: {
                 ...PAYLOAD,
@@ -434,9 +434,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                controllables: [
+                devices: [
                     { kind: "inverter", id: "inverter", name: "Inverter" },
-                    { kind: "generic", id: "boiler", name: "Boiler" },
+                    { kind: "generic", schedulable: true, id: "boiler", name: "Boiler" },
                 ],
             },
         });
@@ -456,9 +456,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
     const mountDependencyPanel = async (
         page: import("@playwright/test").Page,
         {
-            controllables,
+            devices,
             requires,
-        }: { controllables: unknown[]; requires: string },
+        }: { devices: unknown[]; requires: string },
     ) =>
         mountPanel(page, {
             payload: {
@@ -492,7 +492,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                controllables,
+                devices,
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -520,9 +520,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // does not need, next to an option that selects fine.
         await mountDependencyPanel(page, {
             requires: "filtration",
-            controllables: [
-                { kind: "generic", id: "heatpump", name: "Heat pump" },
-                { kind: "climate", id: "filtration", name: "Filtration" },
+            devices: [
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                { kind: "climate", schedulable: true, id: "filtration", name: "Filtration" },
             ],
         });
         await openDialog(page);
@@ -541,9 +541,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // validation is about to reject.
         await mountDependencyPanel(page, {
             requires: "heatpump",
-            controllables: [
-                { kind: "generic", id: "heatpump", name: "Heat pump" },
-                { kind: "generic", id: "filtration", name: "Filtration" },
+            devices: [
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
             ],
         });
         await openDialog(page);
@@ -598,10 +598,10 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                controllables: [
+                devices: [
                     { kind: "inverter", id: "inverter", name: "Inverter" },
-                    { kind: "generic", id: "heatpump", name: "Heat pump" },
-                    { kind: "generic", id: "filtration", name: "Filtration" },
+                    { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                    { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
                 ],
                 automation: {
                     enabled: true,
@@ -632,9 +632,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         page: import("@playwright/test").Page,
         {
             members,
-            controllables,
+            devices,
             requires = null,
-        }: { members: unknown[]; controllables: unknown[]; requires?: string | null },
+        }: { members: unknown[]; devices: unknown[]; requires?: string | null },
     ) =>
         mountPanel(page, {
             payload: {
@@ -664,7 +664,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                controllables,
+                devices,
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -680,9 +680,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         });
 
     const GROUP_CONTROLLABLES = [
-        { kind: "generic", id: "heatpump", name: "Heat pump" },
-        { kind: "generic", id: "filtration", name: "Filtration" },
-        { kind: "generic", id: "sweeper", name: "Sweeper" },
+        { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+        { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
+        { kind: "generic", schedulable: true, id: "sweeper", name: "Sweeper" },
     ];
 
     const memberRows = (page: import("@playwright/test").Page) =>
@@ -693,7 +693,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // first -- so the editor says so, numbers the rows, and reorders in place.
         await mountGroupPanel(page, {
             members: [{ controllable_id: "heatpump" }, { controllable_id: "filtration" }],
-            controllables: GROUP_CONTROLLABLES,
+            devices: GROUP_CONTROLLABLES,
         });
         await openDialog(page);
 
@@ -742,11 +742,39 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         });
     });
 
+    test("a member can be a schedulable child, never a passive device", async ({ page }) => {
+        // The picker walks the whole `devices` tree and keeps what Helman may
+        // schedule -- the same rule validation applies to a target.
+        await mountGroupPanel(page, {
+            members: [{ controllable_id: "heatpump" }],
+            devices: [
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                { kind: "generic", id: "fridge", name: "Fridge" },
+                {
+                    id: "breaker",
+                    consumption: { energy_entity_id: "sensor.breaker_energy" },
+                    children: [
+                        { kind: "generic", schedulable: true, id: "sweeper", name: "Sweeper" },
+                    ],
+                },
+            ],
+        });
+        await openDialog(page);
+
+        const values = await memberRows(page)
+            .first()
+            .locator("select.controllable-target-picker option")
+            .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+        expect(values).toEqual(expect.arrayContaining(["heatpump", "sweeper"]));
+        expect(values).not.toContain("fridge");
+        expect(values).not.toContain("breaker");
+    });
+
     test("the last member cannot be removed", async ({ page }) => {
         // An empty group is unsavable, so the UI must not be able to reach it.
         await mountGroupPanel(page, {
             members: [{ controllable_id: "heatpump" }],
-            controllables: GROUP_CONTROLLABLES,
+            devices: GROUP_CONTROLLABLES,
         });
         await openDialog(page);
 
@@ -760,9 +788,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                 { controllable_id: "heatpump" },
                 { controllable_id: "living", climate_mode: "cool" },
             ],
-            controllables: [
-                { kind: "generic", id: "heatpump", name: "Heat pump" },
-                { kind: "climate", id: "living", name: "Living room" },
+            devices: [
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                { kind: "climate", schedulable: true, id: "living", name: "Living room" },
             ],
         });
         await openDialog(page);
@@ -781,7 +809,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // provider -- not just the first.
         await mountGroupPanel(page, {
             members: [{ controllable_id: "heatpump" }, { controllable_id: "filtration" }],
-            controllables: GROUP_CONTROLLABLES,
+            devices: GROUP_CONTROLLABLES,
             requires: "sweeper",
         });
         await openDialog(page);

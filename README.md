@@ -48,9 +48,9 @@ and surface custom label badges per device.
 
 - Live power and per-bucket history bars (configurable buckets and duration)
 - Sources vs Consumers layout with animated flow arrows scaled by max power
-- House device tree built from Energy device consumption prefs (with "Unmeasured power")
+- House device tree built from `devices` (with "Unmeasured power"); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that
 - Optional house consumption forecast in the node detail dialogs
-- Entity disambiguation via HA Labels for power sensor and power switch selection
+- Entity disambiguation via HA Labels for power sensor and power switch suggestions
 - Group devices by label categories (e.g., Location, Type) with emojis/text
 - Optional aggregate info for Solar (today + forecast), Grid (import/export), and Battery
   (charge/empty ETA)
@@ -104,9 +104,9 @@ build the consumer tree around the house.
 Common optional fields (house tree disambiguation):
 - `source_name` / `consumption_name`: display name overrides.
 - `power_sensor_label` / `power_switch_label`: HA Label names used to disambiguate the power sensor /
-  switch entity when a device exposes multiple. Only applied when building the house tree from Energy
-  preferences — not the explicitly configured source tiles (grid/solar/battery). Label names must
-  match HA Labels exactly.
+  switch entity when a device exposes multiple. They rank the entities suggested for a device in
+  `devices`; the card itself reads only what `devices` configures. Label names must match HA Labels
+  exactly.
 
 - `power_devices.house`: `unmeasured_power_title`; `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
@@ -167,25 +167,30 @@ training:
   `min_history_days`. This is the main driver of the nightly training cost — see
   [Scheduled work](#scheduled-work).
 
-**Deferrable consumers** — the loads subtracted from the house total to leave the baseline
-(`house total - sum(deferrables)`) — are not listed here. They are read off `controllables`: a
-controllable is a device whose consumption can be deferred, so each one that names its energy meter
-counts as one, unless it opts out.
+**Deferrable consumers** — the loads subtracted from the house total to leave the baseline (`house total - sum(deferrables)`) — are not listed here. They are derived from `devices`: a meter's own energy (its reading minus its sub-metered children's) is carved out of the baseline exactly when all demand behind it is schedulable — the device owning it is `schedulable: true`, or every child drawing from it without a meter of its own is.
 
 ```yaml
-controllables:
+devices:
   - id: ev
     kind: ev_charger
     name: EV Charging
+    schedulable: true
     controls: { ... }
     consumption:
       energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
-      deferrable: true                                    # optional; true is the default
+  - id: jistic_klimatizace_energy                         # a passive breaker meter...
+    consumption:
+      energy_entity_id: sensor.jistic_klimatizace_energy
+      power_entity_id: sensor.jistic_klimatizace_power
+    children:                                             # ...the devices drawing from it
+      - id: klima-obyvak
+        kind: climate
+        schedulable: true
+        controls: { climate: { entity_id: climate.obyvak } }
+        consumption: { projection: { ... } }
 ```
 
-Set `deferrable: false` for a device you meter for its own demand projection but want left inside
-the baseline. The inverter may not declare `consumption` at all — it moves energy rather than
-drawing it.
+A passive device (no `schedulable`) stays inside the baseline. The inverter may not declare `consumption` at all — it moves energy rather than drawing it.
 
 For how the house-load chain feeding `total_energy_entity_id` is built, see
 [Supporting entities](docs/supporting-entities.md#1-the-house-load-chain).
@@ -250,7 +255,7 @@ cost — useful if you are wondering what the integration is doing when you are 
 
 | # | Job | Runs on a timer | Also triggered by | Cost |
 |---|---|---|---|---|
-| 1 | **Power tick** | every `visualization.history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity/device registry updates, an Energy prefs change); a config save | Cheap |
+| 1 | **Power tick** | every `visualization.history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity registry updates); a config save | Cheap |
 | 2 | **Schedule executor reconcile** | every **30 s** | startup; any schedule write; execution enable/disable; restore-normal-state; a config save | Cheap |
 | 3 | **Pre-execution reality check** | inside #2, so in practice every **30 s** | — | Cheap |
 | 4 | **Forecast rebuild** | **:00, :15, :30, :45** | startup; a config save; solar-bias trained/status events; a completed house-consumption fit from #6 | Moderate |

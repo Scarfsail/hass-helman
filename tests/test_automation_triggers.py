@@ -99,6 +99,8 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
 
     recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
+
+    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
     recorder_slots_mod.get_local_current_slot_start = (
         lambda reference_time, *, interval_minutes: reference_time.replace(
             minute=(reference_time.minute // interval_minutes) * interval_minutes,

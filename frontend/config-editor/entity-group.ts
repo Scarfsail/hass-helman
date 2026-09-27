@@ -78,6 +78,11 @@ export interface EntityInspection {
      * comes from there rather than from the call site.
      */
     dependsOn?: PathSegment[][];
+    /**
+     * What an unset field resolves to, for a path that is a device's `name` or
+     * `icon` rather than an entity: the editor shows it as the placeholder.
+     */
+    placeholder?: string;
 }
 
 /** One row of the `helman/inspect_entities` answer. */

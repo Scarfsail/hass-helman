@@ -237,7 +237,7 @@ from custom_components.helman.websockets import (
 
 def _invalid_config() -> dict:
     return {
-        "controllables": [
+        "devices": [
             {
                 "kind": "inverter",
                 "id": "inverter",
@@ -653,15 +653,17 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
         config = {
-            "controllables": [
+            "devices": [
                 {
                     "kind": "generic",
+                    "schedulable": True,
                     "id": "dishwasher",
                     "name": "Dishwasher",
                     "controls": {
                         "switch": {"entity_id": "switch.dishwasher"},
                     },
                     "consumption": {
+                        "energy_entity_id": "sensor.dishwasher_energy",
                         "projection": {
                             "strategy": "fixed",
                             "hourly_energy_kwh": 1.2,
@@ -712,7 +714,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         retired = [error for error in errors if error["code"] == "retired_config_key"]
         self.assertEqual({error["path"] for error in retired}, {"appliances", "scheduler"})
         for error in retired:
-            self.assertIn("controllables", error["message"])
+            self.assertIn("devices", error["message"])
 
     async def test_save_config_reports_reload_failure_after_persisting_document(self) -> None:
         storage = FakeStorage()
