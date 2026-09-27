@@ -1323,6 +1323,8 @@ class ConfigValidationTests(unittest.TestCase):
             ),
             ("power_devices.house.power_sensor_label", "devices.power_sensor_label"),
             ("power_devices.house.power_switch_label", "devices.power_switch_label"),
+            ("energy_nodes.house.power_sensor_label", "devices.power_sensor_label"),
+            ("energy_nodes.house.power_switch_label", "devices.power_switch_label"),
         ):
             with self.subTest(old_path=old_path):
                 config = _valid_config()

@@ -66,13 +66,16 @@ _RELOCATED_VISUALIZATION_KEYS = (
 )
 
 #: Where config version 22 moved the device-level settings, old dotted path to
-#: new. The top-level regex is the v17-era spelling of the same key. Same
-#: reasoning as ``_RETIRED_CONFIG_KEYS``.
+#: new. The top-level regex is the v17-era spelling of the same key, and the
+#: house labels are refused under both the pre-v24 ``power_devices`` and the
+#: current ``energy_nodes`` spelling. Same reasoning as ``_RETIRED_CONFIG_KEYS``.
 _RELOCATED_DEVICE_KEYS = {
     "power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
     "visualization.power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
     "power_devices.house.power_sensor_label": "devices.power_sensor_label",
     "power_devices.house.power_switch_label": "devices.power_switch_label",
+    "energy_nodes.house.power_sensor_label": "devices.power_sensor_label",
+    "energy_nodes.house.power_switch_label": "devices.power_switch_label",
 }
 
 #: The keys the ``devices`` section object holds since config version 22.
