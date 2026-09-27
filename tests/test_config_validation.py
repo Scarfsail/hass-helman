@@ -1114,6 +1114,14 @@ class ConfigValidationTests(unittest.TestCase):
                 for issue in report.errors
             )
         )
+        # The guidance names the rule that replaced it, not the rejected key.
+        message = next(
+            issue.message
+            for issue in report.errors
+            if issue.path == "power_devices.house.forecast.deferrable_consumers"
+        )
+        self.assertIn("schedulable", message)
+        self.assertNotIn("consumption.deferrable", message)
 
     def test_the_retired_house_forecast_history_window_keys_are_reported(self) -> None:
         """min_history_days and training_window_days moved to training.house_consumption.

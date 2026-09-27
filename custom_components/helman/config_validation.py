@@ -488,9 +488,9 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
             path="power_devices.house.forecast.deferrable_consumers",
             code="retired_config_key",
             message=(
-                "'deferrable_consumers' is no longer a config key; a controllable "
-                "is a deferrable consumer when its 'consumption.energy_entity_id' "
-                "is set and 'consumption.deferrable' is not false"
+                "'deferrable_consumers' is no longer a config key; a device's "
+                "meter is carved out of the house baseline when the device is "
+                "'schedulable', or when all its meterless children are"
             ),
         )
 
