@@ -64,7 +64,7 @@ def test_candidates_rank_labels_and_device_names_without_discarding_ambiguity():
             return_value=devices,
         ),
     ):
-        result = suggest_entities(hass, "sensor.energy", config)
+        result = suggest_entities(hass, ["sensor.energy"], config)
     assert len(result["switch"]) == 6
     assert [c["entityId"] for c in result["switch"][:2]] == [
         "switch.breaker_3",
@@ -90,7 +90,7 @@ def test_without_registry_device_there_is_no_inference():
             "custom_components.helman.controllables.suggestions.er.async_get",
             return_value=NS(async_get=lambda id: anchor),
         ):
-            assert suggest_entities(hass, "sensor.energy", {}) == {
+            assert suggest_entities(hass, ["sensor.energy"], {}) == {
                 "energy": [],
                 "power": [],
                 "switch": [],
@@ -122,6 +122,45 @@ def test_nullable_optional_sections_do_not_block_same_device_suggestions(config)
         ),
     ):
         result = suggest_entities(
-            NS(states=NS(get=lambda entity_id: None)), "sensor.energy", config
+            NS(states=NS(get=lambda entity_id: None)), ["sensor.energy"], config
         )
     assert result["energy"][0]["entityId"] == "sensor.energy"
+
+
+def test_an_anchor_without_an_ha_device_falls_through_to_the_next():
+    # A utility-meter helper has no HA device; the switch beside it does.
+    helper = entry("sensor.boiler_energy", device_id=None)
+    power = entry("sensor.shelly_power", "power", device_id="shelly")
+    switch = entry("switch.shelly", device_id="shelly")
+    by_id = {e.entity_id: e for e in (helper, power, switch)}
+    seen_devices = []
+
+    def entries_for_device(registry, device_id):
+        seen_devices.append(device_id)
+        return [power, switch]
+
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=by_id.get),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            side_effect=entries_for_device,
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda device_id: None),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)),
+            ["sensor.boiler_energy", "sensor.missing", "switch.shelly"],
+            {},
+        )
+    assert seen_devices == ["shelly"]
+    assert result["power"][0]["entityId"] == "sensor.shelly_power"

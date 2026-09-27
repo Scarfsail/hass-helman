@@ -1156,11 +1156,12 @@ test("Apply suggestions is disabled until the device has an entity to anchor on"
   await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
-test("an EV charger's charge switch anchors its suggestions, never its mode helper", async ({
+test("suggestions are anchored on every entity the device names, most telling first", async ({
   page,
 }) => {
-  // The mode select is listed first and is a helper with no HA device, the
-  // common real setup; the charge switch sits on the wallbox with its meters.
+  // The mode helper is listed first in the config but comes last: the backend
+  // uses the first anchor with an HA device, so the charge switch is tried
+  // before it, and entity ids are trimmed for the registry lookup.
   const ev = {
     id: "garage-ev",
     kind: "ev_charger",
@@ -1180,28 +1181,53 @@ test("an EV charger's charge switch anchors its suggestions, never its mode help
     switch: [],
   });
   await page.locator(".apply-suggestions").click();
-  // Trimmed, so the registry finds the entity's HA device.
   await expect
-    .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_id))
-    .toBe("switch.ev_charge");
+    .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_ids))
+    .toEqual(["switch.ev_charge", "input_select.ev_mode"]);
   await expect
     .poll(async () => (await config(page))[0].consumption)
     .toEqual({ energy_entity_id: "sensor.ev_energy", power_entity_id: "sensor.ev_power" });
 });
 
-test("a charger with only its mode select has nothing to anchor on", async ({ page }) => {
+test("a device's meter and climate control lead its anchors", async ({ page }) => {
+  await mountEditor(page, [
+    {
+      id: "ac",
+      kind: "climate",
+      consumption: { energy_entity_id: "sensor.ac_energy" },
+      controls: { climate: { entity_id: "climate.ac" } },
+    },
+  ]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("ac")!.open = true;
+  });
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [],
+    power: [],
+    switch: [],
+  });
+  await page.locator(".apply-suggestions").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_ids))
+    .toEqual(["sensor.ac_energy", "climate.ac"]);
+});
+
+test("a charger with only its mode select can still ask for suggestions", async ({ page }) => {
+  // The select may sit on the wallbox; if it is a helper, the backend answers
+  // with nothing rather than guessing.
   await mountEditor(page, [
     {
       id: "garage-ev",
       kind: "ev_charger",
-      controls: { use_mode: { entity_id: "select.evcc_mode" } },
+      controls: { use_mode: { entity_id: "select.wallbox_mode" } },
     },
   ]);
   await openTab(page, "Devices");
   await page.evaluate(() => {
     window.__card("garage-ev")!.open = true;
   });
-  await expect(page.locator(".apply-suggestions")).toBeDisabled();
+  await expect(page.locator(".apply-suggestions")).toBeEnabled();
 });
 
 test("a failed suggestion request shows a readable error that a retry clears", async ({

@@ -347,7 +347,7 @@ def ws_get_optimizer_schema(
 
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/suggest_device_entities",
-    vol.Required("anchor_entity_id"): str,
+    vol.Required("anchor_entity_ids"): [str],
     vol.Required("config"): dict,
 })
 @callback
@@ -359,7 +359,7 @@ def ws_suggest_device_entities(
     from .controllables.suggestions import suggest_entities
 
     connection.send_result(
-        msg["id"], suggest_entities(hass, msg["anchor_entity_id"], msg["config"])
+        msg["id"], suggest_entities(hass, msg["anchor_entity_ids"], msg["config"])
     )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -13,14 +14,28 @@ from homeassistant.helpers import (
 
 
 def suggest_entities(
-    hass: HomeAssistant, anchor_entity_id: str, config: dict[str, Any]
+    hass: HomeAssistant, anchor_entity_ids: Sequence[str], config: dict[str, Any]
 ) -> dict[str, list[dict[str, Any]]]:
+    """Ranked candidates from the HA device of the first anchor that has one.
+
+    The editor sends every entity the device names, most telling first; a
+    helper (a utility meter, an ``input_select``) has no HA device, so the
+    next anchor is tried rather than returning nothing.
+    """
     registry = er.async_get(hass)
-    anchor = registry.async_get(anchor_entity_id)
+    anchor = next(
+        (
+            entry
+            for entity_id in anchor_entity_ids
+            if (entry := registry.async_get(entity_id)) is not None
+            and entry.device_id is not None
+        ),
+        None,
+    )
     result: dict[str, list[dict[str, Any]]] = {
         field: [] for field in ("energy", "power", "switch")
     }
-    if anchor is None or anchor.device_id is None:
+    if anchor is None:
         return result
     labels = lr.async_get(hass)
     power_devices = config.get("power_devices") or {}

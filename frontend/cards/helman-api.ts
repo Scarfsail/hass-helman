@@ -761,12 +761,13 @@ export interface EnergyImportPreview {
 }
 export function fetchDeviceSuggestions(
   hass: HomeAssistantLike,
-  anchorEntityId: string,
+  /** Tried in order; the first with an HA device is used. */
+  anchorEntityIds: string[],
   config: object,
 ): Promise<DeviceSuggestions> {
   return hass.callWS({
     type: "helman/suggest_device_entities",
-    anchor_entity_id: anchorEntityId,
+    anchor_entity_ids: anchorEntityIds,
     config,
   });
 }

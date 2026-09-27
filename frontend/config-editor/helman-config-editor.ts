@@ -3638,36 +3638,40 @@ export class HelmanConfigEditorPanel
       : [...path, "consumption", `${field}_entity_id`];
   }
 
-  /** The entity whose HA device suggestions come from; empty when there is none yet. */
-  private _suggestionAnchor(device: JsonObject): string {
-    // Suggestions come from the anchor's HA device, so only the entities that
-    // sit on the device itself anchor: its meters and the control it switches
-    // by. A mode or gear select may be a helper with no HA device, or belong to
-    // another integration's device (evcc, the car), so it never anchors.
+  /**
+   * Every entity the device names, most telling first; empty when it names none.
+   *
+   * The backend takes suggestions from the first one with an HA device, so a
+   * helper (a utility meter, an `input_select`) never blocks them. The meters
+   * and the control the device switches by lead; other controls such as an EV
+   * charger's mode select come last, since they may belong to another
+   * integration's device.
+   */
+  private _suggestionAnchors(device: JsonObject): string[] {
     const controls = asJsonObject(device.controls) ?? {};
     const entity = (value: unknown) =>
       this._stringValue(asJsonObject(value)?.entity_id).trim();
-    return (
-      ownMeter(device) ||
-      this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim() ||
-      entity(controls.switch) ||
-      entity(controls.charge) ||
-      entity(controls.climate)
-    );
+    const anchors = [
+      ownMeter(device),
+      this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim(),
+      ...["switch", "charge", "climate"].map((key) => entity(controls[key])),
+      ...Object.values(controls).map(entity),
+    ].filter(Boolean);
+    return [...new Set(anchors)];
   }
 
   private async _applySuggestions(device: JsonObject): Promise<void> {
     if (!this.hass || !this._config) return;
     const id = this._stringValue(device.id);
-    const anchor = this._suggestionAnchor(device);
-    if (!anchor) return;
+    const anchors = this._suggestionAnchors(device);
+    if (!anchors.length) return;
     this._deviceActionMessage = "";
     const draft = this._config;
     const hass = this.hass;
     const request = (this._deviceSuggestionRequests[id] ?? 0) + 1;
     this._deviceSuggestionRequests[id] = request;
     try {
-      const suggestions = await fetchDeviceSuggestions(hass, anchor, draft);
+      const suggestions = await fetchDeviceSuggestions(hass, anchors, draft);
       if (this._config !== draft || request !== this._deviceSuggestionRequests[id])
         return;
       const current = iterDevices(draft).find(
@@ -3733,7 +3737,7 @@ export class HelmanConfigEditorPanel
       <button
         class="add-button apply-suggestions"
         type="button"
-        ?disabled=${!this._suggestionAnchor(device)}
+        ?disabled=${!this._suggestionAnchors(device).length}
         @click=${() => this._applySuggestions(device)}
       >
         ${this._t("editor.actions.apply_suggestions")}

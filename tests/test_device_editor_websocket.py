@@ -19,7 +19,7 @@ def test_non_admin_suggestions_never_read_registry():
         "custom_components.helman.controllables.suggestions.suggest_entities"
     ) as helper:
         ws_suggest_device_entities(
-            NS(), conn, {"id": 1, "anchor_entity_id": "sensor.energy", "config": {}}
+            NS(), conn, {"id": 1, "anchor_entity_ids": ["sensor.energy"], "config": {}}
         )
     helper.assert_not_called()
     conn.send_error.assert_called_once_with(1, "unauthorized", "Admin access required")
