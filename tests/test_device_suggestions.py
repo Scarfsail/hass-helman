@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace as NS
 from unittest.mock import patch
+import pytest
 from custom_components.helman.controllables.suggestions import suggest_entities
 
 
@@ -94,3 +95,33 @@ def test_without_registry_device_there_is_no_inference():
                 "power": [],
                 "switch": [],
             }
+
+
+@pytest.mark.parametrize(
+    "config", [{"power_devices": None}, {"power_devices": {"house": None}}]
+)
+def test_nullable_optional_sections_do_not_block_same_device_suggestions(config):
+    energy = entry("sensor.energy", "energy")
+    registry = NS(async_get=lambda entity_id: energy)
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            return_value=[energy],
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda device_id: None),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)), "sensor.energy", config
+        )
+    assert result["energy"][0]["entityId"] == "sensor.energy"

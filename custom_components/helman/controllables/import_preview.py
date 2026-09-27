@@ -14,7 +14,7 @@ def preview_energy_import(
     config: dict[str, Any], preferences: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     result = import_energy_preferences(
-        config.get("devices", []), preferences, manual=True
+        config.get("devices") or [], preferences, manual=True
     )
     proposed = {**config, "devices": result.devices}
     before = {

@@ -1,5 +1,4 @@
 """Manual Energy imports preserve identity and expose physical overlaps."""
-
 from copy import deepcopy
 from custom_components.helman.controllables.import_preview import preview_energy_import
 from custom_components.helman.config_validation import validate_config_document
@@ -14,6 +13,19 @@ def device(id, meter, **fields):
 
 def row(meter, parent=None, power=None):
     return {"stat_consumption": meter, "included_in_stat": parent, "stat_rate": power}
+
+
+def test_null_devices_section_imports_as_an_empty_draft():
+    config = {"devices": None}
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.passive")]}
+    )
+    assert result["validation"]["valid"], result["validation"]
+    assert result["devices"] == [
+        {"id": "passive", "consumption": {"energy_entity_id": "sensor.passive"}}
+    ]
+    assert len(result["additions"]) == 1
+    assert config == {"devices": None}
 
 
 def preview(devices, *rows):
