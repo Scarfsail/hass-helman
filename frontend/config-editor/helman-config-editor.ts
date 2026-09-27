@@ -4678,12 +4678,13 @@ export class HelmanConfigEditorPanel
     const device = asJsonObject(getValueAtPath(draft, path));
     if (!device || !isSchedulable(device) || deviceKind(device) === "ev_charger") return;
     const projectionPath = [...path, "consumption", "projection"];
-    // Only a device with no projection gets the whole seed; a configured one
-    // keeps its figures and at most gains the displayed default strategy.
-    if (getValueAtPath(draft, projectionPath) === undefined) {
-      setValueAtPath(draft, projectionPath, { ...SEEDED_PROJECTION });
-    } else if (getValueAtPath(draft, [...projectionPath, "strategy"]) === undefined) {
-      setValueAtPath(draft, [...projectionPath, "strategy"], SEEDED_PROJECTION.strategy);
+    // Configured fields stay; only missing ones are seeded. The backend needs
+    // `hourly_energy_kwh` for every strategy (a learner's fallback), so a
+    // partial projection gains it too.
+    for (const [key, value] of Object.entries(SEEDED_PROJECTION)) {
+      if (getValueAtPath(draft, [...projectionPath, key]) === undefined) {
+        setValueAtPath(draft, [...projectionPath, key], value);
+      }
     }
   }
 

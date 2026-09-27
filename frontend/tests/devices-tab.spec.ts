@@ -362,7 +362,7 @@ test("new scheduling uses the displayed fixed projection without changing the se
     });
 });
 
-test("scheduling keeps a configured projection's own figures", async ({ page }) => {
+test("scheduling keeps a configured projection's figures and seeds the required fallback", async ({ page }) => {
     const learner = {
         id: "boiler",
         consumption: {
@@ -374,9 +374,12 @@ test("scheduling keeps a configured projection's own figures", async ({ page }) 
     await openTab(page, "Devices");
     await setSchedulable(page, "boiler", true);
     await expect.poll(async () => (await config(page))[0].schedulable).toBe(true);
+    // The backend requires hourly_energy_kwh for every strategy, so it is
+    // seeded; the configured strategy and lookback stay as they were.
     expect((await config(page))[0].consumption.projection).toEqual({
         strategy: "history_average",
         lookback_days: 14,
+        hourly_energy_kwh: 1,
     });
 });
 
