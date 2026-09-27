@@ -38,7 +38,10 @@
       "add_controllable_target": "+ Spotřebič",
       "add_device": "Přidat zařízení",
       "add_child_device": "Přidat podřízené zařízení",
-      "cancel": "Zrušit"
+      "cancel": "Zrušit",
+      "apply_suggestions": "Použít návrhy",
+      "import_energy": "Importovat z panelu Energie",
+      "apply": "Použít"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -579,6 +582,21 @@
       "switch": "Spínač",
       "schedulable": "Plánovatelné",
       "issues": "Problémy: {count}"
+    },
+    "import": {
+      "preview": "Náhled importu Energie",
+      "draft_only": "Použití změní návrh. Uložení změny uloží.",
+      "add": "Přidat zařízení",
+      "power": "Doplnit výkon",
+      "move": "Přesunout zařízení s potomky",
+      "skipped": "Přeskočeno",
+      "no_changes": "Žádné změny k použití."
+    },
+    "suggestions": {
+      "energy": "Návrhy energie",
+      "power": "Návrhy výkonu",
+      "switch": "Návrhy spínače",
+      "choose": "Vyberte návrh"
     }
   },
   "common": {

@@ -1,3 +1,4 @@
+import type { HomeAssistantLike, JsonObject, ValidationReport } from "./shared/config/types";
 /**
  * Backend API types for the helman integration.
  *
@@ -718,4 +719,59 @@ export interface AutomationRunPayload {
     cleanup?: { reason: string; actionsStripped: number };
     failure?: { stage: string; message: string; unexpected: boolean };
     trace?: AutomationTraceDTO;
+}
+
+/** Explicit device suggestions preserve every candidate, including ambiguity. */
+export interface DeviceEntityCandidate {
+  entityId: string;
+  name: string;
+  reasons: string[];
+  rank: number;
+}
+export type DeviceSuggestions = Record<
+  "energy" | "power" | "switch",
+  DeviceEntityCandidate[]
+>;
+export interface EnergyImportPreview {
+  devices: JsonObject[];
+  additions: {
+    deviceId: string;
+    parentId: string | null;
+    energyEntityId: string;
+  }[];
+  powerEntities: { deviceId: string; entityId: string }[];
+  nestingChanges: {
+    deviceId: string;
+    fromParentId: string | null;
+    parentId: string | null;
+  }[];
+  skippedRows: {
+    energy_entity_id: string;
+    device_id: string | null;
+    reason: string;
+  }[];
+  warnings: {
+    energy_entity_id: string;
+    device_id: string | null;
+    reason: string;
+    message: string;
+  }[];
+  validation: ValidationReport;
+}
+export function fetchDeviceSuggestions(
+  hass: HomeAssistantLike,
+  anchorEntityId: string,
+  config: object,
+): Promise<DeviceSuggestions> {
+  return hass.callWS({
+    type: "helman/suggest_device_entities",
+    anchor_entity_id: anchorEntityId,
+    config,
+  });
+}
+export function fetchEnergyImportPreview(
+  hass: HomeAssistantLike,
+  config: object,
+): Promise<EnergyImportPreview> {
+  return hass.callWS({ type: "helman/preview_energy_import", config });
 }

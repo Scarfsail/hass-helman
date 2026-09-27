@@ -780,3 +780,292 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
         "Vehicles",
     ]);
 });
+
+const candidate = (entityId: string) => ({
+  entityId,
+  name: "Breaker switch",
+  reasons: ["Same Home Assistant device"],
+  rank: 1,
+});
+
+test("viewing ambiguous suggestions keeps the draft clean and preserves other choices", async ({ page }) => {
+    const device = { id: "breaker", controls: { switch: { entity_id: "switch.anchor" } } };
+    await mountEditor(page, [device]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => { window.__card("breaker")!.open = true; });
+    await deviceResponse(page, "helman/suggest_device_entities", {
+        energy: [candidate("sensor.energy_a"), candidate("sensor.energy_b")],
+        power: [candidate("sensor.power_a"), candidate("sensor.power_b")],
+        switch: [],
+    });
+    await page.locator(".apply-suggestions").click();
+    await expect(page.locator('select.suggestion-candidates[data-field="energy"]')).toBeVisible();
+    expect(await page.evaluate(() => (document.querySelector("helman-config-editor-panel") as any)._dirty)).toBe(false);
+    expect(await config(page)).toEqual([device]);
+    await page.locator('select.suggestion-candidates[data-field="energy"]').selectOption("sensor.energy_b");
+    await expect(page.locator('select.suggestion-candidates[data-field="power"]')).toBeVisible();
+    await page.locator('select.suggestion-candidates[data-field="power"]').selectOption("sensor.power_a");
+    expect((await config(page))[0].consumption).toEqual({ energy_entity_id: "sensor.energy_b", power_entity_id: "sensor.power_a" });
+});
+
+async function deviceResponse(
+  page: Page,
+  type: string,
+  response: unknown,
+  deferred = false,
+): Promise<void> {
+  await page.evaluate(
+    ({ type, response, deferred }) => {
+      const panel = document.querySelector("helman-config-editor-panel") as any;
+      const previous = panel.hass.callWS;
+      panel.hass.callWS = async (request: any) => {
+        if (request.type !== type) return previous(request);
+        (window as any).__deviceRequest = request;
+        if (deferred)
+          return new Promise((resolve) => {
+            (window as any).__resolveDeviceRequest = () => resolve(response);
+          });
+        return response;
+      };
+    },
+    { type, response, deferred },
+  );
+}
+
+function importResponse(
+  devices: unknown[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    devices,
+    additions: [
+      {
+        deviceId: "restored",
+        energyEntityId: "sensor.restored",
+        parentId: null,
+      },
+    ],
+    powerEntities: [],
+    nestingChanges: [],
+    skippedRows: [],
+    warnings: [],
+    validation: { valid: true, errors: [] },
+    ...overrides,
+  };
+}
+
+test("Apply suggestions fills empty singleton fields and exposes all six switches for selection", async ({
+  page,
+}) => {
+  const passive = {
+    id: "breaker",
+    consumption: { energy_entity_id: "sensor.energy" },
+  };
+  await mountEditor(page, [passive]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("breaker")!.open = true;
+  });
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [candidate("sensor.other")],
+    power: [candidate("sensor.power")],
+    switch: Array.from({ length: 6 }, (_, index) =>
+      candidate(`switch.breaker_${index}`),
+    ),
+  });
+  await page.locator(".apply-suggestions").click();
+  await expect
+    .poll(async () => (await config(page))[0].consumption.power_entity_id)
+    .toBe("sensor.power");
+  expect((await config(page))[0].consumption.energy_entity_id).toBe(
+    "sensor.energy",
+  );
+  expect((await config(page))[0].controls).toBeUndefined();
+  await expect(
+    page.locator('select.suggestion-candidates[data-field="switch"] option'),
+  ).toHaveCount(7);
+  await expect(
+    page.locator('select.suggestion-candidates[data-field="switch"]'),
+  ).toContainText("Same Home Assistant device");
+  await page
+    .locator('select.suggestion-candidates[data-field="switch"]')
+    .selectOption("switch.breaker_4");
+  expect((await config(page))[0].controls.switch.entity_id).toBe(
+    "switch.breaker_4",
+  );
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [],
+    power: [candidate("sensor.replace")],
+    switch: [candidate("switch.replace")],
+  });
+  await page.locator(".apply-suggestions").click();
+  await page.waitForTimeout(30);
+  expect((await config(page))[0].consumption.power_entity_id).toBe(
+    "sensor.power",
+  );
+  expect((await config(page))[0].controls.switch.entity_id).toBe(
+    "switch.breaker_4",
+  );
+});
+
+test("import preview cancel is inert and apply changes only the draft with moves and overlap warnings", async ({
+  page,
+}) => {
+  const parent = {
+    id: "parent",
+    consumption: { energy_entity_id: "sensor.parent" },
+  };
+  const child = {
+    id: "child",
+    consumption: { energy_entity_id: "sensor.child" },
+    children: [
+      {
+        id: "plug",
+        schedulable: true,
+        controls: { switch: { entity_id: "switch.plug" } },
+      },
+    ],
+  };
+  const restored = {
+    id: "restored",
+    consumption: { energy_entity_id: "sensor.restored" },
+  };
+  await mountEditor(page, [parent, child]);
+  await openTab(page, "Devices");
+  await deviceResponse(
+    page,
+    "helman/preview_energy_import",
+    importResponse([{ ...parent, children: [child] }, restored], {
+      nestingChanges: [
+        { deviceId: "child", fromParentId: null, parentId: "parent" },
+      ],
+      skippedRows: [
+        {
+          energy_entity_id: "external:stat",
+          reason: "external_statistic",
+          device_id: null,
+        },
+      ],
+      warnings: [
+        {
+          energy_entity_id: "sensor.pool_heater",
+          device_id: "climate-pool",
+          reason: "schedulable",
+          message:
+            "Both are counted independently. Restructure under a passive parent.",
+        },
+      ],
+    }),
+  );
+  await page.locator(".import-energy").click();
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "child → parent",
+  );
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "Both are counted independently",
+  );
+  await page.locator(".cancel-energy-import").click();
+  expect(await config(page)).toEqual([parent, child]);
+  await page.locator(".import-energy").click();
+  await page.locator(".apply-energy-import").click();
+  expect(await config(page)).toEqual([
+    { ...parent, children: [child] },
+    restored,
+  ]);
+  await expect(page.locator(".energy-import-preview")).toHaveCount(0);
+  await deviceResponse(
+    page,
+    "helman/preview_energy_import",
+    importResponse(await config(page), { additions: [] }),
+  );
+  await page.locator(".import-energy").click();
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "No changes to apply",
+  );
+});
+
+test("late suggestions and previews are discarded after the draft changes", async ({
+  page,
+}) => {
+  const device = {
+    id: "breaker",
+    consumption: { energy_entity_id: "sensor.energy" },
+  };
+  await mountEditor(page, [device]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("breaker")!.open = true;
+  });
+  await deviceResponse(
+    page,
+    "helman/suggest_device_entities",
+    { energy: [], power: [candidate("sensor.stale")], switch: [] },
+    true,
+  );
+  await page.locator(".apply-suggestions").click();
+  await page.waitForFunction(() => !!(window as any).__resolveDeviceRequest);
+  await page.evaluate(() => {
+    const panel = document.querySelector("helman-config-editor-panel") as any;
+    panel._applyMutation((draft: any) => {
+      draft.devices[0].name = "New draft name";
+    });
+    (window as any).__resolveDeviceRequest();
+  });
+  await page.waitForTimeout(30);
+  expect((await config(page))[0].consumption.power_entity_id).toBeUndefined();
+  await deviceResponse(
+    page,
+    "helman/preview_energy_import",
+    importResponse([]),
+    true,
+  );
+  await page.locator(".import-energy").click();
+  await page.evaluate(() => {
+    const panel = document.querySelector("helman-config-editor-panel") as any;
+    panel._applyMutation((draft: any) => {
+      draft.devices[0].name = "Still newer";
+    });
+    (window as any).__resolveDeviceRequest();
+  });
+  await page.waitForTimeout(30);
+  await expect(page.locator(".energy-import-preview")).toHaveCount(0);
+  expect((await config(page))[0].name).toBe("Still newer");
+});
+
+test("invalid import cannot be applied and empty state offers import", async ({
+  page,
+}) => {
+  await mountEditor(page, []);
+  await openTab(page, "Devices");
+  await expect(page.locator(".devices-empty")).toBeVisible();
+  await deviceResponse(
+    page,
+    "helman/preview_energy_import",
+    importResponse([], {
+      validation: {
+        valid: false,
+        errors: [{ path: "devices[0]", message: "Invalid draft" }],
+      },
+    }),
+  );
+  await page.locator(".import-energy").click();
+  await expect(page.locator(".apply-energy-import")).toBeDisabled();
+  expect(await config(page)).toEqual([]);
+});
+
+test("suggestions preserve a climate child's control and shared meter", async ({ page }) => {
+    await mountEditor(page, [BREAKER]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => {
+        window.__card("jistic_klimatizace_energy")!.open = true;
+        window.__card("klima_obyvak")!.open = true;
+    });
+    await deviceResponse(page, "helman/suggest_device_entities", {
+        energy: [candidate("sensor.jistic_klimatizace_energy")],
+        power: [],
+        switch: [candidate("switch.breaker")],
+    });
+    await page.locator('details[data-device-id="klima_obyvak"] .apply-suggestions').click();
+    await expect.poll(async () => (await config(page))[0].children[0].controls).toEqual({ climate: { entity_id: "climate.klima_obyvak" } });
+    expect((await config(page))[0].children[0].consumption.energy_entity_id).toBeUndefined();
+});
