@@ -3500,13 +3500,23 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.devices.configured_devices,
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
-          <div class="section-footer"><button class="import-energy" type="button" ?disabled=${this._importLoading} @click=${() => this._previewEnergyImport()}>${this._t("editor.actions.import_energy")}</button></div>
-          ${this._deviceActionMessage ? html`<div class="message info">${this._deviceActionMessage}</div>` : nothing}
-          ${this._renderEnergyImport()}
           ${hasDevices
             ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices"], null)}`
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
-          ${this._renderAddDevice(["devices"], null)}
+          ${this._renderAddDevice(
+            ["devices"],
+            null,
+            html`<button
+              class="add-button import-energy"
+              type="button"
+              ?disabled=${this._importLoading}
+              @click=${() => this._previewEnergyImport()}
+            >
+              ${this._t("editor.actions.import_energy")}
+            </button>`,
+          )}
+          ${this._deviceActionMessage ? html`<div class="message error">${this._deviceActionMessage}</div>` : nothing}
+          ${this._renderEnergyImport()}
         `,
       )}
     `;
@@ -3526,7 +3536,7 @@ export class HelmanConfigEditorPanel
         this._energyImport = { preview, draft };
     } catch (error) {
       if (this._config === draft && request === this._energyImportRequest)
-        this._deviceActionMessage = String(error);
+        this._deviceActionMessage = this._formatError(error, String(error));
     } finally {
       if (request === this._energyImportRequest) this._importLoading = false;
     }
@@ -3552,8 +3562,9 @@ export class HelmanConfigEditorPanel
         ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
       </ul>
       ${!hasChanges ? html`<p>${this._t("editor.import.no_changes")}</p>` : nothing}
+      <div class="inline-actions">
       <button
-        class="apply-energy-import"
+        class="add-button primary apply-energy-import"
         type="button"
         ?disabled=${!preview.validation.valid || !hasChanges}
         @click=${() => {
@@ -3575,7 +3586,7 @@ export class HelmanConfigEditorPanel
         ${this._t("editor.actions.apply")}
       </button>
       <button
-        class="cancel-energy-import"
+        class="add-button cancel-energy-import"
         type="button"
         @click=${() => {
           this._energyImport = null;
@@ -3583,6 +3594,7 @@ export class HelmanConfigEditorPanel
       >
         ${this._t("editor.actions.cancel")}
       </button>
+      </div>
     </div>`;
   }
 
@@ -3595,15 +3607,21 @@ export class HelmanConfigEditorPanel
       : [...path, "consumption", `${field}_entity_id`];
   }
 
-  private async _applySuggestions(device: JsonObject): Promise<void> {
-    if (!this.hass || !this._config) return;
-    const id = this._stringValue(device.id);
+  /** The entity whose HA device suggestions come from; empty when there is none yet. */
+  private _suggestionAnchor(device: JsonObject): string {
     const control = asJsonObject(device.controls) ?? {};
-    const anchor =
+    return (
       ownMeter(device) ||
       this._stringValue(asJsonObject(device.consumption)?.power_entity_id) ||
       this._stringValue(asJsonObject(control.switch)?.entity_id) ||
-      this._stringValue(asJsonObject(control.climate)?.entity_id);
+      this._stringValue(asJsonObject(control.climate)?.entity_id)
+    );
+  }
+
+  private async _applySuggestions(device: JsonObject): Promise<void> {
+    if (!this.hass || !this._config) return;
+    const id = this._stringValue(device.id);
+    const anchor = this._suggestionAnchor(device);
     if (!anchor) return;
     const draft = this._config;
     const hass = this.hass;
@@ -3651,7 +3669,7 @@ export class HelmanConfigEditorPanel
       this._storeSuggestions(id, suggestions);
     } catch (error) {
       if (this._config === draft && request === this._deviceSuggestionRequests[id])
-        this._deviceActionMessage = String(error);
+        this._deviceActionMessage = this._formatError(error, String(error));
     }
   }
 
@@ -3674,8 +3692,9 @@ export class HelmanConfigEditorPanel
         : undefined;
     return html`<div class="device-suggestions">
       <button
-        class="apply-suggestions"
+        class="add-button apply-suggestions"
         type="button"
+        ?disabled=${!this._suggestionAnchor(device)}
         @click=${() => this._applySuggestions(device)}
       >
         ${this._t("editor.actions.apply_suggestions")}
@@ -3787,12 +3806,17 @@ export class HelmanConfigEditorPanel
    * draws from the parent's meter, the switch or climate entity that tells when
    * it runs. The `id` is generated from the entity once and never edited.
    */
-  private _renderAddDevice(listPath: PathSegment[], parent: JsonObject | null): TemplateResult {
+  private _renderAddDevice(
+    listPath: PathSegment[],
+    parent: JsonObject | null,
+    /** Another list action shown beside "Add device". */
+    sibling: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
     const key = entityGroupKey(listPath);
     const child = parent !== null;
     if (this._addDeviceTarget !== key) {
       return html`
-        <div class="section-footer">
+        <div class="section-footer inline-actions">
           <button
             type="button"
             class="add-button primary add-device"
@@ -3802,6 +3826,7 @@ export class HelmanConfigEditorPanel
           >
             ${this._t(child ? "editor.actions.add_child_device" : "editor.actions.add_device")}
           </button>
+          ${sibling}
         </div>
       `;
     }

@@ -26,7 +26,7 @@ def suggest_entities(
     power_devices = config.get("power_devices") or {}
     house = power_devices.get("house") or {}
     device = dr.async_get(hass).async_get(anchor.device_id)
-    device_name = str((device.name_by_user or device.name) if device else "").casefold()
+    device_name = ((device.name_by_user or device.name or "") if device else "").casefold()
     for entry in er.async_entries_for_device(registry, anchor.device_id):
         if entry.disabled_by is not None:
             continue

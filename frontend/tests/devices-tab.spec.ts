@@ -1096,6 +1096,10 @@ test("invalid import cannot be applied and empty state offers import", async ({
   await mountEditor(page, []);
   await openTab(page, "Devices");
   await expect(page.locator(".devices-empty")).toBeVisible();
+  // Importing is a list action, offered beside "Add device" below the list.
+  await expect(
+    page.locator(".section-footer:has(.add-device) .import-energy"),
+  ).toHaveCount(1);
   await deviceResponse(
     page,
     "helman/preview_energy_import",
@@ -1109,6 +1113,17 @@ test("invalid import cannot be applied and empty state offers import", async ({
   await page.locator(".import-energy").click();
   await expect(page.locator(".apply-energy-import")).toBeDisabled();
   expect(await config(page)).toEqual([]);
+});
+
+test("Apply suggestions is disabled until the device has an entity to anchor on", async ({
+  page,
+}) => {
+  await mountEditor(page, [{ id: "blank", name: "Blank" }]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("blank")!.open = true;
+  });
+  await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
 test("an up-to-date Energy preview cannot dirty an unchanged draft", async ({ page }) => {

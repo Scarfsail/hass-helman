@@ -81,7 +81,8 @@ def import_energy_preferences(
             owners.setdefault(meter, device)
 
     # Manual import exposes existing overlaps without changing either side.
-    # Energy can reveal a schedulable ancestor through new intermediate rows.
+    # Energy can reveal a schedulable ancestor through new intermediate rows;
+    # the walk stops at the first existing owner, which answers for its own.
     frozen: set[int] = set()
     overlap_blockers: dict[int, dict[str, Any]] = {}
     if manual:
@@ -97,9 +98,10 @@ def import_energy_preferences(
             while parent_meter is not None and parent_meter not in seen:
                 seen.add(parent_meter)
                 parent = owners.get(parent_meter)
-                if parent is not None and is_schedulable(parent):
-                    frozen.update((id(owner), id(parent)))
-                    overlap_blockers[id(owner)] = parent
+                if parent is not None:
+                    if is_schedulable(parent):
+                        frozen.update((id(owner), id(parent)))
+                        overlap_blockers[id(owner)] = parent
                     break
                 parent_meter = energy_parents.get(parent_meter)
 
@@ -207,20 +209,21 @@ def import_energy_preferences(
                 )
             )
             continue
-
-        def detach(items):
-            items[:] = [device for device in items if device is not owner]
-            for device in items:
-                if isinstance(device, dict) and isinstance(
-                    device.get("children"), list
-                ):
-                    detach(device["children"])
-
-        detach(imported)
         if parent.get("children") is None:
             parent["children"] = []
-        parent.setdefault("children", []).append(owner)
+        if not isinstance(parent["children"], list):
+            continue
+        _detach(imported, owner)
+        parent["children"].append(owner)
     return EnergyImport(imported, conflicts, external, warnings)
+
+
+def _detach(items: list[Any], device: Mapping[str, Any]) -> None:
+    """Remove ``device`` from ``items`` and every nested children list."""
+    items[:] = [item for item in items if item is not device]
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("children"), list):
+            _detach(item["children"], device)
 
 
 def _in_subtree(device: Mapping[str, Any], root: Mapping[str, Any]) -> bool:

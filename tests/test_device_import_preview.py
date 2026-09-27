@@ -235,3 +235,31 @@ def test_new_device_additions_show_the_power_sensor_they_write():
             "powerEntityId": "sensor.kettle_power",
         }
     ]
+
+
+def test_meter_under_existing_passive_parent_moves_while_that_parent_warns():
+    schedulable = device(
+        "breaker",
+        "sensor.breaker",
+        schedulable=True,
+        controls={"switch": {"entity_id": "switch.breaker"}},
+    )
+    passive = device("room", "sensor.room")
+    leaf = device("lamp", "sensor.lamp")
+    result = preview(
+        [schedulable, passive, leaf],
+        row("sensor.room", "sensor.breaker"),
+        row("sensor.lamp", "sensor.room"),
+    )
+    assert result["devices"] == [schedulable, {**passive, "children": [leaf]}]
+    assert [(w["energy_entity_id"], w["device_id"]) for w in result["warnings"]] == [
+        ("sensor.room", "breaker")
+    ]
+
+
+def test_invalid_children_value_yields_a_preview_not_an_exception():
+    parent = device("parent", "sensor.parent", children={})
+    child = device("child", "sensor.child")
+    result = preview([parent, child], row("sensor.child", "sensor.parent"))
+    assert result["devices"] == [parent, child]
+    assert not result["validation"]["valid"]
