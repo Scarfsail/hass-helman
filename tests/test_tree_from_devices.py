@@ -69,6 +69,8 @@ REGISTRY = [
     ("sensor.zasuvka_pracovna_ondra_energy", "dev_plug", []),
     ("switch.zasuvka_pracovna_ondra", "dev_plug", ["night"]),
     (ENERGY_ONLY_METER, "dev_boiler", []),
+    # A meterless AC's own HA device: its labels reach its share row.
+    ("climate.obyvak", "dev_ac_obyvak", ["night"]),
 ]
 LABELS = {"backed": LABEL_BACKED, "night": LABEL_NIGHT}
 
@@ -298,6 +300,10 @@ class TreeFromDevicesTests(unittest.TestCase):
                 "children": {},
             },
         }
+        # A meterless child's labels come from its running signal's HA device.
+        obyvak = breaker["children"]["klima-obyvak"]
+        obyvak["labels"] = [LABEL_NIGHT]
+        obyvak["labelBadgeTexts"] = ["⏻😴"]
 
         self.assertEqual(_slim(self.house["children"]), expected)
 

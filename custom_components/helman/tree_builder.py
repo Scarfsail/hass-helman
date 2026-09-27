@@ -318,6 +318,20 @@ class HelmanTreeBuilder:
             if entity.device_id:
                 entities_by_device.setdefault(entity.device_id, []).append(entity)
 
+        def labels_for(entity_id: str | None) -> list[str]:
+            """Labels from every entity on ``entity_id``'s HA device."""
+            ent_entry = ent_reg.async_get(entity_id) if entity_id else None
+            if not ent_entry or not ent_entry.device_id:
+                return []
+            label_ids: set[str] = set()
+            for entity in entities_by_device.get(ent_entry.device_id, []):
+                label_ids.update(entity.labels)
+            return [
+                label_entry.name
+                for label_id in label_ids
+                if (label_entry := lbl_reg.async_get_label(label_id))
+            ]
+
         tree: list[DeviceNodeDTO] = []
         nodes: dict[int, DeviceNodeDTO] = {}
         for device, parent in iter_devices(self._config):
@@ -331,22 +345,18 @@ class HelmanTreeBuilder:
                         device, parent_node, shared, carved, cleaner_regex
                     )
                     if share_node is not None:
+                        # Its HA device is the running signal's: an AC's
+                        # climate entity, a plug's switch.
+                        share_node.labels = labels_for(share_node.switch_entity_id)
+                        share_node.label_badge_texts = self._apply_label_badge_texts(
+                            share_node.labels, device_label_text
+                        )
                         parent_node.children.append(share_node)
                 continue
             power_sensor_id = _consumption_entity(device, "power_entity_id")
             icon = resolve_device_icon(device, entity_icon=self._entity_icon)
 
-            # Labels from every entity on the meter's HA device
-            labels: list[str] = []
-            ent_entry = ent_reg.async_get(meter)
-            if ent_entry and ent_entry.device_id:
-                label_ids: set[str] = set()
-                for entity in entities_by_device.get(ent_entry.device_id, []):
-                    label_ids.update(entity.labels)
-                for label_id in label_ids:
-                    label_entry = lbl_reg.async_get_label(label_id)
-                    if label_entry:
-                        labels.append(label_entry.name)
+            labels = labels_for(meter)
 
             node = DeviceNodeDTO(
                 id=meter,
