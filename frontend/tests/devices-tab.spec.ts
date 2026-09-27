@@ -1091,6 +1091,38 @@ test("routine hass snapshots retain pending suggestions and import previews", as
     await expect(page.locator(".energy-import-preview")).toBeVisible();
 });
 
+for (const hasPower of [false, true]) {
+    test(`shared-meter energy suggestions require a usable power sensor: ${hasPower}`, async ({ page }) => {
+        const parent = {
+            id: "parent",
+            consumption: { energy_entity_id: "sensor.parent_energy", power_entity_id: "sensor.parent_power" },
+            children: [
+                { id: "first", controls: { switch: { entity_id: "switch.first" } } },
+                { id: "second", controls: { switch: { entity_id: "switch.second" } } },
+            ],
+        };
+        await mountEditor(page, [parent]);
+        await openTab(page, "Devices");
+        await page.evaluate(() => {
+            window.__card("parent")!.open = true;
+            window.__card("first")!.open = true;
+        });
+        await deviceResponse(page, "helman/suggest_device_entities", {
+            energy: [candidate("sensor.first_energy")],
+            power: hasPower ? [candidate("sensor.first_power")] : [],
+            switch: [],
+        });
+        await page.locator('details[data-device-id="first"] .apply-suggestions').click();
+        if (hasPower) {
+            await expect.poll(async () => (await config(page))[0].children[0].consumption).toEqual({ energy_entity_id: "sensor.first_energy", power_entity_id: "sensor.first_power" });
+        } else {
+            await expect(page.locator('details[data-device-id="first"] select.suggestion-candidates[data-field="energy"]')).toBeVisible();
+            expect(await config(page)).toEqual([parent]);
+            expect(await page.evaluate(() => (document.querySelector("helman-config-editor-panel") as any)._dirty)).toBe(false);
+        }
+    });
+}
+
 test("suggestions preserve a climate child's control and shared meter", async ({ page }) => {
     await mountEditor(page, [BREAKER]);
     await openTab(page, "Devices");

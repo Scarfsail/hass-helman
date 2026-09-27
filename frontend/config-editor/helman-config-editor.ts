@@ -3619,10 +3619,18 @@ export class HelmanConfigEditorPanel
               ownMeter(entry.device) === candidate.entityId,
           ),
       );
+      const energyNeedsPower =
+        current.parent !== null &&
+        deviceChildren(current.parent).some(
+          (child) => child.id !== id && !ownMeter(child),
+        ) &&
+        !getValueAtPath(draft, this._suggestionPath(current.path, "power")) &&
+        suggestions.power.length !== 1;
       const fills = (["energy", "power", "switch"] as const).flatMap((field) => {
         const fieldPath = this._suggestionPath(current.path, field);
         if (
           (field === "switch" && deviceKind(current.device) !== "generic") ||
+          (field === "energy" && energyNeedsPower) ||
           getValueAtPath(draft, fieldPath) ||
           suggestions[field].length !== 1
         ) return [];
@@ -3663,7 +3671,7 @@ export class HelmanConfigEditorPanel
               if (field === "switch" && deviceKind(device) !== "generic")
                 return nothing;
               const fieldPath = this._suggestionPath(path, field);
-              if (this._getValue(fieldPath) || suggestions[field].length <= 1)
+              if (this._getValue(fieldPath) || suggestions[field].length === 0)
                 return nothing;
               return html`<div class="field">
                 <label>${this._t(`editor.suggestions.${field}`)}</label>
