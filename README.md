@@ -48,7 +48,7 @@ and surface custom label badges per device.
 
 - Live power and per-bucket history bars (configurable buckets and duration)
 - Sources vs Consumers layout with animated flow arrows scaled by max power
-- House device tree built from `devices.items` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that
+- House device tree built from `devices.items` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that; on upgrade to config version 23 each metered device missing a power sensor or switch gains them from the HA device owning its meter (the top-ranked power sensor; a switch only when it carries the power-switch label or is named like the HA device)
 - Optional house consumption forecast in the node detail dialogs
 - Entity disambiguation via HA Labels for power sensor and power switch suggestions
 - Group devices by label categories (e.g., Location, Type) with emojis/text

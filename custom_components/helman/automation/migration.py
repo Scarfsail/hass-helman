@@ -2,8 +2,8 @@
 
 Pure ``dict -> dict``: no Home Assistant and no storage, so its tests run on the
 host and every rule is table-checkable. What a step needs from Home Assistant —
-Energy preferences, for v20 -> v21 — is an argument. The only side effect is
-the v21 step logging the Energy rows it could not import.
+Energy preferences, for v20 -> v21, and entity suggestions, for v22 -> v23 — is
+an argument. The only side effects are those two steps' log lines.
 
 Runs on **load only**. The save path rejects the old shape instead of rewriting
 it (see ``validate_config_document``): hand-editing is a save-path concern, and
@@ -13,13 +13,27 @@ silently rewriting a user's YAML under them is worse than refusing it.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import Any
 
 from ..const import CONFIG_DOCUMENT_VERSION, DAY_CLASSIFICATIONS
+from ..controllables.config import (
+    CONTROLLABLE_KIND_GENERIC,
+    CONTROLLABLE_KIND_INVERTER,
+    iter_devices,
+    own_meter,
+    peek_controllable_kind,
+)
 from ..controllables.energy_import import import_energy_preferences, meter_device_id
+
+#: ``(anchor entity ids, document) -> {"energy" | "power" | "switch": ranked
+#: candidates}`` — the shape of
+#: :func:`..controllables.suggestions.suggest_entities` with ``hass`` bound.
+EntitySuggestions = Callable[
+    [Sequence[str], Mapping[str, Any]], Mapping[str, list[Mapping[str, Any]]]
+]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +74,14 @@ def needs_migration(document: Mapping[str, Any] | None) -> bool:
 def migrate_config_document(
     document: Mapping[str, Any] | None,
     energy_preferences: Mapping[str, Any] | None = None,
+    entity_suggestions: EntitySuggestions | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Return ``(migrated_document, migrated_optimizer_ids)``.
 
     ``energy_preferences`` are Home Assistant's Energy preferences, which the
     v20 -> v21 step imports into ``devices``; ``None`` imports nothing.
+    ``entity_suggestions`` ranks a meter's sibling entities for the v22 -> v23
+    power and switch backfill; ``None`` backfills nothing.
 
     The document is returned unchanged (and the id list empty) when it is
     already at the current version. Optimizer order is preserved verbatim —
@@ -85,11 +102,12 @@ def migrate_config_document(
     if version >= CONFIG_DOCUMENT_VERSION:
         return (migrated, [])
 
-    # The one step that takes an argument is bound here; the table holds the
+    # The steps that take an argument are bound here; the table holds the
     # pure document-to-document steps.
     migrations = {
         **_MIGRATIONS,
         20: partial(_migrate_v20_to_v21, energy_preferences=energy_preferences),
+        22: partial(_migrate_v22_to_v23, entity_suggestions=entity_suggestions),
     }
     migrated_ids: list[str] = []
     while version < CONFIG_DOCUMENT_VERSION:
@@ -1281,6 +1299,126 @@ def _migrate_v21_to_v22(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v22_to_v23(
+    document: dict[str, Any],
+    entity_suggestions: EntitySuggestions | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Backfill the power sensor and switch the v21 Energy import never set.
+
+    Before v21 the card resolved both at render time from the HA device owning
+    a device's meter; v21 copied only Energy's ``stat_rate``, so an upgraded
+    device lost its watts and its switch. Every non-inverter device with its
+    own meter, children included, gains from the meter's suggestions:
+
+    * ``consumption.power_entity_id`` — the only ``power`` candidate, or the
+      only one carrying the power-sensor label;
+    * ``controls.switch`` (a generic device only; the editor offers no switch
+      on any other kind) — the only ``switch`` candidate carrying the switch
+      label or named like the HA device.
+
+    Two candidates with an equal claim (a multi-channel meter's HA device) are
+    not guessed between, and an entity chosen for two devices goes to neither:
+    this step runs once, and a wrong pick would be saved for good. Nor is an
+    entity another device already names. An existing value is never
+    overwritten. Each backfill is logged, and so is a metered
+    device left without power.
+    """
+    if entity_suggestions is None:
+        return (document, [])
+    picks: list[tuple[dict[str, Any], str | None, str | None]] = []
+    for device, _parent in iter_devices(document):
+        kind = peek_controllable_kind(device)
+        meter = own_meter(device)
+        if kind == CONTROLLABLE_KIND_INVERTER or meter is None:
+            continue
+        # ``null`` counts as absent; any other non-mapping is the validator's.
+        controls = device.get("controls") or {}
+        needs_switch = (
+            kind == CONTROLLABLE_KIND_GENERIC
+            and isinstance(controls, Mapping)
+            and "switch" not in controls
+        )
+        needs_power = not device["consumption"].get("power_entity_id")
+        if not (needs_power or needs_switch):
+            continue
+        suggestions = entity_suggestions([meter], document)
+        power = (
+            _sole_candidate(suggestions.get("power", []), ("label",))
+            if needs_power
+            else None
+        )
+        switch = (
+            _sole_candidate(
+                suggestions.get("switch", []), ("label", "name_match"), required=True
+            )
+            if needs_switch
+            else None
+        )
+        picks.append((device, power, switch))
+
+    # Entities another device already names are taken, whether configured
+    # before this step or picked by it for a second device.
+    claimed = [entity for _device, *entities in picks for entity in entities if entity]
+    claimed += [
+        entity.strip()
+        for device, _parent in iter_devices(document)
+        for entity in _named_power_and_switch(device)
+    ]
+    for device, power, switch in picks:
+        device_id = device.get("id", own_meter(device))
+        if power is not None and claimed.count(power) == 1:
+            device["consumption"]["power_entity_id"] = power
+            _LOGGER.info("Device %s power sensor backfilled: %s", device_id, power)
+        elif not device["consumption"].get("power_entity_id"):
+            _LOGGER.info(
+                "Device %s has a meter but no single power sensor to backfill",
+                device_id,
+            )
+        if switch is not None and claimed.count(switch) == 1:
+            device["controls"] = {
+                **(device.get("controls") or {}),
+                "switch": {"entity_id": switch},
+            }
+            _LOGGER.info("Device %s switch backfilled: %s", device_id, switch)
+    return (document, [])
+
+
+def _named_power_and_switch(device: Mapping[str, Any]) -> list[str]:
+    """The power sensor and switch-like controls ``device`` already names."""
+    consumption = device.get("consumption")
+    controls = device.get("controls")
+    named = [
+        consumption.get("power_entity_id") if isinstance(consumption, Mapping) else None,
+        *(
+            control.get("entity_id")
+            for key in ("switch", "charge")
+            if isinstance(controls, Mapping)
+            and isinstance(control := controls.get(key), Mapping)
+        ),
+    ]
+    return [entity for entity in named if isinstance(entity, str) and entity.strip()]
+
+
+def _sole_candidate(
+    candidates: Sequence[Mapping[str, Any]],
+    preferred: tuple[str, ...],
+    *,
+    required: bool = False,
+) -> str | None:
+    """The one candidate with a ``preferred`` reason, else the only candidate.
+
+    ``required`` takes only a candidate with a ``preferred`` reason. ``None``
+    when two share the best claim: there is nothing to tell them apart by.
+    """
+    marked = [
+        candidate
+        for candidate in candidates
+        if any(reason.get("code") in preferred for reason in candidate["reasons"])
+    ]
+    pool = marked or ([] if required else list(candidates))
+    return pool[0]["entityId"] if len(pool) == 1 else None
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1303,6 +1441,7 @@ _MIGRATIONS = {
     19: _migrate_v19_to_v20,
     # 20 -> 21 needs the Energy preferences: bound in migrate_config_document.
     21: _migrate_v21_to_v22,
+    # 22 -> 23 needs the entity suggestions: bound in migrate_config_document.
 }
 
 
