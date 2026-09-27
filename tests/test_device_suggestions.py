@@ -159,7 +159,7 @@ def test_an_anchor_without_an_ha_device_falls_through_to_the_next():
     ):
         result = suggest_entities(
             NS(states=NS(get=lambda entity_id: None)),
-            ["sensor.boiler_energy", "sensor.missing", "switch.shelly"],
+            ["sensor.boiler_energy", "sensor.missing", " switch.shelly "],
             {},
         )
     assert seen_devices == ["shelly"]

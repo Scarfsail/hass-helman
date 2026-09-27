@@ -3639,13 +3639,14 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * Every entity the device names, most telling first; empty when it names none.
+   * The entities suggestions may come from, most telling first; empty when
+   * the device names none.
    *
-   * The backend takes suggestions from the first one with an HA device, so a
-   * helper (a utility meter, an `input_select`) never blocks them. The meters
-   * and the control the device switches by lead; other controls such as an EV
-   * charger's mode select come last, since they may belong to another
-   * integration's device.
+   * The backend uses the first one with an HA device, so a helper meter never
+   * blocks them. Only the meters and the control the device switches by
+   * qualify: a mode or gear select may belong to another integration's device
+   * (evcc, the car, the inverter's battery), whose sensors would then be
+   * offered, or auto-filled, as this device's meter.
    */
   private _suggestionAnchors(device: JsonObject): string[] {
     const controls = asJsonObject(device.controls) ?? {};
@@ -3655,7 +3656,6 @@ export class HelmanConfigEditorPanel
       ownMeter(device),
       this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim(),
       ...["switch", "charge", "climate"].map((key) => entity(controls[key])),
-      ...Object.values(controls).map(entity),
     ].filter(Boolean);
     return [...new Set(anchors)];
   }

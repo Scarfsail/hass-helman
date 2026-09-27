@@ -27,7 +27,7 @@ def suggest_entities(
         (
             entry
             for entity_id in anchor_entity_ids
-            if (entry := registry.async_get(entity_id)) is not None
+            if (entry := registry.async_get(entity_id.strip())) is not None
             and entry.device_id is not None
         ),
         None,

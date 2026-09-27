@@ -1156,12 +1156,11 @@ test("Apply suggestions is disabled until the device has an entity to anchor on"
   await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
-test("suggestions are anchored on every entity the device names, most telling first", async ({
+test("suggestions are anchored on the switching control, never a mode select", async ({
   page,
 }) => {
-  // The mode helper is listed first in the config but comes last: the backend
-  // uses the first anchor with an HA device, so the charge switch is tried
-  // before it, and entity ids are trimmed for the registry lookup.
+  // The mode select is listed first in the config but never anchors: it may
+  // belong to another integration's device. Entity ids are trimmed.
   const ev = {
     id: "garage-ev",
     kind: "ev_charger",
@@ -1183,7 +1182,7 @@ test("suggestions are anchored on every entity the device names, most telling fi
   await page.locator(".apply-suggestions").click();
   await expect
     .poll(() => page.evaluate(() => (window as any).__deviceRequest?.anchor_entity_ids))
-    .toEqual(["switch.ev_charge", "input_select.ev_mode"]);
+    .toEqual(["switch.ev_charge"]);
   await expect
     .poll(async () => (await config(page))[0].consumption)
     .toEqual({ energy_entity_id: "sensor.ev_energy", power_entity_id: "sensor.ev_power" });
@@ -1213,21 +1212,21 @@ test("a device's meter and climate control lead its anchors", async ({ page }) =
     .toEqual(["sensor.ac_energy", "climate.ac"]);
 });
 
-test("a charger with only its mode select can still ask for suggestions", async ({ page }) => {
-  // The select may sit on the wallbox; if it is a helper, the backend answers
-  // with nothing rather than guessing.
+test("a charger with only its mode select has nothing to anchor on", async ({ page }) => {
+  // Its HA device may be the car's or evcc's, whose sensors must not be
+  // suggested as the charger's meter.
   await mountEditor(page, [
     {
       id: "garage-ev",
       kind: "ev_charger",
-      controls: { use_mode: { entity_id: "select.wallbox_mode" } },
+      controls: { use_mode: { entity_id: "select.evcc_mode" } },
     },
   ]);
   await openTab(page, "Devices");
   await page.evaluate(() => {
     window.__card("garage-ev")!.open = true;
   });
-  await expect(page.locator(".apply-suggestions")).toBeEnabled();
+  await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
 test("a failed suggestion request shows a readable error that a retry clears", async ({
