@@ -127,9 +127,11 @@ EVALUATORS: dict[str, Evaluator] = {
     # requirement is each appliance's own lookback, which the Training tab's
     # depth table applies. Wrapped rather than replaced so the Devices
     # tab keeps showing the switch or climate state it always has. Nested
-    # device prefixes are normalized before matching, at any tree depth.
+    # device prefixes are normalized before matching, at any tree depth. An EV
+    # charger's charge switch is its running signal on a shared meter.
     "devices.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
     "devices.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
+    "devices.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "training.solar_bias.total_energy_entity_id": (
         history_evaluator(

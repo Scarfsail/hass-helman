@@ -804,6 +804,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         for kind, entity, state in (
             ("switch", "switch.dishwasher", "off"),
             ("climate", "climate.living_room", "heat"),
+            ("charge", "switch.ev_charge", "off"),
         ):
             with self.subTest(kind=kind):
                 hass = _ProbingHass({entity: _State(state)})
@@ -946,7 +947,11 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         self.assertIn(list(path), inspection["dependsOn"])
 
     def test_deep_device_activity_controls_keep_history(self):
-        for control, entity_id in [("switch", "switch.plug"), ("climate", "climate.room")]:
+        for control, entity_id in [
+            ("switch", "switch.plug"),
+            ("climate", "climate.room"),
+            ("charge", "switch.ev_charge"),
+        ]:
             with self.subTest(control=control):
                 leaf = {"controls": {control: {"entity_id": entity_id}}}
                 config = {"devices": [{"children": [{"children": [leaf]}]}]}
