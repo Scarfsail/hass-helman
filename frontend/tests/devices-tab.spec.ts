@@ -981,12 +981,21 @@ test("import preview cancel is inert and apply changes only the draft with moves
   );
   await page.locator(".cancel-energy-import").click();
   expect(await config(page)).toEqual([parent, child]);
+  // The move shifts "child" off devices[1]; its YAML state must not follow the path.
+  await page.evaluate(() => {
+    window
+      .__own("child", "summary .mode-toggle button")
+      .find((button) => button.textContent?.trim() === "YAML")
+      ?.click();
+  });
+  await expect(page.locator("ha-yaml-editor")).toHaveCount(1);
   await page.locator(".import-energy").click();
   await page.locator(".apply-energy-import").click();
   expect(await config(page)).toEqual([
     { ...parent, children: [child] },
     restored,
   ]);
+  await expect(page.locator("ha-yaml-editor")).toHaveCount(0);
   await expect(page.locator(".energy-import-preview")).toHaveCount(0);
   await deviceResponse(
     page,

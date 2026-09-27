@@ -3564,6 +3564,8 @@ export class HelmanConfigEditorPanel
             !hasChanges
           )
             return;
+          // Moves shift device paths, which key the YAML mode state.
+          this._resetDeviceModes();
           this._applyMutation((draft) => {
             draft.devices = cloneJson(preview.devices);
           });
