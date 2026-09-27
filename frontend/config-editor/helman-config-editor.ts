@@ -210,7 +210,7 @@ const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as const;
 const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
 type DeviceFilter = (typeof DEVICE_FILTERS)[number];
 
-/** A device's document path as validation reports it: `devices[1].children[0]`. */
+/** A device's document path as validation reports it: `devices.items[1].children[0]`. */
 function validationPath(path: readonly PathSegment[]): string {
   return path
     .map((segment, index) =>
@@ -2081,12 +2081,6 @@ export class HelmanConfigEditorPanel
             ${this._renderOptionalTextField(["visualization", "consumers_title"], "editor.fields.consumers_title")}
             ${this._renderOptionalTextField(["visualization", "groups_title"], "editor.fields.groups_title")}
             ${this._renderOptionalTextField(["visualization", "others_group_label"], "editor.fields.others_group_label")}
-            ${this._renderOptionalTextField(
-              ["visualization", "power_sensor_name_cleaner_regex"],
-              "editor.fields.power_sensor_name_cleaner_regex",
-              "editor.helpers.power_sensor_name_cleaner_regex",
-              "editor.help.power_sensor_name_cleaner_regex",
-            )}
             ${this._renderBooleanField(
               ["visualization", "show_empty_groups"],
               "editor.fields.show_empty_groups",
@@ -2136,18 +2130,6 @@ export class HelmanConfigEditorPanel
               "editor.fields.house_power_entity",
               "editor.help.house_power_entity",
               true,
-            )}
-            ${this._renderOptionalTextField(
-              ["power_devices", "house", "power_sensor_label"],
-              "editor.fields.power_sensor_label",
-            )}
-            ${this._renderOptionalTextField(
-              ["power_devices", "house", "power_switch_label"],
-              "editor.fields.power_switch_label",
-            )}
-            ${this._renderOptionalTextField(
-              ["power_devices", "house", "unmeasured_power_title"],
-              "editor.fields.unmeasured_power_title",
             )}
           </div>
 
@@ -2785,7 +2767,7 @@ export class HelmanConfigEditorPanel
   /**
    * The house meter, plus one row per carved meter.
    *
-   * `devices.*.consumption.energy_entity_id` is the same path a device's
+   * `devices.items.*.consumption.energy_entity_id` is the same path a device's
    * picker already reads elsewhere in the editor — this is a second, read-only
    * view of it, not a second control. Children are walked too: the AC breaker
    * is carved for the air conditioners behind it.
@@ -3513,7 +3495,8 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The Devices tab: the `devices` tree as nested cards.
+   * The Devices tab: the settings every device shares, above the `devices.items`
+   * tree as nested cards.
    *
    * A card renders its `children` with the same card, recursively. The inverter
    * keeps its entry in the list but is edited under Power devices, so here it
@@ -3527,14 +3510,37 @@ export class HelmanConfigEditorPanel
     );
     return html`
       ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.devices.settings,
+        html`
+          <div class="field-grid">
+            ${this._renderOptionalTextField(
+              ["devices", "name_cleaner_regex"],
+              "editor.fields.power_sensor_name_cleaner_regex",
+              "editor.helpers.power_sensor_name_cleaner_regex",
+              "editor.help.power_sensor_name_cleaner_regex",
+            )}
+            ${this._renderOptionalTextField(
+              ["devices", "power_sensor_label"],
+              "editor.fields.power_sensor_label",
+            )}
+            ${this._renderOptionalTextField(
+              ["devices", "power_switch_label"],
+              "editor.fields.power_switch_label",
+            )}
+          </div>
+        `,
+        { initialOpen: false },
+      )}
+
+      ${this._renderSectionScope(
         SECTION_SCOPE_IDS.devices.configured_devices,
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
           ${hasDevices
-            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices"], null)}`
+            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices", "items"], null)}`
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
           ${this._renderAddDevice(
-            ["devices"],
+            ["devices", "items"],
             null,
             html`<button
               class="add-button import-energy"
@@ -3559,6 +3565,12 @@ export class HelmanConfigEditorPanel
     const request = ++this._energyImportRequest;
     this._energyImport = null;
     this._deviceActionMessage = "";
+    // The backend reads a devices value that is not an object as no devices,
+    // so an import onto an old-shape list would replace it with the import.
+    if (draft.devices != null && !asJsonObject(draft.devices)) {
+      this._deviceActionMessage = this._t("editor.messages.import_energy_invalid_devices");
+      return;
+    }
     this._importLoading = true;
     try {
       const preview = await fetchEnergyImportPreview(hass, draft);
@@ -3609,7 +3621,7 @@ export class HelmanConfigEditorPanel
           // Moves shift device paths, which key the YAML mode state.
           this._resetDeviceModes();
           this._applyMutation((draft) => {
-            draft.devices = cloneJson(preview.devices);
+            draft.devices = { ...(asJsonObject(draft.devices) ?? {}), items: cloneJson(preview.devices) };
           });
           this._energyImport = null;
         }}
@@ -4197,14 +4209,14 @@ export class HelmanConfigEditorPanel
    * no demand of its own.
    */
   private _renderInverterSection(): TemplateResult {
-    const devices = asJsonArray(this._getValue(["devices"])) ?? [];
+    const devices = asJsonArray(this._getValue(["devices", "items"])) ?? [];
     const index = devices.findIndex(
       (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
     );
     return this._renderSimpleSection(
       this._t("editor.sections.inverter"),
       index >= 0
-        ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", index])
+        ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", "items", index])
         : html`
             <div class="message info">${this._t("editor.empty.no_inverter")}</div>
             <div class="section-footer">
@@ -4623,7 +4635,7 @@ export class HelmanConfigEditorPanel
 
   /** Move a device, with everything under it, to the end of another parent's children. */
   private _moveDeviceUnder(path: PathSegment[], parentKey: string): void {
-    const currentParentKey = path.length > 2 ? entityGroupKey(path.slice(0, -2)) : "";
+    const currentParentKey = path.length > 3 ? entityGroupKey(path.slice(0, -2)) : "";
     if (parentKey === currentParentKey) return;
     const target = parentKey
       ? iterDevices(this._config).find((entry) => entityGroupKey(entry.path) === parentKey)
@@ -4636,7 +4648,7 @@ export class HelmanConfigEditorPanel
       // still names the device when it is removed.
       appendListItem(
         draft,
-        target ? [...target.path, "children"] : ["devices"],
+        target ? [...target.path, "children"] : ["devices", "items"],
         cloneJson(device as JsonValue),
       );
       removeListItem(draft, path.slice(0, -1), path[path.length - 1] as number);
@@ -5609,11 +5621,11 @@ export class HelmanConfigEditorPanel
 
   /** The tab an issue is shown on: the inverter's are on Power devices, where it is edited. */
   private _issueTab(issue: ValidationIssue): TabId {
-    const devices = asJsonArray(this._getValue(["devices"])) ?? [];
+    const devices = asJsonArray(this._getValue(["devices", "items"])) ?? [];
     const inverter = devices.findIndex(
       (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
     );
-    if (inverter >= 0 && this._deviceIssues(["devices", inverter]).includes(issue)) {
+    if (inverter >= 0 && this._deviceIssues(["devices", "items", inverter]).includes(issue)) {
       return "power_devices";
     }
     return TAB_SECTIONS[issue.section] ?? "power_devices";
@@ -6093,7 +6105,7 @@ export class HelmanConfigEditorPanel
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["devices"],
+        ["devices", "items"],
         createInverterControllableDraft(this._t("editor.dynamic.inverter")),
       );
     });

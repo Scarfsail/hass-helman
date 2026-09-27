@@ -103,9 +103,11 @@ from .consumption_forecast_builder import (
     read_house_training_window_config,
 )
 from .controllables.config import (
+    entity_friendly_name,
     is_active_state,
     iter_device_paths,
     read_carved_meters,
+    read_name_cleaner_regex,
     read_schedulable_consumers,
     read_shared_meters,
     resolve_device_name,
@@ -1082,7 +1084,6 @@ class HelmanCoordinator:
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
             house_scheduled_consumers_provider=self._get_house_scheduled_consumers,
             house_device_consumers_provider=self._get_house_device_consumers,
-            house_unmeasured_label_provider=self._get_house_unmeasured_label,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
             battery_soc_bounds_entity_id_provider=self._get_battery_soc_bounds_entity_ids,
@@ -1133,7 +1134,7 @@ class HelmanCoordinator:
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
-            friendly_name=self._entity_friendly_name,
+            friendly_name=functools.partial(entity_friendly_name, self._hass),
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.
@@ -1387,24 +1388,6 @@ class HelmanCoordinator:
         while its meter is carved under its parent's.
         """
         return read_schedulable_consumers(self._active_config)
-
-    def _get_house_unmeasured_label(self) -> str | None:
-        """The power card's own title for unmetered house load.
-
-        The inspector's breakdown remainder is the same concept the card shows as
-        its "unmeasured" node, so it reuses the very title the user configured
-        there and the two views name it identically. ``None`` when unset, leaving
-        the inspector its own localized string rather than the card's English
-        default.
-        """
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
-        )
-        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
-        title = house_config.get("unmeasured_power_title")
-        if isinstance(title, str) and title.strip():
-            return title.strip()
-        return None
 
     async def _get_house_device_consumers(self) -> list[dict[str, Any]]:
         """Individually-measured house devices, from the shared device tree.
@@ -2451,11 +2434,6 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    def _entity_friendly_name(self, entity_id: str) -> str | None:
-        state = self._hass.states.get(entity_id)
-        name = state.attributes.get("friendly_name") if state is not None else None
-        return name if isinstance(name, str) else None
-
     def _refresh_appliance_metadata(self) -> None:
         """Resolve identity and climate capabilities from currently available states."""
         config = getattr(self, "_active_config", None)
@@ -2464,12 +2442,8 @@ class HelmanCoordinator:
             for _path, device, _parent in iter_device_paths(config)
             if isinstance(device, Mapping) and isinstance(device.get("id"), str)
         }
-        visualization = config.get("visualization") if isinstance(config, Mapping) else None
-        cleaner = (
-            visualization.get("power_sensor_name_cleaner_regex")
-            if isinstance(visualization, Mapping)
-            else None
-        )
+        cleaner = read_name_cleaner_regex(config)
+        friendly_name = functools.partial(entity_friendly_name, self._hass)
         refreshed_appliances = []
         changed = False
 
@@ -2479,8 +2453,8 @@ class HelmanCoordinator:
             if device is not None:
                 name = resolve_device_name(
                     device,
-                    friendly_name=self._entity_friendly_name,
-                    cleaner_regex=cleaner if isinstance(cleaner, str) else None,
+                    friendly_name=friendly_name,
+                    cleaner_regex=cleaner,
                 )
                 if name != appliance.name:
                     refreshed_appliance = replace(refreshed_appliance, name=name)

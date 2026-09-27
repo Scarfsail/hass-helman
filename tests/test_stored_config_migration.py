@@ -19,6 +19,7 @@ read from the ``energy`` store beside it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import unittest
@@ -44,9 +45,12 @@ from custom_components.helman.controllables.config import (
     iter_devices,
     own_meter,
     read_carved_meters,
+    read_devices_section,
+    read_name_cleaner_regex,
     read_schedulable_ids,
     read_shared_meters,
 )
+from custom_components.helman.storage import HelmanStorage
 from custom_components.helman.training.appliance_energy import (
     ApplianceEnergyTrainingRequest,
     SharedMeter,
@@ -331,7 +335,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
         self.migrated, _ids = migrate_config_document(self.before)
 
     def test_it_migrates_to_the_expected_tree(self) -> None:
-        devices = self.migrated["devices"]
+        devices = self.migrated["devices"]["items"]
         old = self.before["controllables"]
 
         self.assertNotIn("controllables", self.migrated)
@@ -365,7 +369,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
         )
 
     def test_ids_projections_and_the_flag_are_preserved(self) -> None:
-        for old, new in zip(self.before["controllables"][1:5], self.migrated["devices"][1:5]):
+        for old, new in zip(self.before["controllables"][1:5], self.migrated["devices"]["items"][1:5]):
             with self.subTest(device=old["id"]):
                 self.assertEqual(new["id"], old["id"])
                 self.assertIs(new["schedulable"], True)
@@ -475,12 +479,12 @@ class LiveEnergyImportTests(unittest.TestCase):
         return meter.removesuffix("_energy") + "_power"
 
     def test_it_migrates_to_the_expected_tree(self) -> None:
-        devices = self.migrated["devices"]
+        devices = self.migrated["devices"]["items"]
 
         # The P1 devices keep their place, ids and everything but a power sensor.
         self.assertEqual(
             [d["id"] for d in devices[:6]],
-            [d["id"] for d in self.without_energy["devices"]],
+            [d["id"] for d in self.without_energy["devices"]["items"]],
         )
         # Every Energy row P1 did not own follows, top-level or nested as Energy nests it.
         self.assertEqual(
@@ -497,7 +501,7 @@ class LiveEnergyImportTests(unittest.TestCase):
                 ("jistic_zasuvky_spiz_a_jidelna_energy", ["zasuvka_lednicka_energy"]),
             ],
         )
-        for device, _parent in iter_devices({"devices": devices[6:]}):
+        for device, _parent in iter_devices({"devices": {"items": devices[6:]}}):
             meter = device["consumption"]["energy_entity_id"]
             with self.subTest(device=device["id"]):
                 self.assertEqual(
@@ -508,8 +512,8 @@ class LiveEnergyImportTests(unittest.TestCase):
                 self.assertNotIn("controls", device)
 
     def test_the_ac_breaker_gains_its_power_sensor_and_nothing_else(self) -> None:
-        before = self.without_energy["devices"][5]
-        after = self.migrated["devices"][5]
+        before = self.without_energy["devices"]["items"][5]
+        after = self.migrated["devices"]["items"][5]
 
         self.assertEqual(
             after,
@@ -523,8 +527,8 @@ class LiveEnergyImportTests(unittest.TestCase):
         )
 
     def test_a_schedulable_owner_keeps_identity_flags_and_controls(self) -> None:
-        before = self.without_energy["devices"][2]
-        after = self.migrated["devices"][2]
+        before = self.without_energy["devices"]["items"][2]
+        after = self.migrated["devices"]["items"][2]
 
         self.assertEqual(after["id"], "pool-filtration")
         self.assertEqual(
@@ -596,7 +600,7 @@ class LiveEnergyImportTests(unittest.TestCase):
         # the import fixes the one error v20 left, the parent's missing power
         # sensor, and adds none.
         self.assertIn(
-            ("devices[5].consumption.power_entity_id", "power_entity_required"),
+            ("devices.items[5].consumption.power_entity_id", "power_entity_required"),
             errors(self.without_energy),
         )
         self.assertEqual(
@@ -607,6 +611,83 @@ class LiveEnergyImportTests(unittest.TestCase):
                 if error[1] != "power_entity_required"
             ],
         )
+
+
+class _Store:
+    """A ``Store`` holding one document; records what is saved."""
+
+    def __init__(self, document: dict | None = None) -> None:
+        self.document = document
+        self.saved: list[dict] = []
+
+    async def async_load(self) -> dict | None:
+        return self.document
+
+    async def async_save(self, payload: dict) -> None:
+        self.saved.append(payload)
+
+
+class StoredV21LoadTests(unittest.TestCase):
+    """A stored v21 document loads into the v22 ``devices`` section object."""
+
+    WASHER = {"id": "washer", "consumption": {"energy_entity_id": "sensor.washer_energy"}}
+
+    def setUp(self) -> None:
+        document = {
+            "config_version": 21,
+            "visualization": {
+                "sources_title": "Zdroje",
+                "power_sensor_name_cleaner_regex": " Výkon$",
+            },
+            "power_devices": {
+                "house": {
+                    "entities": {"power": "sensor.house_power"},
+                    "power_sensor_label": "Měření spotřeby elektřiny",
+                    "power_switch_label": "Ovládání spotřeby elektřiny",
+                    "unmeasured_power_title": "👻 Nesledovaná spotřeba",
+                }
+            },
+            "devices": [self.WASHER],
+        }
+        self.storage = HelmanStorage.__new__(HelmanStorage)
+        self.storage._hass = object()
+        self.storage._store = _Store(document)
+        self.storage._snapshot_store = _Store()
+        self.storage._schedule_store = _Store()
+
+        async def energy_preferences():
+            # Past v21, Energy is never imported again.
+            return {"device_consumption": [{"stat_consumption": "sensor.oven_energy"}]}
+
+        self.storage._async_energy_preferences = energy_preferences
+        asyncio.run(self.storage.async_load())
+        self.config = self.storage.config
+
+    def test_it_loads_into_the_new_shape(self) -> None:
+        self.assertEqual(
+            self.config["devices"],
+            {
+                "name_cleaner_regex": " Výkon$",
+                "power_sensor_label": "Měření spotřeby elektřiny",
+                "power_switch_label": "Ovládání spotřeby elektřiny",
+                "items": [self.WASHER],
+            },
+        )
+        self.assertEqual(
+            self.config["power_devices"]["house"],
+            {"entities": {"power": "sensor.house_power"}},
+        )
+        self.assertNotIn("power_sensor_name_cleaner_regex", self.config["visualization"])
+        self.assertEqual(self.config["visualization"]["sources_title"], "Zdroje")
+        self.assertEqual(self.storage._store.saved, [self.config])
+
+    def test_the_readers_find_the_moved_settings(self) -> None:
+        self.assertEqual(read_name_cleaner_regex(self.config), " Výkon$")
+        self.assertEqual(
+            read_devices_section(self.config)["power_switch_label"],
+            "Ovládání spotřeby elektřiny",
+        )
+        self.assertEqual(validate_config_document(self.config).errors, [])
 
 
 if __name__ == "__main__":

@@ -196,7 +196,7 @@ def _valid_config(
                 },
             }
         )
-    return {"devices": appliances}
+    return {"devices": {"items": appliances}}
 
 
 def _registry(
@@ -253,7 +253,7 @@ class ScheduleApplianceTests(unittest.TestCase):
 
     def test_fixed_max_power_behavior_drops_eco_gear_for_custom_mode_name(self) -> None:
         config = _valid_config()
-        config["devices"][0]["controls"]["use_mode"]["values"] = {
+        config["devices"]["items"][0]["controls"]["use_mode"]["values"] = {
             "Boost": {"behavior": "fixed_max_power"},
             "Solar": {"behavior": "surplus_aware"},
         }

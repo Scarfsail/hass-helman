@@ -63,7 +63,7 @@ def _controllable(controllable_id, energy_entity_id, *, schedulable=True):
 
 
 def _house_children(devices):
-    builder = HelmanTreeBuilder(_Hass(), {"devices": devices})
+    builder = HelmanTreeBuilder(_Hass(), {"devices": {"items": devices}})
     reg = _Registry()
     children = builder._build_house_children(reg, reg, {})
     return {node.id: node for node in children}
@@ -73,7 +73,7 @@ def _built_house_children(devices):
     """The house's children as ``build`` serialises them, remainders included."""
     config = {
         "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
-        "devices": devices,
+        "devices": {"items": devices},
     }
     with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
             mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):

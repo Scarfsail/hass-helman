@@ -22,7 +22,7 @@ const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_i
 const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
 const GRID_PATH = ["power_devices", "grid", "entities", "power"];
 const BATTERY_PATH = ["power_devices", "battery", "entities", "capacity"];
-const CONTROLLABLE_PATH = ["devices", 0, "consumption", "energy_entity_id"];
+const CONTROLLABLE_PATH = ["devices", "items", 0, "consumption", "energy_entity_id"];
 const FORECAST_SOURCE_PATH = [
     "power_devices",
     "solar",
@@ -64,7 +64,7 @@ const CONFIG = {
         grid: { entities: { power: "sensor.grid_power" } },
         battery: { entities: { capacity: "sensor.battery_capacity" } },
     },
-    devices: [
+    devices: { items: [
         {
             id: "dishwasher",
             name: "Dishwasher",
@@ -74,7 +74,7 @@ const CONFIG = {
                 projection: { strategy: "history_average", lookback_days: 21 },
             },
         },
-    ],
+    ] },
     training: {
         house_consumption: { min_history_days: 14, training_window_days: 56 },
         solar_bias: {
@@ -461,12 +461,12 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     // neither meter is read by the house window -- and a row would claim
     // otherwise.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices.push({
+    config.devices.items.push({
         id: "fridge",
         name: "Fridge",
         consumption: { energy_entity_id: "sensor.fridge_energy" },
     });
-    config.devices.push({
+    config.devices.items.push({
         id: "inverter",
         name: "Inverter",
         kind: "inverter",
@@ -488,7 +488,7 @@ test("a carved meter's metered child gets a row, since the trainer reads it", as
     // The breaker is carved (its meterless child is schedulable), and its own
     // energy is its meter minus the plug's -- so the house window reads both.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices.push({
+    config.devices.items.push({
         id: "breaker",
         name: "Breaker",
         consumption: { energy_entity_id: "sensor.breaker_energy" },
@@ -569,7 +569,7 @@ function applianceRows(page: Page) {
 
 test("an appliance row judges depth against its own lookback", async ({ page }) => {
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices[0].consumption.projection.lookback_days = 40;
+    config.devices.items[0].consumption.projection.lookback_days = 40;
     await mountEditor(page, config);
 
     // One device, one row: its meter (33 d) is short of its own 40 days, while
@@ -599,7 +599,7 @@ test("an appliance's activity entity is judged against the lookback training rea
     // read over the longest learning sharer's lookback, and a fixed sharer's
     // activity still divides it; a fixed appliance on its own meter reads nothing.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices = [
+    config.devices.items = [
         {
             id: "dishwasher",
             name: "Dishwasher",
@@ -652,11 +652,11 @@ test("an appliance's activity entity is judged against the lookback training rea
     ];
     await mountEditor(page, config, {
         ...DEPTHS,
-        "devices.0.consumption.energy_entity_id": { raw_states: 33, statistics: 33 },
-        "devices.0.controls.switch.entity_id": { raw_states: 5, statistics: 0 },
-        "devices.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
-        "devices.1.children.0.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
-        "devices.1.children.1.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
+        "devices.items.0.consumption.energy_entity_id": { raw_states: 33, statistics: 33 },
+        "devices.items.0.controls.switch.entity_id": { raw_states: 5, statistics: 0 },
+        "devices.items.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.items.1.children.0.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.items.1.children.1.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
     });
 
     // One row per device (#321): the pool reads nothing, so it is absent.
@@ -701,21 +701,21 @@ test("an appliance's activity entity is judged against the lookback training rea
     );
     expect(requestedKeys).toEqual(
         expect.arrayContaining([
-            "devices.0.consumption.energy_entity_id",
-            "devices.0.controls.switch.entity_id",
-            "devices.1.consumption.energy_entity_id",
-            "devices.1.children.0.controls.climate.entity_id",
-            "devices.1.children.1.controls.climate.entity_id",
+            "devices.items.0.consumption.energy_entity_id",
+            "devices.items.0.controls.switch.entity_id",
+            "devices.items.1.consumption.energy_entity_id",
+            "devices.items.1.children.0.controls.climate.entity_id",
+            "devices.items.1.children.1.controls.climate.entity_id",
         ]),
     );
-    expect(requestedKeys).not.toContain("devices.2.controls.switch.entity_id");
+    expect(requestedKeys).not.toContain("devices.items.2.controls.switch.entity_id");
 });
 
 test("an EV charger sharing a meter is judged by its charge switch", async ({ page }) => {
     // The backend splits a shared meter by each sharer's running signal, and an
     // EV charger's is its charge switch, so that history's depth is shown too.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices = [
+    config.devices.items = [
         {
             id: "garage_breaker",
             consumption: { energy_entity_id: "sensor.garage_breaker" },
@@ -742,9 +742,9 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
     ];
     await mountEditor(page, config, {
         ...DEPTHS,
-        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
-        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
-        "devices.0.children.1.controls.charge.entity_id": { raw_states: 3, statistics: 0 },
+        "devices.items.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.items.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.items.0.children.1.controls.charge.entity_id": { raw_states: 3, statistics: 0 },
     });
 
     const ev = applianceRows(page).filter({ hasText: "Garage EV" });
@@ -755,7 +755,7 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
     const requestedKeys = await page.evaluate(() =>
         ((window as any).__inspectRequests.at(-1)?.targets ?? []).map((target: any) => target.key),
     );
-    expect(requestedKeys).toContain("devices.0.children.1.controls.charge.entity_id");
+    expect(requestedKeys).toContain("devices.items.0.children.1.controls.charge.entity_id");
 });
 
 test("a learner on a shared meter also lists its metered siblings' meters", async ({ page }) => {
@@ -763,7 +763,7 @@ test("a learner on a shared meter also lists its metered siblings' meters", asyn
     // children, so a shallow sub-meter distorts the estimate as much as the
     // parent's meter would.
     const config = JSON.parse(JSON.stringify(CONFIG));
-    config.devices = [
+    config.devices.items = [
         {
             id: "garage_breaker",
             consumption: {
@@ -794,9 +794,9 @@ test("a learner on a shared meter also lists its metered siblings' meters", asyn
     ];
     await mountEditor(page, config, {
         ...DEPTHS,
-        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
-        "devices.0.children.1.consumption.energy_entity_id": { raw_states: 4, statistics: 4 },
-        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.items.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.items.0.children.1.consumption.energy_entity_id": { raw_states: 4, statistics: 4 },
+        "devices.items.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
     });
 
     const heater = applianceRows(page).filter({ hasText: "Garage heater" });

@@ -91,7 +91,7 @@ _RUNTIME_TYPE_BY_KIND = {
 def _config() -> dict:
     """One installation with an inverter and one appliance of every kind."""
     return {
-        "devices": [
+        "devices": {"items": [
             {
                 "kind": "inverter",
                 "id": "inverter",
@@ -164,7 +164,7 @@ def _config() -> dict:
                     "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
                 },
             },
-        ],
+        ]},
     }
 
 
@@ -349,7 +349,7 @@ class ControllableEntitiesPayloadTests(unittest.TestCase):
     def test_appliances_keep_the_order_they_were_configured_in(self) -> None:
         """Grouping by kind would reorder the card's lanes."""
         config = _config()
-        config["devices"][1:] = list(reversed(config["devices"][1:]))
+        config["devices"]["items"][1:] = list(reversed(config["devices"]["items"][1:]))
         payload = build_controllable_entities(
             control_config=read_schedule_control_config(config),
             registry=build_appliances_runtime_registry(config),
@@ -373,7 +373,7 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
     @staticmethod
     def _v6_config() -> dict:
         """The same installation as :func:`_config`, in the pre-v7 shape."""
-        controllables = _config()["devices"]
+        controllables = _config()["devices"]["items"]
         inverter, *appliances = controllables
         mode = inverter["controls"]["mode"]
         return {
@@ -390,7 +390,7 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
     def test_the_migrated_document_matches_the_v7_authored_one(self) -> None:
         migrated, _ids = migrate_config_document(self._v6_config())
 
-        self.assertEqual(migrated["devices"], _config()["devices"])
+        self.assertEqual(migrated["devices"]["items"], _config()["devices"]["items"])
 
     def test_the_inverter_runtime_survives_the_migration(self) -> None:
         migrated, _ids = migrate_config_document(self._v6_config())
@@ -477,7 +477,7 @@ class DeviceTreeReaderTests(unittest.TestCase):
     """The ``devices`` tree, flattened, and what is derived from it."""
 
     def test_the_tree_flattens_in_document_order_with_parents(self) -> None:
-        config = {"devices": [_device("a"), _study(), _device("z")]}
+        config = {"devices": {"items": [_device("a"), _study(), _device("z")]}}
 
         self.assertEqual(
             [
@@ -494,7 +494,7 @@ class DeviceTreeReaderTests(unittest.TestCase):
         )
 
     def test_a_config_without_devices_yields_nothing(self) -> None:
-        for config in ({}, None, {"devices": "nonsense"}):
+        for config in ({}, None, {"devices": "nonsense"}, {"devices": {"items": "nonsense"}}):
             with self.subTest(config=config):
                 self.assertEqual(list(iter_devices(config)), [])
                 self.assertEqual(read_carved_meters(config), [])
@@ -511,15 +511,15 @@ class DeviceTreeReaderTests(unittest.TestCase):
 
     def test_children_are_indexed_by_id_with_the_default_kind(self) -> None:
         self.assertEqual(
-            read_controllable_kinds_by_id({"devices": [_study()]}),
+            read_controllable_kinds_by_id({"devices": {"items": [_study()]}}),
             {"study": "generic", "plug": "generic", "lamp": "generic"},
         )
 
     def test_the_inverter_is_found_at_the_top_level(self) -> None:
         inverter = _device("inverter", kind="inverter")
 
-        self.assertIs(find_inverter_device({"devices": [_study(), inverter]}), inverter)
-        self.assertEqual(find_inverter_device({"devices": [_study()]}), {})
+        self.assertIs(find_inverter_device({"devices": {"items": [_study(), inverter]}}), inverter)
+        self.assertEqual(find_inverter_device({"devices": {"items": [_study()]}}), {})
 
 
 class CarvedMeterReaderTests(unittest.TestCase):
@@ -527,9 +527,9 @@ class CarvedMeterReaderTests(unittest.TestCase):
 
     def test_a_schedulable_leaf_is_carved_under_its_own_id(self) -> None:
         config = {
-            "devices": [
+            "devices": {"items": [
                 _device("pool", meter="sensor.pool_energy", name="Pool pump", schedulable=True)
-            ]
+            ]}
         }
 
         self.assertEqual(
@@ -545,7 +545,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
         )
 
     def test_a_passive_leaf_is_not_carved(self) -> None:
-        config = {"devices": [_device("fridge", meter="sensor.fridge_energy")]}
+        config = {"devices": {"items": [_device("fridge", meter="sensor.fridge_energy")]}}
 
         self.assertEqual(read_carved_meters(config), [])
 
@@ -554,7 +554,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
     ) -> None:
         """The live AC breaker: one row, labelled by the meter, naming all four."""
         self.assertEqual(
-            read_carved_meters({"devices": [_ac_breaker()]}),
+            read_carved_meters({"devices": {"items": [_ac_breaker()]}}),
             [
                 {
                     "energy_entity_id": "sensor.jistic_klimatizace_energy",
@@ -572,7 +572,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
             children=[_switched("lamp"), _switched("radio")],
         )
 
-        self.assertEqual(read_carved_meters({"devices": [breaker]}), [])
+        self.assertEqual(read_carved_meters({"devices": {"items": [breaker]}}), [])
 
     def test_nested_meters_are_carved_once_each(self) -> None:
         """The study: the plug is carved on its own; the breaker only if its
@@ -580,7 +580,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
         self.assertEqual(
             [
                 (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
-                for meter in read_carved_meters({"devices": [_study()]})
+                for meter in read_carved_meters({"devices": {"items": [_study()]}})
             ],
             [("sensor.plug_energy", ["plug"], [])],
         )
@@ -590,7 +590,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
         self.assertEqual(
             [
                 (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
-                for meter in read_carved_meters({"devices": [study]})
+                for meter in read_carved_meters({"devices": {"items": [study]}})
             ],
             [
                 ("sensor.study_energy", ["lamp"], ["sensor.plug_energy"]),
@@ -599,7 +599,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
         )
 
     def test_the_inverter_is_never_carved(self) -> None:
-        config = {"devices": [_device("inverter", kind="inverter", meter="sensor.x")]}
+        config = {"devices": {"items": [_device("inverter", kind="inverter", meter="sensor.x")]}}
 
         self.assertEqual(read_carved_meters(config), [])
 
@@ -608,7 +608,7 @@ class SharedMeterReaderTests(unittest.TestCase):
     """``read_shared_meters``: who splits a meter, from the tree alone."""
 
     def test_a_meters_meterless_children_split_it_passive_ones_included(self) -> None:
-        config = {"devices": [_study()]}
+        config = {"devices": {"items": [_study()]}}
 
         self.assertEqual(
             read_shared_meters(config),
@@ -621,7 +621,7 @@ class SharedMeterReaderTests(unittest.TestCase):
         )
 
     def test_each_member_runs_by_its_own_control(self) -> None:
-        shared = read_shared_meters({"devices": [_ac_breaker()]})
+        shared = read_shared_meters({"devices": {"items": [_ac_breaker()]}})
 
         self.assertEqual(
             shared["sensor.jistic_klimatizace_energy"]["members"],
@@ -632,14 +632,14 @@ class SharedMeterReaderTests(unittest.TestCase):
         study = _study()
         del study["children"][1]
 
-        self.assertEqual(read_shared_meters({"devices": [study]}), {})
+        self.assertEqual(read_shared_meters({"devices": {"items": [study]}}), {})
 
 
 class SchedulableConsumerReaderTests(unittest.TestCase):
     """``read_schedulable_consumers``: everything the planner can schedule demand for."""
 
     def test_only_schedulable_devices_are_listed_at_every_level(self) -> None:
-        config = {"devices": [_device("fridge", meter="sensor.fridge"), _ac_breaker(), _study()]}
+        config = {"devices": {"items": [_device("fridge", meter="sensor.fridge"), _ac_breaker(), _study()]}}
 
         self.assertEqual(
             [consumer["id"] for consumer in read_schedulable_consumers(config)],
@@ -647,7 +647,7 @@ class SchedulableConsumerReaderTests(unittest.TestCase):
         )
 
     def test_a_meterless_child_names_its_effective_meter_and_carve_out(self) -> None:
-        consumers = read_schedulable_consumers({"devices": [_ac_breaker()]})
+        consumers = read_schedulable_consumers({"devices": {"items": [_ac_breaker()]}})
 
         self.assertEqual(
             consumers[0],
@@ -660,7 +660,7 @@ class SchedulableConsumerReaderTests(unittest.TestCase):
         )
 
     def test_the_inverter_is_never_a_scheduled_consumer(self) -> None:
-        config = {"devices": [_device("inverter", kind="inverter", meter="sensor.x")]}
+        config = {"devices": {"items": [_device("inverter", kind="inverter", meter="sensor.x")]}}
 
         self.assertEqual(read_schedulable_consumers(config), [])
 

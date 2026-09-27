@@ -454,7 +454,7 @@ class ControllablesUnificationTests(unittest.TestCase):
         self.assertNotIn("scheduler", migrated)
         self.assertNotIn("appliances", migrated)
         self.assertEqual(
-            migrated["devices"],
+            migrated["devices"]["items"],
             [
                 {
                     "kind": "inverter",
@@ -484,12 +484,12 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"appliances": [self._APPLIANCE, second]}
         )
 
-        self.assertEqual(migrated["devices"], [self._APPLIANCE_V9, second_v9])
+        self.assertEqual(migrated["devices"]["items"], [self._APPLIANCE_V9, second_v9])
 
     def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
         migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
 
-        self.assertEqual(migrated["devices"], [])
+        self.assertEqual(migrated["devices"]["items"], [])
 
     def test_a_document_with_neither_key_grows_no_controllables(self) -> None:
         migrated, _ids = self._migrate_from_v6({"history_buckets": 60})
@@ -501,7 +501,7 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"scheduler": {"control": {**self._CONTROL, "future_key": "keep-me"}}}
         )
 
-        self.assertEqual(migrated["devices"][0]["future_key"], "keep-me")
+        self.assertEqual(migrated["devices"]["items"][0]["future_key"], "keep-me")
 
     def test_an_appliances_value_that_is_not_a_list_is_moved_not_dropped(self) -> None:
         migrated, _ids = self._migrate_from_v6({"appliances": {"oops": True}})
@@ -520,9 +520,10 @@ class ControllablesUnificationTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(
-            [entry["kind"] for entry in migrated["devices"]],
+            [entry["kind"] for entry in migrated["devices"]["items"]],
             ["inverter", "generic"],
         )
+        self.assertEqual(list(migrated["devices"]), ["items"])
         self.assertEqual(ids, ["e"])
 
     def test_a_current_version_document_is_left_exactly_as_it_is(self) -> None:
@@ -704,7 +705,7 @@ class ConsumptionBlockTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(
             {"controllables": list(controllables), "config_version": 8}
         )
-        return migrated["devices"]
+        return migrated["devices"]["items"]
 
     def test_the_meter_comes_up_and_lookback_flattens(self) -> None:
         (entry,) = self._migrate_from_v8(
@@ -1666,7 +1667,10 @@ class VisualizationRelocationTests(unittest.TestCase):
 
         migrated, ids = self._migrate_from_v17(dict(document))
 
+        # v22 moves the regex on to the ``devices`` section.
+        regex = document.pop("power_sensor_name_cleaner_regex")
         self.assertEqual(migrated["visualization"], document)
+        self.assertEqual(migrated["devices"], {"name_cleaner_regex": regex})
         for key in document:
             self.assertNotIn(key, migrated)
         self.assertEqual(ids, [])
@@ -1855,7 +1859,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
 
         self.assertNotIn("controllables", migrated)
         self.assertEqual(
-            migrated["devices"],
+            migrated["devices"]["items"],
             [
                 inverter,
                 {
@@ -1887,7 +1891,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
             return {**entry, "schedulable": True}
 
         self.assertEqual(
-            migrated["devices"],
+            migrated["devices"]["items"],
             [
                 {**pool, "schedulable": True},
                 {
@@ -1911,7 +1915,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(migrated["devices"][2]["id"], "breaker_3")
+        self.assertEqual(migrated["devices"]["items"][2]["id"], "breaker_3")
 
     def test_a_value_that_is_not_a_list_moves_across_unchanged(self) -> None:
         migrated = self._migrate_from_v19({"oops": True})
@@ -1946,7 +1950,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
 
         migrated = self._migrate_from_v20({"devices": devices})
 
-        self.assertEqual(migrated["devices"], devices)
+        self.assertEqual(migrated["devices"]["items"], devices)
 
     def test_a_document_without_devices_gets_the_imported_rows(self) -> None:
         migrated = self._migrate_from_v20(
@@ -1954,7 +1958,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["devices"],
+            migrated["devices"]["items"],
             [{"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}],
         )
 
@@ -1974,7 +1978,8 @@ class EnergyImportMigrationTests(unittest.TestCase):
 
         migrated = self._migrate_from_v20({"power_devices": {"house": dict(house)}})
 
-        self.assertEqual(migrated["power_devices"], {"house": house})
+        # Kept by v21, then moved to the ``devices`` section by v22.
+        self.assertEqual(migrated["devices"], house)
 
     def test_conflicts_and_external_statistics_are_skipped_and_logged(self) -> None:
         pump = {
@@ -1997,7 +2002,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(migrated["devices"], [pump])
+        self.assertEqual(migrated["devices"]["items"], [pump])
         output = "\n".join(logs.output)
         self.assertIn("WARNING", output)
         self.assertIn("sensor.plug_energy", output)
@@ -2020,10 +2025,102 @@ class EnergyImportMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["devices"][0]["consumption"],
+            migrated["devices"]["items"][0]["consumption"],
             {"energy_entity_id": meter, "power_entity_id": "sensor.breaker_power"},
         )
-        self.assertEqual(len(migrated["devices"]), 1)
+        self.assertEqual(len(migrated["devices"]["items"]), 1)
+
+
+class DevicesSectionMigrationTests(unittest.TestCase):
+    """v21 -> v22: ``devices`` becomes a section object holding its settings."""
+
+    WASHER = {"id": "washer", "consumption": {"energy_entity_id": "sensor.washer_energy"}}
+
+    @staticmethod
+    def _migrate_from_v21(document):
+        migrated, _ids = migrate_config_document({"config_version": 21, **document})
+        return migrated
+
+    def test_the_list_is_wrapped(self) -> None:
+        migrated = self._migrate_from_v21({"devices": [self.WASHER]})
+
+        self.assertEqual(migrated["devices"], {"items": [self.WASHER]})
+
+    def test_the_regex_moves_out_of_visualization(self) -> None:
+        migrated = self._migrate_from_v21(
+            {
+                "visualization": {
+                    "sources_title": "Zdroje",
+                    "power_sensor_name_cleaner_regex": " Power$",
+                },
+                "devices": [self.WASHER],
+            }
+        )
+
+        self.assertEqual(migrated["visualization"], {"sources_title": "Zdroje"})
+        self.assertEqual(
+            migrated["devices"],
+            {"name_cleaner_regex": " Power$", "items": [self.WASHER]},
+        )
+
+    def test_each_label_moves_out_of_the_house(self) -> None:
+        for key in ("power_sensor_label", "power_switch_label"):
+            with self.subTest(key=key):
+                migrated = self._migrate_from_v21(
+                    {
+                        "power_devices": {
+                            "house": {
+                                "entities": {"power": "sensor.house_power"},
+                                key: "Label",
+                            }
+                        }
+                    }
+                )
+
+                self.assertEqual(
+                    migrated["power_devices"]["house"],
+                    {"entities": {"power": "sensor.house_power"}},
+                )
+                self.assertEqual(migrated["devices"], {key: "Label"})
+
+    def test_the_unmeasured_title_is_dropped(self) -> None:
+        migrated = self._migrate_from_v21(
+            {"power_devices": {"house": {"unmeasured_power_title": "Unmeasured"}}}
+        )
+
+        self.assertEqual(migrated["power_devices"], {"house": {}})
+        self.assertNotIn("devices", migrated)
+
+    def test_no_devices_object_is_created_when_nothing_goes_in_it(self) -> None:
+        migrated = self._migrate_from_v21(
+            {"visualization": {"sources_title": "Zdroje"}, "power_devices": {"house": {}}}
+        )
+
+        self.assertNotIn("devices", migrated)
+
+    def test_a_devices_value_that_is_not_a_list_is_left_for_the_validator(self) -> None:
+        migrated = self._migrate_from_v21(
+            {
+                "devices": {"oops": True},
+                "visualization": {"power_sensor_name_cleaner_regex": " Power$"},
+            }
+        )
+
+        self.assertEqual(migrated["devices"], {"oops": True})
+        self.assertEqual(
+            migrated["visualization"], {"power_sensor_name_cleaner_regex": " Power$"}
+        )
+
+    def test_a_null_devices_value_counts_as_absent(self) -> None:
+        migrated = self._migrate_from_v21(
+            {
+                "devices": None,
+                "visualization": {"power_sensor_name_cleaner_regex": " Power$"},
+            }
+        )
+
+        self.assertEqual(migrated["devices"], {"name_cleaner_regex": " Power$"})
+        self.assertEqual(migrated["visualization"], {})
 
 
 if __name__ == "__main__":

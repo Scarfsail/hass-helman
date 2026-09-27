@@ -189,7 +189,6 @@ def test_inspector_day_serializes_frontend_contract():
             "hasImportPrice": False,
             "hasExportPrice": False,
         },
-        "houseUnmeasuredLabel": None,
         "priceUnit": None,
         "batterySocBounds": [],
         "trainingExplainability": None,

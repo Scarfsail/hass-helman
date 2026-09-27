@@ -65,7 +65,7 @@ const controllable = (id: string, name: string) => ({
 
 const CONFIG = {
     config_version: 7,
-    devices: [controllable("boiler", "Boiler"), controllable("pump", "Pump")],
+    devices: { items: [controllable("boiler", "Boiler"), controllable("pump", "Pump")] },
     automation: {
         enabled: true,
         appliance_optimizers: [
@@ -91,7 +91,7 @@ const CONFIG = {
 };
 
 interface DraftDocument {
-    devices: { id: string }[];
+    devices: { items: { id: string }[] };
     automation: {
         appliance_optimizers: {
             id: string;
@@ -207,7 +207,7 @@ async function openFirstOptimizer(page: Page): Promise<void> {
 }
 
 const controllableIds = (page: Page) =>
-    page.evaluate(() => window.__editorConfig().devices.map((entry) => entry.id));
+    page.evaluate(() => window.__editorConfig().devices.items.map((entry) => entry.id));
 
 const optimizerIds = (page: Page) =>
     page.evaluate(() =>

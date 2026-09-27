@@ -68,7 +68,7 @@ const CONFIG = {
             slot_invalidation: { max_battery_soc_percent: 95 },
         },
     },
-    devices: [
+    devices: { items: [
         {
             kind: "inverter",
             id: "inverter",
@@ -86,7 +86,7 @@ const CONFIG = {
                 projection: { strategy: "fixed", hourly_energy_kwh: 2 },
             },
         },
-    ],
+    ] },
 };
 
 /**
@@ -95,9 +95,9 @@ const CONFIG = {
  * devices.
  */
 const DEVICE_ENTITY_PATHS = [
-    "devices.1.controls.switch.entity_id",
-    "devices.1.consumption.energy_entity_id",
-    "devices.1.consumption.power_entity_id",
+    "devices.items.1.controls.switch.entity_id",
+    "devices.items.1.consumption.energy_entity_id",
+    "devices.items.1.consumption.power_entity_id",
 ].sort();
 
 const DAILY_ENERGY_ENTITIES =
@@ -127,7 +127,7 @@ const POWER_DEVICE_ENTITY_PATHS = [
     "power_devices.grid.entities.power",
     "power_devices.grid.forecast.sell_price_entity_id",
     // The inverter keeps its `devices` entry but is edited here.
-    "devices.0.controls.mode.entity_id",
+    "devices.items.0.controls.mode.entity_id",
 ].sort();
 
 async function mountEditor(page: Page): Promise<void> {

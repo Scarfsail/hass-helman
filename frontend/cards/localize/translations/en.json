@@ -33,7 +33,6 @@
       "house_actual": "Actual house",
       "house_composition": "House composition (actual)",
       "house_composition_forecast": "House composition (forecast)",
-      "house_unmeasured": "Unmeasured consumption",
       "house_base_load": "Base load",
       "house_group_base": "Base consumption",
       "house_group_deferrable": "Deferrable consumption",
@@ -118,6 +117,7 @@
   },
   "house_section": {
     "deferrable_tag": "deferrable",
+    "unmeasured": "👻 Untracked consumption",
     "show_more": "More",
     "show_less": "Less"
   },

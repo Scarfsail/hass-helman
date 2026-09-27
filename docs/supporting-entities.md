@@ -318,19 +318,20 @@ The matching helman config:
 
 ```yaml
 devices:
-  - kind: inverter
-    id: inverter
-    name: Inverter
-    controls:
-      mode:
-        entity_id: input_select.rezim_fv
-        options:
-          normal: Standardní
-          charge_to_target_soc: Nucené nabíjení
-          discharge_to_target_soc: Nucené vybíjení
-          stop_charging: Zákaz nabíjení
-          stop_discharging: Zákaz vybíjení
-          stop_export: Zákaz exportu
+  items:
+    - kind: inverter
+      id: inverter
+      name: Inverter
+      controls:
+        mode:
+          entity_id: input_select.rezim_fv
+          options:
+            normal: Standardní
+            charge_to_target_soc: Nucené nabíjení
+            discharge_to_target_soc: Nucené vybíjení
+            stop_charging: Zákaz nabíjení
+            stop_discharging: Zákaz vybíjení
+            stop_export: Zákaz exportu
 ```
 
 Every action you map must be handled by your automation, or helman will select an option that does
@@ -382,17 +383,18 @@ it are inverter-native and used directly:
 
 ```yaml
 devices:
-  - kind: ev_charger
-    id: garage-ev
-    schedulable: true
-    controls:
-      charge:
-        entity_id: switch.ev_nabijeni          # this helper
-      use_mode:
-        entity_id: select.solax_ev_charger_charger_use_mode   # native
-        values:
-          Fast: { behavior: fixed_max_power }
-          ECO:  { behavior: surplus_aware }
+  items:
+    - kind: ev_charger
+      id: garage-ev
+      schedulable: true
+      controls:
+        charge:
+          entity_id: switch.ev_nabijeni          # this helper
+        use_mode:
+          entity_id: select.solax_ev_charger_charger_use_mode   # native
+          values:
+            Fast: { behavior: fixed_max_power }
+            ECO:  { behavior: surplus_aware }
 ```
 
 **How it works.** `select.solax_ev_charger_charger_use_mode` offers `Stop`, `Fast`, `ECO`, `Green`.

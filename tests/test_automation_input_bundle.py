@@ -547,7 +547,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"devices": []}
+            {"devices": {"items": []}}
         )
         coordinator._automation_input_bundle = None
         house_forecast = _make_house_forecast()
@@ -622,7 +622,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "devices": [
+                "devices": {"items": [
                     {
                         "kind": "generic",
                         "schedulable": True,
@@ -691,7 +691,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ],
                     },
-                ]
+                ]}
             }
         )
         coordinator._appliance_energy_estimates = {"living-room-hvac": 0.9}
@@ -714,7 +714,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "devices": [
+                "devices": {"items": [
                     {
                         "kind": "generic",
                         "schedulable": True,
@@ -762,7 +762,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                             },
                         },
                     },
-                ]
+                ]}
             }
         )
         # living-room-hvac is absent from the stored estimates, which is what a
@@ -1025,7 +1025,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     """What the coordinator hands the batched reader, and what it does with the answer."""
 
     APPLIANCES = {
-        "devices": [
+        "devices": {"items": [
             {
                 "kind": "generic",
                 "schedulable": True,
@@ -1068,7 +1068,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                     },
                 },
             },
-        ]
+        ]}
     }
 
     def _coordinator(self, reader):
@@ -1235,7 +1235,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         # The request reads shared meters from the config and the appliances
         # from the registry built off it, so both see the same document.
         coordinator._active_config = {
-            "devices": appliances if appliances is not None else [
+            "devices": {"items": appliances if appliances is not None else [
                 {
                     "kind": "generic",
                     "schedulable": True,
@@ -1251,7 +1251,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                         },
                     },
                 },
-            ]
+            ]}
         }
         coordinator._appliances_registry = build_appliances_runtime_registry(
             coordinator._active_config

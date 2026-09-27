@@ -150,7 +150,7 @@ def test_an_upgrade_imports_the_energy_devices() -> None:
     storage = _load({"config_version": 20, "power_devices": {}})
 
     assert len(energy_requests) == 1
-    assert storage.config["devices"] == [
+    assert storage.config["devices"]["items"] == [
         {"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}
     ]
 
@@ -167,6 +167,6 @@ def test_a_fresh_install_starts_with_no_devices() -> None:
 def test_a_current_document_never_reads_energy() -> None:
     energy_requests.clear()
 
-    _load({"config_version": 21})
+    _load({"config_version": 22})
 
     assert energy_requests == []

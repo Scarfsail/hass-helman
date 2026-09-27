@@ -39,8 +39,14 @@ for _name, _path in [
     sys.modules[_name] = _pkg
 
 from custom_components.helman import tree_builder  # noqa: E402
+from custom_components.helman.appliances.config import (  # noqa: E402
+    build_appliances_runtime_registry,
+)
 from custom_components.helman.automation.migration import (  # noqa: E402
     migrate_config_document,
+)
+from custom_components.helman.controllables.config import (  # noqa: E402
+    entity_friendly_name,
 )
 from custom_components.helman.entity_inspection import inspect_target  # noqa: E402
 from custom_components.helman.house_device_consumers import (  # noqa: E402
@@ -211,6 +217,13 @@ _COMPARED = (
 )
 
 
+def _blank_remainder_names(nodes: dict[str, dict]) -> None:
+    for node in nodes.values():
+        if node["isUnmeasured"]:
+            node["displayName"] = ""
+        _blank_remainder_names(node["children"])
+
+
 def _slim(nodes: list[dict]) -> dict[str, dict]:
     """``id -> node``, compared fields only; order is the card's business (it sorts by power)."""
     return {
@@ -287,7 +300,7 @@ class TreeFromDevicesTests(unittest.TestCase):
             },
             "sensor_jistic_klimatizace_energy_unmeasured": {
                 "id": "sensor_jistic_klimatizace_energy_unmeasured",
-                "displayName": "Unmeasured power",
+                "displayName": "",
                 "powerSensorId": "sensor.helman_unmeasured_power_jistic_klimatizace_energy",
                 "switchEntityId": None,
                 "icon": None,
@@ -304,6 +317,8 @@ class TreeFromDevicesTests(unittest.TestCase):
         obyvak = breaker["children"]["klima-obyvak"]
         obyvak["labels"] = [LABEL_NIGHT]
         obyvak["labelBadgeTexts"] = ["⏻😴"]
+        # A remainder carries no name of its own: the card names every one.
+        _blank_remainder_names(expected)
 
         self.assertEqual(_slim(self.house["children"]), expected)
 
@@ -341,7 +356,7 @@ class SharedMeterRowsTests(unittest.TestCase):
 
     def setUp(self) -> None:
         config = _upgrade()
-        breaker = next(d for d in config["devices"] if d.get("id") == "jistic_klimatizace_energy")
+        breaker = next(d for d in config["devices"]["items"] if d.get("id") == "jistic_klimatizace_energy")
         breaker["controls"] = {"switch": {"entity_id": "switch.jistic_klimatizace"}}
         self.breaker = next(
             node for node in _house(_build(config))["children"] if node["id"] == AC_BREAKER
@@ -380,6 +395,8 @@ class SharedMeterRowsTests(unittest.TestCase):
             remainder["powerSensorId"],
             "sensor.helman_unmeasured_power_jistic_klimatizace_energy",
         )
+        # The card names it; the tree leaves the name empty.
+        self.assertEqual(remainder["displayName"], "")
 
 
 class PowerlessParentTests(unittest.TestCase):
@@ -387,7 +404,7 @@ class PowerlessParentTests(unittest.TestCase):
         # An energy-only Energy parent: nothing to subtract its children from.
         config = {
             **_upgrade(),
-            "devices": [
+            "devices": {"items": [
                 {
                     "id": "garage",
                     "consumption": {"energy_entity_id": "sensor.garage_energy"},
@@ -410,7 +427,7 @@ class PowerlessParentTests(unittest.TestCase):
                         }
                     ],
                 }
-            ],
+            ]},
         }
 
         (garage,) = [
@@ -425,6 +442,50 @@ class PowerlessParentTests(unittest.TestCase):
         (workshop,) = garage["children"]
         self.assertEqual(
             [child["isUnmeasured"] for child in workshop["children"]], [False, True]
+        )
+
+
+class NameResolutionTests(unittest.TestCase):
+    """Every surface names an unnamed device alike, cleaned by ``devices.name_cleaner_regex``."""
+
+    CONFIG = {
+        "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "devices": {
+            "name_cleaner_regex": " Výkon$",
+            "items": [
+                {
+                    "kind": "generic",
+                    "id": "washer",
+                    "schedulable": True,
+                    "controls": {"switch": {"entity_id": "switch.washer"}},
+                    "consumption": {
+                        "energy_entity_id": "sensor.washer_energy",
+                        "power_entity_id": "sensor.washer_power",
+                        "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.0},
+                    },
+                }
+            ],
+        },
+    }
+
+    def test_the_card_the_runtimes_and_the_editor_agree(self) -> None:
+        hass = SimpleNamespace(states=_States())
+
+        (row,) = [
+            node
+            for node in _house(_build(self.CONFIG))["children"]
+            if not node["isUnmeasured"]
+        ]
+        registry = build_appliances_runtime_registry(
+            self.CONFIG, friendly_name=lambda entity_id: entity_friendly_name(hass, entity_id)
+        )
+        placeholder = inspect_target(
+            hass, self.CONFIG, ("devices", "items", 0, "name")
+        ).placeholder
+
+        self.assertEqual(
+            [row["displayName"], registry.appliances[0].name, placeholder],
+            ["Washer", "Washer", "Washer"],
         )
 
 
@@ -448,13 +509,13 @@ class MissingEntityTests(unittest.TestCase):
 
         index = next(
             i
-            for i, device in enumerate(config["devices"])
+            for i, device in enumerate(config["devices"]["items"])
             if device.get("id") == "jistic_klimatizace_energy"
         )
         inspection = inspect_target(
             SimpleNamespace(states=_States(missing=frozenset({missing}))),
             config,
-            ("devices", index, "consumption", "power_entity_id"),
+            ("devices", "items", index, "consumption", "power_entity_id"),
         )
         self.assertEqual(inspection.entity_id, missing)
         self.assertEqual(inspection.status, "unavailable")

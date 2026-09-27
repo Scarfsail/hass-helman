@@ -250,7 +250,6 @@ async function mountInspector(
                 hasBatteryForecast: false,
                 hasBatteryActual: false,
             },
-            houseUnmeasuredLabel: null,
             batterySocBounds: [],
             trainingExplainability: null,
         });

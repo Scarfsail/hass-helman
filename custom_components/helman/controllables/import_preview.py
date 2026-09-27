@@ -6,7 +6,12 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 from dataclasses import asdict
-from .config import iter_devices, peek_controllable_id
+from .config import (
+    iter_devices,
+    peek_controllable_id,
+    read_devices,
+    read_devices_section,
+)
 from .energy_import import import_energy_preferences
 from ..config_validation import validate_config_document
 
@@ -15,9 +20,12 @@ def preview_energy_import(
     config: dict[str, Any], preferences: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     result = import_energy_preferences(
-        config.get("devices") or [], preferences, manual=True
+        read_devices(config) or [], preferences, manual=True
     )
-    proposed = {**config, "devices": result.devices}
+    proposed = {
+        **config,
+        "devices": {**read_devices_section(config), "items": result.devices},
+    }
     # Imported devices always get an id, so an id-less one is an existing
     # half-edited device: it cannot be matched across the import, and the
     # import neither adds it nor changes it.

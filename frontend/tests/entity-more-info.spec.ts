@@ -33,7 +33,7 @@ const CONFIG = {
         grid: { entities: { power: "sensor.grid_power" } },
         house: { entities: { power: "sensor.house_power" } },
     },
-    devices: [],
+    devices: { items: [] },
 };
 
 /** What the draft reads, what the *stored* document read: different entities. */

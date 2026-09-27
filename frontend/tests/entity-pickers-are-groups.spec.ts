@@ -105,7 +105,7 @@ const CONFIG = {
         house_consumption: { min_history_days: 30 },
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
-    devices: [
+    devices: { items: [
         {
             kind: "inverter",
             id: "inverter",
@@ -163,7 +163,7 @@ const CONFIG = {
                 projection: { strategy: "fixed", hourly_energy_kwh: 1.5 },
             },
         },
-    ],
+    ] },
 };
 
 /** The ones the user pointed at: loose fields beside a bordered sensor. */

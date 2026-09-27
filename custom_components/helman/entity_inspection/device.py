@@ -15,7 +15,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from ..controllables.config import resolve_device_icon, resolve_device_name
+from ..controllables.config import (
+    entity_friendly_name,
+    read_name_cleaner_regex,
+    resolve_device_icon,
+    resolve_device_name,
+)
 from .context import InspectionRequest, PathSegment
 from .model import Inspection
 
@@ -23,7 +28,7 @@ _DEVICE_FIELDS = ("name", "icon")
 
 
 def device_field(path: Sequence[PathSegment]) -> str | None:
-    """``name`` or ``icon`` when ``path`` is ``devices.<i>(.children.<j>)*.<field>``."""
+    """``name`` or ``icon`` when ``path`` is ``devices.items.<i>(.children.<j>)*.<field>``."""
     prefix_length = device_prefix_length(path)
     if prefix_length is None or len(path) != prefix_length + 1:
         return None
@@ -33,10 +38,15 @@ def device_field(path: Sequence[PathSegment]) -> str | None:
 
 
 def device_prefix_length(path: Sequence[PathSegment]) -> int | None:
-    """Length of the ``devices.<i>(.children.<j>)*`` prefix, at any depth."""
-    if len(path) < 2 or path[0] != "devices" or not _is_index(path[1]):
+    """Length of the ``devices.items.<i>(.children.<j>)*`` prefix, at any depth."""
+    if (
+        len(path) < 3
+        or path[0] != "devices"
+        or path[1] != "items"
+        or not _is_index(path[2])
+    ):
         return None
-    length = 2
+    length = 3
     while (
         length + 1 < len(path)
         and path[length] == "children"
@@ -54,11 +64,10 @@ def evaluate_device_field(request: InspectionRequest) -> Inspection:
         return Inspection(entity_id=None, status="unsupported")
     derived = {key: value for key, value in device.items() if key != field}
     if field == "name":
-        cleaner_regex = request.value("visualization", "power_sensor_name_cleaner_regex")
         placeholder = resolve_device_name(
             derived,
-            friendly_name=lambda entity_id: _attribute(request, entity_id, "friendly_name"),
-            cleaner_regex=cleaner_regex if isinstance(cleaner_regex, str) else None,
+            friendly_name=lambda entity_id: entity_friendly_name(request.hass, entity_id),
+            cleaner_regex=read_name_cleaner_regex(request.config),
         )
     else:
         placeholder = resolve_device_icon(

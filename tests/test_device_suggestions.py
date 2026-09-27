@@ -39,11 +39,9 @@ def test_candidates_rank_labels_and_device_names_without_discarding_ambiguity():
     devices = NS(async_get=lambda id: NS(name="Breaker", name_by_user="AC breaker"))
     hass = NS(states=NS(get=states.get))
     config = {
-        "power_devices": {
-            "house": {
-                "power_sensor_label": "Preferred power",
-                "power_switch_label": "Preferred switch",
-            }
+        "devices": {
+            "power_sensor_label": "Preferred power",
+            "power_switch_label": "Preferred switch",
         }
     }
     with (
