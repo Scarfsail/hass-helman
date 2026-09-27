@@ -1,8 +1,8 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { DeviceNode } from "./DeviceNode";
+import { TreeItem } from "./tree-item";
 import { nothing, TemplateResult } from "lit-html";
-import { BatteryDeviceConfig, GridDeviceConfig, HouseDeviceConfig, SolarDeviceConfig } from "./DeviceConfig";
+import { BatteryNodeConfig, GridNodeConfig, HouseNodeConfig, SolarNodeConfig } from "./energy-node-config";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { sharedStyles } from "./shared-styles";
 import { convertToKWh, getDisplayEnergyUnit } from "./energy-unit-converter";
@@ -12,9 +12,9 @@ import "../schedule-badge";
  *  it is the integration's own output, published under a fixed entity id. */
 const SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_solar_forecast_today_remaining";
 
-@customElement("power-device-info")
-export class PowerDeviceInfo extends LitElement {
-    @property({ attribute: false }) device!: DeviceNode;
+@customElement("helman-tree-item-info")
+export class HelmanTreeItemInfo extends LitElement {
+    @property({ attribute: false }) device!: TreeItem;
     @property({ attribute: false }) public hass!: HomeAssistant;
 
     static get styles() {
@@ -71,7 +71,7 @@ export class PowerDeviceInfo extends LitElement {
         const customLabels = this.device.customLabelTexts ?? [];
         const hasCustomLabels = customLabels.length > 0;
         // What the box says about the schedule. Decided here — beside
-        // power-device's tint, off the same `deferrable` flag — which is what
+        // helman-tree-item's tint, off the same `deferrable` flag — which is what
         // makes the power card and the solar inspector mark a load identically.
         // Gating on the flag rather than on the id alone matters: the forecast
         // breakdown names the controllable behind every scheduled appliance,
@@ -121,26 +121,26 @@ export class PowerDeviceInfo extends LitElement {
         `;
     }
 
-    private _renderDeviceInfo(device: DeviceNode): TemplateResult | typeof nothing {
-        const batteryConfig = device.deviceConfig as BatteryDeviceConfig;
+    private _renderDeviceInfo(device: TreeItem): TemplateResult | typeof nothing {
+        const batteryConfig = device.nodeConfig as BatteryNodeConfig;
         if (batteryConfig.entities.capacity)
             return this._renderBatteryInfo(device, batteryConfig)
 
         if (device.sourceType === "solar")
-            return this._renderSolarInfo(device, device.deviceConfig as SolarDeviceConfig)
+            return this._renderSolarInfo(device, device.nodeConfig as SolarNodeConfig)
 
-        const gridConfig = device.deviceConfig as GridDeviceConfig;
+        const gridConfig = device.nodeConfig as GridNodeConfig;
         if (gridConfig.entities.today_export || gridConfig.entities.today_import)
             return this._renderGridInfo(device, gridConfig)
 
-        const houseConfig = device.deviceConfig as HouseDeviceConfig;
+        const houseConfig = device.nodeConfig as HouseNodeConfig;
         if (device.id === "house" && houseConfig.entities.today_energy)
             return this._renderHouseInfo(houseConfig)
 
         return nothing;
     }
 
-    private _renderGridInfo(device: DeviceNode, gridConfig: GridDeviceConfig): TemplateResult | typeof nothing {
+    private _renderGridInfo(device: TreeItem, gridConfig: GridNodeConfig): TemplateResult | typeof nothing {
         if (!gridConfig.entities.today_export || !gridConfig.entities.today_import) {
             return nothing;
         }
@@ -174,7 +174,7 @@ export class PowerDeviceInfo extends LitElement {
         }
     }
 
-    private _renderSolarInfo(device: DeviceNode, solarConfig: SolarDeviceConfig): TemplateResult | typeof nothing {
+    private _renderSolarInfo(device: TreeItem, solarConfig: SolarNodeConfig): TemplateResult | typeof nothing {
         if (!solarConfig.entities.today_energy) {
             return nothing;
         }
@@ -205,7 +205,7 @@ export class PowerDeviceInfo extends LitElement {
         `;
     }
 
-    private _renderHouseInfo(houseConfig: HouseDeviceConfig): TemplateResult | typeof nothing {
+    private _renderHouseInfo(houseConfig: HouseNodeConfig): TemplateResult | typeof nothing {
         if (!houseConfig.entities.today_energy) {
             return nothing;
         }
@@ -228,7 +228,7 @@ export class PowerDeviceInfo extends LitElement {
         `;
     }
 
-    private _renderBatteryInfo(device: DeviceNode, cfg: BatteryDeviceConfig): TemplateResult | typeof nothing {
+    private _renderBatteryInfo(device: TreeItem, cfg: BatteryNodeConfig): TemplateResult | typeof nothing {
         const targetSocEntityId = device.isSource ? cfg.entities.min_soc : cfg.entities.max_soc;
         const targetSocState = targetSocEntityId ? this.hass?.states[targetSocEntityId] : null;
         const targetSoc = targetSocState ? parseFloat(targetSocState.state) : NaN;
@@ -276,7 +276,7 @@ export class PowerDeviceInfo extends LitElement {
 }
 
 /** Every controllable under a group row, at whatever depth it sits. */
-function _collectControllableIds(device: DeviceNode): string[] {
+function _collectControllableIds(device: TreeItem): string[] {
     const ids: string[] = [];
     for (const child of device.children ?? []) {
         ids.push(...(child.controllableIds ?? []));

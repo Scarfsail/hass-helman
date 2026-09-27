@@ -4,7 +4,7 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { SolarDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import "../../helman/power-device";
+import "../../helman/tree-item-row";
 
 @customElement("node-detail-solar-content")
 export class NodeDetailSolarContent extends LitElement {
@@ -20,8 +20,8 @@ export class NodeDetailSolarContent extends LitElement {
         return html`
             <div class="content">
                 ${p.solarNode ? html`
-                    <div class="power-device-wrapper">
-                        <power-device
+                    <div class="tree-item-wrapper">
+                        <helman-tree-item
                             .hass=${this.hass}
                             .device=${p.solarNode}
                             .currentParentPower=${p.productionNode?.powerValue}
@@ -29,7 +29,7 @@ export class NodeDetailSolarContent extends LitElement {
                             .historyBuckets=${p.historyBuckets}
                             .historyBucketDuration=${p.historyBucketDuration}
                             .historyRevision=${p.historyRevision}
-                        ></power-device>
+                        ></helman-tree-item>
                     </div>
                 ` : nothing}
             </div>

@@ -4,18 +4,18 @@ import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { DEFERRABLE_HOUSE_COLOR, nodeAccentColor, withAlpha } from "../color-utils";
-import { DeviceNode, isNodeVisible } from "./DeviceNode";
-import "./power-device";
-import "./power-devices-container";
+import { TreeItem, isItemVisible } from "./tree-item";
+import "./tree-item-row";
+import "./tree-item-list";
 import "../shared/power-history-bars";
-import "./power-device-icon";
-import "./power-device-power-display";
-import "./power-device-info";
+import "./tree-item-icon";
+import "./tree-item-power-display";
+import "./tree-item-info";
 
-@customElement("power-device")
-export class PowerDevice extends LitElement {
+@customElement("helman-tree-item")
+export class HelmanTreeItem extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public device!: DeviceNode;
+    @property({ attribute: false }) public device!: TreeItem;
     @property({ type: Number }) public currentParentPower?: number;
     @property({ type: Number }) public historyBuckets!: number;
     @property({ type: Number }) public historyBucketDuration!: number;
@@ -26,7 +26,7 @@ export class PowerDevice extends LitElement {
      * The full-height value the bars scale against, when a container already
      * worked it out. Every sibling shares one parent, so the scan over
      * `parentPowerHistory` belongs once in the container rather than once per row;
-     * `power-devices-container` computes it per history revision and hands it
+     * `helman-tree-item-list` computes it per history revision and hands it
      * down. Callers that mount a single row on its own (the node-detail panels)
      * pass only the history and get the scan here.
      */
@@ -149,11 +149,11 @@ export class PowerDevice extends LitElement {
         `;
     }
 
-    private _renderChildren(children: DeviceNode[], currentPower: number, historyToRender: number[]): TemplateResult {
+    private _renderChildren(children: TreeItem[], currentPower: number, historyToRender: number[]): TemplateResult {
         const device = this.device;
         return html`
             <div class="border childrenContainer">
-                <power-devices-container
+                <helman-tree-item-list
                     .hass=${this.hass}
                     .devices=${children}
                     .currentParentPower=${currentPower}
@@ -163,14 +163,14 @@ export class PowerDevice extends LitElement {
                     .historyRevision=${this.historyRevision}
                     .devices_full_width=${device.children_full_width}
                     .sortChildrenByPower=${device.sortChildrenByPower}
-                ></power-devices-container>
+                ></helman-tree-item-list>
             </div>
         `;
     }
 
     render() {
         const device = this.device;
-        if (!isNodeVisible(device)) {
+        if (!isItemVisible(device)) {
             return nothing; // Containers filter these out too; this is the last guard.
         }
 
@@ -203,7 +203,7 @@ export class PowerDevice extends LitElement {
         const childrenToRender = device.children;
 
         // Only the typed top-level nodes carry a domain color of their own.
-        // Untyped nodes (house children, unmeasured, virtual groups) get no glow
+        // Untyped items (house children, unmeasured, virtual groups) get no glow
         // and keep the accent bars, but leaving --device-tint unset lets them
         // inherit their section's tint — that's how the house breakdown picks up
         // the house color.
@@ -237,15 +237,15 @@ export class PowerDevice extends LitElement {
                     </helman-power-history-bars>
                     <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">
                         <div style="display: flex; flex-direction: row;flex-basis: 100%;align-items: center; ">
-                            <power-device-icon 
+                            <helman-tree-item-icon 
                                 .hass=${this.hass} 
                                 .device=${this.device}
                                 .openNodeDetailOnClick=${this.openNodeDetailOnIcon}
                                 @toggle-children=${this._toggleChildren}
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
-                            ></power-device-icon>
+                            ></helman-tree-item-icon>
                             <div class="deviceName ${hasChildren ? 'has-children' : ''}" @click=${this._toggleChildren}>${device.displayName || device.name} ${indicator}</div>
-                            <power-device-power-display
+                            <helman-tree-item-power-display
                                 .powerValue=${this.device.powerValue ?? 0}
                                 .powerSensorId=${this.device.powerSensorId ?? undefined}
                                 .compact=${this.device.compact ?? false}
@@ -256,13 +256,13 @@ export class PowerDevice extends LitElement {
                                     && !Number.isFinite(parseFloat(this.hass?.states[this.device.powerSensorId ?? ""]?.state ?? ""))}
                                 .currentParentPower=${this.currentParentPower}
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
-                            ></power-device-power-display>
+                            ></helman-tree-item-power-display>
                         </div>
-                        <power-device-info
+                        <helman-tree-item-info
                             .device=${this.device} 
                             .hass=${this.hass}
                             @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
-                        ></power-device-info>
+                        ></helman-tree-item-info>
 
                     </div>
                 </div>

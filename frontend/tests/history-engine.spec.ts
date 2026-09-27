@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { HistoryEngine } from "../cards/helman/history-engine";
-import { DeviceNode } from "../cards/helman/DeviceNode";
+import { TreeItem } from "../cards/helman/tree-item";
 import { nodeAccentColor } from "../cards/color-utils";
 
 /**
@@ -32,12 +32,12 @@ function hass(values: Record<string, number>): any {
 }
 
 /** The two source nodes every fixture below attributes to. */
-function sourceNodes(): DeviceNode[] {
-    const solar = new DeviceNode("solar", "Solar", "sensor.solar_power", null, 5);
+function sourceNodes(): TreeItem[] {
+    const solar = new TreeItem("solar", "Solar", "sensor.solar_power", null, 5);
     solar.isSource = true;
     solar.sourceType = "solar";
     solar.ratioSensorId = RATIO_SOLAR;
-    const grid = new DeviceNode("grid", "Grid", "sensor.grid_power", null, 5);
+    const grid = new TreeItem("grid", "Grid", "sensor.grid_power", null, 5);
     grid.isSource = true;
     grid.sourceType = "grid";
     grid.ratioSensorId = RATIO_GRID;
@@ -45,8 +45,8 @@ function sourceNodes(): DeviceNode[] {
 }
 
 /** One measured consumer, the node whose bars the issue is about. */
-function consumerNode(): DeviceNode {
-    return new DeviceNode("washer", "Washer", LOAD, null, 5);
+function consumerNode(): TreeItem {
+    return new TreeItem("washer", "Washer", LOAD, null, 5);
 }
 
 /** An engine over a fixed hass, with the frame callback stubbed out. */
@@ -59,7 +59,7 @@ function engine(states: any, maxBuckets = 5): HistoryEngine {
 }
 
 /** Which source id each bucket was attributed to, or `null` where none was. */
-function attribution(node: DeviceNode): (string | null)[] {
+function attribution(node: TreeItem): (string | null)[] {
     return (node.sourcePowerHistory ?? []).map((bucket) => {
         const ids = Object.keys(bucket);
         return ids.length === 0 ? null : ids.join("+");
@@ -207,7 +207,7 @@ test.describe("HistoryEngine power/source pairing", () => {
     test("attribution follows the tree down to nested consumers", async () => {
         // `_advanceTree` recurses; the house's children are where the reported
         // screenshot's mismatched bands were.
-        const house = new DeviceNode("house", "House", "sensor.house_power", null, 5);
+        const house = new TreeItem("house", "House", "sensor.house_power", null, 5);
         const child = consumerNode();
         house.children = [child];
         const sources = sourceNodes();

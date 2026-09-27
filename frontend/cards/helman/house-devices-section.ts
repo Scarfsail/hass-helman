@@ -2,15 +2,15 @@ import { LitElement, css, html, nothing, unsafeCSS } from "lit-element";
 import { nodeAccentColor } from "../color-utils";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import { DeviceNode } from "./DeviceNode";
-import "./power-devices-container";
+import { TreeItem } from "./tree-item";
+import "./tree-item-list";
 import type { HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
 
-@customElement("power-house-devices-section")
-export class PowerHouseDevicesSection extends LitElement {
+@customElement("helman-house-devices-section")
+export class HelmanHouseDevicesSection extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public devices: DeviceNode[] = [];
+    @property({ attribute: false }) public devices: TreeItem[] = [];
     @property({ type: Number }) public historyBuckets!: number;
     @property({ type: Number }) public historyBucketDuration!: number;
     /** Bumped by the card once per history tick; see `helman-card._historyRevision`. */
@@ -26,7 +26,7 @@ export class PowerHouseDevicesSection extends LitElement {
 
     @state() private _activeCategory?: string;
     @state() private _showAll: boolean = false;
-    @state() private _groupedDevices?: DeviceNode[];
+    @state() private _groupedDevices?: TreeItem[];
     private _localize?: LocalizeFunction;
     private _groupedKey?: string;
 
@@ -46,7 +46,7 @@ export class PowerHouseDevicesSection extends LitElement {
 
         const devices = this.devices || [];
         const ui = this.uiConfig;
-        // The revision is part of the key because the group nodes hold *copies* of
+        // The revision is part of the key because the group items hold *copies* of
         // their children's histories: a tick mutates the children in place and the
         // aggregate would otherwise keep painting the bucket it was built from.
         const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${ui?.others_group_label ?? ''}|${this.historyRevision ?? 0}`;
@@ -67,8 +67,8 @@ export class PowerHouseDevicesSection extends LitElement {
         return css`
             .house-section {
                 /* Everything in this section is a breakdown of the house box, so
-                   it carries the house tint. The rows are untyped nodes and set
-                   no --device-tint of their own, so power-device's fallback
+                   it carries the house tint. The rows are untyped items and set
+                   no --device-tint of their own, so helman-tree-item's fallback
                    inherits this one — custom properties cross shadow boundaries.
                    Tint only: the glow stays on the top-level boxes. */
                 --device-tint: ${unsafeCSS(nodeAccentColor('house'))};
@@ -128,24 +128,24 @@ export class PowerHouseDevicesSection extends LitElement {
         return Object.keys(mapping);
     }
 
-    private _groupByCategory(devices: DeviceNode[], category: string): DeviceNode[] {
+    private _groupByCategory(devices: TreeItem[], category: string): TreeItem[] {
         const mapping = this.uiConfig?.device_label_text?.[category];
         if (!mapping) return devices;
         const order = Object.keys(mapping);
-        const groups: Record<string, DeviceNode> = {};
+        const groups: Record<string, TreeItem> = {};
         for (const label of order) {
             const id = `group:${category}:${label}`;
             const emoji = mapping[label];
-            const node = new DeviceNode(id, `${label} (${emoji})`, null, null, this.historyBuckets);
-            node.virtualType = 'labelCategory';
-            node.groupCategory = category;
-            node.groupLabel = label;
-            node.children_full_width = true;
-            node.sortChildrenByPower = true;
-            node.childrenCollapsed = true; // default collapsed
-            groups[label] = node;
+            const group = new TreeItem(id, `${label} (${emoji})`, null, null, this.historyBuckets);
+            group.virtualType = 'labelCategory';
+            group.groupCategory = category;
+            group.groupLabel = label;
+            group.children_full_width = true;
+            group.sortChildrenByPower = true;
+            group.childrenCollapsed = true; // default collapsed
+            groups[label] = group;
         }
-        const unmatched: DeviceNode[] = [];
+        const unmatched: TreeItem[] = [];
         for (const dev of devices) {
             if (dev.isUnmeasured) continue;
             const labels = new Set(dev.labels || []);
@@ -160,21 +160,21 @@ export class PowerHouseDevicesSection extends LitElement {
             if (!assigned) unmatched.push(dev);
         }
         // Aggregate power for groups
-        const aggregateGroup = (node: DeviceNode) => {
-            const children = node.children || [];
-            node.powerValue = children.reduce((sum, c) => sum + (c.powerValue || 0), 0);
+        const aggregateGroup = (group: TreeItem) => {
+            const children = group.children || [];
+            group.powerValue = children.reduce((sum, c) => sum + (c.powerValue || 0), 0);
             // History aggregation
             const childWithHist = children.find(c => c.powerHistory && c.powerHistory.length > 0);
             if (childWithHist) {
                 const len = childWithHist.powerHistory.length;
-                node.powerHistory = Array(len).fill(0);
+                group.powerHistory = Array(len).fill(0);
                 for (let i = 0; i < len; i++) {
                     for (const c of children) {
-                        node.powerHistory[i] += (c.powerHistory?.[i] || 0);
+                        group.powerHistory[i] += (c.powerHistory?.[i] || 0);
                     }
                 }
                 // Aggregate sourcePowerHistory
-                node.sourcePowerHistory = [];
+                group.sourcePowerHistory = [];
                 for (let i = 0; i < len; i++) {
                     const bucket: { [sourceName: string]: { power: number; color: string } } = {};
                     for (const c of children) {
@@ -187,22 +187,22 @@ export class PowerHouseDevicesSection extends LitElement {
                             bucket[sName].power += src[sName].power;
                         }
                     }
-                    node.sourcePowerHistory.push(bucket);
+                    group.sourcePowerHistory.push(bucket);
                 }
             } else {
-                node.powerHistory = [];
+                group.powerHistory = [];
             }
         };
-        const result: DeviceNode[] = [];
+        const result: TreeItem[] = [];
         for (const label of order) {
-            const node = groups[label];
-            if (node.children.length > 0 || this.uiConfig?.show_empty_groups) {
-                aggregateGroup(node);
-                result.push(node);
+            const group = groups[label];
+            if (group.children.length > 0 || this.uiConfig?.show_empty_groups) {
+                aggregateGroup(group);
+                result.push(group);
             }
         }
         if ((this.uiConfig?.show_others_group ?? true) && unmatched.length > 0) {
-            const others = new DeviceNode(`group:${category}:others`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
+            const others = new TreeItem(`group:${category}:others`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
             others.virtualType = 'others';
             others.groupCategory = category;
             others.children_full_width = true;
@@ -251,7 +251,7 @@ export class PowerHouseDevicesSection extends LitElement {
                     </div>
                 ` : nothing}
 
-                <power-devices-container
+                <helman-tree-item-list
                     .hass=${this.hass}
                     .devices=${devicesToShow}
                     .historyBuckets=${this.historyBuckets}
@@ -262,7 +262,7 @@ export class PowerHouseDevicesSection extends LitElement {
                     .devices_full_width=${this.devices_full_width}
                     .sortChildrenByPower=${this.sortChildrenByPower}
                     .show_only_top_children=${showTop}
-                ></power-devices-container>
+                ></helman-tree-item-list>
             </div>
         `;
     }

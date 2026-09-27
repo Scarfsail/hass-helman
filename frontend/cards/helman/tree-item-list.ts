@@ -1,7 +1,7 @@
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import { DeviceNode, isNodeVisible } from "./DeviceNode";
+import { TreeItem, isItemVisible } from "./tree-item";
 
 /**
  * The rows in the order they are drawn, ranked by history total then by name.
@@ -10,7 +10,7 @@ import { DeviceNode, isNodeVisible } from "./DeviceNode";
  * re-reducing both operands at every comparison — the same ordering for
  * O(devices x history) instead of O(devices x log(devices) x history).
  */
-function sortedIdsByHistoryAndName(devices: DeviceNode[]): string[] {
+function sortedIdsByHistoryAndName(devices: TreeItem[]): string[] {
     const totals = new Map<string, number>();
     for (const device of devices) {
         let total = 0;
@@ -21,12 +21,12 @@ function sortedIdsByHistoryAndName(devices: DeviceNode[]): string[] {
         .sort((a, b) => (totals.get(b.id)! - totals.get(a.id)!) || a.name.localeCompare(b.name))
         .map(device => device.id);
 }
-import "./power-device";
+import "./tree-item-row";
 
-@customElement("power-devices-container")
-export class PowerDevicesContainer extends LitElement {
+@customElement("helman-tree-item-list")
+export class HelmanTreeItemList extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public devices!: DeviceNode[];
+    @property({ attribute: false }) public devices!: TreeItem[];
     
     // Sorting cache: the sorted ORDER (ids), not the array itself.
     private _sortedIds?: string[];
@@ -91,7 +91,7 @@ export class PowerDevicesContainer extends LitElement {
                 flex-direction:column;
                 gap: 5px;
             }
-            .container.full-width > power-device {
+            .container.full-width > helman-tree-item {
                 flex-grow: 1;
                 flex-basis: 0;
                 min-width: 150px; /* Optional: prevent children from becoming too small */
@@ -100,7 +100,7 @@ export class PowerDevicesContainer extends LitElement {
     }
 
     render(): TemplateResult {
-        let devicesToRender: DeviceNode[];
+        let devicesToRender: TreeItem[];
         
         // Use cached sort order if available, but create FRESH array reference
         if (this.sortChildrenByPower && this._sortedIds) {
@@ -112,18 +112,18 @@ export class PowerDevicesContainer extends LitElement {
             devicesToRender = this.devices;
         }
         
-        // Drop the nodes that would render nothing before taking the top N, so the
+        // Drop the items that would render nothing before taking the top N, so the
         // cut spends its slots on rows the user actually sees. Sorting ranks by
-        // history sum while visibility asks about the current value, so a node can
+        // history sum while visibility asks about the current value, so an item can
         // win a slot and then paint nothing — that is the gap this closes.
-        devicesToRender = devicesToRender.filter(isNodeVisible);
+        devicesToRender = devicesToRender.filter(isItemVisible);
         if (this.show_only_top_children && this.show_only_top_children > 0) {
             devicesToRender = devicesToRender.slice(0, this.show_only_top_children);
         }
         return html`
             <div class="container ${this.devices_full_width ? 'full-width' : ''}">
                 ${devicesToRender.map((device) => html`
-                    <power-device
+                    <helman-tree-item
                         .hass=${this.hass}
                         .device=${device}
                         .currentParentPower=${this.currentParentPower}
@@ -132,7 +132,7 @@ export class PowerDevicesContainer extends LitElement {
                         .historyBucketDuration=${this.historyBucketDuration}
                         .historyRevision=${this.historyRevision}
                         .openNodeDetailOnIcon=${this.openNodeDetailOnIcon}
-                    ></power-device>
+                    ></helman-tree-item>
                 `)}
             </div>
         `;

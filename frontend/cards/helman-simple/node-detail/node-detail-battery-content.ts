@@ -7,7 +7,7 @@ import { getDisplayEnergyUnit } from "../../helman/energy-unit-converter";
 import type { BatteryDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { readKWh } from "./node-detail-utils";
-import "../../helman/power-device";
+import "../../helman/tree-item-row";
 
 const batteryDetailStyles = css`
     .battery-summary {
@@ -96,11 +96,11 @@ export class NodeDetailBatteryContent extends LitElement {
         return html`
             <div class="content">
                 ${p.batteryProducerNode || p.batteryConsumerNode ? html`
-                    <div class="power-devices-dual">
+                    <div class="tree-items-dual">
                         ${p.batteryProducerNode ? html`
-                            <div class="power-device-section">
+                            <div class="tree-item-section">
                                 <div class="section-title">${this.localize("node_detail.battery.section_producer")}</div>
-                                <power-device
+                                <helman-tree-item
                                     .hass=${this.hass}
                                     .device=${p.batteryProducerNode}
                                     .currentParentPower=${p.productionNode?.powerValue}
@@ -108,13 +108,13 @@ export class NodeDetailBatteryContent extends LitElement {
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
                                     .historyRevision=${p.historyRevision}
-                                ></power-device>
+                                ></helman-tree-item>
                             </div>
                         ` : nothing}
                         ${p.batteryConsumerNode ? html`
-                            <div class="power-device-section">
+                            <div class="tree-item-section">
                                 <div class="section-title">${this.localize("node_detail.battery.section_consumer")}</div>
-                                <power-device
+                                <helman-tree-item
                                     .hass=${this.hass}
                                     .device=${p.batteryConsumerNode}
                                     .currentParentPower=${p.consumptionNode?.powerValue}
@@ -122,7 +122,7 @@ export class NodeDetailBatteryContent extends LitElement {
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
                                     .historyRevision=${p.historyRevision}
-                                ></power-device>
+                                ></helman-tree-item>
                             </div>
                         ` : nothing}
                     </div>

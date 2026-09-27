@@ -141,7 +141,7 @@ class TestHouseChildDeferrability(unittest.TestCase):
         nodes = _house_children([kitchen])
         kitchen = nodes["sensor.kitchen_energy"]
         # The remainder is synthesised without consulting the roster at all.
-        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_nodes(kitchen, "Unmeasured")
+        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_items(kitchen, "Unmeasured")
 
         payload = kitchen.to_dict()
         self.assertFalse(payload["deferrable"])

@@ -50,12 +50,12 @@ export const nodeDetailSharedStyles = css`
         margin-top: 4px;
     }
 
-    .power-device-wrapper {
+    .tree-item-wrapper {
         display: flex;
         width: 100%;
     }
 
-    .power-devices-dual {
+    .tree-items-dual {
         display: flex;
         flex-direction: row;
         flex-wrap: wrap;
@@ -63,7 +63,7 @@ export const nodeDetailSharedStyles = css`
         width: 100%;
     }
 
-    .power-device-section {
+    .tree-item-section {
         display: flex;
         flex-direction: column;
         flex: 1;

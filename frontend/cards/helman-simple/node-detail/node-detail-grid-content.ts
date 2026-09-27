@@ -5,7 +5,7 @@ import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { LocalizeFunction } from "../../localize/localize";
 import type { GridDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import "../../helman/power-device";
+import "../../helman/tree-item-row";
 
 @customElement("node-detail-grid-content")
 export class NodeDetailGridContent extends LitElement {
@@ -22,11 +22,11 @@ export class NodeDetailGridContent extends LitElement {
         return html`
             <div class="content">
                 ${p.gridProducerNode || p.gridConsumerNode ? html`
-                    <div class="power-devices-dual">
+                    <div class="tree-items-dual">
                         ${p.gridConsumerNode ? html`
-                            <div class="power-device-section">
+                            <div class="tree-item-section">
                                 <div class="section-title">${this.localize("node_detail.grid.section_consumer")}</div>
-                                <power-device
+                                <helman-tree-item
                                     .hass=${this.hass}
                                     .device=${p.gridConsumerNode}
                                     .currentParentPower=${p.consumptionNode?.powerValue}
@@ -34,13 +34,13 @@ export class NodeDetailGridContent extends LitElement {
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
                                     .historyRevision=${p.historyRevision}
-                                ></power-device>
+                                ></helman-tree-item>
                             </div>
                         ` : nothing}
                         ${p.gridProducerNode ? html`
-                            <div class="power-device-section">
+                            <div class="tree-item-section">
                                 <div class="section-title">${this.localize("node_detail.grid.section_producer")}</div>
-                                <power-device
+                                <helman-tree-item
                                     .hass=${this.hass}
                                     .device=${p.gridProducerNode}
                                     .currentParentPower=${p.productionNode?.powerValue}
@@ -48,7 +48,7 @@ export class NodeDetailGridContent extends LitElement {
                                     .historyBuckets=${p.historyBuckets}
                                     .historyBucketDuration=${p.historyBucketDuration}
                                     .historyRevision=${p.historyRevision}
-                                ></power-device>
+                                ></helman-tree-item>
                             </div>
                         ` : nothing}
                     </div>

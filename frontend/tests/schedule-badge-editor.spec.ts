@@ -150,7 +150,7 @@ async function mount(page: Page, nodes: FakeNode[]): Promise<void> {
             host.openFor(event.detail.target);
         });
 
-        const boxes = document.createElement("power-devices-container") as any;
+        const boxes = document.createElement("helman-tree-item-list") as any;
         boxes.hass = window.__fakeHass;
         boxes.devices = fakeNodes.map(hydrate);
         boxes.historyBuckets = 1;
@@ -174,14 +174,14 @@ async function mount(page: Page, nodes: FakeNode[]): Promise<void> {
 /** Press the badge on the row with this label. */
 async function pressBadge(page: Page, label: string): Promise<void> {
     await page.evaluate(async (wanted) => {
-        const boxes = document.querySelector("power-devices-container") as any;
-        for (const row of [...boxes.shadowRoot.querySelectorAll("power-device")] as any[]) {
+        const boxes = document.querySelector("helman-tree-item-list") as any;
+        for (const row of [...boxes.shadowRoot.querySelectorAll("helman-tree-item")] as any[]) {
             await row.updateComplete;
             const content = row.shadowRoot.querySelector(".deviceContent");
             // A row with children appends an expand indicator to its name.
             const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
             if (!name.startsWith(wanted)) continue;
-            const info = content.querySelector("power-device-info");
+            const info = content.querySelector("helman-tree-item-info");
             await info.updateComplete;
             const badge = info.shadowRoot.querySelector("helman-schedule-badge") as any;
             await badge.updateComplete;

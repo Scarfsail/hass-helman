@@ -1,6 +1,6 @@
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { HistoryPayload, applyValueType } from "../helman-api";
-import { DeviceNode } from "./DeviceNode";
+import { TreeItem } from "./tree-item";
 import { nodeAccentColor } from "../color-utils";
 
 export class HistoryEngine {
@@ -13,33 +13,33 @@ export class HistoryEngine {
         private _onTick: () => void,
     ) {}
 
-    /** Flatten a node tree into depth-first order (parent before children). */
-    static walkTree(nodes: DeviceNode[]): DeviceNode[] {
-        const result: DeviceNode[] = [];
-        const walk = (list: DeviceNode[]) => {
-            for (const node of list) {
-                result.push(node);
-                walk(node.children);
+    /** Flatten an item tree into depth-first order (parent before children). */
+    static walkTree(items: TreeItem[]): TreeItem[] {
+        const result: TreeItem[] = [];
+        const walk = (list: TreeItem[]) => {
+            for (const item of list) {
+                result.push(item);
+                walk(item.children);
             }
         };
-        walk(nodes);
+        walk(items);
         return result;
     }
 
     /** Fill powerHistory and sourcePowerHistory from a backend history payload. */
-    applyHistory(history: HistoryPayload, nodes: DeviceNode[], sourceNodes: DeviceNode[]): void {
+    applyHistory(history: HistoryPayload, items: TreeItem[], sourceNodes: TreeItem[]): void {
         const { entity_history, buckets } = history;
-        for (const node of nodes) {
-            if (!node.powerSensorId) continue;
-            const rawHistory = entity_history[node.powerSensorId];
+        for (const item of items) {
+            if (!item.powerSensorId) continue;
+            const rawHistory = entity_history[item.powerSensorId];
             if (rawHistory) {
                 let h = [...rawHistory];
-                if (node.valueType === 'positive') h = h.map(v => Math.max(0, v));
-                else if (node.valueType === 'negative') h = h.map(v => Math.abs(Math.min(0, v)));
-                node.powerHistory = h;
-                node.historyBuckets = buckets;
+                if (item.valueType === 'positive') h = h.map(v => Math.max(0, v));
+                else if (item.valueType === 'negative') h = h.map(v => Math.abs(Math.min(0, v)));
+                item.powerHistory = h;
+                item.historyBuckets = buckets;
             }
-            if (node.isSource) continue;
+            if (item.isSource) continue;
             // One source bucket per *actual* power bucket, never per configured
             // capacity: the backend returns the live deque contents, which are
             // shorter than `buckets` until the buffers have filled (startup, or a
@@ -47,7 +47,7 @@ export class HistoryEngine {
             // different lengths, and since `_advanceTree` appends to both, that
             // offset survived every push and trim — attribution ended up describing
             // a different bucket than the one it was painted on (#227).
-            node.sourcePowerHistory = [];
+            item.sourcePowerHistory = [];
             // The buffers are all appended in lockstep and share one maxlen, so the
             // newest sample of every series is its last one. Align from the end, so
             // a series that started later still lines its samples up in time.
@@ -55,11 +55,11 @@ export class HistoryEngine {
             for (const src of sourceNodes) {
                 if (!src.ratioSensorId) continue;
                 const ratioHistory = entity_history[src.ratioSensorId];
-                if (ratioHistory) ratioOffsets.set(src.ratioSensorId, ratioHistory.length - node.powerHistory.length);
+                if (ratioHistory) ratioOffsets.set(src.ratioSensorId, ratioHistory.length - item.powerHistory.length);
             }
-            for (let i = 0; i < node.powerHistory.length; i++) {
+            for (let i = 0; i < item.powerHistory.length; i++) {
                 const bucket: { [sourceId: string]: { power: number; color: string } } = {};
-                const consumerPower = node.powerHistory[i] ?? 0;
+                const consumerPower = item.powerHistory[i] ?? 0;
                 for (const src of sourceNodes) {
                     if (!src.ratioSensorId) continue;
                     const ratioHistory = entity_history[src.ratioSensorId];
@@ -68,20 +68,20 @@ export class HistoryEngine {
                         bucket[src.id] = { power: consumerPower * ratio, color: nodeAccentColor(src.sourceType) };
                     }
                 }
-                node.sourcePowerHistory.push(bucket);
+                item.sourcePowerHistory.push(bucket);
             }
         }
     }
 
-    /** Push one live bucket per node and notify the card to re-render (coalesced to next animation frame). */
-    advanceBuckets(nodes: DeviceNode[], sourceNodes: DeviceNode[]): void {
+    /** Push one live bucket per item and notify the card to re-render (coalesced to next animation frame). */
+    advanceBuckets(items: TreeItem[], sourceNodes: TreeItem[]): void {
         if (!this._getHass()) return;
-        this._advanceTree(nodes, sourceNodes);
+        this._advanceTree(items, sourceNodes);
         this._scheduleTick();
     }
 
     /** Start the periodic bucket advance. Stops any existing timer first. */
-    start(bucketDuration: number, getNodes: () => DeviceNode[], getSourceNodes: () => DeviceNode[]): void {
+    start(bucketDuration: number, getNodes: () => TreeItem[], getSourceNodes: () => TreeItem[]): void {
         this.stop();
         this._interval = window.setInterval(() => {
             this.advanceBuckets(getNodes(), getSourceNodes());
@@ -108,39 +108,39 @@ export class HistoryEngine {
         });
     }
 
-    private _advanceTree(nodes: DeviceNode[], sourceNodes: DeviceNode[]): void {
+    private _advanceTree(items: TreeItem[], sourceNodes: TreeItem[]): void {
         const hass = this._getHass()!;
         const maxBuckets = this._maxBuckets;
-        for (const node of nodes) {
-            if (node.powerHistory.length > 0) {
-                node.powerHistory.push(node.powerHistory[node.powerHistory.length - 1]);
-                if (node.sourcePowerHistory && node.sourcePowerHistory.length > 0) {
-                    node.sourcePowerHistory.push(node.sourcePowerHistory[node.sourcePowerHistory.length - 1]);
+        for (const item of items) {
+            if (item.powerHistory.length > 0) {
+                item.powerHistory.push(item.powerHistory[item.powerHistory.length - 1]);
+                if (item.sourcePowerHistory && item.sourcePowerHistory.length > 0) {
+                    item.sourcePowerHistory.push(item.sourcePowerHistory[item.sourcePowerHistory.length - 1]);
                 }
             }
-            if (node.powerHistory.length > maxBuckets) {
-                node.powerHistory.shift();
+            if (item.powerHistory.length > maxBuckets) {
+                item.powerHistory.shift();
             }
-            if (node.powerSensorId) {
-                const rawPower = parseFloat(hass.states[node.powerSensorId]?.state ?? '0') || 0;
-                const power = applyValueType(rawPower, node.valueType);
-                if (node.powerHistory.length === 0) node.powerHistory.push(0);
-                node.powerHistory[node.powerHistory.length - 1] = power;
-                node.powerValue = power;
+            if (item.powerSensorId) {
+                const rawPower = parseFloat(hass.states[item.powerSensorId]?.state ?? '0') || 0;
+                const power = applyValueType(rawPower, item.valueType);
+                if (item.powerHistory.length === 0) item.powerHistory.push(0);
+                item.powerHistory[item.powerHistory.length - 1] = power;
+                item.powerValue = power;
             }
-            this._advanceTree(node.children, sourceNodes);
-            if (!node.isSource && node.powerSensorId) {
+            this._advanceTree(item.children, sourceNodes);
+            if (!item.isSource && item.powerSensorId) {
                 // The two series are re-squared to the same length on every tick, so
                 // bucket i of one always describes bucket i of the other. This is also
                 // what gives a consumer that the history payload omitted its first
                 // attribution: without it the source series stayed empty forever and
                 // every one of that consumer's bars fell back to its own colour.
-                const sourceHistory = node.sourcePowerHistory ?? (node.sourcePowerHistory = []);
-                while (sourceHistory.length > node.powerHistory.length) sourceHistory.shift();
-                while (sourceHistory.length < node.powerHistory.length) sourceHistory.unshift({});
+                const sourceHistory = item.sourcePowerHistory ?? (item.sourcePowerHistory = []);
+                while (sourceHistory.length > item.powerHistory.length) sourceHistory.shift();
+                while (sourceHistory.length < item.powerHistory.length) sourceHistory.unshift({});
                 if (sourceHistory.length > 0) {
                     const bucket: { [sourceId: string]: { power: number; color: string } } = {};
-                    const powerVal = node.powerValue || 0;
+                    const powerVal = item.powerValue || 0;
                     if (powerVal > 0) {
                         for (const src of sourceNodes) {
                             if (!src.ratioSensorId) continue;

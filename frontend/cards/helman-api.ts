@@ -26,17 +26,17 @@ export function applyValueType(raw: number, vt: ValueType): number {
 // ── Device node DTOs ──────────────────────────────────────────────────────────
 
 /** Fields present on every device node returned by helman/get_device_tree. */
-export interface DeviceNodeDTOBase {
+export interface TreeItemDTOBase {
     id: string;
     powerSensorId: string | null;
     valueType: ValueType;
     sourceConfig: any | null;
     sourceType: string | null;
-    children: DeviceNodeDTOBase[];
+    children: TreeItemDTOBase[];
 }
 
 /** Full device node DTO — includes all fields used by helman-card. */
-export interface DeviceNodeDTO extends DeviceNodeDTOBase {
+export interface TreeItemDTO extends TreeItemDTOBase {
     displayName: string;
     switchEntityId: string | null;
     isSource: boolean;
@@ -50,7 +50,7 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
     hideChildren: boolean;
     hideChildrenIndicator: boolean;
     sortChildrenByPower: boolean;
-    children: DeviceNodeDTO[];
+    children: TreeItemDTO[];
     ratioSensorId: string | null;
     /** A house child whose energy statistic is a deferrable controllable. */
     deferrable: boolean;
@@ -90,8 +90,8 @@ export interface GetDeviceTreeRequest {
 
 /** Response type for the "helman/get_device_tree" WebSocket command. */
 export interface TreePayload {
-    sources: DeviceNodeDTO[];
-    consumers: DeviceNodeDTO[];
+    sources: TreeItemDTO[];
+    consumers: TreeItemDTO[];
     consumptionTotalSensorId: string | null;
     productionTotalSensorId: string | null;
     uiConfig: HelmanUiConfig;

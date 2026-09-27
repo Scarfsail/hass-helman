@@ -4204,7 +4204,7 @@ export class HelmanConfigEditorPanel
    * The inverter, under Energy nodes.
    *
    * It keeps its entry in `devices` -- optimizers target it by id there -- but
-   * it is not a house consumer, so it is edited beside the other power devices
+   * it is not a house consumer, so it is edited beside the other energy nodes
    * rather than in the Devices tree. No projection section: the inverter has
    * no demand of its own.
    */

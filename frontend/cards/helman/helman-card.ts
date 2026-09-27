@@ -2,13 +2,13 @@ import { LitElement, css, html } from "lit-element"
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
-import { DeviceNode } from "./DeviceNode";
-import type { BatteryDeviceConfig } from "./DeviceConfig";
-import "./power-device";
-import "./power-devices-container";
+import { TreeItem } from "./tree-item";
+import type { BatteryNodeConfig } from "./energy-node-config";
+import "./tree-item-row";
+import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { DeviceNodeDTO, TreePayload } from "../helman-api";
-import { hydrateNode } from "./device-node-hydrator";
+import { TreeItemDTO, TreePayload } from "../helman-api";
+import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
@@ -19,8 +19,8 @@ import {
 import type { NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
 import "./power-flow-arrows"
-import "./power-device-info"
-import "./power-house-devices-section"
+import "./tree-item-info"
+import "./house-devices-section"
 import "../shared/schedule/dialogs/scheduling-day-editor-host"
 import {
     OPEN_SCHEDULE_EDITOR_EVENT,
@@ -31,7 +31,7 @@ import { WATCHED_ENTITIES_EVENT, type WatchedEntitiesDetail } from "../shared/ha
 import "./helman-card-editor"
 import type { LovelaceCardEditor } from "../../hass-frontend/src/panels/lovelace/types";
 
-const EMPTY_ARRAY: readonly DeviceNode[] = Object.freeze([]);
+const EMPTY_ARRAY: readonly TreeItem[] = Object.freeze([]);
 
 @customElement("helman-card")
 export class HelmanCard extends LitElement implements LovelaceCard {
@@ -67,7 +67,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
      */
     private _loadGeneration = 0;
     private _localize?: LocalizeFunction;
-    private _sourceNodes: DeviceNode[] = [];
+    private _sourceNodes: TreeItem[] = [];
     private _watchedEntityIds: Set<string> = new Set();
     /** Entity ids the schedule editor host resolved, folded into the filter. */
     private _scheduleWatchedIds: Set<string> = new Set();
@@ -75,12 +75,12 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     // 5. State properties
     @state() private _hass?: HomeAssistant;
-    @state() private _deviceTree: DeviceNode[] = [];
+    @state() private _deviceTree: TreeItem[] = [];
     @state() private _dialogNodeType: NodeType | null = null;
     /**
-     * Bumped once per history tick. `HistoryEngine` mutates the node histories in
+     * Bumped once per history tick. `HistoryEngine` mutates the item histories in
      * place, so nothing a child is handed changes identity when a bucket rolls —
-     * same nodes, same arrays, and on an idle house the same power values too.
+     * same items, same arrays, and on an idle house the same power values too.
      * Without a signal of its own the containers' dirty checks saw nothing and the
      * bars below them froze until an unrelated HA state change happened to shake
      * the tree (#227). A counter is the whole signal: it moves exactly when the
@@ -89,13 +89,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     @state() private _historyRevision = 0;
     @state() private _uiConfig?: HelmanUiConfig;
     @state() private _computedNodes?: {
-        sourcesNode: DeviceNode | undefined;
-        sourcesChildren: readonly DeviceNode[];
-        consumerNode: DeviceNode | undefined;
-        consumersChildren: readonly DeviceNode[];
-        houseNode: DeviceNode | undefined;
-        houseArrowDevices: (DeviceNode | undefined)[];
-        houseDevices: readonly DeviceNode[];
+        sourcesNode: TreeItem | undefined;
+        sourcesChildren: readonly TreeItem[];
+        consumerNode: TreeItem | undefined;
+        consumersChildren: readonly TreeItem[];
+        houseNode: TreeItem | undefined;
+        houseArrowDevices: (TreeItem | undefined)[];
+        houseDevices: readonly TreeItem[];
     };
 
     // 7. HA-specific setters
@@ -187,7 +187,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         return html`
             <ha-card @show-node-detail=${this._handleShowNodeDetail}>
                 <div class="card-content">
-                    <power-devices-container
+                    <helman-tree-item-list
                         .hass=${this._hass!}
                         .devices=${sourcesChildren}
                         .historyBuckets=${historyBuckets}
@@ -196,20 +196,20 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .currentParentPower=${sourcesNode!.powerValue}
                         .parentPowerHistory=${sourcesNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
-                    ></power-devices-container>
+                    ></helman-tree-item-list>
                     <power-flow-arrows .devices=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
-                    <power-devices-container
+                    <helman-tree-item-list
                         .hass=${this._hass!}
                         .devices=${consumerNode ? [consumerNode] : []}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
                         .historyRevision=${this._historyRevision}
                         .devices_full_width=${true}
-                    ></power-devices-container>
+                    ></helman-tree-item-list>
                     <power-flow-arrows .devices=${consumersChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
-                    <power-devices-container
+                    <helman-tree-item-list
                         .hass=${this._hass!}
                         .devices=${consumersChildren}
                         .historyBuckets=${historyBuckets}
@@ -218,9 +218,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .currentParentPower=${consumerNode!.powerValue}
                         .parentPowerHistory=${consumerNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
-                    ></power-devices-container>
+                    ></helman-tree-item-list>
                     <power-flow-arrows .devices=${houseArrowDevices} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
-                    <power-house-devices-section
+                    <helman-house-devices-section
                         .hass=${this._hass!}
                         .devices=${houseDevices}
                         .historyBuckets=${historyBuckets}
@@ -232,7 +232,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .sortChildrenByPower=${true}
                         .initial_show_only_top_children=${this.config?.collapsed_consumers_count ?? 3}
                         .uiConfig=${this._uiConfig}
-                    ></power-house-devices-section>
+                    ></helman-house-devices-section>
                 </div>
             </ha-card>
             <scheduling-day-editor-host
@@ -306,7 +306,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
         const batteryProducerNode = sourcesChildren.find((device) => device.sourceType === "battery") ?? null;
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
-        const batteryConfig = (batteryProducerNode?.deviceConfig ?? batteryConsumerNode?.deviceConfig) as BatteryDeviceConfig | undefined;
+        const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
         const batterySocEntityId = batteryConfig?.entities.capacity ?? null;
         const batterySocState = batterySocEntityId ? this._hass?.states[batterySocEntityId] : null;
         const rawBatterySoc = batterySocState ? parseFloat(batterySocState.state) : NaN;
@@ -344,7 +344,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             const treePayload = await store.getDeviceTree();
             if (obsolete()) return;
             this._uiConfig = treePayload.uiConfig;
-            this._deviceTree = this._hydrateDeviceNodes(treePayload);
+            this._deviceTree = this._hydrateTreeItems(treePayload);
             this._sourceNodes = this._collectSourceNodes(this._deviceTree);
             this._rebuildWatchedEntityIds();
 
@@ -373,14 +373,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         }
     }
 
-    private _hydrateNode(dto: DeviceNodeDTO): DeviceNode {
-        return hydrateNode(dto, this._uiConfig?.history_buckets ?? 60, this._localize!);
+    private _hydrateItem(dto: TreeItemDTO): TreeItem {
+        return hydrateItem(dto, this._uiConfig?.history_buckets ?? 60, this._localize!);
     }
 
-    private _hydrateDeviceNodes(payload: TreePayload): DeviceNode[] {
+    private _hydrateTreeItems(payload: TreePayload): TreeItem[] {
         const { sources, consumers, consumptionTotalSensorId, productionTotalSensorId, uiConfig } = payload;
         const historyBuckets = uiConfig.history_buckets;
-        const roots: DeviceNode[] = [];
+        const roots: TreeItem[] = [];
 
         // Build id→sourceType map from source DTOs so consumer counterparts (battery, grid)
         // can inherit the same sourceType even when the backend doesn't set it on the consumer side.
@@ -390,30 +390,30 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         }
 
         if (sources.length > 0) {
-            const sourcesNode = new DeviceNode("sources", uiConfig.sources_title, null, null, historyBuckets);
+            const sourcesNode = new TreeItem("sources", uiConfig.sources_title, null, null, historyBuckets);
             sourcesNode.childrenCollapsed = false;
             sourcesNode.icon = 'mdi:lightning-bolt-outline';
             sourcesNode.powerSensorId = productionTotalSensorId;
-            sourcesNode.children = sources.map(dto => this._hydrateNode(dto));
+            sourcesNode.children = sources.map(dto => this._hydrateItem(dto));
             roots.push(sourcesNode);
         }
 
         if (consumers.length > 0) {
-            const consumersNode = new DeviceNode("consumers", uiConfig.consumers_title, null, null, historyBuckets);
+            const consumersNode = new TreeItem("consumers", uiConfig.consumers_title, null, null, historyBuckets);
             consumersNode.hideChildren = true;
             consumersNode.hideChildrenIndicator = true;
             consumersNode.icon = 'mdi:lightning-bolt-outline';
             consumersNode.powerSensorId = consumptionTotalSensorId;
-            consumersNode.children = consumers.map(dto => this._hydrateNode(dto));
+            consumersNode.children = consumers.map(dto => this._hydrateItem(dto));
             // Propagate sourceType to consumer nodes. Source counterparts (battery/grid) inherit
             // from the sourceTypeByDeviceId map; house is identified by its well-known id.
-            const propagateSourceType = (nodes: DeviceNode[]) => {
-                for (const node of nodes) {
-                    if (!node.sourceType) {
-                        node.sourceType = sourceTypeByDeviceId.get(node.id)
-                            ?? (node.id === 'house' ? 'house' : null);
+            const propagateSourceType = (items: TreeItem[]) => {
+                for (const item of items) {
+                    if (!item.sourceType) {
+                        item.sourceType = sourceTypeByDeviceId.get(item.id)
+                            ?? (item.id === 'house' ? 'house' : null);
                     }
-                    propagateSourceType(node.children);
+                    propagateSourceType(item.children);
                 }
             };
             propagateSourceType(consumersNode.children);
@@ -425,11 +425,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     private _rebuildWatchedEntityIds(): void {
         const ids = new Set<string>();
-        const visit = (nodes: DeviceNode[]) => {
-            for (const n of nodes) {
-                if (n.powerSensorId) ids.add(n.powerSensorId);
-                if (n.ratioSensorId) ids.add(n.ratioSensorId);
-                visit(n.children);
+        const visit = (items: TreeItem[]) => {
+            for (const item of items) {
+                if (item.powerSensorId) ids.add(item.powerSensorId);
+                if (item.ratioSensorId) ids.add(item.ratioSensorId);
+                visit(item.children);
             }
         };
         visit(this._deviceTree);
@@ -439,7 +439,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const { sourcesChildren, consumersChildren } = this._computedNodes ?? {};
         const batteryProducerNode = sourcesChildren?.find((n) => n.sourceType === "battery");
         const batteryConsumerNode = consumersChildren?.find((n) => n.sourceType === "battery");
-        const batteryConfig = (batteryProducerNode?.deviceConfig ?? batteryConsumerNode?.deviceConfig) as import("./DeviceConfig").BatteryDeviceConfig | undefined;
+        const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as import("./energy-node-config").BatteryNodeConfig | undefined;
         if (batteryConfig?.entities.capacity) ids.add(batteryConfig.entities.capacity);
         if (batteryConfig?.entities.remaining_energy) ids.add(batteryConfig.entities.remaining_energy);
 
@@ -450,15 +450,15 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._watchedEntityIds = ids;
     }
 
-    private _collectSourceNodes(nodes: DeviceNode[]): DeviceNode[] {
-        const sourceNodes: DeviceNode[] = [];
-        const collect = (nodeList: DeviceNode[]) => {
-            for (const node of nodeList) {
-                if (node.isSource) sourceNodes.push(node);
-                if (node.children) collect(node.children);
+    private _collectSourceNodes(items: TreeItem[]): TreeItem[] {
+        const sourceNodes: TreeItem[] = [];
+        const collect = (itemList: TreeItem[]) => {
+            for (const item of itemList) {
+                if (item.isSource) sourceNodes.push(item);
+                if (item.children) collect(item.children);
             }
         };
-        collect(nodes);
+        collect(items);
         return sourceNodes;
     }
 
@@ -469,6 +469,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 (window as any).customCards.push({
     type: 'helman-card',
     name: 'House Electricity Manager Card',
-    description: 'A custom card for Home Assistant to control power devices. It allows users to see power consumption, control devices, and manage power settings.',
+    description: 'A custom card for Home Assistant to control energy nodes. It allows users to see power consumption, control devices, and manage power settings.',
     preview: true,
 });

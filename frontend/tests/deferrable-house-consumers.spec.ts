@@ -21,7 +21,7 @@ const BUNDLE = resolve(
 
 // DEFERRABLE_HOUSE_COLOR — the same shade the inspector's composition panel
 // paints its shiftable rows with — at the heavier alpha the box tint needs to
-// survive .deviceContent's color-mix. See power-device.ts.
+// survive .deviceContent's color-mix. See helman-tree-item.ts.
 const DEFERRABLE_TINT = "#c084fc90";
 
 // The authorship hooks the scheduling UI already owns; the badge reads exactly
@@ -57,7 +57,7 @@ interface RenderedRow {
 async function loadCardBundle(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("power-devices-container"));
+    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
 }
 
 /**
@@ -168,7 +168,7 @@ async function mountRows(page: Page, nodes: FakeNode[]): Promise<void> {
             ...(node.children ? { children: node.children.map(hydrate) } : {}),
         });
 
-        const el = document.createElement("power-devices-container") as any;
+        const el = document.createElement("helman-tree-item-list") as any;
         el.hass = window.__fakeHass;
         el.devices = fakeNodes.map(hydrate);
         el.historyBuckets = 1;
@@ -181,13 +181,13 @@ async function mountRows(page: Page, nodes: FakeNode[]): Promise<void> {
 
 async function readRows(page: Page): Promise<RenderedRow[]> {
     return page.evaluate(async () => {
-        const el = document.querySelector("power-devices-container") as any;
+        const el = document.querySelector("helman-tree-item-list") as any;
         await el.updateComplete;
         const out = [];
-        for (const row of [...el.shadowRoot.querySelectorAll("power-device")] as any[]) {
+        for (const row of [...el.shadowRoot.querySelectorAll("helman-tree-item")] as any[]) {
             await row.updateComplete;
             const content = row.shadowRoot.querySelector(".deviceContent");
-            const info = content.querySelector("power-device-info");
+            const info = content.querySelector("helman-tree-item-info");
             if (info) await info.updateComplete;
             const badge = info?.shadowRoot?.querySelector("helman-schedule-badge");
             if (badge) await badge.updateComplete;
@@ -329,19 +329,19 @@ test.describe("deferrable house consumers on the power card", () => {
         await page.waitForFunction(() => window.__wsSeen.length >= 3);
 
         const children = await page.evaluate(async () => {
-            const el = document.querySelector("power-devices-container") as any;
+            const el = document.querySelector("helman-tree-item-list") as any;
             await el.updateComplete;
-            const parent = el.shadowRoot.querySelector("power-device") as any;
+            const parent = el.shadowRoot.querySelector("helman-tree-item") as any;
             await parent.updateComplete;
-            const container = parent.shadowRoot.querySelector("power-devices-container") as any;
+            const container = parent.shadowRoot.querySelector("helman-tree-item-list") as any;
             await container.updateComplete;
             const out = [];
-            for (const row of [...container.shadowRoot.querySelectorAll("power-device")] as any[]) {
+            for (const row of [...container.shadowRoot.querySelectorAll("helman-tree-item")] as any[]) {
                 await row.updateComplete;
                 const content = row.shadowRoot.querySelector(".deviceContent");
-                const display = content.querySelector("power-device-power-display");
+                const display = content.querySelector("helman-tree-item-power-display");
                 await display.updateComplete;
-                const info = content.querySelector("power-device-info");
+                const info = content.querySelector("helman-tree-item-info");
                 if (info) await info.updateComplete;
                 const badge = info?.shadowRoot?.querySelector("helman-schedule-badge");
                 if (badge) await badge.updateComplete;
@@ -391,15 +391,15 @@ test.describe("deferrable house consumers on the power card", () => {
             ]);
 
             const value = await page.evaluate(async () => {
-                const el = document.querySelector("power-devices-container") as any;
+                const el = document.querySelector("helman-tree-item-list") as any;
                 await el.updateComplete;
-                const parent = el.shadowRoot.querySelector("power-device") as any;
+                const parent = el.shadowRoot.querySelector("helman-tree-item") as any;
                 await parent.updateComplete;
-                const container = parent.shadowRoot.querySelector("power-devices-container") as any;
+                const container = parent.shadowRoot.querySelector("helman-tree-item-list") as any;
                 await container.updateComplete;
-                const row = container.shadowRoot.querySelector("power-device") as any;
+                const row = container.shadowRoot.querySelector("helman-tree-item") as any;
                 await row.updateComplete;
-                const display = row.shadowRoot.querySelector("power-device-power-display") as any;
+                const display = row.shadowRoot.querySelector("helman-tree-item-power-display") as any;
                 await display.updateComplete;
                 return (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim();
             });

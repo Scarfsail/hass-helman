@@ -1,8 +1,8 @@
 """Which evaluator speaks for which config path.
 
 A registry key is a dotted path with ``*`` standing for one segment the key
-does not care about -- ``energy_nodes.*.entities.power`` covers all four power
-devices, and a later key can cover a list with
+does not care about -- ``energy_nodes.*.entities.power`` covers all four energy
+nodes, and a later key can cover a list with
 ``energy_nodes.solar.forecast.daily_energy_entity_ids.*``. The segments a
 ``*`` matched are handed to the evaluator, so an evaluator learns *which*
 device or index it is looking at from the path rather than from the request.

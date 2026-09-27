@@ -1,4 +1,4 @@
-import type { DeviceNode } from "../helman/DeviceNode";
+import type { TreeItem } from "../helman/tree-item";
 import type { HelmanUiConfig } from "../helman-api";
 
 export type NodeType = "solar" | "battery" | "grid" | "house";
@@ -9,10 +9,10 @@ export interface BatteryDetailParams {
     soc: number;
     socEntityId: string | null;
     remainingEnergyEntityId: string | null;
-    batteryProducerNode: DeviceNode | null;
-    batteryConsumerNode: DeviceNode | null;
-    productionNode?: DeviceNode | null;
-    consumptionNode?: DeviceNode | null;
+    batteryProducerNode: TreeItem | null;
+    batteryConsumerNode: TreeItem | null;
+    productionNode?: TreeItem | null;
+    consumptionNode?: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
     historyRevision: number;
@@ -20,8 +20,8 @@ export interface BatteryDetailParams {
 
 export interface SolarDetailParams {
     nodeType: "solar";
-    solarNode: DeviceNode | null;
-    productionNode?: DeviceNode | null;
+    solarNode: TreeItem | null;
+    productionNode?: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
     historyRevision: number;
@@ -29,10 +29,10 @@ export interface SolarDetailParams {
 
 export interface GridDetailParams {
     nodeType: "grid";
-    gridProducerNode: DeviceNode | null;
-    gridConsumerNode: DeviceNode | null;
-    productionNode?: DeviceNode | null;
-    consumptionNode?: DeviceNode | null;
+    gridProducerNode: TreeItem | null;
+    gridConsumerNode: TreeItem | null;
+    productionNode?: TreeItem | null;
+    consumptionNode?: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
     historyRevision: number;
@@ -41,14 +41,14 @@ export interface GridDetailParams {
 export interface HouseDetailParams {
     nodeType: "house";
     power: number;
-    devices: DeviceNode[];
+    devices: TreeItem[];
     parentPowerHistory?: number[];
-    consumptionNode?: DeviceNode | null;
+    consumptionNode?: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
     historyRevision: number;
     uiConfig?: HelmanUiConfig;
-    houseNode: DeviceNode | null;
+    houseNode: TreeItem | null;
 }
 
 export type NodeDetailParams =

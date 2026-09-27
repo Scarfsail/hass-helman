@@ -37,7 +37,7 @@ def share_power_entity_id(device_id: str) -> str:
 
 
 @dataclass
-class DeviceNodeDTO:
+class TreeItemDTO:
     id: str
     display_name: str
     power_sensor_id: str | None
@@ -56,21 +56,22 @@ class DeviceNodeDTO:
     hide_children: bool
     hide_children_indicator: bool
     sort_children_by_power: bool
-    children: list["DeviceNodeDTO"] = field(default_factory=list)
+    children: list["TreeItemDTO"] = field(default_factory=list)
     ratio_sensor_id: str | None = None
     source_type: str | None = None
-    # A house node whose load is carved out of the house baseline, so the card
+    # A house item whose load is carved out of the house baseline, so the card
     # can mark the load the optimizer is free to move in time: a carved meter's
-    # node, its meterless children, or — when the carved meter also has metered
-    # children — its remainder instead of its node, since only the meter's own
-    # energy is carved. Sources and virtual groups are never deferrable.
+    # device, its meterless children, or — when the carved meter also has
+    # metered children — its remainder instead of its device, since only the
+    # meter's own energy is carved. Sources and virtual groups are never
+    # deferrable.
     deferrable: bool = False
-    # The schedulable device this node is, so the card can look its schedule
+    # The schedulable device this item is, so the card can look its schedule
     # up: a schedulable meter owner's id, or a meterless child's own. Empty for
-    # every other node.
+    # every other item.
     controllable_ids: list[str] = field(default_factory=list)
     # The device's meter, for a metered house child; ``None`` for every other
-    # node. The node ``id`` happens to be the same entity (it keeps the
+    # item. The item ``id`` happens to be the same entity (it keeps the
     # unmeasured sensor ids stable), but readers of the meter read it here.
     energy_entity_id: str | None = None
     # A meterless child's share of its parent's own power: an estimate, not a
@@ -132,7 +133,7 @@ class HelmanTreeBuilder:
         lbl_reg = lr.async_get(self._hass)
 
         # --- Sources ---
-        sources: list[DeviceNodeDTO] = []
+        sources: list[TreeItemDTO] = []
 
         if solar_config and solar_config.get("entities", {}).get("power"):
             sources.append(self._make_source_node(
@@ -162,7 +163,7 @@ class HelmanTreeBuilder:
             ))
 
         # --- Consumers ---
-        consumers: list[DeviceNodeDTO] = []
+        consumers: list[TreeItemDTO] = []
 
         if house_config and house_config.get("entities", {}).get("power"):
             house_children = self._build_house_children(
@@ -173,7 +174,7 @@ class HelmanTreeBuilder:
                 for carve in read_carved_meters(self._config)
                 if carve["metered_children"]
             }
-            house_node = DeviceNodeDTO(
+            house_node = TreeItemDTO(
                 id="house",
                 display_name="",
                 power_sensor_id=house_config["entities"]["power"],
@@ -195,7 +196,7 @@ class HelmanTreeBuilder:
                 sort_children_by_power=True,
                 children=house_children,
             )
-            self._add_unmeasured_nodes(house_node, own_carved)
+            self._add_unmeasured_items(house_node, own_carved)
             consumers.append(house_node)
 
         if battery_config and battery_config.get("entities", {}).get("power"):
@@ -241,8 +242,8 @@ class HelmanTreeBuilder:
         source_type: str,
         value_type: Literal["default", "positive", "negative"],
         icon: str,
-    ) -> DeviceNodeDTO:
-        return DeviceNodeDTO(
+    ) -> TreeItemDTO:
+        return TreeItemDTO(
             id=entity_id,
             display_name="",
             power_sensor_id=entity_id,
@@ -272,8 +273,8 @@ class HelmanTreeBuilder:
         source_type: str,
         value_type: Literal["default", "positive", "negative"],
         icon: str,
-    ) -> DeviceNodeDTO:
-        return DeviceNodeDTO(
+    ) -> TreeItemDTO:
+        return TreeItemDTO(
             id=entity_id,
             display_name="",
             power_sensor_id=entity_id,
@@ -300,12 +301,12 @@ class HelmanTreeBuilder:
         ent_reg: er.EntityRegistry,
         lbl_reg: lr.LabelRegistry,
         device_label_text: dict,
-    ) -> list[DeviceNodeDTO]:
-        """One node per device, nested as the ``devices`` tree nests them.
+    ) -> list[TreeItemDTO]:
+        """One item per device, nested as the ``devices`` tree nests them.
 
         Everything is read from the device, never inferred: a selected entity
         that is missing keeps its row, and the entity inspection reports it.
-        A meterless child is an estimated node under its parent, reading its
+        A meterless child is an estimated item under its parent, reading its
         share sensor — for exactly the children ``read_shared_meters`` splits
         the meter among, which is what the coordinator publishes shares for.
         """
@@ -335,33 +336,33 @@ class HelmanTreeBuilder:
                 if (label_entry := lbl_reg.async_get_label(label_id))
             ]
 
-        tree: list[DeviceNodeDTO] = []
-        nodes: dict[int, DeviceNodeDTO] = {}
+        tree: list[TreeItemDTO] = []
+        devices: dict[int, TreeItemDTO] = {}
         for device, parent in iter_devices(self._config):
             if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
                 continue
-            parent_node = nodes.get(id(parent)) if parent is not None else None
+            parent_device = devices.get(id(parent)) if parent is not None else None
             meter = own_meter(device)
             if meter is None:
-                if parent_node is not None:
-                    share_node = self._make_share_node(
-                        device, parent_node, shared, carved, cleaner_regex
+                if parent_device is not None:
+                    share_device = self._make_share_device(
+                        device, parent_device, shared, carved, cleaner_regex
                     )
-                    if share_node is not None:
+                    if share_device is not None:
                         # Its HA device is the running signal's: an AC's
                         # climate entity, a plug's switch.
-                        share_node.labels = labels_for(share_node.switch_entity_id)
-                        share_node.label_badge_texts = self._apply_label_badge_texts(
-                            share_node.labels, device_label_text
+                        share_device.labels = labels_for(share_device.switch_entity_id)
+                        share_device.label_badge_texts = self._apply_label_badge_texts(
+                            share_device.labels, device_label_text
                         )
-                        parent_node.children.append(share_node)
+                        parent_device.children.append(share_device)
                 continue
             power_sensor_id = _consumption_entity(device, "power_entity_id")
             icon = resolve_device_icon(device, entity_icon=self._entity_icon)
 
             labels = labels_for(meter)
 
-            node = DeviceNodeDTO(
+            item = TreeItemDTO(
                 id=meter,
                 display_name=resolve_device_name(
                     device,
@@ -394,30 +395,30 @@ class HelmanTreeBuilder:
                 ),
                 energy_entity_id=meter,
             )
-            nodes[id(device)] = node
-            (parent_node.children if parent_node is not None else tree).append(node)
+            devices[id(device)] = item
+            (parent_device.children if parent_device is not None else tree).append(item)
 
         return tree
 
-    def _make_share_node(
+    def _make_share_device(
         self,
         device: Device,
-        parent_node: DeviceNodeDTO,
+        parent_device: TreeItemDTO,
         shared: dict[str, dict],
         carved: dict[str, dict],
         cleaner_regex: str | None,
-    ) -> DeviceNodeDTO | None:
+    ) -> TreeItemDTO | None:
         """A meterless child's row: its share of the parent's own power.
 
         ``None`` for a child the meter is not split among (no id, no running
         signal — validation reports both).
         """
-        parent_meter = parent_node.energy_entity_id
+        parent_meter = parent_device.energy_entity_id
         device_id = peek_controllable_id(device)
         members = shared.get(parent_meter, {}).get("members", ())
         if device_id is None or device_id not in {member[0] for member in members}:
             return None
-        return DeviceNodeDTO(
+        return TreeItemDTO(
             id=device_id,
             display_name=resolve_device_name(
                 device,
@@ -452,12 +453,12 @@ class HelmanTreeBuilder:
         state = self._hass.states.get(entity_id)
         return state.attributes.get("icon") if state else None
 
-    def _add_unmeasured_nodes(
+    def _add_unmeasured_items(
         self,
-        node: DeviceNodeDTO,
+        item: TreeItemDTO,
         own_carved: Collection[str] = frozenset(),
     ) -> None:
-        """Add a remainder under every measured node with children.
+        """Add a remainder under every measured item with children.
 
         A remainder's ``display_name`` is empty: the card names every one with
         its own localized label.
@@ -466,20 +467,20 @@ class HelmanTreeBuilder:
         own energy is carved, and their remainder is where it shows, so it is
         the remainder the card marks deferrable.
         """
-        if not node.children:
+        if not item.children:
             return
         # A remainder is the parent's power minus its children's: a metered
         # device without a power sensor (an energy-only Energy row) has none,
         # but its children may still have remainders of their own.
-        if not node.is_virtual and node.power_sensor_id:
-            slug = node.id.replace(".", "_")
-            # The tree node's own ``id`` keeps the historical dot-to-underscore
+        if not item.is_virtual and item.power_sensor_id:
+            slug = item.id.replace(".", "_")
+            # The tree item's own ``id`` keeps the historical dot-to-underscore
             # slug -- it is only a frontend list key. ``power_sensor_id`` is the
             # actual Helman entity id, which ``HelmanUnmeasuredPowerSensor``
             # builds by stripping a leading "sensor." rather than underscoring
             # it, so it is computed separately here to match.
-            entity_slug = node.id.removeprefix("sensor.")
-            unmeasured = DeviceNodeDTO(
+            entity_slug = item.id.removeprefix("sensor.")
+            unmeasured = TreeItemDTO(
                 id=f"{slug}_unmeasured",
                 display_name="",
                 power_sensor_id=f"sensor.helman_unmeasured_power_{entity_slug}",
@@ -498,11 +499,11 @@ class HelmanTreeBuilder:
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
-                deferrable=node.energy_entity_id in own_carved,
+                deferrable=item.energy_entity_id in own_carved,
             )
-            node.children.append(unmeasured)
-        for child in node.children:
-            self._add_unmeasured_nodes(child, own_carved)
+            item.children.append(unmeasured)
+        for child in item.children:
+            self._add_unmeasured_items(child, own_carved)
 
     def _apply_label_badge_texts(self, labels: list[str], device_label_text: dict) -> list[str]:
         result = []

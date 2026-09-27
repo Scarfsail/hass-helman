@@ -4,12 +4,12 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, DeviceNodeDTO, TreePayload, HelmanUiConfig, applyValueType } from "../helman-api";
+import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, applyValueType } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
-import { DeviceNode } from "../helman/DeviceNode";
-import { hydrateNode } from "../helman/device-node-hydrator";
-import type { BatteryDeviceConfig } from "../helman/DeviceConfig";
+import { TreeItem } from "../helman/tree-item";
+import { hydrateItem } from "../helman/tree-item-hydrator";
+import type { BatteryNodeConfig } from "../helman/energy-node-config";
 import type { NodeType, NodeDetailParams } from "./node-detail/node-detail-types";
 import {
     buildNodeDetailParams,
@@ -172,20 +172,20 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _localize?: LocalizeFunction;
     private _latestHass?: HomeAssistant;
     private _watchedEntityIds: Set<string> = new Set();
-    private _solarDTO:           DeviceNodeDTO | null = null;
-    private _gridDTO:            DeviceNodeDTO | null = null;
-    private _batteryDTO:         DeviceNodeDTO | null = null;
-    private _houseDTO:           DeviceNodeDTO | null = null;
-    private _batteryConsumerDTO: DeviceNodeDTO | null = null;
-    private _gridConsumerDTO:    DeviceNodeDTO | null = null;
-    private _solarNode:          DeviceNode | null = null;
-    private _gridProducerNode:   DeviceNode | null = null;
-    private _batteryProducerNode: DeviceNode | null = null;
-    private _batteryConsumerNode: DeviceNode | null = null;
-    private _gridConsumerNode:   DeviceNode | null = null;
-    private _houseNode:          DeviceNode | null = null;
-    private _productionNode:     DeviceNode | null = null;
-    private _consumptionNode:    DeviceNode | null = null;
+    private _solarDTO:           TreeItemDTO | null = null;
+    private _gridDTO:            TreeItemDTO | null = null;
+    private _batteryDTO:         TreeItemDTO | null = null;
+    private _houseDTO:           TreeItemDTO | null = null;
+    private _batteryConsumerDTO: TreeItemDTO | null = null;
+    private _gridConsumerDTO:    TreeItemDTO | null = null;
+    private _solarNode:          TreeItem | null = null;
+    private _gridProducerNode:   TreeItem | null = null;
+    private _batteryProducerNode: TreeItem | null = null;
+    private _batteryConsumerNode: TreeItem | null = null;
+    private _gridConsumerNode:   TreeItem | null = null;
+    private _houseNode:          TreeItem | null = null;
+    private _productionNode:     TreeItem | null = null;
+    private _consumptionNode:    TreeItem | null = null;
     private _historyEngine?: HistoryEngine;
     /**
      * Bumped on every disconnect and on every load that replaces another. A load
@@ -210,7 +210,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     @state() private _energy: EnergyValues = EMPTY_ENERGY;
     @state() private _loading = true;
     @state() private _dialogNodeType: NodeType | null = null;
-    @state() private _houseDevices: DeviceNode[] = [];
+    @state() private _houseDevices: TreeItem[] = [];
 
     // 7. HA-specific property setter
     public set hass(hass: HomeAssistant) {
@@ -432,7 +432,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 if (typeof v === 'string' && v.length > 0) ids.add(v);
             }
         }
-        const addNode = (n: DeviceNode | null | undefined) => {
+        const addNode = (n: TreeItem | null | undefined) => {
             if (!n) return;
             if (n.powerSensorId) ids.add(n.powerSensorId);
             if (n.ratioSensorId) ids.add(n.ratioSensorId);
@@ -471,11 +471,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             this._energy = this._readEnergyValues(this._latestHass!, this._entityMap);
 
             const histBuckets = payload.uiConfig.history_buckets;
-            this._solarNode          = this._solarDTO          ? this._hydrateNode(this._solarDTO,          histBuckets) : null;
-            this._gridProducerNode   = this._gridDTO            ? this._hydrateNode(this._gridDTO,            histBuckets) : null;
-            this._batteryProducerNode = this._batteryDTO        ? this._hydrateNode(this._batteryDTO,        histBuckets) : null;
-            this._batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateNode(this._batteryConsumerDTO, histBuckets) : null;
-            this._gridConsumerNode   = this._gridConsumerDTO    ? this._hydrateNode(this._gridConsumerDTO,    histBuckets) : null;
+            this._solarNode          = this._solarDTO          ? this._hydrateItem(this._solarDTO,          histBuckets) : null;
+            this._gridProducerNode   = this._gridDTO            ? this._hydrateItem(this._gridDTO,            histBuckets) : null;
+            this._batteryProducerNode = this._batteryDTO        ? this._hydrateItem(this._batteryDTO,        histBuckets) : null;
+            this._batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateItem(this._batteryConsumerDTO, histBuckets) : null;
+            this._gridConsumerNode   = this._gridConsumerDTO    ? this._hydrateItem(this._gridConsumerDTO,    histBuckets) : null;
 
             // Consumer-side DTOs don't carry sourceType — propagate from the matching source node
             if (this._batteryConsumerNode && !this._batteryConsumerNode.sourceType)
@@ -484,17 +484,17 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 this._gridConsumerNode.sourceType = this._gridProducerNode?.sourceType;
 
             if (this._houseDTO) {
-                this._houseNode = this._hydrateNode(this._houseDTO, histBuckets);
+                this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
                 if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
                 this._houseDevices = this._houseNode.children;
             }
 
             this._productionNode  = payload.productionTotalSensorId
-                ? new DeviceNode('production-total', '', payload.productionTotalSensorId, null, histBuckets)
+                ? new TreeItem('production-total', '', payload.productionTotalSensorId, null, histBuckets)
                 : null;
             if (this._productionNode) this._productionNode.isSource = true;
             this._consumptionNode = payload.consumptionTotalSensorId
-                ? new DeviceNode('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
+                ? new TreeItem('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
                 : null;
             if (this._consumptionNode) this._consumptionNode.isSource = true;
 
@@ -536,8 +536,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         this._batteryDTO = batteryNode ?? null;
         this._houseDTO   = houseNode   ?? null;
 
-        this._batteryConsumerDTO = this._findConsumerById(payload.consumers, this._batteryDTO?.id ?? null) ?? null;
-        this._gridConsumerDTO    = this._findConsumerById(payload.consumers, this._gridDTO?.id   ?? null) ?? null;
+        this._batteryConsumerDTO = this._findDeviceById(payload.consumers, this._batteryDTO?.id ?? null) ?? null;
+        this._gridConsumerDTO    = this._findDeviceById(payload.consumers, this._gridDTO?.id   ?? null) ?? null;
 
         const battCfg = batteryNode?.sourceConfig?.entities ?? {};
 
@@ -559,7 +559,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     /** Recursively finds the house node (by sourceType or known id) in the consumers tree. */
-    private _findHouseNode(nodes: DeviceNodeDTO[]): DeviceNodeDTO | undefined {
+    private _findHouseNode(nodes: TreeItemDTO[]): TreeItemDTO | undefined {
         for (const node of nodes) {
             if (node.sourceType === "house" || node.id === "house") return node;
             const found = this._findHouseNode(node.children);
@@ -569,11 +569,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     /** Recursively finds a non-source consumer node by entity id in the consumers tree. */
-    private _findConsumerById(nodes: DeviceNodeDTO[], id: string | null): DeviceNodeDTO | undefined {
+    private _findDeviceById(nodes: TreeItemDTO[], id: string | null): TreeItemDTO | undefined {
         if (!id) return undefined;
         for (const node of nodes) {
             if (!node.isSource && node.id === id) return node;
-            const found = this._findConsumerById(node.children, id);
+            const found = this._findDeviceById(node.children, id);
             if (found) return found;
         }
         return undefined;
@@ -582,7 +582,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _buildNodeDetailContext(): NodeDetailContext {
         const historyBuckets = this._uiConfig?.history_buckets ?? 60;
         const historyBucketDuration = this._uiConfig?.history_bucket_duration ?? 60;
-        const batteryConfig = (this._batteryProducerNode?.deviceConfig ?? this._batteryConsumerNode?.deviceConfig) as BatteryDeviceConfig | undefined;
+        const batteryConfig = (this._batteryProducerNode?.nodeConfig ?? this._batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
 
         return {
             batteryPower: this._energy.batteryPower,
@@ -712,16 +712,16 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             </svg>`;
     }
 
-    private _hydrateNode(dto: DeviceNodeDTO, historyBuckets: number): DeviceNode {
-        return hydrateNode(dto, historyBuckets, this._localize!);
+    private _hydrateItem(dto: TreeItemDTO, historyBuckets: number): TreeItem {
+        return hydrateItem(dto, historyBuckets, this._localize!);
     }
 
-    private get _sourceNodes(): DeviceNode[] {
+    private get _sourceNodes(): TreeItem[] {
         return [this._solarNode, this._gridProducerNode, this._batteryProducerNode]
-            .filter((n): n is DeviceNode => n !== null);
+            .filter((n): n is TreeItem => n !== null);
     }
 
-    private _topLevelNodes(): DeviceNode[] {
+    private _topLevelNodes(): TreeItem[] {
         return [
             ...this._sourceNodes,
             this._houseNode,
@@ -729,7 +729,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             this._gridConsumerNode,
             this._productionNode,
             this._consumptionNode,
-        ].filter((n): n is DeviceNode => n !== null);
+        ].filter((n): n is TreeItem => n !== null);
     }
 }
 

@@ -29,7 +29,7 @@ interface FakeNode {
 async function loadCardBundle(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("power-devices-container"));
+    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
 }
 
 /** Mount the container with the given nodes and return the row names it painted. */
@@ -39,7 +39,7 @@ async function renderedRowNames(
     showOnlyTopChildren: number,
 ): Promise<string[]> {
     return page.evaluate(async (o) => {
-        const el = document.createElement("power-devices-container") as any;
+        const el = document.createElement("helman-tree-item-list") as any;
         el.hass = { states: {}, locale: { language: "en" } };
         el.devices = o.nodes.map((n: any) => ({
             children: [],
@@ -58,7 +58,7 @@ async function renderedRowNames(
         await el.updateComplete;
 
         const rows = Array.from(
-            el.shadowRoot!.querySelectorAll("power-device"),
+            el.shadowRoot!.querySelectorAll("helman-tree-item"),
         ) as any[];
         const names: string[] = [];
         for (const row of rows) {

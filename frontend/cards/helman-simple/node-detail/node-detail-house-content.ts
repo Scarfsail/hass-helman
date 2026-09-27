@@ -4,8 +4,8 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { HouseDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import "../../helman/power-device";
-import "../../helman/power-house-devices-section";
+import "../../helman/tree-item-row";
+import "../../helman/house-devices-section";
 
 @customElement("node-detail-house-content")
 export class NodeDetailHouseContent extends LitElement {
@@ -21,8 +21,8 @@ export class NodeDetailHouseContent extends LitElement {
         return html`
             <div class="content">
                 ${p.houseNode ? html`
-                    <div class="power-device-wrapper">
-                        <power-device
+                    <div class="tree-item-wrapper">
+                        <helman-tree-item
                             .hass=${this.hass}
                             .device=${p.houseNode}
                             .currentParentPower=${p.consumptionNode?.powerValue}
@@ -30,11 +30,11 @@ export class NodeDetailHouseContent extends LitElement {
                             .historyBuckets=${p.historyBuckets}
                             .historyBucketDuration=${p.historyBucketDuration}
                             .historyRevision=${p.historyRevision}
-                        ></power-device>
+                        ></helman-tree-item>
                     </div>
                 ` : nothing}
                 ${p.devices.length > 0 ? html`
-                    <power-house-devices-section
+                    <helman-house-devices-section
                         .hass=${this.hass}
                         .devices=${p.devices}
                         .historyBuckets=${p.historyBuckets}
@@ -46,7 +46,7 @@ export class NodeDetailHouseContent extends LitElement {
                         .sortChildrenByPower=${true}
                         .initial_show_only_top_children=${5}
                         .uiConfig=${p.uiConfig}
-                    ></power-house-devices-section>
+                    ></helman-house-devices-section>
                 ` : nothing}
             </div>
         `;

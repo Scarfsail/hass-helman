@@ -1,6 +1,6 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { DeviceNode } from "./DeviceNode";
+import { TreeItem } from "./tree-item";
 import { nothing } from "lit-html";
 
 const STRIPS = html`
@@ -27,12 +27,12 @@ const STRIPS = html`
  */
 @customElement("power-flow-arrows")
 export class PowerFlowArrows extends LitElement {
-    @property({ type: Array }) devices: (DeviceNode | undefined)[] = [];
+    @property({ type: Array }) devices: (TreeItem | undefined)[] = [];
     @property({ type: Number }) maxPower?: number; // Default max power for 3-phase system and 25A per phase
     /**
      * Bumped by the card once per history tick; see `helman-card._historyRevision`.
      *
-     * Nothing here reads it. `powerValue` is written in place on the very nodes
+     * Nothing here reads it. `powerValue` is written in place on the very items
      * `devices` holds, so the array's identity never moves and this is the only
      * signal that the widths changed -- the card used to spread the array on
      * every render to say the same thing, at `hass` churn rate rather than at

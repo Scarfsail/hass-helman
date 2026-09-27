@@ -42,7 +42,7 @@ const EXPECTED_OPTIONS: Record<string, string[]> = {
     grid: ["positive_is_export", "positive_is_import"],
 };
 
-/** The power-devices tab's label per locale -- the tab strip is localized too. */
+/** The energy-nodes tab's label per locale -- the tab strip is localized too. */
 const ENERGY_NODES_TAB: Record<string, string> = {
     en: "Energy nodes",
     cs: "Energetické uzly",
@@ -84,7 +84,7 @@ async function mountEditorWith(
         document.body.appendChild(element);
     }, { config, language });
 
-    // The power-device sections live behind their own tab, and each ships
+    // The helman-tree-item sections live behind their own tab, and each ships
     // collapsed; a collapsed <details> renders nothing to query.
     await expect
         .poll(async () =>

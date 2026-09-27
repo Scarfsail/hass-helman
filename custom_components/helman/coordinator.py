@@ -948,8 +948,8 @@ class HelmanCoordinator:
         return result
 
     @staticmethod
-    def collect_share_nodes(tree: dict) -> dict[str, tuple[str, str]]:
-        """Return {node_id: (share_entity_id, display_name)} for every meterless child's node."""
+    def collect_share_devices(tree: dict) -> dict[str, tuple[str, str]]:
+        """Return {node_id: (share_entity_id, display_name)} for every meterless child device."""
         result: dict[str, tuple[str, str]] = {}
 
         def walk(nodes: list) -> None:
@@ -1323,7 +1323,7 @@ class HelmanCoordinator:
         if self._share_sensor_factory is not None:
             self._sync_node_sensors(
                 self._share_sensors,
-                self.collect_share_nodes(tree),
+                self.collect_share_devices(tree),
                 self._share_sensor_factory,
             )
 
@@ -5391,7 +5391,7 @@ class HelmanCoordinator:
         self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
         self._share_entity_id_map = {
             node_id: entity_id
-            for node_id, (entity_id, _name) in self.collect_share_nodes(tree).items()
+            for node_id, (entity_id, _name) in self.collect_share_devices(tree).items()
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.

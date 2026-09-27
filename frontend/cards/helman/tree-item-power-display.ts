@@ -3,8 +3,8 @@ import { customElement, property } from "lit/decorators.js";
 import { sharedStyles } from "./shared-styles";
 import { formatValue, type ValueKind } from "../power-format";
 
-@customElement("power-device-power-display")
-export class PowerDevicePowerDisplay extends LitElement {
+@customElement("helman-tree-item-power-display")
+export class HelmanTreeItemPowerDisplay extends LitElement {
     @property({ type: Number }) public powerValue = 0;
     @property({ type: String }) public powerSensorId?: string;
     @property({ type: Boolean }) public compact = false;
