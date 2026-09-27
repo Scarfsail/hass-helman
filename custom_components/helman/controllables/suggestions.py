@@ -46,10 +46,11 @@ def suggest_entities(
         )
         if field is None:
             continue
-        reasons = ["Same Home Assistant device"]
+        # Reasons are codes (with a value where one applies); the editor words them.
+        reasons: list[dict[str, str]] = [{"code": "same_device"}]
         score = 1
         if field != "switch":
-            reasons.append(f"Device class: {field}")
+            reasons.append({"code": f"device_class_{field}"})
             score += 2
         label_key = "power_switch_label" if field == "switch" else "power_sensor_label"
         wanted = house.get(label_key)
@@ -57,7 +58,7 @@ def suggest_entities(
             (label := labels.async_get_label(label_id)) and label.name == wanted
             for label_id in entry.labels
         ):
-            reasons.append(f"Label: {wanted}")
+            reasons.append({"code": "label", "value": wanted})
             score += 4
         name = str(
             attrs.get("friendly_name")
@@ -66,7 +67,7 @@ def suggest_entities(
             or entry.entity_id
         )
         if field == "switch" and device_name and name.casefold() == device_name:
-            reasons.append("Friendly name matches device name")
+            reasons.append({"code": "name_match"})
             score += 3
         result[field].append(
             {

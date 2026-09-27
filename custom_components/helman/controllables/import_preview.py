@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 from dataclasses import asdict
@@ -17,13 +18,19 @@ def preview_energy_import(
         config.get("devices") or [], preferences, manual=True
     )
     proposed = {**config, "devices": result.devices}
+    # Imported devices always get an id, so an id-less one is an existing
+    # half-edited device: it cannot be matched across the import, and the
+    # import neither adds it nor changes it.
     before = {
-        peek_controllable_id(d): (d, peek_controllable_id(p) if p else None)
+        device_id: (d, peek_controllable_id(p) if p else None)
         for d, p in iter_devices(config)
+        if (device_id := peek_controllable_id(d)) is not None
     }
     additions, power, moves = [], [], []
     for device, parent in iter_devices(proposed):
         device_id = peek_controllable_id(device)
+        if device_id is None:
+            continue
         parent_id = peek_controllable_id(parent) if parent else None
         consumption = device.get("consumption") or {}
         if device_id not in before:
@@ -57,16 +64,8 @@ def preview_energy_import(
         }
         for statistic in result.external_statistics
     )
-    warnings = [
-        {
-            **asdict(conflict),
-            "message": "Energy reports this meter inside a schedulable device. Both are counted independently. Restructure them under a passive meter-owning parent in the editor."
-            if conflict.reason == "schedulable"
-            else "This move needs a power entity because the parent has meterless children.",
-        }
-        for conflict in result.warnings
-    ]
-    validation = validate_config_document(proposed).to_dict()
+    # Reasons are codes; the editor words them in the user's language.
+    warnings = [asdict(conflict) for conflict in result.warnings]
     return {
         "devices": result.devices,
         "additions": additions,
@@ -74,5 +73,22 @@ def preview_energy_import(
         "nestingChanges": moves,
         "skippedRows": skipped,
         "warnings": warnings,
-        "validation": validation,
+        "validation": _new_errors_only(config, proposed),
     }
+
+
+def _new_errors_only(
+    config: dict[str, Any], proposed: dict[str, Any]
+) -> dict[str, Any]:
+    """The proposed draft's validation, limited to errors the import adds.
+
+    Applying is refused only for errors the import introduces; the draft's own
+    errors are not the import's to fix, and Save still refuses them. Errors are
+    compared by how often each code occurs, not by path: a move shifts index
+    paths and can change which of two devices an error is reported on.
+    """
+    existing = Counter(issue.code for issue in validate_config_document(config).errors)
+    report = validate_config_document(proposed).to_dict()
+    added = Counter(issue["code"] for issue in report["errors"]) - existing
+    errors = [issue for issue in report["errors"] if added[issue["code"]]]
+    return {**report, "valid": not errors, "errors": errors}

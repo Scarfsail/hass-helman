@@ -784,7 +784,7 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
 const candidate = (entityId: string) => ({
   entityId,
   name: "Breaker switch",
-  reasons: ["Same Home Assistant device"],
+  reasons: [{ code: "same_device" }, { code: "name_match" }],
   rank: 1,
 });
 
@@ -887,7 +887,7 @@ test("Apply suggestions fills empty singleton fields and exposes all six switche
   ).toHaveCount(7);
   await expect(
     page.locator('select.suggestion-candidates[data-field="switch"]'),
-  ).toContainText("Same Home Assistant device");
+  ).toContainText("Same Home Assistant device, Name matches the device");
   await page
     .locator('select.suggestion-candidates[data-field="switch"]')
     .selectOption("switch.breaker_4");
@@ -963,8 +963,6 @@ test("import preview cancel is inert and apply changes only the draft with moves
           energy_entity_id: "sensor.pool_heater",
           device_id: "climate-pool",
           reason: "schedulable",
-          message:
-            "Both are counted independently. Restructure under a passive parent.",
         },
       ],
     }),
@@ -976,8 +974,12 @@ test("import preview cancel is inert and apply changes only the draft with moves
   await expect(page.locator(".energy-import-preview")).toContainText(
     "child → parent",
   );
+  // Codes from the backend are worded by the editor's translations.
   await expect(page.locator(".energy-import-preview")).toContainText(
-    "Both are counted independently",
+    "Energy reports sensor.pool_heater inside the meter of schedulable device climate-pool",
+  );
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "external:stat — an external statistic, not an entity",
   );
   await page.locator(".cancel-energy-import").click();
   expect(await config(page)).toEqual([parent, child]);
@@ -1112,6 +1114,9 @@ test("invalid import cannot be applied and empty state offers import", async ({
   );
   await page.locator(".import-energy").click();
   await expect(page.locator(".apply-energy-import")).toBeDisabled();
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "The import would add errors of these kinds.",
+  );
   expect(await config(page)).toEqual([]);
 });
 

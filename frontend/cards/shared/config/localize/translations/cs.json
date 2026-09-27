@@ -592,13 +592,30 @@
       "power": "Doplnit výkon",
       "move": "Přesunout zařízení s potomky",
       "skipped": "Přeskočeno",
-      "no_changes": "Žádné změny k použití."
+      "no_changes": "Žádné změny k použití.",
+      "blocked": "Import by přidal chyby těchto druhů. Uvedeny jsou i chyby stejného druhu, které návrh už obsahuje.",
+      "skip_reasons": {
+        "schedulable": "jeho energii už měří elektroměr plánovatelného zařízení {device}",
+        "power_required": "potřebuje senzor výkonu, protože {device} dělí svůj okamžitý výkon mezi podřízená zařízení bez vlastního elektroměru",
+        "external_statistic": "externí statistika, ne entita"
+      },
+      "warnings": {
+        "schedulable": "Panel Energie uvádí {meter} uvnitř elektroměru plánovatelného zařízení {device}, takže se započítávají obě. Opravíte to tak, že je umístíte pod pasivní zařízení, které vlastní vnější elektroměr.",
+        "power_required": "{meter} nelze přesunout pod {device} bez senzoru výkonu, protože {device} má podřízená zařízení bez vlastního elektroměru."
+      }
     },
     "suggestions": {
       "energy": "Návrhy energie",
       "power": "Návrhy výkonu",
       "switch": "Návrhy spínače",
-      "choose": "Vyberte návrh"
+      "choose": "Vyberte návrh",
+      "reasons": {
+        "same_device": "Stejné zařízení Home Assistant",
+        "device_class_energy": "Senzor energie",
+        "device_class_power": "Senzor výkonu",
+        "label": "Štítek: {value}",
+        "name_match": "Název odpovídá zařízení"
+      }
     }
   },
   "common": {

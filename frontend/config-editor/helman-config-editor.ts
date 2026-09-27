@@ -3557,8 +3557,9 @@ export class HelmanConfigEditorPanel
         ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.powerEntityId ? html`, ${item.powerEntityId}` : nothing}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
         ${preview.powerEntities.map((item) => html`<li>${this._t("editor.import.power")}: ${item.deviceId} → ${item.entityId}</li>`)}
         ${preview.nestingChanges.map((item) => html`<li>${this._t("editor.import.move")}: ${item.deviceId} → ${item.parentId}</li>`)}
-        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} (${item.reason}${item.device_id ? html`: ${item.device_id}` : nothing})</li>`)}
-        ${preview.warnings.map((item) => html`<li class="message info">${item.energy_entity_id} → ${item.device_id}: ${item.message}</li>`)}
+        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} — ${this._tFormat(`editor.import.skip_reasons.${item.reason}`, { device: item.device_id ?? "" })}</li>`)}
+        ${preview.warnings.map((item) => html`<li class="message info">${this._tFormat(`editor.import.warnings.${item.reason}`, { meter: item.energy_entity_id, device: item.device_id ?? "" })}</li>`)}
+        ${preview.validation.errors.length ? html`<li>${this._t("editor.import.blocked")}</li>` : nothing}
         ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
       </ul>
       ${!hasChanges ? html`<p>${this._t("editor.import.no_changes")}</p>` : nothing}
@@ -3731,7 +3732,7 @@ export class HelmanConfigEditorPanel
                   <option value="">
                     ${this._t("editor.suggestions.choose")}
                   </option>
-                  ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.join(", ")}</option>`)}
+                  ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.map((reason) => this._tFormat(`editor.suggestions.reasons.${reason.code}`, { value: reason.value ?? "" })).join(", ")}</option>`)}
                 </select>
               </div>`;
             })

@@ -1,6 +1,9 @@
 """Manual Energy imports preserve identity and expose physical overlaps."""
 from copy import deepcopy
-from custom_components.helman.controllables.import_preview import preview_energy_import
+from custom_components.helman.controllables.import_preview import (
+    _new_errors_only,
+    preview_energy_import,
+)
 from custom_components.helman.config_validation import validate_config_document
 
 
@@ -264,4 +267,62 @@ def test_invalid_children_value_yields_a_preview_not_an_exception():
     child = device("child", "sensor.child")
     result = preview([parent, child], row("sensor.child", "sensor.parent"))
     assert result["devices"] == [parent, child]
-    assert not result["validation"]["valid"]
+    # The invalid children value is the draft's own error, not the import's.
+    assert result["validation"]["valid"], result["validation"]
+
+
+def test_existing_draft_errors_do_not_block_an_import():
+    broken = {"id": "broken", "schedulable": True}
+    config = {"devices": [broken]}
+    assert not validate_config_document(config).valid
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.kettle")]}
+    )
+    assert result["additions"][0]["deviceId"] == "kettle"
+    assert result["validation"]["valid"], result["validation"]
+    assert result["validation"]["errors"] == []
+
+
+def test_errors_the_import_introduces_still_block_it():
+    config = {"devices": []}
+    proposed = {"devices": [{"id": "broken", "schedulable": True}]}
+    report = _new_errors_only(config, proposed)
+    assert not report["valid"]
+    assert report["errors"]
+
+
+def test_existing_error_on_a_device_shifted_by_a_move_does_not_block():
+    a = device("a", "sensor.a")
+    b = device("b", "sensor.b")
+    broken = {"id": "broken", "schedulable": True}
+    config = {"devices": [a, b, broken]}
+    errors = validate_config_document(config).errors
+    assert any(issue.path.startswith("devices[2]") for issue in errors)
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.a", "sensor.b")]}
+    )
+    # The move shifts "broken" from devices[2] to devices[1]; its error is still its own.
+    assert result["devices"] == [{**b, "children": [a]}, broken]
+    assert result["validation"]["valid"], result["validation"]
+
+
+def test_existing_error_on_a_device_without_an_id_does_not_block_a_move():
+    a = device("a", "sensor.a")
+    b = device("b", "sensor.b")
+    half_edited = {"kind": "generic"}
+    config = {"devices": [a, b, half_edited]}
+    assert not validate_config_document(config).valid
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.a", "sensor.b")]}
+    )
+    assert result["devices"] == [{**b, "children": [a]}, half_edited]
+    assert result["validation"]["valid"], result["validation"]
+
+
+def test_devices_without_ids_report_no_phantom_changes():
+    parent = device("parent", "sensor.parent", children=[{"kind": "generic"}])
+    loose = {"kind": "generic"}
+    result = preview_energy_import(
+        {"devices": [parent, loose]}, {"device_consumption": []}
+    )
+    assert result["additions"] == result["powerEntities"] == result["nestingChanges"] == []
