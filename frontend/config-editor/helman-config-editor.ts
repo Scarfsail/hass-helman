@@ -3640,17 +3640,19 @@ export class HelmanConfigEditorPanel
 
   /** The entity whose HA device suggestions come from; empty when there is none yet. */
   private _suggestionAnchor(device: JsonObject): string {
-    // Any configured entity will do: suggestions come from its HA device, and
-    // every control of a kind (an EV charger's charge switch or mode select)
-    // sits on the device that also holds its meter.
-    const controls = Object.values(asJsonObject(device.controls) ?? {}).map((control) =>
-      this._stringValue(asJsonObject(control)?.entity_id).trim(),
-    );
+    // Suggestions come from the anchor's HA device, so only the entities that
+    // sit on the device itself anchor: its meters and the control it switches
+    // by. A mode or gear select may be a helper with no HA device, or belong to
+    // another integration's device (evcc, the car), so it never anchors.
+    const controls = asJsonObject(device.controls) ?? {};
+    const entity = (value: unknown) =>
+      this._stringValue(asJsonObject(value)?.entity_id).trim();
     return (
       ownMeter(device) ||
       this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim() ||
-      controls.find(Boolean) ||
-      ""
+      entity(controls.switch) ||
+      entity(controls.charge) ||
+      entity(controls.climate)
     );
   }
 
