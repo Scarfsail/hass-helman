@@ -98,7 +98,7 @@ def _carved_beneath(node: dict[str, Any], carved_meters: Collection[str]) -> lis
         if not isinstance(child, dict):
             continue
         meter = child.get("energyEntityId")
-        if meter in carved_meters:
+        if isinstance(meter, str) and meter in carved_meters:
             found.append(meter)
         else:
             found.extend(_carved_beneath(child, carved_meters))

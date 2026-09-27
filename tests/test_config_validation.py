@@ -1488,6 +1488,10 @@ class DeviceTreeValidationTests(unittest.TestCase):
         self.assertEqual(
             running_signal(breaker["children"][4]), ("switch.ev_charge", "switch")
         )
+        # Only an EV charger's charge control counts; on another kind it is not
+        # a control the device's reader knows.
+        generic = {"id": "x", "controls": {"charge": {"entity_id": "switch.x"}}}
+        self.assertIsNone(running_signal(generic))
 
     def test_mixed_schedulable_and_passive_meterless_siblings_are_rejected(
         self,

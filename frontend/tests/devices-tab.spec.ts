@@ -362,6 +362,24 @@ test("new scheduling uses the displayed fixed projection without changing the se
     });
 });
 
+test("scheduling keeps a configured projection's own figures", async ({ page }) => {
+    const learner = {
+        id: "boiler",
+        consumption: {
+            energy_entity_id: "sensor.boiler_energy",
+            projection: { strategy: "history_average", lookback_days: 14 },
+        },
+    };
+    await mountEditor(page, [learner]);
+    await openTab(page, "Devices");
+    await setSchedulable(page, "boiler", true);
+    await expect.poll(async () => (await config(page))[0].schedulable).toBe(true);
+    expect((await config(page))[0].consumption.projection).toEqual({
+        strategy: "history_average",
+        lookback_days: 14,
+    });
+});
+
 test("generated child ids avoid share sensor slug collisions", async ({ page }) => {
     const breaker = structuredClone(BREAKER);
     breaker.children[0].id = "ac-room";

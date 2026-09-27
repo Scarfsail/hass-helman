@@ -22,6 +22,7 @@ from typing import Any
 
 from .spec import (
     CONTROLLABLE_KIND_CLIMATE,
+    CONTROLLABLE_KIND_EV_CHARGER,
     CONTROLLABLE_KIND_GENERIC,
     CONTROLLABLE_KIND_INVERTER,
 )
@@ -166,11 +167,10 @@ def running_signal(device: Device) -> tuple[str, str] | None:
     controls = device.get("controls")
     if not isinstance(controls, Mapping):
         return None
-    for key, activity in (
-        ("switch", "switch"),
-        ("charge", "switch"),
-        (CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_CLIMATE),
-    ):
+    signals = [("switch", "switch"), (CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_CLIMATE)]
+    if peek_controllable_kind(device) == CONTROLLABLE_KIND_EV_CHARGER:
+        signals.insert(1, ("charge", "switch"))
+    for key, activity in signals:
         control = controls.get(key)
         if not isinstance(control, Mapping):
             continue
