@@ -169,10 +169,6 @@ class TestHouseDeviceConsumers(unittest.TestCase):
         for tree in (None, {}, {"consumers": None}, {"consumers": []}, "nonsense"):
             self.assertEqual(extract(tree), [], tree)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_carved_meters_beneath_a_row_are_its_metered_children(self):
         # A schedulable washer under a passive circuit is a breakdown row of its
         # own, so the circuit's row must leave it out. Only the topmost carved
@@ -201,3 +197,7 @@ if __name__ == "__main__":
 
         self.assertEqual(result[0]["metered_children"], ["sensor.washer_energy"])
         self.assertEqual(extract(tree)[0]["metered_children"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()
