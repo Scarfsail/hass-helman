@@ -1233,6 +1233,54 @@ def _migrate_v20_to_v21(
     return (document, [])
 
 
+#: ``power_devices.house`` keys v22 moves to ``devices``. They are read only by
+#: the entity suggestions of the Devices editor.
+_DEVICE_LABEL_KEYS = ("power_sensor_label", "power_switch_label")
+
+
+def _migrate_v21_to_v22(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``devices`` becomes a section object holding its list and its settings.
+
+    The list moves to ``devices.items``;
+    ``visualization.power_sensor_name_cleaner_regex`` becomes
+    ``devices.name_cleaner_regex``, since it names every device on every
+    surface; ``power_devices.house.power_sensor_label`` and
+    ``power_switch_label`` move beside it. ``power_devices.house.
+    unmeasured_power_title`` is dropped: the Unmeasured rows use a fixed,
+    localized label.
+
+    The ``devices`` object is created only when something goes in it. A
+    ``devices`` value that is neither a list nor absent (``null`` counts as
+    absent) is left alone for the validator to report.
+    """
+    devices = document.get("devices")
+    if devices is not None and not isinstance(devices, list):
+        return (document, [])
+    section: dict[str, Any] = {}
+
+    visualization = document.get("visualization")
+    if isinstance(visualization, dict) and (
+        "power_sensor_name_cleaner_regex" in visualization
+    ):
+        section["name_cleaner_regex"] = visualization.pop(
+            "power_sensor_name_cleaner_regex"
+        )
+
+    power_devices = document.get("power_devices")
+    house = power_devices.get("house") if isinstance(power_devices, dict) else None
+    if isinstance(house, dict):
+        for key in _DEVICE_LABEL_KEYS:
+            if key in house:
+                section[key] = house.pop(key)
+        house.pop("unmeasured_power_title", None)
+
+    if devices is not None:
+        section["items"] = devices
+    if section:
+        document["devices"] = section
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1254,6 +1302,7 @@ _MIGRATIONS = {
     18: _migrate_v18_to_v19,
     19: _migrate_v19_to_v20,
     # 20 -> 21 needs the Energy preferences: bound in migrate_config_document.
+    21: _migrate_v21_to_v22,
 }
 
 

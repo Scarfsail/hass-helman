@@ -4,6 +4,7 @@
   },
   "house_section": {
     "deferrable_tag": "odložitelná",
+    "unmeasured": "👻 Nesledovaná spotřeba",
     "group_by": "Seskupit podle",
     "others": "Ostatní",
     "show_more": "Více",
@@ -593,7 +594,6 @@
       "house_actual": "Skutečná spotřeba",
       "house_composition": "Složení spotřeby (skutečné)",
       "house_composition_forecast": "Složení spotřeby (predikce)",
-      "house_unmeasured": "Nesledovaná spotřeba",
       "house_base_load": "Základní spotřeba",
       "house_group_base": "Základní spotřeba",
       "house_group_deferrable": "Odložitelná spotřeba",

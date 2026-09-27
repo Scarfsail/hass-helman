@@ -32,7 +32,7 @@ function learner(id: string, name: string, meter: string): Record<string, unknow
 
 const CONFIG = {
     config_version: 19,
-    devices: [
+    devices: { items: [
         learner("dishwasher", "Dishwasher", "sensor.dishwasher_energy"),
         learner("washer", "Laundry", "sensor.washer_energy"),
         learner("dryer", "Dryer", "sensor.dryer_energy"),
@@ -47,7 +47,7 @@ const CONFIG = {
                 projection: { strategy: "fixed", hourly_energy_kwh: 1 },
             },
         },
-    ],
+    ] },
 };
 
 function job(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {

@@ -296,7 +296,7 @@ def _battery_forecast_schedule_signature(coordinator):
 
 def _valid_appliances_config() -> dict:
     return {
-        "devices": [
+        "devices": {"items": [
             {
                 "kind": "ev_charger",
                 "schedulable": True,
@@ -335,13 +335,13 @@ def _valid_appliances_config() -> dict:
                     }
                 ],
             }
-        ]
+        ]}
     }
 
 
 def _valid_climate_config() -> dict:
     return {
-        "devices": [
+        "devices": {"items": [
             {
                 "kind": "climate",
                 "schedulable": True,
@@ -359,7 +359,7 @@ def _valid_climate_config() -> dict:
                     },
                 },
             }
-        ]
+        ]}
     }
 
 
@@ -667,9 +667,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_derived_appliance_name_refreshes_after_startup(self) -> None:
         config = _valid_climate_config()
-        device = config["devices"][0]
+        device = config["devices"]["items"][0]
         del device["name"]
-        config["visualization"] = {"power_sensor_name_cleaner_regex": " Power$"}
+        config["devices"]["name_cleaner_regex"] = " Power$"
         storage = FakeStorage(schedule_document={}, config=config)
         hass = FakeHass()
         coordinator = HelmanCoordinator(hass, storage)
@@ -1397,10 +1397,10 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(captured.output), 1)
         self.assertIn(
-            "devices[inverter].controls.mode.entity_id", captured.output[0]
+            "devices.items[inverter].controls.mode.entity_id", captured.output[0]
         )
         self.assertIn(
-            "devices[inverter].controls.mode.options.normal",
+            "devices.items[inverter].controls.mode.options.normal",
             captured.output[0],
         )
 

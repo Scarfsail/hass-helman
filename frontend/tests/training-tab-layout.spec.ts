@@ -19,14 +19,14 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const DISHWASHER_METER_KEY = "devices.0.consumption.energy_entity_id";
+const DISHWASHER_METER_KEY = "devices.items.0.consumption.energy_entity_id";
 
 const CONFIG = {
     config_version: 19,
     power_devices: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
-    devices: [
+    devices: { items: [
         {
             id: "dishwasher",
             name: "Dishwasher",
@@ -36,7 +36,7 @@ const CONFIG = {
                 projection: { strategy: "history_average", lookback_days: 21 },
             },
         },
-    ],
+    ] },
     training: {
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },

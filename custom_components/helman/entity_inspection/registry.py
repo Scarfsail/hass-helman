@@ -116,7 +116,7 @@ EVALUATORS: dict[str, Evaluator] = {
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
-    "devices.*.consumption.energy_entity_id": history_evaluator(
+    "devices.items.*.consumption.energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
@@ -129,9 +129,9 @@ EVALUATORS: dict[str, Evaluator] = {
     # tab keeps showing the switch or climate state it always has. Nested
     # device prefixes are normalized before matching, at any tree depth. An EV
     # charger's charge switch is its running signal on a shared meter.
-    "devices.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
-    "devices.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
-    "devices.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
+    "devices.items.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
+    "devices.items.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
+    "devices.items.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
     "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
     "training.solar_bias.total_energy_entity_id": (
         history_evaluator(
@@ -206,7 +206,7 @@ def evaluator_for(
     # the actual draft field.
     prefix_length = device_prefix_length(path)
     match_path = (
-        (*path[:2], *path[prefix_length:])
+        (*path[:3], *path[prefix_length:])
         if prefix_length is not None
         else path
     )

@@ -374,7 +374,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private _hydrateNode(dto: DeviceNodeDTO): DeviceNode {
-        return hydrateNode(dto, this._uiConfig?.history_buckets ?? 60);
+        return hydrateNode(dto, this._uiConfig?.history_buckets ?? 60, this._localize!);
     }
 
     private _hydrateDeviceNodes(payload: TreePayload): DeviceNode[] {

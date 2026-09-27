@@ -71,14 +71,12 @@ def _valid_config() -> dict:
                     "Kitchen": "KT",
                 }
             },
-            "power_sensor_name_cleaner_regex": r"\s+",
         },
         "power_devices": {
             "house": {
                 "entities": {
                     "power": "sensor.house_power",
                 },
-                "unmeasured_power_title": "Unmeasured",
                 "forecast": {
                     "total_energy_entity_id": "sensor.house_energy_total",
                 },
@@ -131,7 +129,7 @@ def _valid_config() -> dict:
                 "training_window_days": 56,
             },
         },
-        "devices": [
+        "devices": {"name_cleaner_regex": r"\s+", "items": [
             _inverter_controllable(),
             {
                 "kind": "ev_charger",
@@ -176,7 +174,7 @@ def _valid_config() -> dict:
                 ],
                 "consumption": {"energy_entity_id": "sensor.ev_energy_total"},
             }
-        ],
+        ]},
     }
 
 
@@ -306,7 +304,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_unknown_controllable_kind_is_warning_only(self) -> None:
         config = _valid_config()
-        config["devices"] = [{"kind": "heat_pump"}]
+        config["devices"]["items"] = [{"kind": "heat_pump"}]
 
         report = validate_config_document(config)
 
@@ -317,7 +315,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_inverter_control_is_error(self) -> None:
         config = _valid_config()
-        config["devices"][0]["controls"]["mode"] = {
+        config["devices"]["items"][0]["controls"]["mode"] = {
             "entity_id": "sensor.bad_domain",
             "options": {
                 "normal": "Normal",
@@ -334,7 +332,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_stop_export_option_type_is_error(self) -> None:
         config = _valid_config()
-        config["devices"][0]["controls"]["mode"]["options"]["stop_export"] = 42
+        config["devices"]["items"][0]["controls"]["mode"]["options"]["stop_export"] = 42
 
         report = validate_config_document(config)
 
@@ -342,7 +340,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "devices[0].controls.mode.options.stop_export"
+                == "devices.items[0].controls.mode.options.stop_export"
                 and issue.code == "invalid_type"
                 for issue in report.errors
             )
@@ -373,7 +371,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_second_inverter_is_rejected(self) -> None:
         config = _valid_config()
-        config["devices"].append(_inverter_controllable())
+        config["devices"]["items"].append(_inverter_controllable())
 
         report = validate_config_document(config)
 
@@ -386,7 +384,7 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance()
         appliance["id"] = "inverter"
-        config["devices"].append(appliance)
+        config["devices"]["items"].append(appliance)
 
         report = validate_config_document(config)
 
@@ -400,7 +398,7 @@ class ConfigValidationTests(unittest.TestCase):
         climate = _climate_appliance()
         generic = _generic_appliance()
         generic["id"] = climate["id"]
-        config["devices"].extend([climate, generic])
+        config["devices"]["items"].extend([climate, generic])
 
         report = validate_config_document(config)
 
@@ -449,7 +447,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_appliance_runtime_optimizer_passes_for_configured_generic_appliance(self) -> None:
         config = _valid_config()
-        config["devices"].append(_generic_appliance())
+        config["devices"]["items"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
             "appliance_optimizers": [
@@ -472,7 +470,7 @@ class ConfigValidationTests(unittest.TestCase):
             with self.subTest(kind=device["kind"]):
                 del device["name"]
                 config = _valid_config()
-                config["devices"].append(device)
+                config["devices"]["items"].append(device)
                 report = validate_config_document(config)
                 self.assertTrue(report.valid, report.errors)
 
@@ -506,7 +504,7 @@ class ConfigValidationTests(unittest.TestCase):
         self,
     ) -> None:
         config = _valid_config()
-        config["devices"].append(_generic_appliance())
+        config["devices"]["items"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
             "appliance_optimizers": [
@@ -570,7 +568,7 @@ class ConfigValidationTests(unittest.TestCase):
         implied its own target.
         """
         config = _valid_config()
-        config["devices"].append(_generic_appliance())
+        config["devices"]["items"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
             "system_optimizers": [
@@ -692,7 +690,7 @@ class ConfigValidationTests(unittest.TestCase):
             appliance["name"] = appliance_id.title()
             appliance["consumption"]["energy_entity_id"] = f"sensor.{appliance_id}_energy"
             appliance["controls"]["switch"]["entity_id"] = f"switch.{appliance_id}"
-            config["devices"].append(appliance)
+            config["devices"]["items"].append(appliance)
 
         config["automation"] = {
             "enabled": True,
@@ -897,7 +895,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_climate_mode_is_checked_per_member_by_its_kind(self) -> None:
         config = self._pool_config()
-        config["devices"].append(_climate_appliance())
+        config["devices"]["items"].append(_climate_appliance())
         config["automation"]["appliance_optimizers"] = [
             {
                 "id": "group",
@@ -937,7 +935,7 @@ class ConfigValidationTests(unittest.TestCase):
         for raw_id, label in ((None, "absent"), ("fv", "renamed")):
             with self.subTest(label):
                 config = _valid_config()
-                inverter = config["devices"][0]
+                inverter = config["devices"]["items"][0]
                 if raw_id is None:
                     inverter.pop("id")
                 else:
@@ -949,7 +947,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         issue.code == "required_controllable_id"
-                        and issue.path == "devices[0].id"
+                        and issue.path == "devices.items[0].id"
                         and "'inverter'" in issue.message
                         for issue in report.errors
                     ),
@@ -963,7 +961,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_valid_generic_appliance_passes(self) -> None:
         config = _valid_config()
-        config["devices"] = [_inverter_controllable(), _generic_appliance(strategy="history_average")]
+        config["devices"]["items"] = [_inverter_controllable(), _generic_appliance(strategy="history_average")]
 
         report = validate_config_document(config)
 
@@ -972,7 +970,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_valid_climate_appliance_passes(self) -> None:
         config = _valid_config()
-        config["devices"] = [_inverter_controllable(), _climate_appliance(strategy="history_average")]
+        config["devices"]["items"] = [_inverter_controllable(), _climate_appliance(strategy="history_average")]
 
         report = validate_config_document(config)
 
@@ -981,7 +979,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_appliance_icon_accepts_non_mdi_value(self) -> None:
         config = _valid_config()
-        config["devices"][1]["icon"] = "hass:car-electric"
+        config["devices"]["items"][1]["icon"] = "hass:car-electric"
 
         report = validate_config_document(config)
 
@@ -992,13 +990,13 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance(strategy="history_average")
         del appliance["consumption"]["energy_entity_id"]
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertIn(
-            ("devices[1].consumption.energy_entity_id", "required"),
+            ("devices.items[1].consumption.energy_entity_id", "required"),
             {(issue.path, issue.code) for issue in report.errors},
         )
 
@@ -1006,14 +1004,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         inverter = _inverter_controllable()
         inverter["consumption"] = {"energy_entity_id": "sensor.inverter_energy"}
-        config["devices"] = [inverter, _generic_appliance()]
+        config["devices"]["items"] = [inverter, _generic_appliance()]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices[0].consumption"
+                issue.path == "devices.items[0].consumption"
                 and issue.code == "consumption_not_allowed"
                 for issue in report.errors
             )
@@ -1023,7 +1021,7 @@ class ConfigValidationTests(unittest.TestCase):
         # Four air conditioners behind one breaker meter: the house baseline
         # subtracts the meter once and history_average splits it among them.
         config = _valid_config()
-        config["devices"] = [_inverter_controllable(), _ac_breaker()]
+        config["devices"]["items"] = [_inverter_controllable(), _ac_breaker()]
 
         report = validate_config_document(config)
 
@@ -1038,28 +1036,28 @@ class ConfigValidationTests(unittest.TestCase):
         second["consumption"]["energy_entity_id"] = first["consumption"][
             "energy_entity_id"
         ]
-        config["devices"] = [_inverter_controllable(), first, second]
+        config["devices"]["items"] = [_inverter_controllable(), first, second]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertEqual(
             [issue.path for issue in report.errors if issue.code == "duplicate_meter"],
-            ["devices[2].consumption.energy_entity_id"],
+            ["devices.items[2].consumption.energy_entity_id"],
         )
 
     def test_the_meter_must_be_a_sensor(self) -> None:
         config = _valid_config()
         appliance = _generic_appliance()
         appliance["consumption"]["energy_entity_id"] = "switch.not_a_meter"
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices[1].consumption.energy_entity_id"
+                issue.path == "devices.items[1].consumption.energy_entity_id"
                 for issue in report.errors
             )
         )
@@ -1070,14 +1068,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance()
         appliance["projection"] = {"strategy": "fixed", "hourly_energy_kwh": 1.2}
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices[1].projection"
+                issue.path == "devices.items[1].projection"
                 and issue.code == "retired_config_key"
                 and "consumption.projection" in issue.message
                 for issue in report.errors
@@ -1088,13 +1086,13 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance(strategy="history_average")
         appliance["consumption"]["deferrable"] = False
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertIn(
-            ("devices[1].consumption.deferrable", "unknown_key"),
+            ("devices.items[1].consumption.deferrable", "unknown_key"),
             {(issue.path, issue.code) for issue in report.errors},
         )
 
@@ -1209,14 +1207,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _climate_appliance()
         appliance["controls"]["climate"]["entity_id"] = "switch.not_a_climate"
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices[1]"
+                issue.path == "devices.items[1]"
                 and "controls.climate.entity_id" in issue.message
                 for issue in report.errors
             )
@@ -1226,14 +1224,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance()
         appliance["icon"] = "   "
-        config["devices"] = [_inverter_controllable(), appliance]
+        config["devices"]["items"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices[1]"
+                issue.path == "devices.items[1]"
                 and ".icon must be a non-empty string" in issue.message
                 for issue in report.errors
             )
@@ -1316,13 +1314,133 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
 
+    def test_relocated_device_settings_are_refused_by_name(self) -> None:
+        for old_path, new_path in (
+            ("power_sensor_name_cleaner_regex", "devices.name_cleaner_regex"),
+            (
+                "visualization.power_sensor_name_cleaner_regex",
+                "devices.name_cleaner_regex",
+            ),
+            ("power_devices.house.power_sensor_label", "devices.power_sensor_label"),
+            ("power_devices.house.power_switch_label", "devices.power_switch_label"),
+        ):
+            with self.subTest(old_path=old_path):
+                config = _valid_config()
+                *parents, key = old_path.split(".")
+                container = config
+                for part in parents:
+                    container = container[part]
+                container[key] = "x"
+
+                report = validate_config_document(config)
+
+                issues = [
+                    issue
+                    for issue in report.errors
+                    if issue.code == "relocated_config_key"
+                ]
+                self.assertEqual([issue.path for issue in issues], [old_path])
+                self.assertIn(new_path, issues[0].message)
+
+    def test_the_unmeasured_power_title_is_retired(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["house"]["unmeasured_power_title"] = "Unmeasured"
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            [
+                (issue.path, issue.code, issue.message)
+                for issue in report.errors
+            ],
+            [
+                (
+                    "power_devices.house.unmeasured_power_title",
+                    "retired_config_key",
+                    "the Unmeasured rows use a fixed label; remove this key",
+                )
+            ],
+        )
+
+    def test_devices_as_a_list_is_refused_with_the_new_shape(self) -> None:
+        config = _valid_config()
+        config["devices"] = config["devices"]["items"]
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            [(issue.path, issue.code, issue.message) for issue in report.errors],
+            [
+                (
+                    "devices",
+                    "relocated_config_key",
+                    "devices is now an object; put the list under devices.items",
+                )
+            ],
+        )
+
+    def test_devices_must_be_an_object(self) -> None:
+        config = _valid_config()
+        config["devices"] = "nonsense"
+
+        report = validate_config_document(config)
+
+        self.assertIn(("devices", "invalid_type"), _paths_and_codes(report))
+
+    def test_devices_items_must_be_a_list(self) -> None:
+        config = _valid_config()
+        config["devices"]["items"] = {"id": "washer"}
+
+        report = validate_config_document(config)
+
+        self.assertIn(("devices.items", "invalid_type"), _paths_and_codes(report))
+
+    def test_an_invalid_name_cleaner_regex_is_reported_at_its_new_path(self) -> None:
+        for value, code in (("(", "invalid_regex"), ("  ", "invalid_type")):
+            with self.subTest(value=value):
+                config = _valid_config()
+                config["devices"]["name_cleaner_regex"] = value
+
+                report = validate_config_document(config)
+
+                self.assertEqual(
+                    _paths_and_codes(report),
+                    [("devices.name_cleaner_regex", code)],
+                )
+
+    def test_device_labels_must_be_non_empty_strings(self) -> None:
+        config = _valid_config()
+        config["devices"]["power_sensor_label"] = "power"
+        config["devices"]["power_switch_label"] = 5
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report), [("devices.power_switch_label", "invalid_type")]
+        )
+
+    def test_an_unknown_key_under_devices_is_reported(self) -> None:
+        config = _valid_config()
+        config["devices"]["colour"] = "blue"
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report), [("devices.colour", "unknown_key")]
+        )
+
+
+def _paths_and_codes(report) -> list[tuple[str, str]]:
+    return [(issue.path, issue.code) for issue in report.errors]
+
+
 
 class DeviceTreeValidationTests(unittest.TestCase):
     """The rules that relate devices to one another in the ``devices`` tree."""
 
     def _codes(self, *devices, automation=None):
         config = _valid_config()
-        config["devices"] = [_inverter_controllable(), *devices]
+        config["devices"]["items"] = [_inverter_controllable(), *devices]
         if automation is not None:
             config["automation"] = automation
         report = validate_config_document(config)
@@ -1354,16 +1472,16 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(appliance)
 
-        self.assertIn(("devices[1]", "invalid_appliance"), errors)
+        self.assertIn(("devices.items[1]", "invalid_appliance"), errors)
 
     def test_ids_are_unique_across_the_whole_tree(self) -> None:
         breaker = _ac_breaker()
         breaker["children"][0]["id"] = "garage-ev"
 
-        errors, _ = self._codes(_valid_config()["devices"][1], breaker)
+        errors, _ = self._codes(_valid_config()["devices"]["items"][1], breaker)
 
         self.assertIn(
-            ("devices[2].children[0].id", "duplicate_controllable_id"), errors
+            ("devices.items[2].children[0].id", "duplicate_controllable_id"), errors
         )
 
     def test_the_inverter_is_top_level_only(self) -> None:
@@ -1372,7 +1490,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices[1].children[4]", "inverter_not_top_level"), errors)
+        self.assertIn(("devices.items[1].children[4]", "inverter_not_top_level"), errors)
 
     def test_a_child_may_not_repeat_another_devices_meter(self) -> None:
         breaker = _ac_breaker()
@@ -1383,7 +1501,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, _ = self._codes(breaker)
 
         self.assertIn(
-            ("devices[1].children[0].consumption.energy_entity_id", "duplicate_meter"),
+            ("devices.items[1].children[0].consumption.energy_entity_id", "duplicate_meter"),
             errors,
         )
 
@@ -1399,7 +1517,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, _ = self._codes(breaker)
 
         self.assertIn(
-            ("devices[1].children[0].children", "children_without_meter"), errors
+            ("devices.items[1].children[0].children", "children_without_meter"), errors
         )
 
     def test_a_schedulable_device_with_children_is_rejected(self) -> None:
@@ -1415,7 +1533,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices[1].children", "schedulable_with_children"), errors)
+        self.assertIn(("devices.items[1].children", "schedulable_with_children"), errors)
 
     def test_the_inverter_cannot_have_children(self) -> None:
         config = _valid_config()
@@ -1432,12 +1550,12 @@ class DeviceTreeValidationTests(unittest.TestCase):
                 },
             }
         ]
-        config["devices"] = [inverter]
+        config["devices"]["items"] = [inverter]
 
         report = validate_config_document(config)
 
         self.assertIn(
-            ("devices[0].children", "inverter_with_children"),
+            ("devices.items[0].children", "inverter_with_children"),
             {(issue.path, issue.code) for issue in report.errors},
         )
 
@@ -1448,7 +1566,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices[1].children[1].id", "share_sensor_collision"), errors)
+        self.assertIn(("devices.items[1].children[1].id", "share_sensor_collision"), errors)
 
     def test_a_share_collision_with_an_unsupported_kind_is_rejected(self) -> None:
         # A preserved future kind is skipped by the rest of validation, but
@@ -1460,7 +1578,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices[1].children[1].id", "share_sensor_collision"), errors)
+        self.assertIn(("devices.items[1].children[1].id", "share_sensor_collision"), errors)
 
     def test_a_meterless_child_needs_a_running_signal(self) -> None:
         breaker = _ac_breaker()
@@ -1471,7 +1589,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, _ = self._codes(breaker)
 
         self.assertIn(
-            ("devices[1].children[4].controls", "running_signal_required"), errors
+            ("devices.items[1].children[4].controls", "running_signal_required"), errors
         )
 
     def test_an_ev_chargers_charge_switch_is_its_running_signal(self) -> None:
@@ -1491,7 +1609,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, _ = self._codes(breaker)
 
         self.assertNotIn(
-            ("devices[1].children[4].controls", "running_signal_required"), errors
+            ("devices.items[1].children[4].controls", "running_signal_required"), errors
         )
         self.assertEqual(
             running_signal(breaker["children"][4]), ("switch.ev_charge", "switch")
@@ -1509,7 +1627,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices[1].children", "mixed_meterless_children"), errors)
+        self.assertIn(("devices.items[1].children", "mixed_meterless_children"), errors)
 
     def test_a_parent_of_meterless_children_needs_a_power_sensor(self) -> None:
         breaker = _ac_breaker()
@@ -1518,7 +1636,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, _ = self._codes(breaker)
 
         self.assertIn(
-            ("devices[1].consumption.power_entity_id", "power_entity_required"), errors
+            ("devices.items[1].consumption.power_entity_id", "power_entity_required"), errors
         )
 
     def test_an_energy_only_metered_sibling_of_a_meterless_child_is_rejected(
@@ -1530,7 +1648,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
             errors,
             {
                 (
-                    "devices[1].children[0].consumption.power_entity_id",
+                    "devices.items[1].children[0].consumption.power_entity_id",
                     "power_entity_required",
                 )
             },

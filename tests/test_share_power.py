@@ -112,7 +112,7 @@ def _make_coordinator(states: dict[str, str], *, metered_child: bool = False):
     config = {
         "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
         "power_devices": {"house": {"entities": {"power": HOUSE}}},
-        "devices": _devices(metered_child=metered_child),
+        "devices": {"items": _devices(metered_child=metered_child)},
     }
     hass = SimpleNamespace(states=_States(states))
     with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
@@ -208,7 +208,7 @@ class SharePowerTests(unittest.TestCase):
         # No power sensor, so no remainder node: the shares still get a value,
         # and it is unavailable, not a sensor stuck at "unknown".
         c, _ = self._run(("obyvak",))
-        del c._active_config["devices"][0]["consumption"]["power_entity_id"]
+        del c._active_config["devices"]["items"][0]["consumption"]["power_entity_id"]
         with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
                 mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):
             c._cached_tree = asyncio.run(

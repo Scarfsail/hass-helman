@@ -2,7 +2,7 @@ import { asJsonArray, asJsonObject } from "./config-document";
 import type { JsonObject, JsonValue, PathSegment } from "./types";
 
 /**
- * The draft's `devices` tree, read the way the backend reads it.
+ * The draft's `devices.items` tree, read the way the backend reads it.
  *
  * Mirrors `custom_components/helman/controllables/config.py`: the tree is
  * flattened depth first in document order, `kind` defaults to `generic`, and
@@ -28,7 +28,7 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
       walk(device.children, device, [...devicePath, "children"]);
     });
   };
-  walk(config?.devices, null, ["devices"]);
+  walk(asJsonObject(config?.devices)?.items, null, ["devices", "items"]);
   return entries;
 }
 

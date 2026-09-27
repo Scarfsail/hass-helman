@@ -85,17 +85,17 @@ const DEVICES = [INVERTER, BREAKER, STUDY, BOILER];
 
 /** What the backend's name resolution answers, by name/icon path key. */
 const PLACEHOLDERS: Record<string, string> = {
-    "devices.1.name": "AC breaker",
-    "devices.1.icon": "mdi:air-conditioner",
-    "devices.1.children.0.name": "Obývák",
-    "devices.1.children.1.name": "Ložnice",
+    "devices.items.1.name": "AC breaker",
+    "devices.items.1.icon": "mdi:air-conditioner",
+    "devices.items.1.children.0.name": "Obývák",
+    "devices.items.1.children.1.name": "Ložnice",
 };
 
 type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: Device[] };
+        __editorConfig: () => { devices: { items: Device[] } };
         __inspectKeys: string[];
         __validation: unknown;
         __card: (id: string) => HTMLDetailsElement | null;
@@ -123,7 +123,7 @@ async function mountEditor(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
             window.__editorConfig = () =>
-                (element as unknown as { _config: { devices: Device[] } })._config;
+                (element as unknown as { _config: { devices: { items: Device[] } } })._config;
             window.__inspectKeys = [];
             window.__validation = report;
             window.__card = (id) =>
@@ -162,7 +162,14 @@ async function mountEditor(
                                         entityId: null,
                                         status: "ok",
                                         facts: [],
-                                        placeholder: placeholders[target.key],
+                                        // Cleaned as the backend's resolution cleans it,
+                                        // so the draft's regex shows in the answer.
+                                        placeholder: request.config?.devices?.name_cleaner_regex
+                                            ? placeholders[target.key]?.replace(
+                                                  new RegExp(request.config.devices.name_cleaner_regex),
+                                                  "",
+                                              )
+                                            : placeholders[target.key],
                                     },
                                     saved: null,
                                 };
@@ -174,9 +181,42 @@ async function mountEditor(
             };
             document.body.appendChild(element);
         },
-        { config: { config_version: 21, devices }, placeholders: PLACEHOLDERS, report: validation },
+        { config: { config_version: 22, devices: { items: devices } }, placeholders: PLACEHOLDERS, report: validation },
     );
 }
+
+test("the device settings sit above the list and the regex renames the cards", async ({
+    page,
+}) => {
+    await mountEditor(page);
+    await openTab(page, "Devices");
+
+    const sections = page.locator("helman-config-editor-panel").locator("details.section-card");
+    // The tab's own sections, in order; device cards nest sections of their own.
+    const labels = await sections.locator(":scope > summary .section-summary-label").allTextContents();
+    expect(labels.slice(0, 2)).toEqual(["Device settings", "Configured devices"]);
+    await expect
+        .poll(() =>
+            page.evaluate(() => window.__own("jistic_klimatizace_energy", ".card-title strong")[0]?.textContent?.trim()),
+        )
+        .toBe("AC breaker");
+
+    const settings = sections.first();
+    await expect(settings).not.toHaveAttribute("open", "");
+    await settings.evaluate((details) => ((details as HTMLDetailsElement).open = true));
+    const regex = settings.locator(".field").filter({ hasText: "Device name cleaner regex" }).locator("input");
+    await regex.fill("\\sbreaker$");
+    await regex.dispatchEvent("change");
+
+    expect(
+        await page.evaluate(() => (window.__editorConfig().devices as any).name_cleaner_regex),
+    ).toBe("\\sbreaker$");
+    await expect
+        .poll(() =>
+            page.evaluate(() => window.__own("jistic_klimatizace_energy", ".card-title strong")[0]?.textContent?.trim()),
+        )
+        .toBe("AC");
+});
 
 async function openTab(page: Page, label: string): Promise<void> {
     await page
@@ -186,7 +226,7 @@ async function openTab(page: Page, label: string): Promise<void> {
         .click();
 }
 
-const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices);
+const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.items);
 
 /** The ids of the cards the tab shows, in document order, hidden ones left out. */
 const visibleCardIds = (page: Page) =>
@@ -274,7 +314,7 @@ test("the overview row shows the resolved name, icon and derived badges", async 
         )
         .toBe("AC breaker");
     expect(await page.evaluate(() => window.__inspectKeys)).toEqual(
-        expect.arrayContaining(["devices.1.name", "devices.1.icon", "devices.1.children.0.name"]),
+        expect.arrayContaining(["devices.items.1.name", "devices.items.1.icon", "devices.items.1.children.0.name"]),
     );
     const breaker = await page.evaluate(() => ({
         icon: (window.__own("jistic_klimatizace_energy", "summary ha-icon")[0] as any)?.icon,
@@ -475,7 +515,7 @@ test("the parent picker moves a device with its subtree", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");
 
-    await choose(page, "study", "select.device-parent", "devices.1");
+    await choose(page, "study", "select.device-parent", "devices.items.1");
     await expect.poll(() => config(page)).toEqual([
         INVERTER,
         { ...BREAKER, children: [...BREAKER.children, STUDY] },
@@ -559,7 +599,7 @@ test("a passive meterless child's control is editable and required", async ({ pa
         }));
     });
     expect(group).toContainEqual({
-        path: "devices.2.children.1.controls.switch.entity_id",
+        path: "devices.items.2.children.1.controls.switch.entity_id",
         required: true,
     });
     // No projection on a passive device.
@@ -599,12 +639,12 @@ test("the tree round-trips through YAML, whole and per card", async ({ page }) =
             );
         }, value);
 
-    // The tab's YAML is the whole tree, and handing it back changes nothing.
+    // The tab's YAML is the whole `devices` section, and handing it back changes nothing.
     await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
     const tabYaml = await panel
         .locator("ha-yaml-editor")
         .evaluate((editor) => (editor as any).defaultValue);
-    expect(tabYaml).toEqual(DEVICES);
+    expect(tabYaml).toEqual({ items: DEVICES });
     await fire(tabYaml);
     await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "Visual" }).click();
     expect(await config(page)).toEqual(DEVICES);
@@ -660,7 +700,7 @@ for (const ancestor of ["card", "tab"] as const) {
         const nextStudy = { ...STUDY, children: [STUDY.children[1]] };
         const replacement = ancestor === "card"
             ? nextStudy
-            : [INVERTER, BREAKER, nextStudy, BOILER];
+            : { items: [INVERTER, BREAKER, nextStudy, BOILER] };
         await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
             editor.dispatchEvent(new CustomEvent("value-changed", {
                 detail: { value, isValid: true }, bubbles: true, composed: true,
@@ -691,9 +731,9 @@ test("validation errors surface on the nested card they name", async ({ page }) 
     await mountEditor(page, DEVICES, {
         valid: false,
         errors: [
-            issue("devices[2].children[1].controls", "lamp needs a switch"),
-            issue("devices[2].children", "study children rule"),
-            issue("devices[1].children[0].consumption.projection", "obyvak projection"),
+            issue("devices.items[2].children[1].controls", "lamp needs a switch"),
+            issue("devices.items[2].children", "study children rule"),
+            issue("devices.items[1].children[0].consumption.projection", "obyvak projection"),
         ],
         warnings: [],
     });
@@ -754,7 +794,7 @@ test("the inverter is edited under Power devices", async ({ page }) => {
         .toBe("Feed-in Priority");
     await expect(
         inverter.locator("helman-entity-group").evaluate((group: any) => group.path.join(".")),
-    ).resolves.toBe("devices.0.controls.mode.entity_id");
+    ).resolves.toBe("devices.items.0.controls.mode.entity_id");
 });
 
 test("Add inverter is offered under Power devices only while there is none", async ({
@@ -1008,7 +1048,7 @@ test("import preview cancel is inert and apply changes only the draft with moves
   );
   await page.locator(".cancel-energy-import").click();
   expect(await config(page)).toEqual([parent, child]);
-  // The move shifts "child" off devices[1]; its YAML state must not follow the path.
+  // The move shifts "child" off devices.items[1]; its YAML state must not follow the path.
   await page.evaluate(() => {
     window
       .__own("child", "summary .mode-toggle button")
@@ -1058,7 +1098,7 @@ test("late suggestions and previews are discarded after the draft changes", asyn
   await page.evaluate(() => {
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._applyMutation((draft: any) => {
-      draft.devices[0].name = "New draft name";
+      draft.devices.items[0].name = "New draft name";
     });
     (window as any).__resolveDeviceRequest();
   });
@@ -1074,7 +1114,7 @@ test("late suggestions and previews are discarded after the draft changes", asyn
   await page.evaluate(() => {
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._applyMutation((draft: any) => {
-      draft.devices[0].name = "Still newer";
+      draft.devices.items[0].name = "Still newer";
     });
     (window as any).__resolveDeviceRequest();
   });
@@ -1109,7 +1149,7 @@ test("visible candidates disappear when the draft is replaced outside a field ed
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._config = {
       ...panel._config,
-      devices: [{ id: "breaker", consumption: { energy_entity_id: "sensor.new" } }],
+      devices: { items: [{ id: "breaker", consumption: { energy_entity_id: "sensor.new" } }] },
     };
   });
   await expect(
@@ -1133,7 +1173,7 @@ test("invalid import cannot be applied and empty state offers import", async ({
     importResponse([], {
       validation: {
         valid: false,
-        errors: [{ path: "devices[0]", message: "Invalid draft" }],
+        errors: [{ path: "devices.items[0]", message: "Invalid draft" }],
       },
     }),
   );

@@ -581,7 +581,7 @@ test("typing does not send one request per keystroke", async ({ page }) => {
     await page.evaluate(() => {
         const editor = document.querySelector("helman-config-editor-panel") as any;
         for (let index = 0; index < 10; index += 1) {
-            editor.setValue(["power_devices", "house", "power_sensor_label"], "x".repeat(index + 1));
+            editor.setValue(["devices", "power_sensor_label"], "x".repeat(index + 1));
         }
     });
 

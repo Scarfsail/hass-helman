@@ -60,10 +60,27 @@ _RELOCATED_VISUALIZATION_KEYS = (
     "consumers_title",
     "groups_title",
     "others_group_label",
-    "power_sensor_name_cleaner_regex",
     "show_empty_groups",
     "show_others_group",
     "device_label_text",
+)
+
+#: Where config version 22 moved the device-level settings, old dotted path to
+#: new. The top-level regex is the v17-era spelling of the same key. Same
+#: reasoning as ``_RETIRED_CONFIG_KEYS``.
+_RELOCATED_DEVICE_KEYS = {
+    "power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
+    "visualization.power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
+    "power_devices.house.power_sensor_label": "devices.power_sensor_label",
+    "power_devices.house.power_switch_label": "devices.power_switch_label",
+}
+
+#: The keys the ``devices`` section object holds since config version 22.
+_DEVICES_SECTION_KEYS = (
+    "items",
+    "name_cleaner_regex",
+    "power_sensor_label",
+    "power_switch_label",
 )
 
 #: The action options an inverter's ``controls.mode.options`` may carry, in the
@@ -213,32 +230,6 @@ def _validate_visualization_config(
         "visualization.show_others_group",
         visualization.get("show_others_group"),
     )
-
-    regex_value = visualization.get("power_sensor_name_cleaner_regex")
-    if regex_value is not None:
-        if not _is_non_empty_string(regex_value):
-            report.add_error(
-                section=section,
-                path="visualization.power_sensor_name_cleaner_regex",
-                code="invalid_type",
-                message=(
-                    "visualization.power_sensor_name_cleaner_regex must be a "
-                    "non-empty string"
-                ),
-            )
-        else:
-            try:
-                re.compile(regex_value.strip())
-            except re.error as err:
-                report.add_error(
-                    section=section,
-                    path="visualization.power_sensor_name_cleaner_regex",
-                    code="invalid_regex",
-                    message=(
-                        "visualization.power_sensor_name_cleaner_regex is "
-                        f"invalid: {err}"
-                    ),
-                )
 
     device_label_text = visualization.get("device_label_text")
     if device_label_text is not None:
@@ -431,24 +422,13 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
             )
             _validate_power_polarity(report, section, "house", entity_map)
 
-    _validate_optional_string(
-        report,
-        section,
-        "power_devices.house.power_sensor_label",
-        house.get("power_sensor_label"),
-    )
-    _validate_optional_string(
-        report,
-        section,
-        "power_devices.house.power_switch_label",
-        house.get("power_switch_label"),
-    )
-    _validate_optional_string(
-        report,
-        section,
-        "power_devices.house.unmeasured_power_title",
-        house.get("unmeasured_power_title"),
-    )
+    if "unmeasured_power_title" in house:
+        report.add_error(
+            section=section,
+            path="power_devices.house.unmeasured_power_title",
+            code="retired_config_key",
+            message="the Unmeasured rows use a fixed label; remove this key",
+        )
 
     forecast = house.get("forecast")
     if forecast is None:
@@ -1014,6 +994,10 @@ def _validate_controllables_config(
     the per-kind runtime reader. Per parent: the rules that relate a device to
     its children (see :func:`_validate_device_children`). Across the tree: a
     meter belongs to exactly one device.
+
+    Since config version 22 ``devices`` is a section object: the tree under
+    ``items`` beside the device-level settings. Their old spellings, and a bare
+    ``devices`` list, are refused by name.
     """
     section = "devices"
     for retired_key in _RETIRED_CONFIG_KEYS:
@@ -1028,15 +1012,61 @@ def _validate_controllables_config(
                 ),
             )
 
-    raw_devices = config.get("devices")
+    for old_path, new_path in _RELOCATED_DEVICE_KEYS.items():
+        *parents, key = old_path.split(".")
+        container: Any = config
+        for part in parents:
+            container = container.get(part) if isinstance(container, Mapping) else None
+        if isinstance(container, Mapping) and key in container:
+            report.add_error(
+                section=section,
+                path=old_path,
+                code="relocated_config_key",
+                message=f"{old_path!r} moved under 'devices'; write it as {new_path}",
+            )
+
+    raw_section = config.get("devices")
+    if raw_section is None:
+        return
+    if isinstance(raw_section, list):
+        report.add_error(
+            section=section,
+            path="devices",
+            code="relocated_config_key",
+            message="devices is now an object; put the list under devices.items",
+        )
+        return
+    if not isinstance(raw_section, Mapping):
+        report.add_error(
+            section=section,
+            path="devices",
+            code="invalid_type",
+            message="devices must be an object",
+        )
+        return
+    for key in raw_section:
+        if key not in _DEVICES_SECTION_KEYS:
+            report.add_error(
+                section=section,
+                path=f"devices.{key}",
+                code="unknown_key",
+                message=f"devices.{key} is not a config key",
+            )
+    _validate_name_cleaner_regex(raw_section.get("name_cleaner_regex"), report)
+    for key in ("power_sensor_label", "power_switch_label"):
+        _validate_optional_string(
+            report, section, f"devices.{key}", raw_section.get(key)
+        )
+
+    raw_devices = raw_section.get("items")
     if raw_devices is None:
         return
     if not isinstance(raw_devices, list):
         report.add_error(
             section=section,
-            path="devices",
+            path="devices.items",
             code="invalid_type",
-            message="devices must be a list",
+            message="devices.items must be a list",
         )
         return
 
@@ -2138,6 +2168,30 @@ def _validate_optional_probability(
             path=path,
             code="invalid_probability",
             message=f"{path} must be a number greater than 0 and at most 1",
+        )
+
+
+def _validate_name_cleaner_regex(value: object, report: ValidationReport) -> None:
+    """``devices.name_cleaner_regex``: optional, and a pattern ``re`` compiles."""
+    path = "devices.name_cleaner_regex"
+    if value is None:
+        return
+    if not _is_non_empty_string(value):
+        report.add_error(
+            section="devices",
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be a non-empty string",
+        )
+        return
+    try:
+        re.compile(value.strip())
+    except re.error as err:
+        report.add_error(
+            section="devices",
+            path=path,
+            code="invalid_regex",
+            message=f"{path} is invalid: {err}",
         )
 
 

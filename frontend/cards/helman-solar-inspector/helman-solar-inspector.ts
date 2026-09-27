@@ -609,12 +609,6 @@ type InspectorPayload = {
     hasImportPrice: boolean;
     hasExportPrice: boolean;
   };
-  /**
-   * The power card's configured title for unmetered load, reused so the
-   * breakdown's remainder row reads exactly as the card names it. Null when
-   * unconfigured, leaving the card's own localized string.
-   */
-  houseUnmeasuredLabel: string | null;
   /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
   batterySocBounds: SocBoundsPoint[];
   /** The currency-per-energy unit both price rails are quoted in. */
@@ -2956,10 +2950,6 @@ export class HelmanSolarInspector extends LitElement {
       breakdownSeries: series,
       mixes,
       variant: "actual",
-      // The power card's own title for unmetered load, from whichever day the
-      // card last loaded -- it is config, not a per-day figure, so the day the
-      // reader arrived from names the concept the same way here.
-      unmeasuredLabel: this._payload?.houseUnmeasuredLabel ?? null,
       // A bar is a whole bucket wide. A month is not a fixed number of days, so
       // this is the nominal width the power card labels its bars with rather
       // than a claim about any particular month.
@@ -5259,10 +5249,10 @@ export class HelmanSolarInspector extends LitElement {
         </div>
       </div>
       ${this._isSeriesEnabled("houseActual")
-        ? this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)
+        ? this._renderHouseBreakdown(houseBreakdown, slots, "actual")
         : ""}
       ${this._isSeriesEnabled("houseForecast")
-        ? this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast", null)
+        ? this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast")
         : ""}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
     `;
@@ -5305,17 +5295,11 @@ export class HelmanSolarInspector extends LitElement {
    * mix so a future slot's bars are coloured by the forecast supply rather than by
    * measurements that do not exist yet. Their remainders differ in kind and so are
    * named apart: what no meter accounted for, against the base load.
-   *
-   * `unmeasuredLabel` is the power card's own configured title for unmetered load,
-   * so both views name the concept identically; it falls back to this card's
-   * localized string when the card leaves it unset, and does not apply to the
-   * forecast, whose remainder is the base load.
    */
   private _renderHouseBreakdown(
     breakdown: HouseBreakdownPoint | null,
     slots: readonly string[],
     variant: "actual" | "forecast",
-    unmeasuredLabel: string | null,
   ) {
     if (!breakdown) return "";
     // Bars read off the backend's native 15-minute grid rather than the width the
@@ -5347,7 +5331,6 @@ export class HelmanSolarInspector extends LitElement {
       breakdownSeries,
       mixes,
       variant,
-      unmeasuredLabel,
       barSeconds: SLOT_MINUTES * 60,
       // The forecast's remainder is the residual against the house forecast the
       // panel sits under, not the composed base alone. At the native width the
@@ -5382,7 +5365,6 @@ export class HelmanSolarInspector extends LitElement {
     breakdownSeries: readonly HouseBreakdownPoint[];
     mixes: Map<string, BucketSourceMix>;
     variant: "actual" | "forecast";
-    unmeasuredLabel: string | null;
     barSeconds: number;
     unmeasuredFor: ((itemisedWh: number) => number) | null;
   }) {
@@ -5392,7 +5374,6 @@ export class HelmanSolarInspector extends LitElement {
       breakdownSeries,
       mixes,
       variant,
-      unmeasuredLabel,
       barSeconds,
       unmeasuredFor,
     } = options;
@@ -5407,7 +5388,7 @@ export class HelmanSolarInspector extends LitElement {
     );
     // What no meter claimed. This is deliberately not the forecast's
     // non-deferrable base load — it is the same idea as the power card's
-    // "unmeasured" node, so it borrows that node's configured title. Like the
+    // "unmeasured" node, so it reads that node's very label. Like the
     // consumer boxes it is dropped when it carries nothing, so an empty slot — or
     // one whose whole demand is metered — shows no dead box.
     //
@@ -5441,7 +5422,7 @@ export class HelmanSolarInspector extends LitElement {
           null,
           forecast
             ? this._t("bias_correction.inspector.house_base_load")
-            : unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
+            : this._t("house_section.unmeasured"),
           unmeasuredWh,
           null,
           null,
@@ -6077,7 +6058,6 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasGridActual ??= false;
       payload.availability.hasBatteryForecast ??= false;
       payload.availability.hasBatteryActual ??= false;
-      payload.houseUnmeasuredLabel ??= null;
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         // Cleared here rather than on the way out: a request dropped as a

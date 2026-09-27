@@ -128,7 +128,6 @@ class SolarBiasCorrectionService:
         house_deferrable_consumers_provider=None,
         house_scheduled_consumers_provider=None,
         house_device_consumers_provider=None,
-        house_unmeasured_label_provider=None,
         battery_soc_entity_id_provider=None,
         battery_soc_bounds_provider=None,
         battery_soc_bounds_entity_id_provider=None,
@@ -150,7 +149,6 @@ class SolarBiasCorrectionService:
         self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
         self._house_scheduled_consumers_provider = house_scheduled_consumers_provider
         self._house_device_consumers_provider = house_device_consumers_provider
-        self._house_unmeasured_label_provider = house_unmeasured_label_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._battery_soc_bounds_provider = battery_soc_bounds_provider
         self._battery_soc_bounds_entity_id_provider = (
@@ -1603,7 +1601,6 @@ class SolarBiasCorrectionService:
             battery_soc_bounds=self._battery_soc_bounds_for_date(
                 bounds_entity_ids, numeric_history_by_entity
             ),
-            house_unmeasured_label=self._house_unmeasured_label(),
             price_unit=price_unit,
             data_granularity_minutes=HOUR_MINUTES if reads_statistics else 15,
         )
@@ -1984,17 +1981,6 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("House scheduled consumers provider failed")
             return []
         return [consumer for consumer in raw if isinstance(consumer, dict)]
-
-    def _house_unmeasured_label(self) -> str | None:
-        """The power card's configured title for unmetered load, if any."""
-        if self._house_unmeasured_label_provider is None:
-            return None
-        try:
-            label = self._house_unmeasured_label_provider()
-        except Exception:
-            _LOGGER.exception("House unmeasured label provider failed")
-            return None
-        return label if isinstance(label, str) and label.strip() else None
 
     async def _house_device_consumers(self) -> list[dict]:
         """Individually-measured house devices from the shared device tree."""

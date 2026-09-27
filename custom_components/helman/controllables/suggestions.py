@@ -12,6 +12,8 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
+from .config import read_devices_section
+
 
 def suggest_entities(
     hass: HomeAssistant, anchor_entity_ids: Sequence[str], config: dict[str, Any]
@@ -38,8 +40,7 @@ def suggest_entities(
     if anchor is None:
         return result
     labels = lr.async_get(hass)
-    power_devices = config.get("power_devices") or {}
-    house = power_devices.get("house") or {}
+    section = read_devices_section(config)
     device = dr.async_get(hass).async_get(anchor.device_id)
     device_name = ((device.name_by_user or device.name or "") if device else "").casefold()
     for entry in er.async_entries_for_device(registry, anchor.device_id):
@@ -68,7 +69,7 @@ def suggest_entities(
             reasons.append({"code": f"device_class_{field}"})
             score += 2
         label_key = "power_switch_label" if field == "switch" else "power_sensor_label"
-        wanted = house.get(label_key)
+        wanted = section.get(label_key)
         if wanted and any(
             (label := labels.async_get_label(label_id)) and label.name == wanted
             for label_id in entry.labels

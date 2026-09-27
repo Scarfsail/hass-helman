@@ -713,7 +713,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     private _hydrateNode(dto: DeviceNodeDTO, historyBuckets: number): DeviceNode {
-        return hydrateNode(dto, historyBuckets);
+        return hydrateNode(dto, historyBuckets, this._localize!);
     }
 
     private get _sourceNodes(): DeviceNode[] {

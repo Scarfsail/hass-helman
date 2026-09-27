@@ -10,6 +10,7 @@ from ..controllables.config import (
     iter_device_paths,
     peek_controllable_kind,
     read_devices,
+    read_name_cleaner_regex,
     resolve_device_name,
 )
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
@@ -46,12 +47,7 @@ def build_appliances_runtime_registry(
 
     appliances = []
     seen_appliance_ids: set[str] = set()
-    visualization = config.get("visualization") if isinstance(config, Mapping) else None
-    cleaner_regex = (
-        visualization.get("power_sensor_name_cleaner_regex")
-        if isinstance(visualization, Mapping)
-        else None
-    )
+    cleaner_regex = read_name_cleaner_regex(config)
 
     for path, device, parent in iter_device_paths(config):
         if not isinstance(device, Mapping):
@@ -68,7 +64,7 @@ def build_appliances_runtime_registry(
                 parent,
                 path=path,
                 friendly_name=friendly_name,
-                cleaner_regex=cleaner_regex if isinstance(cleaner_regex, str) else None,
+                cleaner_regex=cleaner_regex,
             )
         except (
             ClimateApplianceConfigError,
@@ -108,7 +104,7 @@ def _has_devices_list(
         return False
 
     if not isinstance(devices, list):
-        logger.error("Ignoring devices config: top-level 'devices' must be a list")
+        logger.error("Ignoring devices config: 'devices.items' must be a list")
         return False
 
     return True

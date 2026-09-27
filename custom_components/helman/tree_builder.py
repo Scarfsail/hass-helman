@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Literal
 
 from homeassistant.core import HomeAssistant
@@ -12,12 +13,14 @@ from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .visualization import read_visualization
 from .controllables.config import (
     Device,
+    entity_friendly_name,
     is_schedulable,
     iter_devices,
     own_meter,
     peek_controllable_id,
     peek_controllable_kind,
     read_carved_meters,
+    read_name_cleaner_regex,
     read_shared_meters,
     share_sensor_slug,
     resolve_device_icon,
@@ -108,6 +111,7 @@ class DeviceNodeDTO:
 class HelmanTreeBuilder:
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
         self._hass = hass
+        self._friendly_name = partial(entity_friendly_name, hass)
         self._config = config
 
     def _visualization(self) -> dict:
@@ -164,7 +168,6 @@ class HelmanTreeBuilder:
             house_children = self._build_house_children(
                 ent_reg, lbl_reg, device_label_text
             )
-            unmeasured_title = house_config.get("unmeasured_power_title", "Unmeasured power")
             own_carved = {
                 carve["energy_entity_id"]
                 for carve in read_carved_meters(self._config)
@@ -192,7 +195,7 @@ class HelmanTreeBuilder:
                 sort_children_by_power=True,
                 children=house_children,
             )
-            self._add_unmeasured_nodes(house_node, unmeasured_title, own_carved)
+            self._add_unmeasured_nodes(house_node, own_carved)
             consumers.append(house_node)
 
         if battery_config and battery_config.get("entities", {}).get("power"):
@@ -310,7 +313,7 @@ class HelmanTreeBuilder:
             carve["energy_entity_id"]: carve for carve in read_carved_meters(self._config)
         }
         shared = read_shared_meters(self._config)
-        cleaner_regex = self._visualization().get("power_sensor_name_cleaner_regex", "")
+        cleaner_regex = read_name_cleaner_regex(self._config)
 
         # Pre-group entities by device_id for efficient lookup
         entities_by_device: dict[str, list] = {}
@@ -402,7 +405,7 @@ class HelmanTreeBuilder:
         parent_node: DeviceNodeDTO,
         shared: dict[str, dict],
         carved: dict[str, dict],
-        cleaner_regex: str,
+        cleaner_regex: str | None,
     ) -> DeviceNodeDTO | None:
         """A meterless child's row: its share of the parent's own power.
 
@@ -445,10 +448,6 @@ class HelmanTreeBuilder:
             is_estimated=True,
         )
 
-    def _friendly_name(self, entity_id: str) -> str | None:
-        state = self._hass.states.get(entity_id)
-        return state.attributes.get("friendly_name") if state else None
-
     def _entity_icon(self, entity_id: str) -> str | None:
         state = self._hass.states.get(entity_id)
         return state.attributes.get("icon") if state else None
@@ -456,10 +455,12 @@ class HelmanTreeBuilder:
     def _add_unmeasured_nodes(
         self,
         node: DeviceNodeDTO,
-        unmeasured_title: str,
         own_carved: Collection[str] = frozenset(),
     ) -> None:
         """Add a remainder under every measured node with children.
+
+        A remainder's ``display_name`` is empty: the card names every one with
+        its own localized label.
 
         ``own_carved`` are the carved meters with metered children: only their
         own energy is carved, and their remainder is where it shows, so it is
@@ -480,7 +481,7 @@ class HelmanTreeBuilder:
             entity_slug = node.id.removeprefix("sensor.")
             unmeasured = DeviceNodeDTO(
                 id=f"{slug}_unmeasured",
-                display_name=unmeasured_title,
+                display_name="",
                 power_sensor_id=f"sensor.helman_unmeasured_power_{entity_slug}",
                 switch_entity_id=None,
                 is_source=False,
@@ -501,7 +502,7 @@ class HelmanTreeBuilder:
             )
             node.children.append(unmeasured)
         for child in node.children:
-            self._add_unmeasured_nodes(child, unmeasured_title, own_carved)
+            self._add_unmeasured_nodes(child, own_carved)
 
     def _apply_label_badge_texts(self, labels: list[str], device_label_text: dict) -> list[str]:
         result = []

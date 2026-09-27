@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Collection, Iterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .spec import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -26,6 +26,9 @@ from .spec import (
     CONTROLLABLE_KIND_GENERIC,
     CONTROLLABLE_KIND_INVERTER,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 #: The id the inverter entry is migrated to and the one the UI seeds. Reserved:
 #: config validation refuses it to every other kind, so an optimizer targeting
@@ -37,16 +40,51 @@ CONTROLLABLE_ID_INVERTER = "inverter"
 Device = Mapping[str, Any]
 
 
+def read_devices_section(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """The ``devices:`` section object — ``{}`` when absent or not a mapping.
+
+    Since config version 22 it holds the device list under ``items`` next to
+    the device-level settings (``name_cleaner_regex``, ``power_sensor_label``,
+    ``power_switch_label``).
+    """
+    if not isinstance(config, Mapping):
+        return {}
+    section = config.get("devices")
+    return section if isinstance(section, Mapping) else {}
+
+
 def read_devices(config: Mapping[str, Any] | None) -> Any:
-    """The raw ``devices:`` value — ``None`` when absent.
+    """The raw ``devices.items`` value — ``None`` when absent.
 
     Returned unvalidated on purpose: the runtime reader logs a bad type and
     carries on, while the config validator reports it, and both need to tell
     "absent" apart from "present but wrong".
     """
-    if not isinstance(config, Mapping):
+    return read_devices_section(config).get("items")
+
+
+def read_name_cleaner_regex(config: Mapping[str, Any] | None) -> str | None:
+    """``devices.name_cleaner_regex`` — the only reader of the device-name regex.
+
+    ``None`` when unset. It has no default on purpose: absent means "clean
+    nothing", and an empty string is not a value validation accepts, so filling
+    one in on load would make an untouched document fail to save.
+    """
+    regex = read_devices_section(config).get("name_cleaner_regex")
+    return regex if isinstance(regex, str) and regex else None
+
+
+def entity_friendly_name(hass: HomeAssistant, entity_id: str) -> str | None:
+    """An entity's ``friendly_name`` attribute — only ever a non-empty string.
+
+    The one lookup every surface names a device through, so the card, the
+    inspector, the runtimes and the Devices editor cannot drift apart.
+    """
+    state = hass.states.get(entity_id)
+    if state is None:
         return None
-    return config.get("devices")
+    name = state.attributes.get("friendly_name")
+    return name if isinstance(name, str) and name else None
 
 
 def iter_devices(
@@ -69,11 +107,11 @@ def iter_device_paths(
     """:func:`iter_devices` with each entry's document path, non-mappings included.
 
     For the readers that must say *where* something is — validation and the
-    runtime registry's log lines: ``devices[1].children[0]``.
+    runtime registry's log lines: ``devices.items[1].children[0]``.
     """
     devices = read_devices(config)
     if isinstance(devices, list):
-        yield from _iter_children(devices, None, "devices")
+        yield from _iter_children(devices, None, "devices.items")
 
 
 def _iter_children(
@@ -416,8 +454,8 @@ def resolve_device_name(
 
     The ``name`` override, else the friendly name of ``power_entity_id``, else
     of ``energy_entity_id``, else of the control entity — a looked-up friendly
-    name cleaned with ``cleaner_regex`` (``visualization.
-    power_sensor_name_cleaner_regex``). The device id when none of them
+    name cleaned with ``cleaner_regex`` (``devices.name_cleaner_regex``, read
+    by :func:`read_name_cleaner_regex`). The device id when none of them
     resolves. ``friendly_name`` maps an entity id to its friendly name or
     ``None``, so the caller decides where states come from.
     """
@@ -484,7 +522,7 @@ def share_sensor_slug(device_id: str) -> str:
 
 
 def clean_name(name: str, pattern: str | None) -> str:
-    """``name`` with ``power_sensor_name_cleaner_regex`` removed; unchanged on a bad pattern."""
+    """``name`` with ``devices.name_cleaner_regex`` removed; unchanged on a bad pattern."""
     if pattern:
         try:
             return re.sub(pattern, "", name).strip()

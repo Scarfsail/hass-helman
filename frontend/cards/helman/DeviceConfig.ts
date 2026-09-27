@@ -4,8 +4,6 @@ interface PowerDeviceConfigBase {
     }
     source_name?: string;
     consumption_name?: string;
-    power_sensor_label?: string;
-    power_switch_label?: string;
 }
 
 export interface SolarForecastConfig {
@@ -34,7 +32,6 @@ export interface HouseForecastConfig {
 }
 
 export interface HouseDeviceConfig extends PowerDeviceConfigBase {
-    unmeasured_power_title?: string;
     entities: {
         power: string;
         today_energy?: string;

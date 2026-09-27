@@ -74,7 +74,7 @@ def import_energy_preferences(
     imported = deepcopy(list(devices))
     owners: dict[str, dict[str, Any]] = {}
     taken_ids = {CONTROLLABLE_ID_INVERTER}
-    for device, _parent in iter_devices({"devices": imported}):
+    for device, _parent in iter_devices({"devices": {"items": imported}}):
         if (device_id := peek_controllable_id(device)) is not None:
             taken_ids.add(device_id)
         if (meter := own_meter(device)) is not None:

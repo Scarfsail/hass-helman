@@ -434,10 +434,10 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: [
+                devices: { items: [
                     { kind: "inverter", id: "inverter", name: "Inverter" },
                     { kind: "generic", schedulable: true, id: "boiler", name: "Boiler" },
-                ],
+                ] },
             },
         });
         await openDialog(page);
@@ -492,7 +492,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices,
+                devices: { items: devices },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -598,11 +598,11 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: [
+                devices: { items: [
                     { kind: "inverter", id: "inverter", name: "Inverter" },
                     { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
                     { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
-                ],
+                ] },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -664,7 +664,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices,
+                devices: { items: devices },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{

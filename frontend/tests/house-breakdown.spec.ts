@@ -8,7 +8,7 @@ import { resolve } from "node:path";
  * into each individually metered consumer plus whatever no meter accounted for —
  * the `houseActualBreakdown` series the backend serves. This pins that the panel
  * appears on selection, ranks every row heaviest first, drops rows that drew
- * nothing, reuses the power card's configured title for the remainder, and stays
+ * nothing, names the remainder with the power card's own Unmeasured label, and stays
  * hidden when the backend supplied no breakdown.
  *
  * Note the unmeasured remainder is NOT the forecast's non-deferrable base load;
@@ -51,8 +51,6 @@ async function mountInspector(
         withBreakdown: boolean;
         appliances: Appliance[];
         unmeasuredWh: number;
-        /** The power card's configured title; null falls back to the translation. */
-        unmeasuredLabel?: string | null;
         /** Net grid energy per 15-min slot: positive exports, negative imports. */
         gridWh?: number;
         /** Net battery energy per 15-min slot: positive charges, negative discharges. */
@@ -236,7 +234,6 @@ async function mountInspector(
                 hasBatteryForecast: false,
                 hasBatteryActual: false,
             },
-            houseUnmeasuredLabel: opts.unmeasuredLabel ?? null,
             batterySocBounds: [],
             trainingExplainability: null,
         };
@@ -541,7 +538,7 @@ test.describe("solar inspector house composition", () => {
         // dishwasher 200, ev 120 — total 720. Ranked heaviest first, so the
         // remainder leads here rather than being pinned last.
         expect(rows.map((r) => r.label)).toEqual([
-            "Unmeasured consumption",
+            "👻 Untracked consumption",
             "Dishwasher",
             "EV charger",
         ]);
@@ -554,21 +551,103 @@ test.describe("solar inspector house composition", () => {
         expect(rows.map((r) => r.share)).toEqual(["56%", "28%", "17%"]);
     });
 
-    test("uses the power card's configured unmeasured title when set", async ({ page }) => {
+    test("the remainder reads the power card's Unmeasured label", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
             withBreakdown: true,
             appliances: APPLIANCES,
             unmeasuredWh: 100,
-            unmeasuredLabel: "👻 Nesledovaná spotřeba",
+        });
+        await selectNoonSlot(page);
+        const inspectorLabel = (await breakdownBoxes(page))[0].label;
+
+        // Both cards hydrate the same tree: every remainder comes without a
+        // name, and each card names it with the one translation.
+        const cardLabels = await page.evaluate(async () => {
+            const remainder = {
+                id: "house_unmeasured",
+                displayName: "",
+                powerSensorId: "sensor.helman_house_unmeasured_power",
+                ratioSensorId: null,
+                switchEntityId: null,
+                valueType: "default",
+                sourceConfig: null,
+                sourceType: null,
+                isSource: false,
+                isUnmeasured: true,
+                labels: [],
+                labelBadgeTexts: [],
+                icon: null,
+                compact: false,
+                showAdditionalInfo: false,
+                childrenFullWidth: false,
+                hideChildren: false,
+                hideChildrenIndicator: false,
+                sortChildrenByPower: false,
+                deferrable: false,
+                controllableIds: [],
+                children: [],
+            };
+            const house = {
+                ...remainder,
+                id: "house",
+                powerSensorId: "sensor.house_power",
+                isUnmeasured: false,
+                children: [remainder],
+            };
+            const tree = {
+                sources: [],
+                consumers: [house],
+                consumptionTotalSensorId: null,
+                productionTotalSensorId: null,
+                uiConfig: {
+                    sources_title: "Sources",
+                    consumers_title: "Consumers",
+                    groups_title: "Groups",
+                    others_group_label: "Others",
+                    show_others_group: false,
+                    device_label_text: {},
+                    history_buckets: 3,
+                    history_bucket_duration: 5,
+                },
+            };
+            const hass = {
+                language: "en",
+                locale: { language: "en" },
+                config: { time_zone: "UTC" },
+                connection: {
+                    sendMessagePromise: async () => ({}),
+                    subscribeMessage: async () => () => undefined,
+                },
+                states: {},
+                callWS: async (msg: { type: string }) => {
+                    if (msg.type === "helman/get_device_tree") return tree;
+                    if (msg.type === "helman/get_history") {
+                        return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                    }
+                    if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
+                    return {};
+                },
+            };
+            const walk = (nodes: any[]): any[] =>
+                nodes.flatMap((node) => [node, ...walk(node.children ?? [])]);
+            const labels: string[] = [];
+            for (const name of ["helman-card", "helman-simple-card"]) {
+                const card = document.createElement(name) as any;
+                await card.setConfig({ type: `custom:${name}` });
+                card.hass = hass;
+                document.body.appendChild(card);
+                const nodes = () => walk(card._deviceTree ?? (card._houseNode ? [card._houseNode] : []));
+                for (let i = 0; i < 100 && !nodes().some((node) => node.isUnmeasured); i++) {
+                    await new Promise((done) => setTimeout(done, 20));
+                }
+                labels.push(...nodes().filter((node) => node.isUnmeasured).map((node) => node.name));
+            }
+            return labels;
         });
 
-        await selectNoonSlot(page);
-        const rows = await breakdownBoxes(page);
-
-        // The card's own title wins over this card's localized fallback.
-        expect(rows[0].label).toBe("👻 Nesledovaná spotřeba");
-        expect(rows[0].hasSensor).toBe(false);
+        expect(inspectorLabel).toBe("👻 Untracked consumption");
+        expect(cardLabels).toEqual(["👻 Untracked consumption", "👻 Untracked consumption"]);
     });
 
     test("hides the unmeasured box when the slot's whole demand is metered", async ({ page }) => {
@@ -604,7 +683,7 @@ test.describe("solar inspector house composition", () => {
         const rows = await breakdownBoxes(page);
 
         // The idle EV is dropped; the rest stay ranked heaviest first.
-        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher"]);
+        expect(rows.map((r) => r.label)).toEqual(["👻 Untracked consumption", "Dishwasher"]);
     });
 
     test("clicking a consumer box opens its power sensor — the one the card reads", async ({ page }) => {
@@ -1056,7 +1135,7 @@ test.describe("solar inspector deferrable house load", () => {
         const rows = await breakdownBoxes(page);
         // Base group first, heaviest first inside it (unmeasured 400, fridge 120),
         // then the deferrable group's dishwasher at 200 — ranking is per group now.
-        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Fridge", "Dishwasher"]);
+        expect(rows.map((r) => r.label)).toEqual(["👻 Untracked consumption", "Fridge", "Dishwasher"]);
         // The word is gone from the label channel; the shiftable row carries the
         // scheduling badge instead, and only it — the others name no controllable.
         expect(rows.map((r) => r.tag)).toEqual(["", "", ""]);
@@ -1270,7 +1349,7 @@ test.describe("solar inspector forecast composition", () => {
         // The measured panel is unchanged; the forecast one names the base load
         // and each scheduled appliance, tagged and tinted like any shiftable row.
         expect((await breakdownBoxes(page, 0)).map((r) => r.label)).toEqual([
-            "Unmeasured consumption",
+            "👻 Untracked consumption",
             "Fridge",
             "Dishwasher",
         ]);

@@ -208,7 +208,6 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 hasBatteryForecast: false,
                 hasBatteryActual: false,
             },
-            houseUnmeasuredLabel: null,
             batterySocBounds: [],
             trainingExplainability: null,
         });

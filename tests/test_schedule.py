@@ -624,7 +624,7 @@ class ScheduleHelperTests(unittest.TestCase):
     ) -> None:
         control_config = read_schedule_control_config(
             {
-                "devices": [
+                "devices": {"items": [
                     {
                         "kind": "inverter",
                         "id": "inverter",
@@ -639,7 +639,7 @@ class ScheduleHelperTests(unittest.TestCase):
                             }
                         },
                     }
-                ]
+                ]}
             }
         )
 
@@ -659,7 +659,7 @@ class ScheduleHelperTests(unittest.TestCase):
     def test_read_schedule_control_config_reads_stop_export_option(self) -> None:
         control_config = read_schedule_control_config(
             {
-                "devices": [
+                "devices": {"items": [
                     {
                         "kind": "inverter",
                         "id": "inverter",
@@ -675,7 +675,7 @@ class ScheduleHelperTests(unittest.TestCase):
                             }
                         },
                     }
-                ]
+                ]}
             }
         )
 

@@ -40,6 +40,7 @@ export type ScopeId =
   | "section:automation.settings"
   | "section:automation.appliance_optimizer_pipeline"
   | "section:automation.system_optimizer_pipeline"
+  | "section:devices.settings"
   | "section:devices.configured_devices";
 
 export interface EditorScope {
@@ -96,6 +97,7 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.appliance_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
+  "section:devices.settings": CONFIGURATION_ICON,
   "section:devices.configured_devices": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
 };
 
@@ -153,6 +155,7 @@ export const SECTION_SCOPE_IDS = {
     system_optimizer_pipeline: "section:automation.system_optimizer_pipeline",
   },
   devices: {
+    settings: "section:devices.settings",
     configured_devices: "section:devices.configured_devices",
   },
 } as const;
@@ -164,7 +167,6 @@ const CARD_LABELS_AND_HISTORY_KEYS = [
   "consumers_title",
   "groups_title",
   "others_group_label",
-  "power_sensor_name_cleaner_regex",
   "show_empty_groups",
   "show_others_group",
 ] as const;
@@ -181,6 +183,11 @@ const TRAINING_SETTINGS_MEMBERS = [
     documentPath: ["training", "training_time"],
   },
 ] satisfies ScopeProjectionMember[];
+const DEVICES_SETTINGS_MEMBERS = [
+  "name_cleaner_regex",
+  "power_sensor_label",
+  "power_switch_label",
+].map((key) => ({ yamlKey: key, documentPath: ["devices", key] })) satisfies ScopeProjectionMember[];
 const AUTOMATION_SETTINGS_MEMBERS = [
   {
     yamlKey: "enabled",
@@ -235,8 +242,8 @@ export const EDITOR_SCOPES = {
     tabId: "devices",
     labelKey: "editor.tabs.devices",
     adapter: createPathScopeAdapter(["devices"], {
-      emptyValue: EMPTY_ARRAY,
-      rootKind: "array",
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
     }),
   },
   [TAB_SCOPE_IDS.visualization]: {
@@ -428,13 +435,21 @@ export const EDITOR_SCOPES = {
       rootKind: "array",
     }),
   },
+  [SECTION_SCOPE_IDS.devices.settings]: {
+    id: SECTION_SCOPE_IDS.devices.settings,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.devices,
+    tabId: "devices",
+    labelKey: "editor.sections.device_settings",
+    adapter: createProjectionScopeAdapter(DEVICES_SETTINGS_MEMBERS),
+  },
   [SECTION_SCOPE_IDS.devices.configured_devices]: {
     id: SECTION_SCOPE_IDS.devices.configured_devices,
     kind: "section",
     parentId: TAB_SCOPE_IDS.devices,
     tabId: "devices",
     labelKey: "editor.sections.configured_devices",
-    adapter: createPathScopeAdapter(["devices"], {
+    adapter: createPathScopeAdapter(["devices", "items"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),

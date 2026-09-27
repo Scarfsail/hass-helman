@@ -39,11 +39,11 @@ def test_meterless_child_with_null_consumption_keeps_valid_preview_unchanged():
     }
     parent = device("parent", "sensor.energy", children=[child])
     parent["consumption"]["power_entity_id"] = "sensor.power"
-    config = {"devices": [parent]}
+    config = {"devices": {"items": [parent]}}
     assert validate_config_document(config).valid
     result = preview_energy_import(config, {"device_consumption": []})
     assert result["validation"]["valid"]
-    assert result["devices"] == config["devices"]
+    assert result["devices"] == config["devices"]["items"]
     assert result["additions"] == result["powerEntities"] == result["nestingChanges"] == []
 
 
@@ -61,7 +61,7 @@ def test_null_children_accept_new_and_existing_nested_energy_rows():
 
 def preview(devices, *rows):
     return preview_energy_import(
-        {"devices": devices}, {"device_consumption": list(rows)}
+        {"devices": {"items": devices}}, {"device_consumption": list(rows)}
     )
 
 
@@ -75,7 +75,7 @@ def test_existing_device_moves_with_subtree_controls_and_targets():
     old = device("old", "sensor.old", children=[child])
     parent = device("parent", "sensor.parent")
     config = {
-        "devices": [old, parent],
+        "devices": {"items": [old, parent]},
         "automation": {
             "enabled": True,
             "appliance_optimizers": [
@@ -98,7 +98,7 @@ def test_existing_device_moves_with_subtree_controls_and_targets():
     assert result["devices"] == [{**parent, "children": [old]}]
     assert config == saved
     assert result["validation"]["valid"], result["validation"]
-    assert validate_config_document({**config, "devices": result["devices"]}).valid
+    assert validate_config_document({**config, "devices": {"items": result["devices"]}}).valid
     assert result["devices"][0]["children"][0]["children"][0] == child
 
 
@@ -115,9 +115,9 @@ def test_preview_valid_idempotent_and_preserves_configuration():
             row("sensor.passive"),
         ]
     }
-    result = preview_energy_import({"devices": [original]}, preferences)
+    result = preview_energy_import({"devices": {"items": [original]}}, preferences)
     assert result["validation"]["valid"], result["validation"]
-    next_result = preview_energy_import({"devices": result["devices"]}, preferences)
+    next_result = preview_energy_import({"devices": {"items": result["devices"]}}, preferences)
     assert next_result["devices"] == result["devices"]
     assert (
         next_result["additions"]
@@ -226,7 +226,7 @@ def test_existing_device_is_not_lost_when_energy_parent_is_skipped():
 
 def test_new_device_additions_show_the_power_sensor_they_write():
     result = preview_energy_import(
-        {"devices": []},
+        {"devices": {"items": []}},
         {"device_consumption": [row("sensor.kettle", power="sensor.kettle_power")]},
     )
     assert result["devices"][0]["consumption"]["power_entity_id"] == "sensor.kettle_power"
@@ -273,7 +273,7 @@ def test_invalid_children_value_yields_a_preview_not_an_exception():
 
 def test_existing_draft_errors_do_not_block_an_import():
     broken = {"id": "broken", "schedulable": True}
-    config = {"devices": [broken]}
+    config = {"devices": {"items": [broken]}}
     assert not validate_config_document(config).valid
     result = preview_energy_import(
         config, {"device_consumption": [row("sensor.kettle")]}
@@ -284,8 +284,8 @@ def test_existing_draft_errors_do_not_block_an_import():
 
 
 def test_errors_the_import_introduces_still_block_it():
-    config = {"devices": []}
-    proposed = {"devices": [{"id": "broken", "schedulable": True}]}
+    config = {"devices": {"items": []}}
+    proposed = {"devices": {"items": [{"id": "broken", "schedulable": True}]}}
     report = _new_errors_only(config, proposed)
     assert not report["valid"]
     assert report["errors"]
@@ -295,13 +295,13 @@ def test_existing_error_on_a_device_shifted_by_a_move_does_not_block():
     a = device("a", "sensor.a")
     b = device("b", "sensor.b")
     broken = {"id": "broken", "schedulable": True}
-    config = {"devices": [a, b, broken]}
+    config = {"devices": {"items": [a, b, broken]}}
     errors = validate_config_document(config).errors
-    assert any(issue.path.startswith("devices[2]") for issue in errors)
+    assert any(issue.path.startswith("devices.items[2]") for issue in errors)
     result = preview_energy_import(
         config, {"device_consumption": [row("sensor.a", "sensor.b")]}
     )
-    # The move shifts "broken" from devices[2] to devices[1]; its error is still its own.
+    # The move shifts "broken" from devices.items[2] to devices.items[1]; its error is still its own.
     assert result["devices"] == [{**b, "children": [a]}, broken]
     assert result["validation"]["valid"], result["validation"]
 
@@ -310,7 +310,7 @@ def test_existing_error_on_a_device_without_an_id_does_not_block_a_move():
     a = device("a", "sensor.a")
     b = device("b", "sensor.b")
     half_edited = {"kind": "generic"}
-    config = {"devices": [a, b, half_edited]}
+    config = {"devices": {"items": [a, b, half_edited]}}
     assert not validate_config_document(config).valid
     result = preview_energy_import(
         config, {"device_consumption": [row("sensor.a", "sensor.b")]}
@@ -323,6 +323,6 @@ def test_devices_without_ids_report_no_phantom_changes():
     parent = device("parent", "sensor.parent", children=[{"kind": "generic"}])
     loose = {"kind": "generic"}
     result = preview_energy_import(
-        {"devices": [parent, loose]}, {"device_consumption": []}
+        {"devices": {"items": [parent, loose]}}, {"device_consumption": []}
     )
     assert result["additions"] == result["powerEntities"] == result["nestingChanges"] == []

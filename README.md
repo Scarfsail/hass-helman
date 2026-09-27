@@ -48,7 +48,7 @@ and surface custom label badges per device.
 
 - Live power and per-bucket history bars (configurable buckets and duration)
 - Sources vs Consumers layout with animated flow arrows scaled by max power
-- House device tree built from `devices` (with "Unmeasured power"); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that
+- House device tree built from `devices.items` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that
 - Optional house consumption forecast in the node detail dialogs
 - Entity disambiguation via HA Labels for power sensor and power switch suggestions
 - Group devices by label categories (e.g., Location, Type) with emojis/text
@@ -90,8 +90,6 @@ keys used to sit at the top level, and a stored config is migrated on load.
 - `history_buckets`: number — Number of history samples to keep/render. Default: 60.
 - `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
   interval). Default: 5.
-- `power_sensor_name_cleaner_regex`: string — JavaScript regex (no slashes, global flag applied) used
-  to clean device names derived from sensors, e.g. `" - [Pp]ower$"`.
 - `device_label_text`: object — Mapping to enable label grouping and per-device badges. See
   "Grouping by labels".
 - `show_empty_groups` / `show_others_group` / `others_group_label`: control the "Others" group.
@@ -101,14 +99,10 @@ keys used to sit at the top level, and a stored config is migrated on load.
 Defines entities for the four power endpoints. At least `house.entities.power` should be provided to
 build the consumer tree around the house.
 
-Common optional fields (house tree disambiguation):
+Common optional fields:
 - `source_name` / `consumption_name`: display name overrides.
-- `power_sensor_label` / `power_switch_label`: HA Label names used to disambiguate the power sensor /
-  switch entity when a device exposes multiple. They rank the entities suggested for a device in
-  `devices`; the card itself reads only what `devices` configures. Label names must match HA Labels
-  exactly.
 
-- `power_devices.house`: `unmeasured_power_title`; `entities.power`, `entities.today_energy`.
+- `power_devices.house`: `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
 - `power_devices.grid`: `entities.power` (positive export, negative import),
   `entities.today_export`, `entities.today_import`. Solar bias correction reads the signed power
@@ -119,6 +113,12 @@ Common optional fields (house tree disambiguation):
 - `power_devices.solar`: `entities.power`, `entities.today_energy`. The "remaining today" figure
   next to it on the card is Helman's own bias-corrected
   `sensor.helman_solar_forecast_today_remaining` and is not configurable.
+
+**`devices`**
+The device tree and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. A stored config is migrated on load.
+- `items`: list — The devices, as described under "House consumption forecast" below.
+- `name_cleaner_regex`: string — Python regular expression (`re.sub`) removed from an entity's friendly name wherever a device without a `name` is named from it: the card, the inspector, the schedulable runtimes and the Devices editor. E.g. `" - [Pp]ower$"`.
+- `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.items` configures. Label names must match HA Labels exactly.
 
 All energy sensors auto-detect units from `unit_of_measurement` (Wh, kWh, MWh, GWh supported).
 
@@ -171,23 +171,24 @@ training:
 
 ```yaml
 devices:
-  - id: ev
-    kind: ev_charger
-    name: EV Charging
-    schedulable: true
-    controls: { ... }
-    consumption:
-      energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
-  - id: jistic_klimatizace_energy                         # a passive breaker meter...
-    consumption:
-      energy_entity_id: sensor.jistic_klimatizace_energy
-      power_entity_id: sensor.jistic_klimatizace_power
-    children:                                             # ...the devices drawing from it
-      - id: klima-obyvak
-        kind: climate
-        schedulable: true
-        controls: { climate: { entity_id: climate.obyvak } }
-        consumption: { projection: { ... } }
+  items:
+    - id: ev
+      kind: ev_charger
+      name: EV Charging
+      schedulable: true
+      controls: { ... }
+      consumption:
+        energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
+    - id: jistic_klimatizace_energy                         # a passive breaker meter...
+      consumption:
+        energy_entity_id: sensor.jistic_klimatizace_energy
+        power_entity_id: sensor.jistic_klimatizace_power
+      children:                                             # ...the devices drawing from it
+        - id: klima-obyvak
+          kind: climate
+          schedulable: true
+          controls: { climate: { entity_id: climate.obyvak } }
+          consumption: { projection: { ... } }
 ```
 
 A passive device (no `schedulable`) stays inside the baseline. The inverter may not declare `consumption` at all — it moves energy rather than drawing it.

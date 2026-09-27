@@ -11,10 +11,6 @@ from typing import Any
 #: so every reader resolves through :func:`read_visualization` instead of
 #: carrying a fallback of its own -- which is also how the tick and the history
 #: payload once disagreed on the bucket duration (5 s against 1 s).
-#:
-#: ``power_sensor_name_cleaner_regex`` has no entry on purpose: absent means
-#: "clean nothing", and an empty string is not a value validation accepts, so
-#: filling one in on load would make an untouched document fail to save.
 VISUALIZATION_DEFAULTS: dict[str, Any] = {
     "history_buckets": 60,
     "history_bucket_duration": 5,

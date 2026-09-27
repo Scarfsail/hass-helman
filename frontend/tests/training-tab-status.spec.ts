@@ -24,7 +24,7 @@ const CONFIG = {
     power_devices: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
-    devices: [
+    devices: { items: [
         {
             id: "dishwasher",
             name: "Dishwasher",
@@ -47,7 +47,7 @@ const CONFIG = {
             name: "Fridge",
             consumption: { energy_entity_id: "sensor.fridge_energy" },
         },
-    ],
+    ] },
     training: {},
 };
 

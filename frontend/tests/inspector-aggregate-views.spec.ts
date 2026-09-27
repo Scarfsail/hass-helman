@@ -1015,7 +1015,7 @@ test.describe("the house composition at D and M", () => {
         // appliance -- the panel's own order, which the bucket panel has to
         // reproduce rather than merely contain.
         expect(atSixty.map((box) => box.label))
-            .toEqual(["Unmeasured consumption", "Fridge", "Washer"]);
+            .toEqual(["👻 Untracked consumption", "Fridge", "Washer"]);
 
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
