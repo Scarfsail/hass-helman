@@ -3536,7 +3536,7 @@ export class HelmanConfigEditorPanel
         this._energyImport = { preview, draft };
     } catch (error) {
       if (this._config === draft && request === this._energyImportRequest)
-        this._deviceActionMessage = this._formatError(error, String(error));
+        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.import_energy_failed"));
     } finally {
       if (request === this._energyImportRequest) this._importLoading = false;
     }
@@ -3623,6 +3623,7 @@ export class HelmanConfigEditorPanel
     const id = this._stringValue(device.id);
     const anchor = this._suggestionAnchor(device);
     if (!anchor) return;
+    this._deviceActionMessage = "";
     const draft = this._config;
     const hass = this.hass;
     const request = (this._deviceSuggestionRequests[id] ?? 0) + 1;
@@ -3669,7 +3670,7 @@ export class HelmanConfigEditorPanel
       this._storeSuggestions(id, suggestions);
     } catch (error) {
       if (this._config === draft && request === this._deviceSuggestionRequests[id])
-        this._deviceActionMessage = this._formatError(error, String(error));
+        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.suggestions_failed"));
     }
   }
 

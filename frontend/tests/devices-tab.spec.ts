@@ -1126,6 +1126,37 @@ test("Apply suggestions is disabled until the device has an entity to anchor on"
   await expect(page.locator(".apply-suggestions")).toBeDisabled();
 });
 
+test("a failed suggestion request shows a readable error that a retry clears", async ({
+  page,
+}) => {
+  const device = {
+    id: "breaker",
+    consumption: { energy_entity_id: "sensor.energy" },
+  };
+  await mountEditor(page, [device]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("breaker")!.open = true;
+    const panel = document.querySelector("helman-config-editor-panel") as any;
+    const previous = panel.hass.callWS;
+    panel.hass.callWS = async (request: any) =>
+      request.type === "helman/suggest_device_entities"
+        ? Promise.reject({ code: "unknown_error" })
+        : previous(request);
+  });
+  await page.locator(".apply-suggestions").click();
+  await expect(page.locator(".message.error")).toHaveText(
+    "Failed to load entity suggestions.",
+  );
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [],
+    power: [],
+    switch: [],
+  });
+  await page.locator(".apply-suggestions").click();
+  await expect(page.locator(".message.error")).toHaveCount(0);
+});
+
 test("an up-to-date Energy preview cannot dirty an unchanged draft", async ({ page }) => {
     const device = { id: "breaker", consumption: { energy_entity_id: "sensor.energy" } };
     await mountEditor(page, [device]);

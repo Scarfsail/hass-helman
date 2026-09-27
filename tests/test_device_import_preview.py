@@ -237,7 +237,7 @@ def test_new_device_additions_show_the_power_sensor_they_write():
     ]
 
 
-def test_meter_under_existing_passive_parent_moves_while_that_parent_warns():
+def test_meter_below_a_schedulable_ancestor_warns_through_a_passive_parent():
     schedulable = device(
         "breaker",
         "sensor.breaker",
@@ -251,10 +251,12 @@ def test_meter_under_existing_passive_parent_moves_while_that_parent_warns():
         row("sensor.room", "sensor.breaker"),
         row("sensor.lamp", "sensor.room"),
     )
-    assert result["devices"] == [schedulable, {**passive, "children": [leaf]}]
-    assert [(w["energy_entity_id"], w["device_id"]) for w in result["warnings"]] == [
-        ("sensor.room", "breaker")
-    ]
+    # Both meters sit inside the breaker's, so both overlaps are reported and
+    # neither device moves, even though the lamp's direct parent is passive.
+    assert result["devices"] == [schedulable, passive, leaf]
+    assert sorted(
+        (w["energy_entity_id"], w["device_id"]) for w in result["warnings"]
+    ) == [("sensor.lamp", "breaker"), ("sensor.room", "breaker")]
 
 
 def test_invalid_children_value_yields_a_preview_not_an_exception():

@@ -81,8 +81,7 @@ def import_energy_preferences(
             owners.setdefault(meter, device)
 
     # Manual import exposes existing overlaps without changing either side.
-    # Energy can reveal a schedulable ancestor through new intermediate rows;
-    # the walk stops at the first existing owner, which answers for its own.
+    # Energy can reveal a schedulable ancestor through new intermediate rows.
     frozen: set[int] = set()
     overlap_blockers: dict[int, dict[str, Any]] = {}
     if manual:
@@ -98,10 +97,9 @@ def import_energy_preferences(
             while parent_meter is not None and parent_meter not in seen:
                 seen.add(parent_meter)
                 parent = owners.get(parent_meter)
-                if parent is not None:
-                    if is_schedulable(parent):
-                        frozen.update((id(owner), id(parent)))
-                        overlap_blockers[id(owner)] = parent
+                if parent is not None and is_schedulable(parent):
+                    frozen.update((id(owner), id(parent)))
+                    overlap_blockers[id(owner)] = parent
                     break
                 parent_meter = energy_parents.get(parent_meter)
 

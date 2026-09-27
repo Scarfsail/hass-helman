@@ -380,6 +380,8 @@
       "validation_passed": "Validation passed in the backend.",
       "validation_failed": "Validation returned backend errors. Review the issue list below.",
       "validate_config_failed": "Failed to validate the config in the backend.",
+      "import_energy_failed": "Failed to preview the Energy dashboard import.",
+      "suggestions_failed": "Failed to load entity suggestions.",
       "config_saved_reload_started": "Config saved. Helman reload started.",
       "config_saved": "Config saved.",
       "config_saved_reload_failed": "Config was saved, but Helman reload failed.",
