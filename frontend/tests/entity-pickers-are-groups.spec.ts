@@ -27,7 +27,7 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const TABS = ["Power devices", "Devices", "Automation", "Training", "Helman card"];
+const TABS = ["Energy nodes", "Devices", "Automation", "Training", "Helman card"];
 
 /**
  * Enough optimizer schema for the Automation tab to render something.
@@ -72,7 +72,7 @@ const CONFIG = {
             },
         ],
     },
-    power_devices: {
+    energy_nodes: {
         house: {
             entities: { power: "sensor.house_power" },
             forecast: { total_energy_entity_id: "sensor.house_energy" },
@@ -168,9 +168,9 @@ const CONFIG = {
 
 /** The ones the user pointed at: loose fields beside a bordered sensor. */
 const CIRCLED_KEYS = [
-    "power_devices.solar.entities.today_energy",
-    "power_devices.battery.entities.remaining_energy",
-    "power_devices.battery.entities.capacity",
+    "energy_nodes.solar.entities.today_energy",
+    "energy_nodes.battery.entities.remaining_energy",
+    "energy_nodes.battery.entities.capacity",
 ];
 
 /** What the stub answers for every target, standing in for the fallback. */
@@ -406,7 +406,7 @@ test("a group in a nested shadow root is seen by the collector and the guard", a
         shadow.appendChild(field);
 
         panel.shadowRoot.appendChild(host);
-    }, ["power_devices", "grid", "entities", "power"]);
+    }, ["energy_nodes", "grid", "entities", "power"]);
 
     expect(await barePickerLabels(page)).toEqual(["Nested picker"]);
 
@@ -417,13 +417,13 @@ test("a group in a nested shadow root is seen by the collector and the guard", a
                 return (requests.at(-1)?.targets ?? []).map((target: any) => target.key);
             }),
         )
-        .toContain("power_devices.grid.entities.power");
+        .toContain("energy_nodes.grid.entities.power");
 });
 
 test("every picked entity shows the reading the backend sent for it", async ({ page }) => {
     await mountEditor(page);
     const seen: Record<string, string[]> = {};
-    for (const label of ["Power devices", "Devices"]) {
+    for (const label of ["Energy nodes", "Devices"]) {
         await openTab(page, label);
         await expandEverything(page);
         // The poll is on a two-second timer, so the readings arrive a tick

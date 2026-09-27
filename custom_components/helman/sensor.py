@@ -65,7 +65,7 @@ async def async_setup_entry(
     share_nodes = coordinator.collect_share_nodes(tree)
 
     battery_entities = (
-        coordinator.config.get("power_devices", {})
+        coordinator.config.get("energy_nodes", {})
         .get("battery", {})
         .get("entities", {})
     )

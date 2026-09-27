@@ -14,7 +14,7 @@ class StateSample:
 class InvalidationInputs:
     """Everything the curtailment test reads, in UTC.
 
-    ``grid_power_samples_utc`` carries ``power_devices.grid.entities.power``
+    ``grid_power_samples_utc`` carries ``energy_nodes.grid.entities.power``
     with its house convention: **positive is export**, negative is import (see
     ``tree_builder``, which reads the grid node's export side as the positive
     part). The test only ever looks at the positive side.

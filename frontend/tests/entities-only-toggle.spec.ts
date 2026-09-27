@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 /**
  * The entities-only view: every entity group, and nothing else.
  *
- * The Power devices tab spreads its pickers across sections nested four deep,
+ * The Energy nodes tab spreads its pickers across sections nested four deep,
  * every one of them collapsed by default. This toggle is the answer to "show me
  * the entity configuration and nothing else" -- so its whole promise is that
  * *nothing is missed*. Every assertion below is a way of holding that promise:
@@ -26,10 +26,10 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-/** A document with something picked at every Power devices entity path. */
+/** A document with something picked at every Energy nodes entity path. */
 const CONFIG = {
     config_version: 7,
-    power_devices: {
+    energy_nodes: {
         house: {
             entities: { power: "sensor.house_power" },
             forecast: {
@@ -101,31 +101,31 @@ const DEVICE_ENTITY_PATHS = [
 ].sort();
 
 const DAILY_ENERGY_ENTITIES =
-    CONFIG.power_devices.solar.forecast.daily_energy_entity_ids;
+    CONFIG.energy_nodes.solar.forecast.daily_energy_entity_ids;
 
 /**
- * Every entity the Power devices tab configures, as the path its group carries.
+ * Every entity the Energy nodes tab configures, as the path its group carries.
  *
  * The daily-energy entries are expanded from the fixture rather than written
  * out, because they are a list: the tab renders one group per configured id,
  * so the expected count has to follow the document that is actually mounted.
  */
 const POWER_DEVICE_ENTITY_PATHS = [
-    "power_devices.house.entities.power",
-    "power_devices.house.forecast.total_energy_entity_id",
-    "power_devices.solar.entities.power",
-    "power_devices.solar.entities.today_energy",
-    "power_devices.solar.forecast.total_energy_entity_id",
+    "energy_nodes.house.entities.power",
+    "energy_nodes.house.forecast.total_energy_entity_id",
+    "energy_nodes.solar.entities.power",
+    "energy_nodes.solar.entities.today_energy",
+    "energy_nodes.solar.forecast.total_energy_entity_id",
     ...DAILY_ENERGY_ENTITIES.map(
-        (_value, index) => `power_devices.solar.forecast.daily_energy_entity_ids.${index}`,
+        (_value, index) => `energy_nodes.solar.forecast.daily_energy_entity_ids.${index}`,
     ),
-    "power_devices.battery.entities.power",
-    "power_devices.battery.entities.remaining_energy",
-    "power_devices.battery.entities.capacity",
-    "power_devices.battery.entities.min_soc",
-    "power_devices.battery.entities.max_soc",
-    "power_devices.grid.entities.power",
-    "power_devices.grid.forecast.sell_price_entity_id",
+    "energy_nodes.battery.entities.power",
+    "energy_nodes.battery.entities.remaining_energy",
+    "energy_nodes.battery.entities.capacity",
+    "energy_nodes.battery.entities.min_soc",
+    "energy_nodes.battery.entities.max_soc",
+    "energy_nodes.grid.entities.power",
+    "energy_nodes.grid.forecast.sell_price_entity_id",
     // The inverter keeps its `devices` entry but is edited here.
     "devices.items.0.controls.mode.entity_id",
 ].sort();
@@ -236,7 +236,7 @@ async function openTab(page: Page, label: string): Promise<void> {
     await page.waitForTimeout(80);
 }
 
-const openPowerDevicesTab = (page: Page) => openTab(page, "Power devices");
+const openEnergyNodesTab = (page: Page) => openTab(page, "Energy nodes");
 
 /**
  * Switch a scope between Visual and YAML through the button the user clicks.
@@ -324,11 +324,11 @@ function emptyNotice(page: Page): Promise<string | null> {
 }
 
 test.describe("entities-only toggle", () => {
-    test("shows every Power devices entity group without expanding anything", async ({
+    test("shows every Energy nodes entity group without expanding anything", async ({
         page,
     }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
 
         // Every section on this tab is collapsed by default, so before the
         // toggle there is nothing on screen at all. That is the state the view
@@ -347,7 +347,7 @@ test.describe("entities-only toggle", () => {
 
     test("hides every field that is not part of a group", async ({ page }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
         await setEntitiesOnly(page, true);
 
         const loose = await page.evaluate(() => {
@@ -366,7 +366,7 @@ test.describe("entities-only toggle", () => {
 
     test("keeps the settings that qualify an entity inside its group", async ({ page }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
         await setEntitiesOnly(page, true);
 
         // A group's slotted settings are children of `helman-entity-group` in
@@ -394,7 +394,7 @@ test.describe("entities-only toggle", () => {
 
     test("drops the sections that hold no entity", async ({ page }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
         await setEntitiesOnly(page, true);
 
         const sections = await page.evaluate(() => {
@@ -449,7 +449,7 @@ test.describe("entities-only toggle", () => {
 
     test("restores the sections' open state when it is switched off", async ({ page }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
 
         // One section deliberately opened by hand first, so "restore" means
         // something other than "close everything again".
@@ -534,7 +534,7 @@ test.describe("entities-only toggle", () => {
 
     test("keeps a section left in YAML mode, and its way back", async ({ page }) => {
         await mountEditor(page);
-        await openPowerDevicesTab(page);
+        await openEnergyNodesTab(page);
 
         // Put the Battery section in YAML mode *before* turning the view on,
         // which is the order a real user arrives in: the mode is remembered,
@@ -598,7 +598,7 @@ test.describe("entities-only toggle", () => {
         // And never where there is something to show. This is the assertion
         // that would catch a message keyed off "no readings have arrived yet"
         // rather than off "this tab has no entities".
-        await openTab(page, "Power devices");
+        await openTab(page, "Energy nodes");
         expect(await emptyNotice(page)).toBe(null);
         expect(await visibleGroupPaths(page)).toEqual(POWER_DEVICE_ENTITY_PATHS);
 

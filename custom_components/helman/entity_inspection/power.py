@@ -34,13 +34,13 @@ from .state import read_numeric_state
 
 
 def evaluate_power_entity(request: InspectionRequest) -> Inspection:
-    """What ``power_devices.<device>.entities.power`` currently reads.
+    """What ``energy_nodes.<device>.entities.power`` currently reads.
 
     The device name comes from the path itself -- ``request.path[1]`` in
-    ``power_devices.<device>.entities.power`` -- rather than from
+    ``energy_nodes.<device>.entities.power`` -- rather than from
     ``request.wildcards``. The wildcard would carry the same segment when this
-    is reached through the generic ``power_devices.*.entities.power`` key, but
-    ``power_devices.grid.entities.power`` is also registered as its own exact
+    is reached through the generic ``energy_nodes.*.entities.power`` key, but
+    ``energy_nodes.grid.entities.power`` is also registered as its own exact
     key (:mod:`.registry`, so :func:`~.history.history_aware` can wrap this
     evaluator for the grid meter), and an exact key matches no wildcard at
     all. Reading the path directly answers both the same way.

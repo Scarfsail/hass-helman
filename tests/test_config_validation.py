@@ -72,7 +72,7 @@ def _valid_config() -> dict:
                 }
             },
         },
-        "power_devices": {
+        "energy_nodes": {
             "house": {
                 "entities": {
                     "power": "sensor.house_power",
@@ -412,8 +412,8 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_grid_energy_meter_entity_ids_are_reported(self) -> None:
         config = _valid_config()
-        config["power_devices"]["grid"]["entities"]["today_import"] = "not-an-entity-id"
-        config["power_devices"]["grid"]["entities"]["today_export"] = 42
+        config["energy_nodes"]["grid"]["entities"]["today_import"] = "not-an-entity-id"
+        config["energy_nodes"]["grid"]["entities"]["today_export"] = 42
 
         report = validate_config_document(config)
 
@@ -421,7 +421,7 @@ class ConfigValidationTests(unittest.TestCase):
         for key in ("today_import", "today_export"):
             self.assertTrue(
                 any(
-                    issue.path == f"power_devices.grid.entities.{key}"
+                    issue.path == f"energy_nodes.grid.entities.{key}"
                     for issue in report.errors
                 ),
                 msg=f"expected an error for {key}",
@@ -429,7 +429,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_grid_import_windows_are_reported(self) -> None:
         config = _valid_config()
-        config["power_devices"]["grid"]["forecast"]["import_price_windows"] = [
+        config["energy_nodes"]["grid"]["forecast"]["import_price_windows"] = [
             {"start": "00:00", "end": "05:00", "price": 2.5},
             {"start": "06:00", "end": "00:00", "price": 3.5},
         ]
@@ -1098,7 +1098,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_the_retired_deferrable_consumers_key_is_reported(self) -> None:
         config = _valid_config()
-        config["power_devices"]["house"]["forecast"]["deferrable_consumers"] = [
+        config["energy_nodes"]["house"]["forecast"]["deferrable_consumers"] = [
             {"energy_entity_id": "sensor.washer_energy", "label": "Washer"}
         ]
 
@@ -1107,7 +1107,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "power_devices.house.forecast.deferrable_consumers"
+                issue.path == "energy_nodes.house.forecast.deferrable_consumers"
                 and issue.code == "retired_config_key"
                 for issue in report.errors
             )
@@ -1116,7 +1116,7 @@ class ConfigValidationTests(unittest.TestCase):
         message = next(
             issue.message
             for issue in report.errors
-            if issue.path == "power_devices.house.forecast.deferrable_consumers"
+            if issue.path == "energy_nodes.house.forecast.deferrable_consumers"
         )
         self.assertIn("schedulable", message)
         self.assertNotIn("consumption.deferrable", message)
@@ -1130,7 +1130,7 @@ class ConfigValidationTests(unittest.TestCase):
         for retired_key in ("min_history_days", "training_window_days"):
             with self.subTest(retired_key=retired_key):
                 config = _valid_config()
-                config["power_devices"]["house"]["forecast"][retired_key] = 30
+                config["energy_nodes"]["house"]["forecast"][retired_key] = 30
 
                 report = validate_config_document(config)
 
@@ -1138,7 +1138,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         issue.path
-                        == f"power_devices.house.forecast.{retired_key}"
+                        == f"energy_nodes.house.forecast.{retired_key}"
                         and issue.code == "retired_config_key"
                         for issue in report.errors
                     )
@@ -1329,7 +1329,7 @@ class ConfigValidationTests(unittest.TestCase):
                 *parents, key = old_path.split(".")
                 container = config
                 for part in parents:
-                    container = container[part]
+                    container = container.setdefault(part, {})
                 container[key] = "x"
 
                 report = validate_config_document(config)
@@ -1339,12 +1339,36 @@ class ConfigValidationTests(unittest.TestCase):
                     for issue in report.errors
                     if issue.code == "relocated_config_key"
                 ]
-                self.assertEqual([issue.path for issue in issues], [old_path])
-                self.assertIn(new_path, issues[0].message)
+                # A label under the old top-level key is refused twice: once
+                # for the renamed key, once for the label's own new home.
+                renamed = ["power_devices"] if parents[:1] == ["power_devices"] else []
+                self.assertEqual([issue.path for issue in issues], [*renamed, old_path])
+                self.assertIn(new_path, issues[-1].message)
+
+    def test_power_devices_is_refused_with_its_new_name(self) -> None:
+        config = _valid_config()
+        config["power_devices"] = config.pop("energy_nodes")
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            [
+                (issue.section, issue.path, issue.code, issue.message)
+                for issue in report.errors
+            ],
+            [
+                (
+                    "energy_nodes",
+                    "power_devices",
+                    "relocated_config_key",
+                    "'power_devices' was renamed to 'energy_nodes'",
+                )
+            ],
+        )
 
     def test_the_unmeasured_power_title_is_retired(self) -> None:
         config = _valid_config()
-        config["power_devices"]["house"]["unmeasured_power_title"] = "Unmeasured"
+        config["energy_nodes"]["house"]["unmeasured_power_title"] = "Unmeasured"
 
         report = validate_config_document(config)
 
@@ -1355,7 +1379,7 @@ class ConfigValidationTests(unittest.TestCase):
             ],
             [
                 (
-                    "power_devices.house.unmeasured_power_title",
+                    "energy_nodes.house.unmeasured_power_title",
                     "retired_config_key",
                     "the Unmeasured rows use a fixed label; remove this key",
                 )

@@ -12,7 +12,7 @@ import { resolve } from "node:path";
  * The fixture is the live setup in miniature: an AC breaker whose climate
  * children draw from its meter, a study breaker with a sub-metered PC and a
  * passive lamp on its meter, and a schedulable boiler of its own. The inverter
- * keeps its `devices` entry but is edited under Power devices.
+ * keeps its `devices` entry but is edited under Energy nodes.
  */
 
 const BUNDLE = resolve(
@@ -286,7 +286,7 @@ async function addDevice(page: Page, button: string, entityId: string, nth = 0):
 test("the Devices tab replaces Controllables and lists no inverter", async ({ page }) => {
     await mountEditor(page);
     const tabs = page.locator("helman-config-editor-panel").locator(".tabs button");
-    await expect(tabs).toContainText(["Power devices", "Devices"]);
+    await expect(tabs).toContainText(["Energy nodes", "Devices"]);
     await expect(tabs.filter({ hasText: "Controllables" })).toHaveCount(0);
 
     await openTab(page, "Devices");
@@ -774,10 +774,10 @@ test("the empty state says nothing is imported and offers Add device", async ({ 
     await expect(panel.locator("details.device-card")).toHaveCount(0);
 });
 
-test("the inverter is edited under Power devices", async ({ page }) => {
+test("the inverter is edited under Energy nodes", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
-    await openTab(page, "Power devices");
+    await openTab(page, "Energy nodes");
 
     const inverter = panel.locator("details.inverter-card");
     await expect(inverter.locator(".card-title strong")).toHaveText("Inverter");
@@ -797,12 +797,12 @@ test("the inverter is edited under Power devices", async ({ page }) => {
     ).resolves.toBe("devices.items.0.controls.mode.entity_id");
 });
 
-test("Add inverter is offered under Power devices only while there is none", async ({
+test("Add inverter is offered under Energy nodes only while there is none", async ({
     page,
 }) => {
     await mountEditor(page, [BOILER]);
     const panel = page.locator("helman-config-editor-panel");
-    await openTab(page, "Power devices");
+    await openTab(page, "Energy nodes");
 
     const add = panel.locator(".section-footer .add-button", { hasText: "Add inverter" });
     await add.dispatchEvent("click");

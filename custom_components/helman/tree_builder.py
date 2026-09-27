@@ -119,14 +119,14 @@ class HelmanTreeBuilder:
 
     async def build(self) -> dict:
         """Build and return the full device tree as a serializable dict."""
-        power_devices = self._config.get("power_devices", {})
+        energy_nodes = self._config.get("energy_nodes", {})
         visualization = self._visualization()
         device_label_text = visualization["device_label_text"]
 
-        solar_config = power_devices.get("solar")
-        battery_config = power_devices.get("battery")
-        grid_config = power_devices.get("grid")
-        house_config = power_devices.get("house")
+        solar_config = energy_nodes.get("solar")
+        battery_config = energy_nodes.get("battery")
+        grid_config = energy_nodes.get("grid")
+        house_config = energy_nodes.get("house")
 
         ent_reg = er.async_get(self._hass)
         lbl_reg = lr.async_get(self._hass)

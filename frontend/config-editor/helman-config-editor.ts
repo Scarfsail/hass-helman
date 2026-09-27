@@ -1078,7 +1078,7 @@ export class HelmanConfigEditorPanel
   private _hass?: HomeAssistantLike;
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
-  private _activeTab: TabId = "power_devices";
+  private _activeTab: TabId = "energy_nodes";
   /**
    * Reduce every tab to nothing but its entity groups.
    *
@@ -1596,10 +1596,10 @@ export class HelmanConfigEditorPanel
           TAB_SCOPE_IDS.visualization,
           this._renderVisualizationTab(),
         );
-      case "power_devices":
+      case "energy_nodes":
         return this._renderTabScope(
-          TAB_SCOPE_IDS.power_devices,
-          this._renderPowerDevicesTab(),
+          TAB_SCOPE_IDS.energy_nodes,
+          this._renderEnergyNodesTab(),
         );
       case "training":
         return this._renderTabScope(TAB_SCOPE_IDS.training, this._renderTrainingTab());
@@ -1639,7 +1639,7 @@ export class HelmanConfigEditorPanel
   /**
    * The entities-only switch, in every tab's toolbar.
    *
-   * On every tab rather than only on Power devices, which is where the noise
+   * On every tab rather than only on Energy nodes, which is where the noise
    * complaint came from: the mechanism is a CSS class and a `:has()` selector
    * that know nothing about which tab they are on, and gating it to one tab
    * would be more code than leaving it general. A tab whose sections hold no
@@ -2114,15 +2114,15 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderPowerDevicesTab(): TemplateResult {
+  private _renderEnergyNodesTab(): TemplateResult {
     const dailyEnergyEntityIds =
-      asJsonArray(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [];
+      asJsonArray(this._getValue(["energy_nodes", "solar", "forecast", "daily_energy_entity_ids"])) ?? [];
     const importPriceWindows =
-      asJsonArray(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
+      asJsonArray(this._getValue(["energy_nodes", "grid", "forecast", "import_price_windows"])) ?? [];
 
     return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.power_devices.house,
+        SECTION_SCOPE_IDS.energy_nodes.house,
         html`
           <div class="field-grid">
             ${this._renderPowerEntityGroup(
@@ -2134,11 +2134,11 @@ export class HelmanConfigEditorPanel
           </div>
 
           ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.house_forecast,
+            SECTION_SCOPE_IDS.energy_nodes.house_forecast,
             html`
               <div class="field-grid">
                 ${this._renderEntityGroup(
-                  ["power_devices", "house", "forecast", "total_energy_entity_id"],
+                  ["energy_nodes", "house", "forecast", "total_energy_entity_id"],
                   "editor.fields.forecast_total_energy_entity",
                   {
                     includeDomains: ["sensor"],
@@ -2154,7 +2154,7 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.power_devices.solar,
+        SECTION_SCOPE_IDS.energy_nodes.solar,
         html`
           <div class="field-grid field-grid--roomy">
             ${this._renderPowerEntityGroup(
@@ -2163,7 +2163,7 @@ export class HelmanConfigEditorPanel
               "editor.help.solar_power_entity",
             )}
             ${this._renderEntityGroup(
-              ["power_devices", "solar", "entities", "today_energy"],
+              ["energy_nodes", "solar", "entities", "today_energy"],
               "editor.fields.today_energy_entity",
               {
                 includeDomains: ["sensor"],
@@ -2173,12 +2173,12 @@ export class HelmanConfigEditorPanel
           </div>
 
           ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.solar_forecast,
+            SECTION_SCOPE_IDS.energy_nodes.solar_forecast,
             html`
               <p class="inline-note">${this._t("editor.notes.solar_forecast_bias_correction")}</p>
               <div class="field-grid field-grid--roomy">
                 ${this._renderEntityGroup(
-                  ["power_devices", "solar", "forecast", "total_energy_entity_id"],
+                  ["energy_nodes", "solar", "forecast", "total_energy_entity_id"],
                   "editor.fields.forecast_total_energy_entity",
                   {
                     includeDomains: ["sensor"],
@@ -2193,7 +2193,7 @@ export class HelmanConfigEditorPanel
                 renderItem: (_value, index) => this._renderDailyEnergyEntity(index),
                 onMove: (oldIndex, newIndex) =>
                   this._moveListItem(
-                    ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+                    ["energy_nodes", "solar", "forecast", "daily_energy_entity_ids"],
                     oldIndex,
                     newIndex,
                   ),
@@ -2211,7 +2211,7 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.power_devices.battery,
+        SECTION_SCOPE_IDS.energy_nodes.battery,
         html`
           <p class="inline-note">
             ${this._t("editor.notes.battery_entities")}
@@ -2223,7 +2223,7 @@ export class HelmanConfigEditorPanel
               "editor.help.battery_power_entity",
             )}
             ${this._renderEntityGroup(
-              ["power_devices", "battery", "entities", "remaining_energy"],
+              ["energy_nodes", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
               {
                 includeDomains: ["sensor"],
@@ -2231,7 +2231,7 @@ export class HelmanConfigEditorPanel
               },
             )}
             ${this._renderEntityGroup(
-              ["power_devices", "battery", "entities", "capacity"],
+              ["energy_nodes", "battery", "entities", "capacity"],
               "editor.fields.capacity_entity",
               {
                 includeDomains: ["sensor"],
@@ -2239,7 +2239,7 @@ export class HelmanConfigEditorPanel
               },
             )}
             ${this._renderEntityGroup(
-              ["power_devices", "battery", "entities", "min_soc"],
+              ["energy_nodes", "battery", "entities", "min_soc"],
               "editor.fields.min_soc_entity",
               {
                 includeDomains: ["sensor"],
@@ -2247,7 +2247,7 @@ export class HelmanConfigEditorPanel
               },
             )}
             ${this._renderEntityGroup(
-              ["power_devices", "battery", "entities", "max_soc"],
+              ["energy_nodes", "battery", "entities", "max_soc"],
               "editor.fields.max_soc_entity",
               {
                 includeDomains: ["sensor"],
@@ -2257,29 +2257,29 @@ export class HelmanConfigEditorPanel
           </div>
 
           ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.battery_forecast,
+            SECTION_SCOPE_IDS.energy_nodes.battery_forecast,
             html`
               <div class="field-grid">
                 ${this._renderOptionalNumberField(
-                  ["power_devices", "battery", "forecast", "charge_efficiency"],
+                  ["energy_nodes", "battery", "forecast", "charge_efficiency"],
                   "editor.fields.charge_efficiency",
                   undefined,
                   "editor.help.battery_charge_efficiency",
                 )}
                 ${this._renderOptionalNumberField(
-                  ["power_devices", "battery", "forecast", "discharge_efficiency"],
+                  ["energy_nodes", "battery", "forecast", "discharge_efficiency"],
                   "editor.fields.discharge_efficiency",
                   undefined,
                   "editor.help.battery_discharge_efficiency",
                 )}
                 ${this._renderOptionalNumberField(
-                  ["power_devices", "battery", "forecast", "max_charge_power_w"],
+                  ["energy_nodes", "battery", "forecast", "max_charge_power_w"],
                   "editor.fields.max_charge_power_w",
                   undefined,
                   "editor.help.battery_max_charge_power_w",
                 )}
                 ${this._renderOptionalNumberField(
-                  ["power_devices", "battery", "forecast", "max_discharge_power_w"],
+                  ["energy_nodes", "battery", "forecast", "max_discharge_power_w"],
                   "editor.fields.max_discharge_power_w",
                   undefined,
                   "editor.help.battery_max_discharge_power_w",
@@ -2293,7 +2293,7 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.power_devices.grid,
+        SECTION_SCOPE_IDS.energy_nodes.grid,
         html`
           <div class="field-grid">
             ${this._renderPowerEntityGroup(
@@ -2304,11 +2304,11 @@ export class HelmanConfigEditorPanel
           </div>
 
           ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.grid_forecast,
+            SECTION_SCOPE_IDS.energy_nodes.grid_forecast,
             html`
               <div class="field-grid">
                 ${this._renderEntityGroup(
-                  ["power_devices", "grid", "forecast", "sell_price_entity_id"],
+                  ["energy_nodes", "grid", "forecast", "sell_price_entity_id"],
                   "editor.fields.sell_price_entity",
                   {
                     includeDomains: ["sensor"],
@@ -2316,7 +2316,7 @@ export class HelmanConfigEditorPanel
                   },
                 )}
                 ${this._renderOptionalTextField(
-                  ["power_devices", "grid", "forecast", "import_price_unit"],
+                  ["energy_nodes", "grid", "forecast", "import_price_unit"],
                   "editor.fields.import_price_unit",
                   "editor.helpers.import_price_unit",
                   "editor.help.grid_import_price_unit",
@@ -2333,7 +2333,7 @@ export class HelmanConfigEditorPanel
                   this._renderImportPriceWindow(windowConfig, index),
                 onMove: (oldIndex, newIndex) =>
                   this._moveListItem(
-                    ["power_devices", "grid", "forecast", "import_price_windows"],
+                    ["energy_nodes", "grid", "forecast", "import_price_windows"],
                     oldIndex,
                     newIndex,
                   ),
@@ -2776,7 +2776,7 @@ export class HelmanConfigEditorPanel
     return [
       {
         label: this._t("editor.training_depth.house_meter"),
-        path: ["power_devices", "house", "forecast", "total_energy_entity_id"],
+        path: ["energy_nodes", "house", "forecast", "total_energy_entity_id"],
         roleKey: "editor.training_depth.role_house_meter",
       },
       ...iterDevices(this._config).flatMap(({ device, parent, path }, index): TrainingDepthRow[] => {
@@ -2839,7 +2839,7 @@ export class HelmanConfigEditorPanel
       },
       {
         label: this._t("editor.training_depth.forecast_source"),
-        path: ["power_devices", "solar", "forecast", "daily_energy_entity_ids", 0],
+        path: ["energy_nodes", "solar", "forecast", "daily_energy_entity_ids", 0],
         roleKey: "editor.training_depth.role_forecast_source",
       },
       {
@@ -2851,12 +2851,12 @@ export class HelmanConfigEditorPanel
       },
       {
         label: this._t("editor.training_depth.grid_power"),
-        path: ["power_devices", "grid", "entities", "power"],
+        path: ["energy_nodes", "grid", "entities", "power"],
         roleKey: "editor.training_depth.role_grid_power",
       },
       {
         label: this._t("editor.training_depth.battery_soc"),
-        path: ["power_devices", "battery", "entities", "capacity"],
+        path: ["energy_nodes", "battery", "entities", "capacity"],
         roleKey: "editor.training_depth.role_battery_soc",
       },
     ];
@@ -3499,7 +3499,7 @@ export class HelmanConfigEditorPanel
    * tree as nested cards.
    *
    * A card renders its `children` with the same card, recursively. The inverter
-   * keeps its entry in the list but is edited under Power devices, so here it
+   * keeps its entry in the list but is edited under Energy nodes, so here it
    * is a hidden placeholder that keeps the sortable list's indices equal to the
    * document's -- which is also why the filter hides cards rather than dropping
    * them.
@@ -4096,7 +4096,7 @@ export class HelmanConfigEditorPanel
    */
   private _renderDailyEnergyEntity(index: number): TemplateResult {
     const path: PathSegment[] = [
-      "power_devices",
+      "energy_nodes",
       "solar",
       "forecast",
       "daily_energy_entity_ids",
@@ -4115,7 +4115,7 @@ export class HelmanConfigEditorPanel
             ${renderRemoveButton(this, {
               onRemove: () =>
                 this._removeListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+                  ["energy_nodes", "solar", "forecast", "daily_energy_entity_ids"],
                   index,
                 ),
             })}
@@ -4136,7 +4136,7 @@ export class HelmanConfigEditorPanel
   ): TemplateResult {
     const windowObject = asJsonObject(windowConfig) ?? {};
     const basePath: PathSegment[] = [
-      "power_devices",
+      "energy_nodes",
       "grid",
       "forecast",
       "import_price_windows",
@@ -4157,7 +4157,7 @@ export class HelmanConfigEditorPanel
             ${renderRemoveButton(this, {
               onRemove: () =>
                 this._removeListItem(
-                  ["power_devices", "grid", "forecast", "import_price_windows"],
+                  ["energy_nodes", "grid", "forecast", "import_price_windows"],
                   index,
                 ),
             })}
@@ -4201,7 +4201,7 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The inverter, under Power devices.
+   * The inverter, under Energy nodes.
    *
    * It keeps its entry in `devices` -- optimizers target it by id there -- but
    * it is not a house consumer, so it is edited beside the other power devices
@@ -5187,7 +5187,7 @@ export class HelmanConfigEditorPanel
     }));
     return renderSelectFieldWithDefault(
       this,
-      ["power_devices", device, "entities", "power_polarity"],
+      ["energy_nodes", device, "entities", "power_polarity"],
       "editor.fields.power_polarity",
       options,
       POWER_POLARITY_OPTIONS[device][0],
@@ -5334,7 +5334,7 @@ export class HelmanConfigEditorPanel
     helpKey: string,
     required = false,
   ): TemplateResult {
-    const entityPath: PathSegment[] = ["power_devices", device, "entities", "power"];
+    const entityPath: PathSegment[] = ["energy_nodes", device, "entities", "power"];
     return this._renderEntityGroup(
       entityPath,
       labelKey,
@@ -5589,7 +5589,7 @@ export class HelmanConfigEditorPanel
 
   private _buildTabIssueCounts(): Record<TabId, { errors: number; warnings: number }> {
     const counts: Record<TabId, { errors: number; warnings: number }> = {
-      power_devices: { errors: 0, warnings: 0 },
+      energy_nodes: { errors: 0, warnings: 0 },
       training: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       devices: { errors: 0, warnings: 0 },
@@ -5619,16 +5619,16 @@ export class HelmanConfigEditorPanel
     return counts;
   }
 
-  /** The tab an issue is shown on: the inverter's are on Power devices, where it is edited. */
+  /** The tab an issue is shown on: the inverter's are on Energy nodes, where it is edited. */
   private _issueTab(issue: ValidationIssue): TabId {
     const devices = asJsonArray(this._getValue(["devices", "items"])) ?? [];
     const inverter = devices.findIndex(
       (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
     );
     if (inverter >= 0 && this._deviceIssues(["devices", "items", inverter]).includes(issue)) {
-      return "power_devices";
+      return "energy_nodes";
     }
-    return TAB_SECTIONS[issue.section] ?? "power_devices";
+    return TAB_SECTIONS[issue.section] ?? "energy_nodes";
   }
 
   /** Adopt the stored document as the baseline, without touching the draft. */
@@ -6052,7 +6052,7 @@ export class HelmanConfigEditorPanel
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+        ["energy_nodes", "solar", "forecast", "daily_energy_entity_ids"],
         createDailyEnergyEntityDraft(),
       );
     });
@@ -6062,7 +6062,7 @@ export class HelmanConfigEditorPanel
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["power_devices", "grid", "forecast", "import_price_windows"],
+        ["energy_nodes", "grid", "forecast", "import_price_windows"],
         createImportPriceWindowDraft(),
       );
     });

@@ -51,7 +51,7 @@ from typing import Any, Literal
 
 ValueType = Literal["default", "positive", "negative"]
 
-#: The config key, under ``power_devices.<device>.entities``.
+#: The config key, under ``energy_nodes.<device>.entities``.
 POWER_POLARITY_KEY = "power_polarity"
 
 #: Allowed values per device, **upright option first**. The first entry is the

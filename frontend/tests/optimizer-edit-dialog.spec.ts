@@ -88,7 +88,7 @@ const GROUP_TARGET_FIELD = {
 /** A document with more in it than the optimizer, so a clobber would show. */
 const CONFIG = {
     config_version: 4,
-    power_devices: { house: { base_load_w: 350 } },
+    energy_nodes: { house: { base_load_w: 350 } },
     appliances: [],
     automation: {
         enabled: true,
@@ -837,7 +837,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // Everything outside the edited optimizer survives verbatim — a
         // whole-document save that dropped a sibling would be the worst
         // possible bug here, and it would be silent.
-        expect(sent.power_devices).toEqual(CONFIG.power_devices);
+        expect(sent.energy_nodes).toEqual(CONFIG.energy_nodes);
         expect(sent.automation.system_optimizers[0]).toEqual(CONFIG.automation.system_optimizers[0]);
         expect(sent.automation.system_optimizers[1].conditions).toEqual([{ when_price_below: 2.5 }]);
     });
@@ -954,7 +954,7 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
     /** The same document, plus an edit nobody in this dialog made. */
     const CHANGED_ELSEWHERE = {
         ...CONFIG,
-        power_devices: { house: { base_load_w: 900 } },
+        energy_nodes: { house: { base_load_w: 900 } },
     };
 
     /** What the stored document looks like once this dialog's own save landed. */
@@ -989,7 +989,7 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         const REORDERED = {
             automation: CONFIG.automation,
             appliances: CONFIG.appliances,
-            power_devices: CONFIG.power_devices,
+            energy_nodes: CONFIG.energy_nodes,
             config_version: CONFIG.config_version,
         };
         await mountPanel(page, { configSequence: [CONFIG, REORDERED] });
@@ -1191,7 +1191,7 @@ test.describe("editing an optimizer as YAML from the dialog", () => {
         expect(sent.automation.system_optimizers[1].conditions)
             .toEqual([{ when_price_below: 3.5 }]);
         // The rest of the document is untouched, as with a form edit.
-        expect(sent.power_devices).toEqual(CONFIG.power_devices);
+        expect(sent.energy_nodes).toEqual(CONFIG.energy_nodes);
         expect(sent.automation.system_optimizers[0])
             .toEqual(CONFIG.automation.system_optimizers[0]);
     });

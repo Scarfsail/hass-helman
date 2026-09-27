@@ -54,7 +54,7 @@ def test_defaults_empty_config():
 
 def test_read_nested_config():
     config = {
-        "power_devices": {
+        "energy_nodes": {
             "solar": {
                 "forecast": {
                     "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
@@ -89,7 +89,7 @@ def test_read_nested_config():
 
 def test_reads_total_energy_entity_from_the_solar_bias_training_config():
     config = {
-        "power_devices": {
+        "energy_nodes": {
             "solar": {
                 "forecast": {
                     "total_energy_entity_id": "sensor.forecast_total",

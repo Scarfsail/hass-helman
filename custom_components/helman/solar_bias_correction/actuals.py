@@ -591,14 +591,14 @@ def _resolve_curtailment_entities(
     soc_entity_id = _read_battery_soc_entity_id_from_runtime_config(hass)
     if soc_entity_id is None:
         _LOGGER.warning(
-            "Solar bias slot invalidation is configured, but power_devices.battery.entities.capacity is unavailable at runtime; skipping curtailment invalidation for this training window"
+            "Solar bias slot invalidation is configured, but energy_nodes.battery.entities.capacity is unavailable at runtime; skipping curtailment invalidation for this training window"
         )
         return None
 
     grid_power_entity_id = _read_grid_power_entity_id_from_runtime_config(hass)
     if grid_power_entity_id is None:
         _LOGGER.warning(
-            "Solar bias slot invalidation is configured, but power_devices.grid.entities.power is unavailable at runtime; skipping curtailment invalidation for this training window"
+            "Solar bias slot invalidation is configured, but energy_nodes.grid.entities.power is unavailable at runtime; skipping curtailment invalidation for this training window"
         )
         return None
 
@@ -940,7 +940,7 @@ def _read_solar_max_power_from_runtime_config(hass: HomeAssistant) -> float | No
     )
     if not isinstance(runtime_config, dict):
         return None
-    solar_config = runtime_config.get("power_devices", {}).get("solar", {})
+    solar_config = runtime_config.get("energy_nodes", {}).get("solar", {})
     raw_value = solar_config.get("max_power")
     if isinstance(raw_value, bool) or raw_value is None:
         return None
@@ -977,10 +977,10 @@ def _read_grid_power_inverted_from_runtime_config(hass: HomeAssistant) -> bool:
     )
     if not isinstance(runtime_config, dict):
         return False
-    power_devices = runtime_config.get("power_devices")
-    if not isinstance(power_devices, dict):
+    energy_nodes = runtime_config.get("energy_nodes")
+    if not isinstance(energy_nodes, dict):
         return False
-    return is_power_inverted(power_devices.get("grid"), "grid")
+    return is_power_inverted(energy_nodes.get("grid"), "grid")
 
 
 def _read_device_entity_id_from_runtime_config(
@@ -996,7 +996,7 @@ def _read_device_entity_id_from_runtime_config(
     if not isinstance(runtime_config, dict):
         return None
 
-    device_config = runtime_config.get("power_devices", {}).get(device, {})
+    device_config = runtime_config.get("energy_nodes", {}).get(device, {})
     entities = device_config.get("entities", {})
     if not isinstance(entities, dict):
         return None

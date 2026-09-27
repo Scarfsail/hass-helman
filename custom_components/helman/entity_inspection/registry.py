@@ -1,9 +1,9 @@
 """Which evaluator speaks for which config path.
 
 A registry key is a dotted path with ``*`` standing for one segment the key
-does not care about -- ``power_devices.*.entities.power`` covers all four power
+does not care about -- ``energy_nodes.*.entities.power`` covers all four power
 devices, and a later key can cover a list with
-``power_devices.solar.forecast.daily_energy_entity_ids.*``. The segments a
+``energy_nodes.solar.forecast.daily_energy_entity_ids.*``. The segments a
 ``*`` matched are handed to the evaluator, so an evaluator learns *which*
 device or index it is looking at from the path rather than from the request.
 That is what lets the websocket command carry no entity id and no settings.
@@ -46,8 +46,8 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 
 #: Registry keys in declaration order. Matching is exact on segment count, so
 #: order only decides which of two equally specific keys wins. That is not
-#: hypothetical for one pair below: ``power_devices.grid.entities.power`` is
-#: also a match for the wildcard ``power_devices.*.entities.power``, and it is
+#: hypothetical for one pair below: ``energy_nodes.grid.entities.power`` is
+#: also a match for the wildcard ``energy_nodes.*.entities.power``, and it is
 #: declared *first* on purpose, so the grid meter keeps its power reading
 #: (:mod:`.power`) with a history fact appended (:func:`~.history.history_aware`)
 #: rather than falling through to the plain power reading every other device
@@ -102,17 +102,17 @@ SOLAR_FORECAST_CURRENT_INSPECTION_PATH = "helman.solar_forecast_current"
 
 
 EVALUATORS: dict[str, Evaluator] = {
-    "power_devices.grid.entities.power": history_aware(
+    "energy_nodes.grid.entities.power": history_aware(
         evaluate_power_entity,
         ("training", "solar_bias", "min_history_days"),
         SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
-    "power_devices.*.entities.power": evaluate_power_entity,
-    "power_devices.battery.entities.capacity": history_evaluator(
+    "energy_nodes.*.entities.power": evaluate_power_entity,
+    "energy_nodes.battery.entities.capacity": history_evaluator(
         ("training", "solar_bias", "min_history_days"),
         SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
-    "power_devices.house.forecast.total_energy_entity_id": history_evaluator(
+    "energy_nodes.house.forecast.total_energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
@@ -132,7 +132,7 @@ EVALUATORS: dict[str, Evaluator] = {
     "devices.items.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
     "devices.items.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
     "devices.items.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
-    "power_devices.solar.forecast.total_energy_entity_id": history_evaluator(),
+    "energy_nodes.solar.forecast.total_energy_entity_id": history_evaluator(),
     "training.solar_bias.total_energy_entity_id": (
         history_evaluator(
             ("training", "solar_bias", "min_history_days"),
@@ -145,7 +145,7 @@ EVALUATORS: dict[str, Evaluator] = {
     # depth a training requirement. It now reads its own published forecast
     # entity instead (``forecast_slot_history.py``), so no entry in this list
     # governs anything -- the requirement moved to the row below.
-    "power_devices.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
+    "energy_nodes.solar.forecast.daily_energy_entity_ids.*": history_evaluator(),
     # Not a config path: Helman publishes this entity, so its id is a constant.
     # It is the forecast side of the bias comparison now, and the only entity
     # whose depth decides how far back the solar fit can reach -- which is why

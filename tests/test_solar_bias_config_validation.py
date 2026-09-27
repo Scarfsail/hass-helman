@@ -145,7 +145,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         for block in ({"enabled": True}, {"min_history_days": 10}, {}):
             with self.subTest(block=block):
                 config = _valid_config()
-                config["power_devices"]["solar"]["forecast"]["bias_correction"] = block
+                config["energy_nodes"]["solar"]["forecast"]["bias_correction"] = block
 
                 report = validate_config_document(config)
                 self.assertFalse(report.valid)
@@ -157,7 +157,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
                     ],
                     [
                         (
-                            "power_devices.solar.forecast.bias_correction",
+                            "energy_nodes.solar.forecast.bias_correction",
                             "relocated_config_key",
                         )
                     ],
@@ -266,7 +266,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_requires_grid_power_entity(self) -> None:
         config = _valid_config()
-        config["power_devices"]["grid"]["entities"]["power"] = "   "
+        config["energy_nodes"]["grid"]["entities"]["power"] = "   "
         config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
@@ -369,7 +369,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_requires_battery_capacity_entity(self) -> None:
         config = _valid_config()
-        config["power_devices"]["battery"]["entities"]["capacity"] = "   "
+        config["energy_nodes"]["battery"]["entities"]["capacity"] = "   "
         config.setdefault("training", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,

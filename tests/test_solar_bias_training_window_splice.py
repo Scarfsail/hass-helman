@@ -525,7 +525,7 @@ class HourGrainCurtailmentTests(unittest.IsolatedAsyncioTestCase):
             grid["entities"]["power_polarity"] = "positive_is_import"
         return _make_hass(
             {
-                "power_devices": {
+                "energy_nodes": {
                     "battery": {"entities": {"capacity": SOC}},
                     "grid": grid,
                 }
@@ -606,7 +606,7 @@ class SplitHorizonTests(unittest.IsolatedAsyncioTestCase):
     def _hass(self):
         return _make_hass(
             {
-                "power_devices": {
+                "energy_nodes": {
                     "battery": {"entities": {"capacity": SOC}},
                     "grid": {"entities": {"power": GRID}},
                 }

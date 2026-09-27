@@ -72,7 +72,7 @@ def _house_children(devices):
 def _built_house_children(devices):
     """The house's children as ``build`` serialises them, remainders included."""
     config = {
-        "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {"items": devices},
     }
     with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \

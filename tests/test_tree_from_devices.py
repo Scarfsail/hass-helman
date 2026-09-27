@@ -134,7 +134,7 @@ def _v20_document() -> dict:
                 "Režimy": {LABEL_NIGHT: "⏻😴"},
             },
         },
-        "power_devices": {
+        "energy_nodes": {
             "house": {
                 "entities": {"power": "sensor.house_power"},
                 "power_sensor_label": "Měření spotřeby elektřiny",
@@ -449,7 +449,7 @@ class NameResolutionTests(unittest.TestCase):
     """Every surface names an unnamed device alike, cleaned by ``devices.name_cleaner_regex``."""
 
     CONFIG = {
-        "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {
             "name_cleaner_regex": " Výkon$",
             "items": [

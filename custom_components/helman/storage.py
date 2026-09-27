@@ -35,7 +35,7 @@ TRAINING_ARTIFACTS_STORAGE_KEY = f"{DOMAIN}.training_artifacts"
 TRAINING_ARTIFACTS_STORAGE_VERSION = 1
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "power_devices": {},
+    "energy_nodes": {},
 }
 
 

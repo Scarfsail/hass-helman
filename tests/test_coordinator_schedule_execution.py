@@ -1344,7 +1344,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         storage = FakeStorage(
             schedule_document={"executionEnabled": False, "slots": {}},
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "battery": {
                         "entities": {
                             "remaining_energy": "sensor.battery_remaining_energy",

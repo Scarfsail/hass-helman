@@ -21,7 +21,7 @@ const HOUSE_ATTEMPT_AT = "2026-09-19T03:01:00+00:00";
 
 const CONFIG = {
     config_version: 14,
-    power_devices: {
+    energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
     devices: { items: [
@@ -465,7 +465,7 @@ test("the Training tab carries a badge for a failed job without being open", asy
         }),
     );
 
-    // The editor opens on Power devices; the badge reads the same poll anyway.
+    // The editor opens on Energy nodes; the badge reads the same poll anyway.
     await expect(page.locator(".tabs button.active")).not.toContainText("Training");
     const badge = page.locator(".tabs button", { hasText: "Training" }).locator(".tab-warning-dot");
     await expect(badge).toBeVisible();

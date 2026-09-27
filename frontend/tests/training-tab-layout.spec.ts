@@ -23,7 +23,7 @@ const DISHWASHER_METER_KEY = "devices.items.0.consumption.energy_entity_id";
 
 const CONFIG = {
     config_version: 19,
-    power_devices: {
+    energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
     devices: { items: [

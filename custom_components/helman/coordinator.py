@@ -1362,10 +1362,10 @@ class HelmanCoordinator:
         return self._cached_tree
 
     def _get_house_energy_entity_id(self) -> str | None:
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
+        energy_nodes = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("energy_nodes")
         )
-        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        house_config = ConsumptionForecastBuilder._read_dict(energy_nodes.get("house"))
         forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
         return ConsumptionForecastBuilder._read_entity_id(
             forecast_cfg.get("total_energy_entity_id")
@@ -1426,18 +1426,18 @@ class HelmanCoordinator:
         return (bounds_config.min_soc_entity_id, bounds_config.max_soc_entity_id)
 
     def _get_grid_energy_entity_id(self, key: str) -> str | None:
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
+        energy_nodes = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("energy_nodes")
         )
-        grid_config = ConsumptionForecastBuilder._read_dict(power_devices.get("grid"))
+        grid_config = ConsumptionForecastBuilder._read_dict(energy_nodes.get("grid"))
         entities = ConsumptionForecastBuilder._read_dict(grid_config.get("entities"))
         return ConsumptionForecastBuilder._read_entity_id(entities.get(key))
 
     def _get_grid_sell_price_entity_id(self) -> str | None:
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
+        energy_nodes = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("energy_nodes")
         )
-        grid_config = ConsumptionForecastBuilder._read_dict(power_devices.get("grid"))
+        grid_config = ConsumptionForecastBuilder._read_dict(energy_nodes.get("grid"))
         forecast = ConsumptionForecastBuilder._read_dict(grid_config.get("forecast"))
         return ConsumptionForecastBuilder._read_entity_id(
             forecast.get("sell_price_entity_id")
@@ -1495,20 +1495,20 @@ class HelmanCoordinator:
         return snapshot
 
     def _get_battery_entity_id(self, key: str) -> str | None:
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
+        energy_nodes = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("energy_nodes")
         )
         battery_config = ConsumptionForecastBuilder._read_dict(
-            power_devices.get("battery")
+            energy_nodes.get("battery")
         )
         entities = ConsumptionForecastBuilder._read_dict(battery_config.get("entities"))
         return ConsumptionForecastBuilder._read_entity_id(entities.get(key))
 
     def _read_house_forecast_config(self) -> tuple[str | None, int, int, str]:
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
+        energy_nodes = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("energy_nodes")
         )
-        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        house_config = ConsumptionForecastBuilder._read_dict(energy_nodes.get("house"))
         forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
         total_energy_entity_id = ConsumptionForecastBuilder._read_entity_id(
             forecast_cfg.get("total_energy_entity_id")
@@ -2210,7 +2210,7 @@ class HelmanCoordinator:
         # refresh -- so one null node would report every beat as a failed
         # forecast rebuild.
         read = ConsumptionForecastBuilder._read_dict
-        forecast = read(read(read(config.get("power_devices")).get("solar")).get("forecast"))
+        forecast = read(read(read(config.get("energy_nodes")).get("solar")).get("forecast"))
         entity_ids = forecast.get("daily_energy_entity_ids")
         if not isinstance(entity_ids, list) or not entity_ids:
             return None
@@ -5507,7 +5507,7 @@ class HelmanCoordinator:
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
         if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
-            battery_cfg = self._active_config.get("power_devices", {}).get("battery", {})
+            battery_cfg = self._active_config.get("energy_nodes", {}).get("battery", {})
             sensor_id = battery_cfg.get("entities", {}).get("power")
             hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
 
