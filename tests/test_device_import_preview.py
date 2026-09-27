@@ -317,3 +317,12 @@ def test_existing_error_on_a_device_without_an_id_does_not_block_a_move():
     )
     assert result["devices"] == [{**b, "children": [a]}, half_edited]
     assert result["validation"]["valid"], result["validation"]
+
+
+def test_devices_without_ids_report_no_phantom_changes():
+    parent = device("parent", "sensor.parent", children=[{"kind": "generic"}])
+    loose = {"kind": "generic"}
+    result = preview_energy_import(
+        {"devices": [parent, loose]}, {"device_consumption": []}
+    )
+    assert result["additions"] == result["powerEntities"] == result["nestingChanges"] == []

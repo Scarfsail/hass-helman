@@ -593,6 +593,7 @@
       "move": "Přesunout zařízení s potomky",
       "skipped": "Přeskočeno",
       "no_changes": "Žádné změny k použití.",
+      "blocked": "Import by přidal chyby těchto druhů. Uvedeny jsou i chyby stejného druhu, které návrh už obsahuje.",
       "skip_reasons": {
         "schedulable": "jeho energii už měří elektroměr plánovatelného zařízení {device}",
         "power_required": "potřebuje senzor výkonu, protože {device} dělí svůj okamžitý výkon mezi podřízená zařízení bez vlastního elektroměru",

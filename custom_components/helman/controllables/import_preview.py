@@ -18,13 +18,19 @@ def preview_energy_import(
         config.get("devices") or [], preferences, manual=True
     )
     proposed = {**config, "devices": result.devices}
+    # Imported devices always get an id, so an id-less one is an existing
+    # half-edited device: it cannot be matched across the import, and the
+    # import neither adds it nor changes it.
     before = {
-        peek_controllable_id(d): (d, peek_controllable_id(p) if p else None)
+        device_id: (d, peek_controllable_id(p) if p else None)
         for d, p in iter_devices(config)
+        if (device_id := peek_controllable_id(d)) is not None
     }
     additions, power, moves = [], [], []
     for device, parent in iter_devices(proposed):
         device_id = peek_controllable_id(device)
+        if device_id is None:
+            continue
         parent_id = peek_controllable_id(parent) if parent else None
         consumption = device.get("consumption") or {}
         if device_id not in before:

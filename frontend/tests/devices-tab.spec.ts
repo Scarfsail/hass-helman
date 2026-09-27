@@ -1114,6 +1114,9 @@ test("invalid import cannot be applied and empty state offers import", async ({
   );
   await page.locator(".import-energy").click();
   await expect(page.locator(".apply-energy-import")).toBeDisabled();
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "The import would add errors of these kinds.",
+  );
   expect(await config(page)).toEqual([]);
 });
 

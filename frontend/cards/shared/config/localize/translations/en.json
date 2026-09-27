@@ -592,6 +592,7 @@
       "move": "Move device with its children",
       "skipped": "Skipped",
       "no_changes": "No changes to apply.",
+      "blocked": "The import would add errors of these kinds. Errors of the same kind that the draft already has are listed too.",
       "skip_reasons": {
         "schedulable": "its energy is already measured by the meter of schedulable device {device}",
         "power_required": "needs a power sensor, because {device} splits its live power among children without their own meter",
