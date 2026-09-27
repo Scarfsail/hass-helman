@@ -162,6 +162,7 @@
       "value_not_trained": "Not trained yet",
       "value_fixed": "Fixed · {kwh} kWh/h",
       "appliance_entity_meter": "meter",
+      "appliance_entity_submeter": "sub-meter",
       "appliance_entity_switch": "switch",
       "appliance_entity_climate": "climate",
       "appliance_entity_charge": "charge switch",

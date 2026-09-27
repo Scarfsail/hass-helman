@@ -163,6 +163,7 @@
       "value_not_trained": "Zatím nenaučeno",
       "value_fixed": "Pevně · {kwh} kWh/h",
       "appliance_entity_meter": "měřič",
+      "appliance_entity_submeter": "podružný měřič",
       "appliance_entity_switch": "spínač",
       "appliance_entity_climate": "klimatizace",
       "appliance_entity_charge": "spínač nabíjení",

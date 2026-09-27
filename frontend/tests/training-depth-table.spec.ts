@@ -757,3 +757,55 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
     );
     expect(requestedKeys).toContain("devices.0.children.1.controls.charge.entity_id");
 });
+
+test("a learner on a shared meter also lists its metered siblings' meters", async ({ page }) => {
+    // Training splits the parent's own energy, its meter minus its metered
+    // children, so a shallow sub-meter distorts the estimate as much as the
+    // parent's meter would.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices = [
+        {
+            id: "garage_breaker",
+            consumption: {
+                energy_entity_id: "sensor.garage_breaker",
+                power_entity_id: "sensor.garage_breaker_power",
+            },
+            children: [
+                {
+                    id: "garage_heater",
+                    name: "Garage heater",
+                    kind: "generic",
+                    schedulable: true,
+                    controls: { switch: { entity_id: "switch.garage_heater" } },
+                    consumption: {
+                        projection: { strategy: "history_average", lookback_days: 14 },
+                    },
+                },
+                {
+                    id: "garage_plug",
+                    name: "Garage plug",
+                    consumption: {
+                        energy_entity_id: "sensor.garage_plug",
+                        power_entity_id: "sensor.garage_plug_power",
+                    },
+                },
+            ],
+        },
+    ];
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.0.children.1.consumption.energy_entity_id": { raw_states: 4, statistics: 4 },
+        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+    });
+
+    const heater = applianceRows(page).filter({ hasText: "Garage heater" });
+    await expect(heater.locator("td:first-child .training-depth-entity-id")).toHaveText([
+        "sensor.garage_breaker",
+        "sensor.garage_plug",
+        "switch.garage_heater",
+    ]);
+    // The shallow sub-meter is what marks the row.
+    await expect(heater).toHaveClass(/training-depth-warn/);
+    await expect(heater.locator("td").nth(3)).toContainText("sub-meter 4 d");
+});

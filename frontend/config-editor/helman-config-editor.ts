@@ -2916,6 +2916,16 @@ export class HelmanConfigEditorPanel
           "consumption",
           "energy_entity_id",
         ],
+        // The parent's own energy is its meter minus these, so training reads
+        // their history as well before splitting what is left.
+        submeterPaths: drawsFromParent
+          ? (asJsonArray(parent?.children) ?? []).flatMap((sibling, siblingIndex) => {
+              const siblingDevice = asJsonObject(sibling);
+              return siblingDevice && ownMeter(siblingDevice)
+                ? [[...path.slice(0, -1), siblingIndex, "consumption", "energy_entity_id"]]
+                : [];
+            })
+          : [],
         // The control whose history tells when it ran: the same running signal
         // the backend splits a shared meter by (an EV charger's is its charge switch).
         activity:
@@ -2959,7 +2969,13 @@ export class HelmanConfigEditorPanel
           learns: item.learns,
           fixedKwh: item.fixedKwh,
           lookbackDays: days,
-          entities: item.learns ? [entity("meter", item.meterPath), ...activity] : activity,
+          entities: item.learns
+            ? [
+                entity("meter", item.meterPath),
+                ...item.submeterPaths.map((submeterPath) => entity("submeter", submeterPath)),
+                ...activity,
+              ]
+            : activity,
         },
       ];
     });
