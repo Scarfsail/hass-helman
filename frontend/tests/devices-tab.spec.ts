@@ -842,6 +842,7 @@ function importResponse(
       {
         deviceId: "restored",
         energyEntityId: "sensor.restored",
+        powerEntityId: null,
         parentId: null,
       },
     ],
@@ -928,7 +929,10 @@ test("import preview cancel is inert and apply changes only the draft with moves
   };
   const restored = {
     id: "restored",
-    consumption: { energy_entity_id: "sensor.restored" },
+    consumption: {
+      energy_entity_id: "sensor.restored",
+      power_entity_id: "sensor.restored_power",
+    },
   };
   await mountEditor(page, [parent, child]);
   await openTab(page, "Devices");
@@ -936,6 +940,14 @@ test("import preview cancel is inert and apply changes only the draft with moves
     page,
     "helman/preview_energy_import",
     importResponse([{ ...parent, children: [child] }, restored], {
+      additions: [
+        {
+          deviceId: "restored",
+          energyEntityId: "sensor.restored",
+          powerEntityId: "sensor.restored_power",
+          parentId: null,
+        },
+      ],
       nestingChanges: [
         { deviceId: "child", fromParentId: null, parentId: "parent" },
       ],
@@ -958,6 +970,9 @@ test("import preview cancel is inert and apply changes only the draft with moves
     }),
   );
   await page.locator(".import-energy").click();
+  await expect(page.locator(".energy-import-preview")).toContainText(
+    "restored — sensor.restored, sensor.restored_power",
+  );
   await expect(page.locator(".energy-import-preview")).toContainText(
     "child → parent",
   );
@@ -1030,6 +1045,40 @@ test("late suggestions and previews are discarded after the draft changes", asyn
   await page.waitForTimeout(30);
   await expect(page.locator(".energy-import-preview")).toHaveCount(0);
   expect((await config(page))[0].name).toBe("Still newer");
+});
+
+test("visible candidates disappear when the draft is replaced outside a field edit", async ({
+  page,
+}) => {
+  const device = {
+    id: "breaker",
+    consumption: { energy_entity_id: "sensor.energy" },
+  };
+  await mountEditor(page, [device]);
+  await openTab(page, "Devices");
+  await page.evaluate(() => {
+    window.__card("breaker")!.open = true;
+  });
+  await deviceResponse(page, "helman/suggest_device_entities", {
+    energy: [],
+    power: [candidate("sensor.old_a"), candidate("sensor.old_b")],
+    switch: [],
+  });
+  await page.locator(".apply-suggestions").click();
+  await expect(
+    page.locator('select.suggestion-candidates[data-field="power"]'),
+  ).toHaveCount(1);
+  // YAML editors and reloads assign the draft directly, keeping the device id.
+  await page.evaluate(() => {
+    const panel = document.querySelector("helman-config-editor-panel") as any;
+    panel._config = {
+      ...panel._config,
+      devices: [{ id: "breaker", consumption: { energy_entity_id: "sensor.new" } }],
+    };
+  });
+  await expect(
+    page.locator('select.suggestion-candidates[data-field="power"]'),
+  ).toHaveCount(0);
 });
 
 test("invalid import cannot be applied and empty state offers import", async ({

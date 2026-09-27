@@ -1143,7 +1143,12 @@ export class HelmanConfigEditorPanel
   private _deviceYamlErrors: Partial<Record<string, string>> = {};
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
-  private _deviceSuggestions: Record<string, DeviceSuggestions> = {};
+  // Bound to the draft they were fetched for, like `_energyImport`: the draft
+  // is replaced by paths that bypass `_markDraftChanged` (YAML, reload).
+  private _deviceSuggestions: {
+    draft: JsonObject | null;
+    byId: Record<string, DeviceSuggestions>;
+  } = { draft: null, byId: {} };
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
@@ -3539,7 +3544,7 @@ export class HelmanConfigEditorPanel
       <strong>${this._t("editor.import.preview")}</strong>
       <p>${this._t("editor.import.draft_only")}</p>
       <ul>
-        ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
+        ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.powerEntityId ? html`, ${item.powerEntityId}` : nothing}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
         ${preview.powerEntities.map((item) => html`<li>${this._t("editor.import.power")}: ${item.deviceId} → ${item.entityId}</li>`)}
         ${preview.nestingChanges.map((item) => html`<li>${this._t("editor.import.move")}: ${item.deviceId} → ${item.parentId}</li>`)}
         ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} (${item.reason}${item.device_id ? html`: ${item.device_id}` : nothing})</li>`)}
@@ -3641,14 +3646,19 @@ export class HelmanConfigEditorPanel
           for (const fill of fills) setValueAtPath(next, fill.path, fill.entityId);
         });
       }
-      this._deviceSuggestions = {
-        ...this._deviceSuggestions,
-        [id]: suggestions,
-      };
+      this._storeSuggestions(id, suggestions);
     } catch (error) {
       if (this._config === draft && request === this._deviceSuggestionRequests[id])
         this._deviceActionMessage = String(error);
     }
+  }
+
+  private _storeSuggestions(id: string, suggestions: DeviceSuggestions): void {
+    const { draft, byId } = this._deviceSuggestions;
+    this._deviceSuggestions = {
+      draft: this._config,
+      byId: { ...(draft === this._config ? byId : {}), [id]: suggestions },
+    };
   }
 
   private _renderSuggestions(
@@ -3656,7 +3666,10 @@ export class HelmanConfigEditorPanel
     path: PathSegment[],
   ): TemplateResult {
     const id = this._stringValue(device.id);
-    const suggestions = this._deviceSuggestions[id];
+    const suggestions =
+      this._deviceSuggestions.draft === this._config
+        ? this._deviceSuggestions.byId[id]
+        : undefined;
     return html`<div class="device-suggestions">
       <button
         class="apply-suggestions"
@@ -3689,10 +3702,7 @@ export class HelmanConfigEditorPanel
                       )
                     ) {
                       this._setRequiredString(fieldPath, value);
-                      this._deviceSuggestions = {
-                        ...this._deviceSuggestions,
-                        [id]: suggestions,
-                      };
+                      this._storeSuggestions(id, suggestions);
                     }
                   }}
                 >
@@ -6270,7 +6280,7 @@ export class HelmanConfigEditorPanel
    */
   private _markDraftChanged(): void {
     this._energyImport = null;
-    this._deviceSuggestions = {};
+    this._deviceSuggestions = { draft: null, byId: {} };
     this._dirty = true;
     this._validation = null;
     this._message = null;

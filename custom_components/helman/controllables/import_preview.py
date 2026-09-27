@@ -32,6 +32,7 @@ def preview_energy_import(
                     "deviceId": device_id,
                     "parentId": parent_id,
                     "energyEntityId": consumption.get("energy_entity_id"),
+                    "powerEntityId": consumption.get("power_entity_id"),
                 }
             )
             continue

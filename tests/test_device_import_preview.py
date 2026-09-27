@@ -219,3 +219,19 @@ def test_existing_device_is_not_lost_when_energy_parent_is_skipped():
     assert result["devices"] == [parent, child]
     assert result["nestingChanges"] == []
     assert result["validation"]["valid"]
+
+
+def test_new_device_additions_show_the_power_sensor_they_write():
+    result = preview_energy_import(
+        {"devices": []},
+        {"device_consumption": [row("sensor.kettle", power="sensor.kettle_power")]},
+    )
+    assert result["devices"][0]["consumption"]["power_entity_id"] == "sensor.kettle_power"
+    assert result["additions"] == [
+        {
+            "deviceId": "kettle",
+            "parentId": None,
+            "energyEntityId": "sensor.kettle",
+            "powerEntityId": "sensor.kettle_power",
+        }
+    ]

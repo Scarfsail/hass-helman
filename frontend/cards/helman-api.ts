@@ -738,6 +738,7 @@ export interface EnergyImportPreview {
     deviceId: string;
     parentId: string | null;
     energyEntityId: string;
+    powerEntityId: string | null;
   }[];
   powerEntities: { deviceId: string; entityId: string }[];
   nestingChanges: {
