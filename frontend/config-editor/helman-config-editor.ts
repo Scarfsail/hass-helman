@@ -1,3 +1,4 @@
+import { fetchDeviceSuggestions, fetchEnergyImportPreview, type DeviceSuggestions, type EnergyImportPreview } from "../cards/helman-api";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
@@ -366,6 +367,10 @@ export class HelmanConfigEditorPanel
     _deviceYamlValues: { state: true },
     _deviceYamlErrors: { state: true },
     _deviceFilter: { state: true },
+    _deviceSuggestions: { state: true },
+    _energyImport: { state: true },
+    _deviceActionMessage: { state: true },
+    _importLoading: { state: true },
     _addDeviceTarget: { state: true },
     _liveApplianceMetadata: { state: true },
     _haLabelNames: { state: true },
@@ -1138,6 +1143,18 @@ export class HelmanConfigEditorPanel
   private _deviceYamlErrors: Partial<Record<string, string>> = {};
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
+  // Bound to the draft they were fetched for, like `_energyImport`: the draft
+  // is replaced by paths that bypass `_markDraftChanged` (YAML, reload).
+  private _deviceSuggestions: {
+    draft: JsonObject | null;
+    byId: Record<string, DeviceSuggestions>;
+  } = { draft: null, byId: {} };
+  private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
+  private _deviceActionMessage = "";
+  private _importLoading = false;
+  private _energyImportRequest = 0;
+  private _deviceSuggestionRequests: Record<string, number> = {};
+
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
@@ -3486,10 +3503,241 @@ export class HelmanConfigEditorPanel
           ${hasDevices
             ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices"], null)}`
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
-          ${this._renderAddDevice(["devices"], null)}
+          ${this._renderAddDevice(
+            ["devices"],
+            null,
+            html`<button
+              class="add-button import-energy"
+              type="button"
+              ?disabled=${this._importLoading}
+              @click=${() => this._previewEnergyImport()}
+            >
+              ${this._t("editor.actions.import_energy")}
+            </button>`,
+          )}
+          ${this._deviceActionMessage ? html`<div class="message error">${this._deviceActionMessage}</div>` : nothing}
+          ${this._renderEnergyImport()}
         `,
       )}
     `;
+  }
+
+  private async _previewEnergyImport(): Promise<void> {
+    if (!this.hass || !this._config) return;
+    const draft = this._config;
+    const hass = this.hass;
+    const request = ++this._energyImportRequest;
+    this._energyImport = null;
+    this._deviceActionMessage = "";
+    this._importLoading = true;
+    try {
+      const preview = await fetchEnergyImportPreview(hass, draft);
+      if (this._config === draft && request === this._energyImportRequest)
+        this._energyImport = { preview, draft };
+    } catch (error) {
+      if (this._config === draft && request === this._energyImportRequest)
+        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.import_energy_failed"));
+    } finally {
+      if (request === this._energyImportRequest) this._importLoading = false;
+    }
+  }
+
+  private _renderEnergyImport(): TemplateResult | typeof nothing {
+    if (!this._energyImport || this._energyImport.draft !== this._config)
+      return nothing;
+    const { preview } = this._energyImport;
+    const hasChanges =
+      preview.additions.length +
+      preview.powerEntities.length +
+      preview.nestingChanges.length > 0;
+    return html`<div class="list-card energy-import-preview">
+      <strong>${this._t("editor.import.preview")}</strong>
+      <p>${this._t("editor.import.draft_only")}</p>
+      <ul>
+        ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.powerEntityId ? html`, ${item.powerEntityId}` : nothing}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
+        ${preview.powerEntities.map((item) => html`<li>${this._t("editor.import.power")}: ${item.deviceId} → ${item.entityId}</li>`)}
+        ${preview.nestingChanges.map((item) => html`<li>${this._t("editor.import.move")}: ${item.deviceId} → ${item.parentId}</li>`)}
+        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} (${item.reason}${item.device_id ? html`: ${item.device_id}` : nothing})</li>`)}
+        ${preview.warnings.map((item) => html`<li class="message info">${item.energy_entity_id} → ${item.device_id}: ${item.message}</li>`)}
+        ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
+      </ul>
+      ${!hasChanges ? html`<p>${this._t("editor.import.no_changes")}</p>` : nothing}
+      <div class="inline-actions">
+      <button
+        class="add-button primary apply-energy-import"
+        type="button"
+        ?disabled=${!preview.validation.valid || !hasChanges}
+        @click=${() => {
+          if (
+            !this._energyImport ||
+            this._energyImport.draft !== this._config ||
+            !preview.validation.valid ||
+            !hasChanges
+          )
+            return;
+          // Moves shift device paths, which key the YAML mode state.
+          this._resetDeviceModes();
+          this._applyMutation((draft) => {
+            draft.devices = cloneJson(preview.devices);
+          });
+          this._energyImport = null;
+        }}
+      >
+        ${this._t("editor.actions.apply")}
+      </button>
+      <button
+        class="add-button cancel-energy-import"
+        type="button"
+        @click=${() => {
+          this._energyImport = null;
+        }}
+      >
+        ${this._t("editor.actions.cancel")}
+      </button>
+      </div>
+    </div>`;
+  }
+
+  private _suggestionPath(
+    path: PathSegment[],
+    field: keyof DeviceSuggestions,
+  ): PathSegment[] {
+    return field === "switch"
+      ? [...path, "controls", "switch", "entity_id"]
+      : [...path, "consumption", `${field}_entity_id`];
+  }
+
+  /** The entity whose HA device suggestions come from; empty when there is none yet. */
+  private _suggestionAnchor(device: JsonObject): string {
+    const control = asJsonObject(device.controls) ?? {};
+    return (
+      ownMeter(device) ||
+      this._stringValue(asJsonObject(device.consumption)?.power_entity_id) ||
+      this._stringValue(asJsonObject(control.switch)?.entity_id) ||
+      this._stringValue(asJsonObject(control.climate)?.entity_id)
+    );
+  }
+
+  private async _applySuggestions(device: JsonObject): Promise<void> {
+    if (!this.hass || !this._config) return;
+    const id = this._stringValue(device.id);
+    const anchor = this._suggestionAnchor(device);
+    if (!anchor) return;
+    this._deviceActionMessage = "";
+    const draft = this._config;
+    const hass = this.hass;
+    const request = (this._deviceSuggestionRequests[id] ?? 0) + 1;
+    this._deviceSuggestionRequests[id] = request;
+    try {
+      const suggestions = await fetchDeviceSuggestions(hass, anchor, draft);
+      if (this._config !== draft || request !== this._deviceSuggestionRequests[id])
+        return;
+      const current = iterDevices(draft).find(
+        (entry) => entry.device.id === id,
+      );
+      if (!current) return;
+      // A selected meter already belongs to one device.
+      suggestions.energy = suggestions.energy.filter(
+        (candidate) =>
+          !iterDevices(draft).some(
+            (entry) =>
+              entry.device.id !== id &&
+              ownMeter(entry.device) === candidate.entityId,
+          ),
+      );
+      const energyNeedsPower =
+        current.parent !== null &&
+        deviceChildren(current.parent).some(
+          (child) => child.id !== id && !ownMeter(child),
+        ) &&
+        !getValueAtPath(draft, this._suggestionPath(current.path, "power")) &&
+        suggestions.power.length !== 1;
+      const fills = (["energy", "power", "switch"] as const).flatMap((field) => {
+        const fieldPath = this._suggestionPath(current.path, field);
+        if (
+          (field === "switch" && deviceKind(current.device) !== "generic") ||
+          (field === "energy" && energyNeedsPower) ||
+          getValueAtPath(draft, fieldPath) ||
+          suggestions[field].length !== 1
+        ) return [];
+        return [{ path: fieldPath, entityId: suggestions[field][0].entityId }];
+      });
+      if (fills.length) {
+        this._applyMutation((next) => {
+          for (const fill of fills) setValueAtPath(next, fill.path, fill.entityId);
+        });
+      }
+      this._storeSuggestions(id, suggestions);
+    } catch (error) {
+      if (this._config === draft && request === this._deviceSuggestionRequests[id])
+        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.suggestions_failed"));
+    }
+  }
+
+  private _storeSuggestions(id: string, suggestions: DeviceSuggestions): void {
+    const { draft, byId } = this._deviceSuggestions;
+    this._deviceSuggestions = {
+      draft: this._config,
+      byId: { ...(draft === this._config ? byId : {}), [id]: suggestions },
+    };
+  }
+
+  private _renderSuggestions(
+    device: JsonObject,
+    path: PathSegment[],
+  ): TemplateResult {
+    const id = this._stringValue(device.id);
+    const suggestions =
+      this._deviceSuggestions.draft === this._config
+        ? this._deviceSuggestions.byId[id]
+        : undefined;
+    return html`<div class="device-suggestions">
+      <button
+        class="add-button apply-suggestions"
+        type="button"
+        ?disabled=${!this._suggestionAnchor(device)}
+        @click=${() => this._applySuggestions(device)}
+      >
+        ${this._t("editor.actions.apply_suggestions")}
+      </button>
+      ${
+        suggestions
+          ? (["energy", "power", "switch"] as const).map((field) => {
+              if (field === "switch" && deviceKind(device) !== "generic")
+                return nothing;
+              const fieldPath = this._suggestionPath(path, field);
+              if (this._getValue(fieldPath) || suggestions[field].length === 0)
+                return nothing;
+              return html`<div class="field">
+                <label>${this._t(`editor.suggestions.${field}`)}</label>
+                <select
+                  class="suggestion-candidates"
+                  data-field=${field}
+                  @change=${(event: Event) => {
+                    const value = (event.currentTarget as HTMLSelectElement)
+                      .value;
+                    if (
+                      value &&
+                      !this._getValue(fieldPath) &&
+                      suggestions[field].some(
+                        (candidate) => candidate.entityId === value,
+                      )
+                    ) {
+                      this._setRequiredString(fieldPath, value);
+                      this._storeSuggestions(id, suggestions);
+                    }
+                  }}
+                >
+                  <option value="">
+                    ${this._t("editor.suggestions.choose")}
+                  </option>
+                  ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.join(", ")}</option>`)}
+                </select>
+              </div>`;
+            })
+          : nothing
+      }
+    </div>`;
   }
 
   private _renderDeviceFilter(): TemplateResult {
@@ -3559,12 +3807,17 @@ export class HelmanConfigEditorPanel
    * draws from the parent's meter, the switch or climate entity that tells when
    * it runs. The `id` is generated from the entity once and never edited.
    */
-  private _renderAddDevice(listPath: PathSegment[], parent: JsonObject | null): TemplateResult {
+  private _renderAddDevice(
+    listPath: PathSegment[],
+    parent: JsonObject | null,
+    /** Another list action shown beside "Add device". */
+    sibling: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
     const key = entityGroupKey(listPath);
     const child = parent !== null;
     if (this._addDeviceTarget !== key) {
       return html`
-        <div class="section-footer">
+        <div class="section-footer inline-actions">
           <button
             type="button"
             class="add-button primary add-device"
@@ -3574,6 +3827,7 @@ export class HelmanConfigEditorPanel
           >
             ${this._t(child ? "editor.actions.add_child_device" : "editor.actions.add_device")}
           </button>
+          ${sibling}
         </div>
       `;
     }
@@ -4086,6 +4340,7 @@ export class HelmanConfigEditorPanel
           ${isYaml
             ? this._renderDeviceYamlEditor(path)
             : html`
+              ${this._renderSuggestions(device, path)}
               ${this._renderSimpleSection(
                 this._t("editor.sections.identity"),
                 html`<div class="field-grid">
@@ -6052,6 +6307,8 @@ export class HelmanConfigEditorPanel
    * door, and it was already wrong.
    */
   private _markDraftChanged(): void {
+    this._energyImport = null;
+    this._deviceSuggestions = { draft: null, byId: {} };
     this._dirty = true;
     this._validation = null;
     this._message = null;

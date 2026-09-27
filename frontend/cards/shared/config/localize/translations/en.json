@@ -37,7 +37,10 @@
       "add_controllable_target": "+ Appliance",
       "add_device": "Add device",
       "add_child_device": "Add child device",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "apply_suggestions": "Apply suggestions",
+      "import_energy": "Import from Energy dashboard",
+      "apply": "Apply"
     },
     "status": {
       "loading_config": "Loading stored config...",
@@ -377,6 +380,8 @@
       "validation_passed": "Validation passed in the backend.",
       "validation_failed": "Validation returned backend errors. Review the issue list below.",
       "validate_config_failed": "Failed to validate the config in the backend.",
+      "import_energy_failed": "Failed to preview the Energy dashboard import.",
+      "suggestions_failed": "Failed to load entity suggestions.",
       "config_saved_reload_started": "Config saved. Helman reload started.",
       "config_saved": "Config saved.",
       "config_saved_reload_failed": "Config was saved, but Helman reload failed.",
@@ -578,6 +583,21 @@
       "switch": "Switch",
       "schedulable": "Schedulable",
       "issues": "Issues: {count}"
+    },
+    "import": {
+      "preview": "Energy import preview",
+      "draft_only": "Apply changes the draft. Save persists it.",
+      "add": "Add device",
+      "power": "Fill power entity",
+      "move": "Move device with its children",
+      "skipped": "Skipped",
+      "no_changes": "No changes to apply."
+    },
+    "suggestions": {
+      "energy": "Energy candidates",
+      "power": "Power candidates",
+      "switch": "Switch candidates",
+      "choose": "Choose a candidate"
     }
   },
   "common": {

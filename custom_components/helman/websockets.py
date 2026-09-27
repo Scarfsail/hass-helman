@@ -116,6 +116,8 @@ def _validate_forecast_days(value: object) -> int:
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
+    async_register_command(hass, ws_suggest_device_entities)
+    async_register_command(hass, ws_preview_energy_import)
     async_register_command(hass, ws_validate_config)
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_config_defaults)
@@ -340,6 +342,43 @@ def ws_get_optimizer_schema(
             # declaration so the picker cannot offer what validation rejects.
             "applianceKinds": sorted(appliance_controllable_kinds()),
         },
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/suggest_device_entities",
+    vol.Required("anchor_entity_id"): str,
+    vol.Required("config"): dict,
+})
+@callback
+def ws_suggest_device_entities(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+    from .controllables.suggestions import suggest_entities
+
+    connection.send_result(
+        msg["id"], suggest_entities(hass, msg["anchor_entity_id"], msg["config"])
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/preview_energy_import",
+    vol.Required("config"): dict,
+})
+@websocket_api.async_response
+async def ws_preview_energy_import(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+    from homeassistant.components.energy import data as energy_data
+    from .controllables.import_preview import preview_energy_import
+
+    manager = await energy_data.async_get_manager(hass)
+    connection.send_result(
+        msg["id"], preview_energy_import(msg["config"], manager.data)
     )
 
 

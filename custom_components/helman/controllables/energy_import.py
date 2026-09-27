@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .config import (
@@ -48,10 +48,11 @@ class EnergyImport:
     conflicts: list[EnergyImportConflict]
     #: External statistics (``source:stat``): no entity, so no device.
     external_statistics: list[str]
+    warnings: list[EnergyImportConflict] = field(default_factory=list)
 
 
 def import_energy_preferences(
-    devices: list[Any], preferences: Mapping[str, Any] | None
+    devices: list[Any], preferences: Mapping[str, Any] | None, *, manual: bool = False
 ) -> EnergyImport:
     """``devices`` with every Energy ``device_consumption`` row imported.
 
@@ -66,7 +67,9 @@ def import_energy_preferences(
     another; the one move made is a top-level existing device going, with its
     subtree, under a *newly imported* device Energy nests it in — otherwise the
     new meter and the one inside it would both count the same energy.
-    ``devices`` itself is not modified.
+    Manual previews additionally move existing nested devices beneath existing
+    passive parents. Existing schedulable overlaps are warnings and leave both
+    devices untouched. ``devices`` itself is not modified.
     """
     imported = deepcopy(list(devices))
     owners: dict[str, dict[str, Any]] = {}
@@ -76,6 +79,29 @@ def import_energy_preferences(
             taken_ids.add(device_id)
         if (meter := own_meter(device)) is not None:
             owners.setdefault(meter, device)
+
+    # Manual import exposes existing overlaps without changing either side.
+    # Energy can reveal a schedulable ancestor through new intermediate rows.
+    frozen: set[int] = set()
+    overlap_blockers: dict[int, dict[str, Any]] = {}
+    if manual:
+        energy_parents = {
+            _entity_id(row.get("stat_consumption")): _entity_id(
+                row.get("included_in_stat")
+            )
+            for row in _device_consumption(preferences)
+        }
+        for meter, owner in owners.items():
+            parent_meter = energy_parents.get(meter)
+            seen: set[str] = set()
+            while parent_meter is not None and parent_meter not in seen:
+                seen.add(parent_meter)
+                parent = owners.get(parent_meter)
+                if parent is not None and is_schedulable(parent):
+                    frozen.update((id(owner), id(parent)))
+                    overlap_blockers[id(owner)] = parent
+                    break
+                parent_meter = energy_parents.get(parent_meter)
 
     top_level = list(imported)
     new_devices: list[tuple[dict[str, Any], str | None]] = []
@@ -91,8 +117,15 @@ def import_energy_preferences(
         power = _entity_id(row.get("stat_rate"))
         owner = owners.get(meter)
         if owner is not None:
-            if power is not None and not owner["consumption"].get("power_entity_id"):
-                owner["consumption"] = {**owner["consumption"], "power_entity_id": power}
+            if (
+                power is not None
+                and id(owner) not in frozen
+                and not owner["consumption"].get("power_entity_id")
+            ):
+                owner["consumption"] = {
+                    **owner["consumption"],
+                    "power_entity_id": power,
+                }
             if (parent_meter := _entity_id(row.get("included_in_stat"))) is not None:
                 existing_nesting.append((owner, parent_meter))
             continue
@@ -126,22 +159,69 @@ def import_energy_preferences(
         # parent to go under; the row stays at the top level.
         if parent is not None and _nested_in(parent, device, included_in, owners):
             parent = None
-        children = parent.setdefault("children", []) if parent is not None else None
+        if parent is not None and parent.get("children") is None:
+            parent["children"] = []
+        children = parent.get("children") if parent is not None else None
         (children if isinstance(children, list) else imported).append(device)
         placed.add(id(device))
 
+    warnings: list[EnergyImportConflict] = []
     for owner, parent_meter in existing_nesting:
         parent = owners.get(parent_meter)
+        if manual and id(owner) in overlap_blockers:
+            warnings.append(
+                EnergyImportConflict(
+                    owner["consumption"]["energy_entity_id"],
+                    peek_controllable_id(overlap_blockers[id(owner)]),
+                )
+            )
+            continue
+        if manual and id(owner) in frozen:
+            continue
         if (
             parent is None
-            or id(parent) not in placed
-            or not any(owner is device for device in top_level)
+            or (
+                manual
+                and not any(
+                    _in_subtree(parent, root)
+                    for root in imported
+                    if isinstance(root, Mapping)
+                )
+            )
+            or (not manual and id(parent) not in placed)
+            or (not manual and not any(owner is device for device in top_level))
+            or any(child is owner for child in device_children(parent))
             or _in_subtree(parent, owner)
         ):
             continue
-        imported[:] = [device for device in imported if device is not owner]
-        parent.setdefault("children", []).append(owner)
-    return EnergyImport(imported, conflicts, external)
+        if (
+            manual
+            and not owner["consumption"].get("power_entity_id")
+            and any(own_meter(child) is None for child in device_children(parent))
+        ):
+            warnings.append(
+                EnergyImportConflict(
+                    owner["consumption"]["energy_entity_id"],
+                    peek_controllable_id(parent),
+                    "power_required",
+                )
+            )
+            continue
+        if parent.get("children") is None:
+            parent["children"] = []
+        if not isinstance(parent["children"], list):
+            continue
+        _detach(imported, owner)
+        parent["children"].append(owner)
+    return EnergyImport(imported, conflicts, external, warnings)
+
+
+def _detach(items: list[Any], device: Mapping[str, Any]) -> None:
+    """Remove ``device`` from ``items`` and every nested children list."""
+    items[:] = [item for item in items if item is not device]
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("children"), list):
+            _detach(item["children"], device)
 
 
 def _in_subtree(device: Mapping[str, Any], root: Mapping[str, Any]) -> bool:

@@ -38,7 +38,10 @@
       "add_controllable_target": "+ Spotřebič",
       "add_device": "Přidat zařízení",
       "add_child_device": "Přidat podřízené zařízení",
-      "cancel": "Zrušit"
+      "cancel": "Zrušit",
+      "apply_suggestions": "Použít návrhy",
+      "import_energy": "Importovat z panelu Energie",
+      "apply": "Použít"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -378,6 +381,8 @@
       "validation_passed": "Validace v backendu prošla.",
       "validation_failed": "Validace vrátila chyby backendu. Zkontrolujte seznam problémů níže.",
       "validate_config_failed": "Nepodařilo se validovat konfiguraci v backendu.",
+      "import_energy_failed": "Nepodařilo se načíst náhled importu z panelu Energie.",
+      "suggestions_failed": "Nepodařilo se načíst návrhy entit.",
       "config_saved_reload_started": "Konfigurace byla uložena. Restart Helman byl spuštěn.",
       "config_saved": "Konfigurace byla uložena.",
       "config_saved_reload_failed": "Konfigurace byla uložena, ale restart Helman selhal.",
@@ -579,6 +584,21 @@
       "switch": "Spínač",
       "schedulable": "Plánovatelné",
       "issues": "Problémy: {count}"
+    },
+    "import": {
+      "preview": "Náhled importu Energie",
+      "draft_only": "Použití změní návrh. Uložení změny uloží.",
+      "add": "Přidat zařízení",
+      "power": "Doplnit výkon",
+      "move": "Přesunout zařízení s potomky",
+      "skipped": "Přeskočeno",
+      "no_changes": "Žádné změny k použití."
+    },
+    "suggestions": {
+      "energy": "Návrhy energie",
+      "power": "Návrhy výkonu",
+      "switch": "Návrhy spínače",
+      "choose": "Vyberte návrh"
     }
   },
   "common": {
