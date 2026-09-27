@@ -57,16 +57,8 @@ def preview_energy_import(
         }
         for statistic in result.external_statistics
     )
-    warnings = [
-        {
-            **asdict(conflict),
-            "message": "Energy reports this meter inside a schedulable device. Both are counted independently. Restructure them under a passive meter-owning parent in the editor."
-            if conflict.reason == "schedulable"
-            else "This move needs a power entity because the parent has meterless children.",
-        }
-        for conflict in result.warnings
-    ]
-    validation = validate_config_document(proposed).to_dict()
+    # Reasons are codes; the editor words them in the user's language.
+    warnings = [asdict(conflict) for conflict in result.warnings]
     return {
         "devices": result.devices,
         "additions": additions,
@@ -74,5 +66,25 @@ def preview_energy_import(
         "nestingChanges": moves,
         "skippedRows": skipped,
         "warnings": warnings,
-        "validation": validation,
+        "validation": _new_errors_only(config, proposed),
     }
+
+
+def _new_errors_only(
+    config: dict[str, Any], proposed: dict[str, Any]
+) -> dict[str, Any]:
+    """The proposed draft's validation, minus errors the draft already had.
+
+    Applying is refused only for errors the import introduces; the draft's own
+    errors are not the import's to fix, and Save still refuses them.
+    """
+    existing = {
+        (issue.path, issue.code) for issue in validate_config_document(config).errors
+    }
+    report = validate_config_document(proposed).to_dict()
+    errors = [
+        issue
+        for issue in report["errors"]
+        if (issue["path"], issue["code"]) not in existing
+    ]
+    return {**report, "valid": not errors, "errors": errors}

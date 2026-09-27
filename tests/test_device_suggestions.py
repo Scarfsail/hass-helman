@@ -71,14 +71,14 @@ def test_candidates_rank_labels_and_device_names_without_discarding_ambiguity():
         "switch.breaker_2",
     ]
     assert result["switch"][0]["reasons"] == [
-        "Same Home Assistant device",
-        "Label: Preferred switch",
+        {"code": "same_device"},
+        {"code": "label", "value": "Preferred switch"},
     ]
-    assert result["switch"][1]["reasons"][-1] == "Friendly name matches device name"
+    assert result["switch"][1]["reasons"][-1] == {"code": "name_match"}
     assert result["power"][0]["reasons"] == [
-        "Same Home Assistant device",
-        "Device class: power",
-        "Label: Preferred power",
+        {"code": "same_device"},
+        {"code": "device_class", "value": "power"},
+        {"code": "label", "value": "Preferred power"},
     ]
     assert result["energy"][0]["entityId"] == "sensor.energy"
 

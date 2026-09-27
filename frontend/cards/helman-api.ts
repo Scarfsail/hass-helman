@@ -725,7 +725,8 @@ export interface AutomationRunPayload {
 export interface DeviceEntityCandidate {
   entityId: string;
   name: string;
-  reasons: string[];
+  /** Why it was suggested, as a code the editor translates. */
+  reasons: { code: string; value?: string }[];
   rank: number;
 }
 export type DeviceSuggestions = Record<
@@ -755,7 +756,6 @@ export interface EnergyImportPreview {
     energy_entity_id: string;
     device_id: string | null;
     reason: string;
-    message: string;
   }[];
   validation: ValidationReport;
 }
