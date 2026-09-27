@@ -289,3 +289,18 @@ def test_errors_the_import_introduces_still_block_it():
     report = _new_errors_only(config, proposed)
     assert not report["valid"]
     assert report["errors"]
+
+
+def test_existing_error_on_a_device_shifted_by_a_move_does_not_block():
+    a = device("a", "sensor.a")
+    b = device("b", "sensor.b")
+    broken = {"id": "broken", "schedulable": True}
+    config = {"devices": [a, b, broken]}
+    errors = validate_config_document(config).errors
+    assert any(issue.path.startswith("devices[2]") for issue in errors)
+    result = preview_energy_import(
+        config, {"device_consumption": [row("sensor.a", "sensor.b")]}
+    )
+    # The move shifts "broken" from devices[2] to devices[1]; its error is still its own.
+    assert result["devices"] == [{**b, "children": [a]}, broken]
+    assert result["validation"]["valid"], result["validation"]

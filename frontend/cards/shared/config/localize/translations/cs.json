@@ -610,7 +610,8 @@
       "choose": "Vyberte návrh",
       "reasons": {
         "same_device": "Stejné zařízení Home Assistant",
-        "device_class": "Třída zařízení: {value}",
+        "device_class_energy": "Senzor energie",
+        "device_class_power": "Senzor výkonu",
         "label": "Štítek: {value}",
         "name_match": "Název odpovídá zařízení"
       }

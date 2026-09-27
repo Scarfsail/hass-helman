@@ -50,7 +50,7 @@ def suggest_entities(
         reasons: list[dict[str, str]] = [{"code": "same_device"}]
         score = 1
         if field != "switch":
-            reasons.append({"code": "device_class", "value": field})
+            reasons.append({"code": f"device_class_{field}"})
             score += 2
         label_key = "power_switch_label" if field == "switch" else "power_sensor_label"
         wanted = house.get(label_key)

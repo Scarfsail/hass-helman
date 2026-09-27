@@ -609,7 +609,8 @@
       "choose": "Choose a candidate",
       "reasons": {
         "same_device": "Same Home Assistant device",
-        "device_class": "Device class: {value}",
+        "device_class_energy": "Energy sensor",
+        "device_class_power": "Power sensor",
         "label": "Label: {value}",
         "name_match": "Name matches the device"
       }

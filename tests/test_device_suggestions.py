@@ -77,7 +77,7 @@ def test_candidates_rank_labels_and_device_names_without_discarding_ambiguity():
     assert result["switch"][1]["reasons"][-1] == {"code": "name_match"}
     assert result["power"][0]["reasons"] == [
         {"code": "same_device"},
-        {"code": "device_class", "value": "power"},
+        {"code": "device_class_power"},
         {"code": "label", "value": "Preferred power"},
     ]
     assert result["energy"][0]["entityId"] == "sensor.energy"

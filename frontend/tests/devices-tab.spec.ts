@@ -784,7 +784,7 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
 const candidate = (entityId: string) => ({
   entityId,
   name: "Breaker switch",
-  reasons: [{ code: "same_device" }, { code: "device_class", value: "power" }],
+  reasons: [{ code: "same_device" }, { code: "device_class_power" }],
   rank: 1,
 });
 
@@ -887,7 +887,7 @@ test("Apply suggestions fills empty singleton fields and exposes all six switche
   ).toHaveCount(7);
   await expect(
     page.locator('select.suggestion-candidates[data-field="switch"]'),
-  ).toContainText("Same Home Assistant device, Device class: power");
+  ).toContainText("Same Home Assistant device, Power sensor");
   await page
     .locator('select.suggestion-candidates[data-field="switch"]')
     .selectOption("switch.breaker_4");
