@@ -2916,8 +2916,16 @@ export class HelmanConfigEditorPanel
           "consumption",
           "energy_entity_id",
         ],
-        // Only these two kinds have a running signal or learn from history.
-        activity: kind === "generic" ? "switch" : kind === "climate" ? "climate" : null,
+        // The control whose history tells when it ran: the same running signal
+        // the backend splits a shared meter by (an EV charger's is its charge switch).
+        activity:
+          kind === "generic"
+            ? "switch"
+            : kind === "climate"
+              ? "climate"
+              : kind === "ev_charger"
+                ? "charge"
+                : null,
         learns: isSchedulable(device) && projection.strategy === "history_average",
         fixedKwh: projection.hourly_energy_kwh,
         // The backend trains on 30 days when the key is absent.

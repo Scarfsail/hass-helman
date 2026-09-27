@@ -164,6 +164,7 @@
       "appliance_entity_meter": "meter",
       "appliance_entity_switch": "switch",
       "appliance_entity_climate": "climate",
+      "appliance_entity_charge": "charge switch",
       "appliance_table_note": "The average is taken only over the hours the device's switch or climate entity shows it running, over the lookback shown. A fixed device is listed when it shares a meter with one that learns, because when it ran decides its share of that meter. These settings live on the device in the Controllables tab."
     },
     "fields": {

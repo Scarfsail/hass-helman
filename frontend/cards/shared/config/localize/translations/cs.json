@@ -165,6 +165,7 @@
       "appliance_entity_meter": "měřič",
       "appliance_entity_switch": "spínač",
       "appliance_entity_climate": "klimatizace",
+      "appliance_entity_charge": "spínač nabíjení",
       "appliance_table_note": "Průměr se počítá jen z hodin, kdy spínač nebo klimatizační entita spotřebiče ukazuje chod, za uvedené období. Spotřebič s pevnou hodnotou je uveden, když sdílí měřič se spotřebičem, který se učí, protože kdy běžel, rozhoduje o jeho podílu na měřiči. Nastavení je u spotřebiče na kartě Řízené spotřebiče."
     },
     "fields": {

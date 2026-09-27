@@ -710,3 +710,50 @@ test("an appliance's activity entity is judged against the lookback training rea
     );
     expect(requestedKeys).not.toContain("devices.2.controls.switch.entity_id");
 });
+
+test("an EV charger sharing a meter is judged by its charge switch", async ({ page }) => {
+    // The backend splits a shared meter by each sharer's running signal, and an
+    // EV charger's is its charge switch, so that history's depth is shown too.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices = [
+        {
+            id: "garage_breaker",
+            consumption: { energy_entity_id: "sensor.garage_breaker" },
+            children: [
+                {
+                    id: "garage_heater",
+                    name: "Garage heater",
+                    kind: "generic",
+                    schedulable: true,
+                    controls: { switch: { entity_id: "switch.garage_heater" } },
+                    consumption: {
+                        projection: { strategy: "history_average", lookback_days: 14 },
+                    },
+                },
+                {
+                    id: "garage_ev",
+                    name: "Garage EV",
+                    kind: "ev_charger",
+                    schedulable: true,
+                    controls: { charge: { entity_id: "switch.ev_charge" } },
+                },
+            ],
+        },
+    ];
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "devices.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
+        "devices.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+        "devices.0.children.1.controls.charge.entity_id": { raw_states: 3, statistics: 0 },
+    });
+
+    const ev = applianceRows(page).filter({ hasText: "Garage EV" });
+    await expect(ev.locator("td:first-child .training-depth-entity-id")).toHaveText([
+        "switch.ev_charge",
+    ]);
+    await expect(ev).toHaveClass(/training-depth-warn/);
+    const requestedKeys = await page.evaluate(() =>
+        ((window as any).__inspectRequests.at(-1)?.targets ?? []).map((target: any) => target.key),
+    );
+    expect(requestedKeys).toContain("devices.0.children.1.controls.charge.entity_id");
+});
