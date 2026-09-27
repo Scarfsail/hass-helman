@@ -1147,6 +1147,8 @@ export class HelmanConfigEditorPanel
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
+  private _energyImportRequest = 0;
+  private _deviceSuggestionRequests: Record<string, number> = {};
 
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
@@ -3509,17 +3511,19 @@ export class HelmanConfigEditorPanel
     if (!this.hass || !this._config) return;
     const draft = this._config;
     const hass = this.hass;
+    const request = ++this._energyImportRequest;
     this._energyImport = null;
     this._deviceActionMessage = "";
     this._importLoading = true;
     try {
       const preview = await fetchEnergyImportPreview(hass, draft);
-      if (this._config === draft && this.hass === hass)
+      if (this._config === draft && request === this._energyImportRequest)
         this._energyImport = { preview, draft };
     } catch (error) {
-      if (this._config === draft) this._deviceActionMessage = String(error);
+      if (this._config === draft && request === this._energyImportRequest)
+        this._deviceActionMessage = String(error);
     } finally {
-      this._importLoading = false;
+      if (request === this._energyImportRequest) this._importLoading = false;
     }
   }
 
@@ -3596,9 +3600,12 @@ export class HelmanConfigEditorPanel
     if (!anchor) return;
     const draft = this._config;
     const hass = this.hass;
+    const request = (this._deviceSuggestionRequests[id] ?? 0) + 1;
+    this._deviceSuggestionRequests[id] = request;
     try {
       const suggestions = await fetchDeviceSuggestions(hass, anchor, draft);
-      if (this._config !== draft || this.hass !== hass) return;
+      if (this._config !== draft || request !== this._deviceSuggestionRequests[id])
+        return;
       const current = iterDevices(draft).find(
         (entry) => entry.device.id === id,
       );
@@ -3631,7 +3638,8 @@ export class HelmanConfigEditorPanel
         [id]: suggestions,
       };
     } catch (error) {
-      if (this._config === draft) this._deviceActionMessage = String(error);
+      if (this._config === draft && request === this._deviceSuggestionRequests[id])
+        this._deviceActionMessage = String(error);
     }
   }
 

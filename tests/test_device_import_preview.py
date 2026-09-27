@@ -28,6 +28,34 @@ def test_null_devices_section_imports_as_an_empty_draft():
     assert config == {"devices": None}
 
 
+def test_meterless_child_with_null_consumption_keeps_valid_preview_unchanged():
+    child = {
+        "id": "child",
+        "consumption": None,
+        "controls": {"switch": {"entity_id": "switch.child"}},
+    }
+    parent = device("parent", "sensor.energy", children=[child])
+    parent["consumption"]["power_entity_id"] = "sensor.power"
+    config = {"devices": [parent]}
+    assert validate_config_document(config).valid
+    result = preview_energy_import(config, {"device_consumption": []})
+    assert result["validation"]["valid"]
+    assert result["devices"] == config["devices"]
+    assert result["additions"] == result["powerEntities"] == result["nestingChanges"] == []
+
+
+def test_null_children_accept_new_and_existing_nested_energy_rows():
+    for existing in (False, True):
+        parent = device("parent", "sensor.parent", children=None)
+        child = device("child", "sensor.child")
+        devices = [parent, child] if existing else [parent]
+        result = preview(devices, row("sensor.child", "sensor.parent"))
+        assert result["validation"]["valid"], result["validation"]
+        assert len(result["devices"]) == 1
+        assert result["devices"][0]["children"][0]["consumption"]["energy_entity_id"] == "sensor.child"
+        assert parent["children"] is None
+
+
 def preview(devices, *rows):
     return preview_energy_import(
         {"devices": devices}, {"device_consumption": list(rows)}

@@ -25,20 +25,19 @@ def preview_energy_import(
     for device, parent in iter_devices(proposed):
         device_id = peek_controllable_id(device)
         parent_id = peek_controllable_id(parent) if parent else None
+        consumption = device.get("consumption") or {}
         if device_id not in before:
             additions.append(
                 {
                     "deviceId": device_id,
                     "parentId": parent_id,
-                    "energyEntityId": device.get("consumption", {}).get(
-                        "energy_entity_id"
-                    ),
+                    "energyEntityId": consumption.get("energy_entity_id"),
                 }
             )
             continue
         previous, previous_parent = before[device_id]
-        value = device.get("consumption", {}).get("power_entity_id")
-        if value and not previous.get("consumption", {}).get("power_entity_id"):
+        value = consumption.get("power_entity_id")
+        if value and not (previous.get("consumption") or {}).get("power_entity_id"):
             power.append({"deviceId": device_id, "entityId": value})
         if previous_parent != parent_id:
             moves.append(

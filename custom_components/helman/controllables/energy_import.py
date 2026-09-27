@@ -159,7 +159,9 @@ def import_energy_preferences(
         # parent to go under; the row stays at the top level.
         if parent is not None and _nested_in(parent, device, included_in, owners):
             parent = None
-        children = parent.setdefault("children", []) if parent is not None else None
+        if parent is not None and parent.get("children") is None:
+            parent["children"] = []
+        children = parent.get("children") if parent is not None else None
         (children if isinstance(children, list) else imported).append(device)
         placed.add(id(device))
 
@@ -215,6 +217,8 @@ def import_energy_preferences(
                     detach(device["children"])
 
         detach(imported)
+        if parent.get("children") is None:
+            parent["children"] = []
         parent.setdefault("children", []).append(owner)
     return EnergyImport(imported, conflicts, external, warnings)
 

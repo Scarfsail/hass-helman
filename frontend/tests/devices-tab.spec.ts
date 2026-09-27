@@ -1065,6 +1065,32 @@ test("an up-to-date Energy preview cannot dirty an unchanged draft", async ({ pa
     expect(await config(page)).toEqual([device]);
 });
 
+test("routine hass snapshots retain pending suggestions and import previews", async ({ page }) => {
+    const device = { id: "breaker", consumption: { energy_entity_id: "sensor.energy" } };
+    await mountEditor(page, [device]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => { window.__card("breaker")!.open = true; });
+    await deviceResponse(page, "helman/suggest_device_entities", { energy: [], power: [candidate("sensor.power")], switch: [] }, true);
+    await page.locator(".apply-suggestions").click();
+    await page.waitForFunction(() => !!(window as any).__resolveDeviceRequest);
+    await page.evaluate(() => {
+        const panel = document.querySelector("helman-config-editor-panel") as any;
+        panel.hass = { ...panel.hass, states: { ...panel.hass.states } };
+        (window as any).__resolveDeviceRequest();
+        delete (window as any).__resolveDeviceRequest;
+    });
+    await expect.poll(async () => (await config(page))[0].consumption.power_entity_id).toBe("sensor.power");
+    await deviceResponse(page, "helman/preview_energy_import", importResponse(await config(page), { additions: [] }), true);
+    await page.locator(".import-energy").click();
+    await page.waitForFunction(() => !!(window as any).__resolveDeviceRequest);
+    await page.evaluate(() => {
+        const panel = document.querySelector("helman-config-editor-panel") as any;
+        panel.hass = { ...panel.hass, states: { ...panel.hass.states } };
+        (window as any).__resolveDeviceRequest();
+    });
+    await expect(page.locator(".energy-import-preview")).toBeVisible();
+});
+
 test("suggestions preserve a climate child's control and shared meter", async ({ page }) => {
     await mountEditor(page, [BREAKER]);
     await openTab(page, "Devices");
