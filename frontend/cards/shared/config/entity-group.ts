@@ -14,6 +14,7 @@ import {
     getLocalizeFunction,
 } from "./localize/localize";
 import type { PathSegment } from "./types";
+import { SENSOR_KIND_FILTERS, type SensorKind } from "./sensor-kind";
 
 /**
  * One entity, its settings, and what it currently reads -- as one control.
@@ -145,6 +146,8 @@ export class HelmanEntityGroup extends LitElement {
     @property({ attribute: false }) helpKey?: string;
     @property({ attribute: false }) helperKey?: string;
     @property({ attribute: false }) includeDomains?: string[];
+    /** Narrows a sensor picker to the sensors its field means. */
+    @property({ attribute: false }) sensorKind?: SensorKind;
     /** A blank is written through rather than removing the key. */
     @property({ type: Boolean }) required = false;
     /** Pushed down by the editor's collector; null until the first poll lands. */
@@ -375,6 +378,7 @@ export class HelmanEntityGroup extends LitElement {
                     .hass=${this.hass}
                     .value=${stringValue(this.fieldHost?.getValue(this.path))}
                     .includeDomains=${this.includeDomains}
+                    .entityFilter=${this.sensorKind ? SENSOR_KIND_FILTERS[this.sensorKind] : undefined}
                     @value-changed=${this._handleEntityChanged}
                 ></ha-entity-picker>
                 ${this.helperKey
@@ -614,6 +618,7 @@ if (!customElements.get("helman-entity-group")) {
 /** What a call site says about one picker; everything else comes from the host. */
 export interface EntityGroupOptions {
     includeDomains?: string[];
+    sensorKind?: SensorKind;
     helperKey?: string;
     helpKey?: string;
     required?: boolean;
@@ -643,6 +648,7 @@ export function renderEntityGroup(
             .helpKey=${options.helpKey}
             .helperKey=${options.helperKey}
             .includeDomains=${options.includeDomains}
+            .sensorKind=${options.sensorKind}
             ?required=${options.required ?? false}
             .inspection=${inspections[entityGroupKey(path)] ?? null}
         >${slotted}</helman-entity-group>
