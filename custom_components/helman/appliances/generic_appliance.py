@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from ..controllables.config import SWITCH_CONTROL_DOMAINS
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
 
 _GENERIC_APPLIANCE_KIND = "generic"
@@ -106,7 +107,7 @@ def read_generic_appliance(
     switch_entity_id = _read_entity_id(
         switch.get("entity_id"),
         path=f"{path}.controls.switch.entity_id",
-        allowed_domains=("switch",),
+        allowed_domains=SWITCH_CONTROL_DOMAINS,
     )
 
     consumption = _read_mapping(value.get("consumption"), path=f"{path}.consumption")

@@ -245,7 +245,7 @@
       "max_consecutive_skips": "Max consecutive skips",
       "kind": "Kind",
       "climate_entity": "Climate entity",
-      "switch_entity": "Switch entity",
+      "switch_entity": "Switch or light entity",
       "projection_strategy": "Projection strategy",
       "fallback_hourly_energy_kwh": "Fallback hourly energy kWh",
       "hourly_energy_kwh": "Average hourly energy kWh",
@@ -300,7 +300,7 @@
       "parent": "Parent",
       "consumption_power_entity": "Power entity",
       "add_device_entity": "Energy meter of the new device",
-      "add_child_device_entity": "Energy meter, switch or climate entity of the new child"
+      "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -374,7 +374,7 @@
       "consumption_power_entity": "Instantaneous power sensor (W). A device whose children draw from its meter needs one to split its live power among them.",
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",
       "add_device": "Its id is generated from the entity once and never changes.",
-      "add_child_device": "Pick a sensor for a child with its own meter, or the switch or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
+      "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -536,7 +536,7 @@
       "ev_use_mode_entity": "Select or input_select entity that controls the EV charger's operating mode (e.g. fixed max power, surplus aware). Helman writes the active mode to this entity to implement the scheduled charging behavior.",
       "ev_eco_gear_entity": "Select or input_select entity that controls the eco gear level (charging power step) of the EV charger. Helman controls this in surplus-aware mode to throttle charging to available solar surplus.",
       "appliance_climate_entity": "Climate entity for this appliance. Helman monitors its active/inactive state (heat or cool mode) to build history-based energy projections. Required for the history_average projection strategy.",
-      "appliance_switch_entity": "Switch entity that controls this generic appliance. Helman monitors the on/off state history to build energy projections when using the history_average strategy.",
+      "appliance_switch_entity": "Switch or light entity that controls this generic appliance. Helman monitors the on/off state history to build energy projections when using the history_average strategy.",
       "appliance_projection_strategy": "How Helman estimates this appliance's future energy consumption. Fixed: always uses the configured average hourly energy. History average: learns from the entity's recorded history and falls back to the fixed value if history is insufficient.",
       "appliance_hourly_energy_kwh": "Average energy consumption per hour in kWh when the appliance is active. Used directly for the fixed strategy and as a fallback value for history_average when recorded history is insufficient.",
       "appliance_history_lookback_days": "How many days back Helman looks when calculating the historical average energy consumption for this appliance. A longer lookback gives more stable estimates but reacts slower to changes in usage patterns.",

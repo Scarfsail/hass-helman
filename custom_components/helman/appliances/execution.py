@@ -14,6 +14,7 @@ from ..scheduling.runtime_status import (
     RuntimeOutcome,
 )
 from ..scheduling.actuation import ScheduleActuator
+from ..controllables.config import SWITCH_CONTROL_DOMAINS
 from ..controllables.controllers import SelectEntityController
 from ..controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -53,11 +54,12 @@ class AppliancesExecutionResult:
 class SwitchEntityController:
     def __init__(self, entity_id: str, *, description: str) -> None:
         domain, separator, object_id = entity_id.partition(".")
-        if not separator or not object_id or domain != "switch":
+        if not separator or not object_id or domain not in SWITCH_CONTROL_DOMAINS:
             raise ScheduleExecutionUnavailableError(
-                f"{description} must use the switch domain"
+                f"{description} must use the switch or light domain"
             )
         self.entity_id = entity_id
+        self._domain = domain
         self._description = description
 
     def read_state(self, actuator: ScheduleActuator) -> Any:
@@ -85,7 +87,7 @@ class SwitchEntityController:
     async def async_turn_on(self, actuator: ScheduleActuator) -> None:
         try:
             await actuator.async_call(
-                "switch",
+                self._domain,
                 "turn_on",
                 {"entity_id": self.entity_id},
             )
@@ -99,7 +101,7 @@ class SwitchEntityController:
     async def async_turn_off(self, actuator: ScheduleActuator) -> None:
         try:
             await actuator.async_call(
-                "switch",
+                self._domain,
                 "turn_off",
                 {"entity_id": self.entity_id},
             )

@@ -4,6 +4,7 @@ import asyncio
 import sys
 import types
 import unittest
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -576,6 +577,37 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "apply")
         self.assertEqual(runtime.outcome, "success")
         self.assertTrue(memory.last_enabled)
+
+    async def test_generic_light_is_switched_through_the_light_domain(self) -> None:
+        appliance = replace(_build_generic_appliance(), switch_entity_id="light.hall")
+        hass = FakeHass({"light.hall": FakeState("off")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": True},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+
+        hass.states._states["light.hall"].state = "on"
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": False},
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(runtime.outcome, "success")
+        self.assertEqual(
+            [call[:2] for call in hass.services.calls],
+            [("light", "turn_on"), ("light", "turn_off")],
+        )
 
     async def test_generic_missing_action_after_previous_on_clears_runtime_after_stop(
         self,

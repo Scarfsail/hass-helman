@@ -12,7 +12,7 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
-from .config import read_devices_section
+from .config import SWITCH_CONTROL_DOMAINS, read_devices_section
 
 
 def suggest_entities(
@@ -56,7 +56,7 @@ def suggest_entities(
         )
         field = (
             "switch"
-            if entry.domain == "switch"
+            if entry.domain in SWITCH_CONTROL_DOMAINS
             else device_class
             if entry.domain == "sensor" and device_class in ("energy", "power")
             else None

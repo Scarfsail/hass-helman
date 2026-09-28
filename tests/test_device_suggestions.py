@@ -195,3 +195,30 @@ def test_a_switch_named_after_its_device_matches_without_a_state():
         )
     assert result["switch"][0]["name"] == "Boiler"
     assert result["switch"][0]["reasons"][-1] == {"code": "name_match"}
+
+
+def test_a_light_is_offered_as_a_switch():
+    energy = entry("sensor.hall_energy", "energy")
+    light = entry("light.hall")
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=lambda entity_id: energy),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            return_value=[energy, light],
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda id: None),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)), ["sensor.hall_energy"], {}
+        )
+    assert [c["entityId"] for c in result["switch"]] == ["light.hall"]
