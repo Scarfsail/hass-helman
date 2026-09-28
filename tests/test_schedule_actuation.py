@@ -77,6 +77,7 @@ class FakeServices:
         data: dict,
         *,
         blocking: bool,
+        context=None,
     ) -> None:
         self.calls.append((domain, service, data, blocking))
         if self.release is not None:

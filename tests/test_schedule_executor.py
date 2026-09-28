@@ -161,6 +161,7 @@ class FakeServices:
         data: dict,
         *,
         blocking: bool,
+        context=None,
     ) -> None:
         if self.error is not None:
             raise self.error

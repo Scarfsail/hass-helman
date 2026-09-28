@@ -134,10 +134,14 @@ class GroupResolverTests(unittest.TestCase):
         self.assertFalse(group_exists({}, "power", "night"))
 
 
+CALLER_CONTEXT = object()
+
+
 class FakeServices:
     def __init__(self, failing: set[str] = frozenset()) -> None:
         self.registered: dict[str, tuple] = {}
         self.calls: list[tuple[str, str, dict]] = []
+        self.contexts: list[object] = []
         self._failing = failing
 
     def async_register(
@@ -146,8 +150,9 @@ class FakeServices:
         assert domain == DOMAIN
         self.registered[service] = (handler, schema, supports_response)
 
-    async def async_call(self, domain, service, data, *, blocking) -> None:
+    async def async_call(self, domain, service, data, *, blocking, context) -> None:
         self.calls.append((domain, service, data))
+        self.contexts.append(context)
         if data["entity_id"] in self._failing:
             raise HomeAssistantError("boom")
 
@@ -167,7 +172,8 @@ class GroupServicesTests(unittest.TestCase):
 
     def _call(self, service: str, **data):
         handler, schema, _ = self.services.registered[service]
-        return asyncio.run(handler(SimpleNamespace(data=schema(data))))
+        call = SimpleNamespace(data=schema(data), context=CALLER_CONTEXT)
+        return asyncio.run(handler(call))
 
     def test_registration(self) -> None:
         self.assertIs(
@@ -224,6 +230,8 @@ class GroupServicesTests(unittest.TestCase):
             ],
         )
         self.assertEqual(sleeps, [0.5, 0.5])
+        # Member calls keep the caller's context, so logbook attribution holds.
+        self.assertEqual(self.services.contexts, [CALLER_CONTEXT] * 3)
 
     def test_group_action_without_delay_does_not_sleep(self) -> None:
         async def fail_sleep(seconds: float) -> None:

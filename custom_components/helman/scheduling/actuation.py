@@ -25,11 +25,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
 from .schedule import ScheduleError, ScheduleExecutionUnavailableError
+
+if TYPE_CHECKING:
+    from homeassistant.core import Context
 
 _LOGGER = logging.getLogger(__name__)
 # Shared by every hardware write. ``blocking=True`` waits for the target
@@ -81,6 +84,8 @@ class ScheduleActuator:
         domain: str,
         service: str,
         data: Mapping[str, Any],
+        *,
+        context: Context | None = None,
     ) -> None:
         if not self.is_open:
             raise ScheduleExecutionDisabledError(
@@ -95,6 +100,7 @@ class ScheduleActuator:
                     service,
                     dict(data),
                     blocking=True,
+                    context=context,
                 )
         except TimeoutError as err:
             # A TimeoutError raised by the target integration itself is its own

@@ -89,7 +89,9 @@ def async_register_group_services(hass: HomeAssistant) -> None:
                 await asyncio.sleep(delay_seconds)
             domain = entity_id.split(".", 1)[0]
             try:
-                await actuator.async_call(domain, action, {"entity_id": entity_id})
+                await actuator.async_call(
+                    domain, action, {"entity_id": entity_id}, context=call.context
+                )
             except Exception:
                 _LOGGER.exception(
                     "helman.group_action: %s.%s failed for %s",
