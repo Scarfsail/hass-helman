@@ -88,7 +88,7 @@
       "children": "Podřízená zařízení"
     },
     "notes": {
-      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení přes klíč groups ve svém YAML. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení.",
+      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Podřízené zařízení sleduje skupinu nadřazeného, dokud je zapnuto „Zdědit od nadřazeného“. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
@@ -183,7 +183,6 @@
       "training_time": "Čas trénování (HH:MM)",
       "grouping_name": "Název seskupení",
       "group_name": "Skupina",
-      "group_id": "Id",
       "group_short_name": "Zkratka",
       "house_power_entity": "Entita výkonu domu",
       "power_sensor_label": "Popisek senzoru výkonu",
@@ -585,13 +584,9 @@
       "schedulable": "Plánovatelná",
       "passive": "Pasivní"
     },
-    "device_view": {
-      "label": "Zobrazení zařízení",
-      "list": "Seznam",
+    "device_groups": {
       "unassigned": "Nezařazená",
-      "group": "Skupina",
-      "none": "Žádná",
-      "same_as_parent": "Stejná jako nadřazené"
+      "inherit": "Zdědit od nadřazeného"
     },
     "device_badges": {
       "energy": "Energie",

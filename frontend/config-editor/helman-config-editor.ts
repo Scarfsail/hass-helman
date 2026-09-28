@@ -2,6 +2,9 @@ import { fetchEnergyImportPreview, type EnergyImportPreview } from "../cards/hel
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
+import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
 
 /**
  * Which sign a power sensor uses to carry its quantity, per power device.
@@ -57,20 +60,25 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
+  assignGroup,
   canHaveChildren,
+  consumerGroups,
   DEVICE_FILTERS,
   deviceChildren,
   deviceIdFor,
   deviceKind,
   isCarvedMeterOwner,
   isSchedulable,
+  inheritsGroup,
   iterDevices,
   meterlessChildren,
   ownMeter,
+  setGroupInherited,
   slugId,
   stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
   type DeviceFilter,
+  type GroupedDeviceEntry,
 } from "../cards/shared/config/devices";
 import {
   configDefaultHint,
@@ -100,7 +108,7 @@ import {
 } from "./config-editor-scopes";
 import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
-import { mdiAlertOutline } from "@mdi/js";
+import { mdiAlertOutline, mdiDragVertical } from "@mdi/js";
 import {
   fetchOptimizerSchema,
   type OptimizerConfigBucket,
@@ -144,7 +152,6 @@ import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles"
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/devices/helman-device-editor";
-import { deviceGroupingViewStyles } from "./helman-device-grouping-view";
 import {
   TRAINING_STATUS_CHANGED,
   asTrainingStatus,
@@ -199,6 +206,17 @@ const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const INVERTER_CONTROLLABLE_KIND = "inverter";
 /** Reserved for the inverter; mirrors `CONTROLLABLE_ID_INVERTER` in Python. */
 const CONTROLLABLE_ID_INVERTER = "inverter";
+
+/** The chevron of a collapsible card, as the device cards draw it. */
+const GROUPING_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+
+/**
+ * A group's device chips move between lists but never sort within one. The
+ * inherit toggle on a chip must click, not start a drag.
+ */
+const MEMBER_SORTABLE_OPTIONS = { sort: false, filter: "input, label", preventOnFilter: false };
+
+const stopEvent = (event: Event): void => event.stopPropagation();
 
 /** Which device sits at which path; changes only when an edit moves devices. */
 function devicePathSignature(config: JsonObject | null): string {
@@ -300,7 +318,6 @@ export class HelmanConfigEditorPanel
     _deviceYamlValues: { state: true },
     _deviceYamlErrors: { state: true },
     _deviceFilter: { state: true },
-    _deviceView: { state: true },
     _energyImport: { state: true },
     _deviceActionMessage: { state: true },
     _importLoading: { state: true },
@@ -318,7 +335,6 @@ export class HelmanConfigEditorPanel
     configFormStyles,
     optimizerCardStyles,
     deviceEditorStyles,
-    deviceGroupingViewStyles,
     css`
     :host {
       display: block;
@@ -361,14 +377,6 @@ export class HelmanConfigEditorPanel
       max-width: 240px;
     }
 
-    .group-row > .group-id-cell {
-      flex: 1 1 100px;
-      min-width: 80px;
-      font-family: var(--code-font-family, monospace);
-      color: var(--secondary-text-color);
-      overflow-wrap: anywhere;
-    }
-
     .group-row > .list-actions {
       margin-left: auto;
       flex: 0 0 auto;
@@ -388,8 +396,76 @@ export class HelmanConfigEditorPanel
       width: 32px;
     }
 
-    /* The grouping name is the card's title, so it is edited where it is read
-       rather than in a field below the header. */
+    /* A group's devices, on their own line under its fields. The list keeps
+       a height when empty, so a device can still be dropped into it. */
+    .group-members {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 32px;
+      padding: 4px;
+      box-sizing: border-box;
+      border: 1px dashed var(--divider-color);
+      border-radius: 12px;
+    }
+
+    .group-row > ha-sortable {
+      flex: 1 0 100%;
+    }
+
+    .group-unassigned {
+      display: grid;
+      gap: 6px;
+      padding: 0 16px 8px;
+    }
+
+    .member-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border: 1px solid var(--divider-color);
+      border-radius: 999px;
+      background: var(--secondary-background-color);
+      font-size: 0.93rem;
+    }
+
+    .member-chip.draggable {
+      cursor: grab;
+      padding-left: 4px;
+    }
+
+    .member-chip.inheriting {
+      border-style: dashed;
+      background: transparent;
+    }
+
+    .member-chip-glyph {
+      width: 16px;
+      height: 16px;
+      fill: var(--secondary-text-color);
+    }
+
+    .member-parent {
+      color: var(--secondary-text-color);
+    }
+
+    .member-parent::before {
+      content: "· ";
+    }
+
+    .member-inherit {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+    }
+
+    .grouping-name {
+      padding: 16px 16px 8px;
+    }
+
     .grouping-name-input {
       font-size: 1rem;
       font-weight: var(--ha-font-weight-medium, 500);
@@ -816,10 +892,7 @@ export class HelmanConfigEditorPanel
       display: none;
     }
 
-    .device-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+    .device-filter {
       justify-self: start;
     }
 
@@ -921,10 +994,6 @@ export class HelmanConfigEditorPanel
   private _deviceYamlErrors: Partial<Record<string, string>> = {};
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
-  /** The consumers as a tree (`null`), or grouped by the grouping with this id. */
-  private _deviceView: string | null = null;
-  /** Bound once, so the grouped view does not re-render on every panel update. */
-  private _boundT = (key: string): string => this._t(key);
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
@@ -3269,7 +3338,7 @@ export class HelmanConfigEditorPanel
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
           ${consumers.length > 0
-            ? this._renderConsumers()
+            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices", "consumers"], null)}`
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
           ${this._renderAddDevice(
             ["devices", "consumers"],
@@ -3372,67 +3441,6 @@ export class HelmanConfigEditorPanel
       </button>
       </div>
     </div>`;
-  }
-
-  /**
-   * The consumers, as the list or grouped by the chosen grouping. A grouping
-   * gone from the draft falls back to the list, and so does the entities-only
-   * view, which keeps the cards that hold the entity pickers.
-   */
-  private _renderConsumers(): TemplateResult {
-    const groupings = (asJsonArray(this._getValue(["devices", "groupings"])) ?? []).flatMap((value) => {
-      const grouping = asJsonObject(value);
-      return grouping ? [grouping] : [];
-    });
-    const grouping = this._entitiesOnly
-      ? undefined
-      : groupings.find((candidate) => this._stringValue(candidate.id) === this._deviceView);
-    return html`
-      <div class="device-toolbar">
-        ${this._renderDeviceFilter()}
-        ${groupings.length > 0 ? this._renderDeviceViewToggle(groupings, grouping) : nothing}
-      </div>
-      ${grouping
-        ? html`<helman-device-grouping-view
-            .config=${this._config}
-            .grouping=${grouping}
-            .localize=${this._boundT}
-            .inspections=${this._inspections.results}
-            .filter=${this._deviceFilter}
-            @device-config-changed=${this._handleDeviceConfigChanged}
-          ></helman-device-grouping-view>`
-        : this._renderDeviceList(["devices", "consumers"], null)}
-    `;
-  }
-
-  /** "List", then one button per grouping. */
-  private _renderDeviceViewToggle(groupings: JsonObject[], active: JsonObject | undefined): TemplateResult {
-    const views = [
-      { id: null as string | null, label: this._t("editor.device_view.list") },
-      ...groupings.map((grouping) => ({
-        id: this._stringValue(grouping.id),
-        label: this._stringValue(grouping.name) || this._stringValue(grouping.id),
-      })),
-    ];
-    const activeId = active ? this._stringValue(active.id) : null;
-    return html`
-      <div class="mode-toggle device-view" role="group" aria-label=${this._t("editor.device_view.label")}>
-        ${views.map(
-          (view) => html`
-            <button
-              type="button"
-              class=${view.id === activeId ? "active" : ""}
-              aria-pressed=${view.id === activeId}
-              @click=${() => {
-                this._deviceView = view.id;
-              }}
-            >
-              ${view.label}
-            </button>
-          `,
-        )}
-      </div>
-    `;
   }
 
   private _renderDeviceFilter(): TemplateResult {
@@ -3596,7 +3604,12 @@ export class HelmanConfigEditorPanel
     }
     return html`
       <div class="list-stack">
-        ${groupings.map((grouping, index) => this._renderGrouping(asJsonObject(grouping) ?? {}, index))}
+        ${groupings.map((value, index) => {
+          const grouping = asJsonObject(value) ?? {};
+          // ha-sortable reads its drag group only when created: a card reused for
+          // another grouping would keep the old one, so each grouping keeps its own.
+          return keyed(this._stringValue(grouping.id), this._renderGrouping(grouping, index));
+        })}
       </div>
     `;
   }
@@ -3604,28 +3617,39 @@ export class HelmanConfigEditorPanel
   private _renderGrouping(grouping: JsonObject, index: number): TemplateResult {
     const path: PathSegment[] = ["devices", "groupings", index];
     const groups = asJsonArray(grouping.groups) ?? [];
+    const groupingId = this._stringValue(grouping.id);
+    const members = consumerGroups(this._config, groupingId);
+    const groupIds = new Set(groups.map((group) => this._stringValue(asJsonObject(group)?.id)));
     const nameLabel = this._t("editor.fields.grouping_name");
     return html`
-      <div class="list-card grouping-card">
-        <div class="card-header">
-          <div class="card-title">
-            <input
-              class="grouping-name-input"
-              .value=${this._stringValue(grouping.name)}
-              title=${nameLabel}
-              aria-label=${nameLabel}
-              @change=${(event: Event) =>
-                this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
-            />
-            <span class="card-subtitle">${this._t("editor.card.grouping")} · ${this._stringValue(grouping.id)}</span>
+      <details class="list-card grouping-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${this._stringValue(grouping.name)}</strong>
+                <span class="card-subtitle">${this._t("editor.card.grouping")}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${renderRemoveButton(this, {
+                className: "remove-grouping",
+                onRemove: () => this._handleRemoveGrouping(index),
+                label: this._t("editor.actions.remove_grouping"),
+              })}
+            </div>
           </div>
-          <div class="inline-actions">
-            ${renderRemoveButton(this, {
-              className: "remove-grouping",
-              onRemove: () => this._handleRemoveGrouping(index),
-              label: this._t("editor.actions.remove_grouping"),
-            })}
-          </div>
+        </summary>
+        <div class="grouping-name">
+          <input
+            class="grouping-name-input"
+            .value=${this._stringValue(grouping.name)}
+            title=${nameLabel}
+            aria-label=${nameLabel}
+            @change=${(event: Event) =>
+              this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
+          />
         </div>
         ${groups.length > 0
           ? html`
@@ -3634,30 +3658,46 @@ export class HelmanConfigEditorPanel
                   <span class="group-row-handle-spacer"></span>
                   <label class="group-name-cell">${this._t("editor.fields.group_name")}</label>
                   <label class="group-short-name-cell">${this._t("editor.fields.group_short_name")}</label>
-                  <label class="group-id-cell">${this._t("editor.fields.group_id")}</label>
                   <span class="group-row-actions-spacer"></span>
                 </div>
                 ${renderSortableList({
                   items: groups,
                   containerClass: "group-rows-list",
                   renderItem: (group, groupIndex) =>
-                    this._renderGroupRow(asJsonObject(group) ?? {}, index, groupIndex),
+                    this._renderGroupRow(asJsonObject(group) ?? {}, index, groupIndex, groupingId, members),
                   onMove: (oldIndex, newIndex) => this._moveListItem([...path, "groups"], oldIndex, newIndex),
                 })}
               </div>
             `
           : nothing}
+        <div class="group-unassigned">
+          <strong>${this._t("editor.device_groups.unassigned")}</strong>
+          ${this._renderGroupMembers(
+            groupingId,
+            null,
+            // An id the grouping does not have fails validation; until it is
+            // fixed the device shows here rather than nowhere.
+            members.filter((entry) => entry.group === null || !groupIds.has(entry.group)),
+          )}
+        </div>
         <div class="section-footer">
           <button type="button" class="add-button add-group" @click=${() => this._handleAddGroup(index)}>
             ${this._t("editor.actions.add_group")}
           </button>
         </div>
-      </div>
+      </details>
     `;
   }
 
-  private _renderGroupRow(group: JsonObject, groupingIndex: number, groupIndex: number): TemplateResult {
+  private _renderGroupRow(
+    group: JsonObject,
+    groupingIndex: number,
+    groupIndex: number,
+    groupingId: string,
+    members: GroupedDeviceEntry[],
+  ): TemplateResult {
     const path: PathSegment[] = ["devices", "groupings", groupingIndex, "groups", groupIndex];
+    const groupId = this._stringValue(group.id);
     const nameLabel = this._t("editor.fields.group_name");
     const shortNameLabel = this._t("editor.fields.group_short_name");
     return html`
@@ -3681,13 +3721,91 @@ export class HelmanConfigEditorPanel
               this._setRequiredString([...path, "short_name"], (event.currentTarget as HTMLInputElement).value)}
           />
         </div>
-        <span class="group-id-cell">${this._stringValue(group.id)}</span>
         <div class="list-actions">
           ${renderRemoveButton(this, {
             className: "remove-group",
             onRemove: () => this._handleRemoveGroup(groupingIndex, groupIndex),
           })}
         </div>
+        ${this._renderGroupMembers(
+          groupingId,
+          groupId,
+          members.filter((entry) => entry.group === groupId),
+        )}
+      </div>
+    `;
+  }
+
+  /**
+   * One group's devices, or "Unassigned"'s (`groupId` null), as chips dragged
+   * between the lists of one grouping. Their order is the tree's: it is not
+   * stored, so the list does not sort.
+   *
+   * A drop is applied from the target's item-added, or refused; either way
+   * ha-sortable's rollback first puts the dragged chip back where it came
+   * from, so the DOM is Lit's again before it redraws from the document.
+   * The events are stopped here because they bubble, and the group rows'
+   * own list would take an item-moved for a reorder of the groups.
+   */
+  private _renderGroupMembers(
+    groupingId: string,
+    groupId: string | null,
+    members: GroupedDeviceEntry[],
+  ): TemplateResult {
+    return html`
+      <ha-sortable
+        group=${"helman-grouping-" + groupingId}
+        draggable-selector=".member-chip.draggable"
+        .options=${MEMBER_SORTABLE_OPTIONS}
+        @item-added=${(event: Event) => {
+          event.stopPropagation();
+          const devicePath = (event as CustomEvent<{ data?: unknown }>).detail?.data;
+          if (!Array.isArray(devicePath)) return;
+          this._applyMutation((draft) => assignGroup(draft, devicePath, groupingId, groupId));
+        }}
+        @item-moved=${stopEvent}
+        @item-removed=${stopEvent}
+      >
+        <div class="group-members" data-group-id=${groupId ?? ""}>
+          ${repeat(
+            members,
+            (entry) => entry.path.join("."),
+            (entry) => this._renderMemberChip(entry, groupingId),
+          )}
+        </div>
+      </ha-sortable>
+    `;
+  }
+
+  /**
+   * A device in a group: its name and, for a child, its parent's. A child
+   * whose parent has a group carries the inherit toggle, and while it
+   * inherits it moves only with its parent, so it cannot be dragged.
+   */
+  private _renderMemberChip(entry: GroupedDeviceEntry, groupingId: string): TemplateResult {
+    const { device, parent, path } = entry;
+    const inheriting = inheritsGroup(entry, groupingId);
+    const classes = ["member-chip", inheriting ? "inheriting" : "draggable"].join(" ");
+    return html`
+      <div class=${classes} data-device-id=${this._stringValue(device.id)} .sortableData=${path}>
+        ${inheriting ? nothing : this._renderSvgIcon(mdiDragVertical, "member-chip-glyph")}
+        <span class="member-name">${deviceName(this, this._inspections.results, device, path)}</span>
+        ${parent
+          ? html`<span class="member-parent">${deviceName(this, this._inspections.results, parent, path.slice(0, -2))}</span>`
+          : nothing}
+        ${entry.parentGroup !== null
+          ? html`<label class="member-inherit">
+              <input
+                type="checkbox"
+                .checked=${live(inheriting)}
+                @change=${(event: Event) => {
+                  const inherit = (event.currentTarget as HTMLInputElement).checked;
+                  this._applyMutation((draft) => setGroupInherited(draft, path, groupingId, inherit));
+                }}
+              />
+              ${this._t("editor.device_groups.inherit")}
+            </label>`
+          : nothing}
       </div>
     `;
   }
@@ -4704,8 +4822,6 @@ export class HelmanConfigEditorPanel
   /** Removes a grouping and, in the same mutation, every device's reference to it. */
   private _handleRemoveGrouping(index: number): void {
     const groupingId = this._stringValue(this._getValue(["devices", "groupings", index, "id"]));
-    // A later grouping may reuse the id; it should not reopen this view.
-    if (this._deviceView === groupingId) this._deviceView = null;
     this._applyMutation((draft) => {
       removeListItem(draft, ["devices", "groupings"], index);
       stripGroupReferences(draft, groupingId);
@@ -4941,9 +5057,10 @@ export class HelmanConfigEditorPanel
    * forget to ask for one. It is not the *only* door into the draft, though --
    * see `_markDraftChanged`.
    */
-  private _applyMutation(mutator: (draft: JsonObject) => void): void {
+  private _applyMutation(mutator: (draft: JsonObject) => void | boolean): void {
     const draft = cloneJson(this._config ?? {});
-    mutator(draft);
+    // `false` is a mutator declining: the draft stays as it was.
+    if (mutator(draft) === false) return;
     this._config = draft;
     this._markDraftChanged();
   }

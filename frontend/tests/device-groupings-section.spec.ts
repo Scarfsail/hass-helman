@@ -98,7 +98,16 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
     await panel.locator(".tabs").getByRole("button", { name: "Devices", exact: true }).click();
     await section(page).evaluate((details) => ((details as HTMLDetailsElement).open = true));
     // Every removal asks first; the tests answer yes.
+    await openGroupings(page);
     page.on("dialog", (dialog) => void dialog.accept());
+}
+
+/** Grouping cards start collapsed; open them all to work inside. */
+async function openGroupings(page: Page): Promise<void> {
+    await page
+        .locator("helman-config-editor-panel")
+        .locator("details.grouping-card")
+        .evaluateAll((cards) => cards.forEach((card) => ((card as HTMLDetailsElement).open = true)));
 }
 
 function section(page: Page) {
@@ -165,6 +174,7 @@ test("added entries get an id slugged from their name", async ({ page }) => {
 
     await expect(section(page).locator(".message.info")).toHaveText("No groupings configured.");
     await section(page).locator(".add-grouping").click();
+    await openGroupings(page);
     await groupingCard(page, 0).locator(".add-group").click();
     await groupingCard(page, 0).locator(".add-group").click();
 
@@ -206,4 +216,17 @@ test("removing a grouping strips every device reference to it", async ({ page })
         pump: undefined,
         washer: undefined,
     });
+});
+
+test("a grouping card starts collapsed and shows no ids", async ({ page }) => {
+    await mountEditor(page);
+
+    await section(page).locator(".add-grouping").click();
+
+    const added = section(page).locator("details.grouping-card").last();
+    expect(await added.evaluate((card) => (card as HTMLDetailsElement).open)).toBe(false);
+    // Opening the others earlier does not open it, and ids are not shown anywhere.
+    await expect(section(page).locator(".group-id-cell")).toHaveCount(0);
+    await expect(groupingCard(page, 0).locator("summary")).toContainText("Jističe");
+    await expect(groupingCard(page, 0).locator("summary")).not.toContainText("breakers");
 });
