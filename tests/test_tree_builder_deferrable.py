@@ -15,7 +15,6 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,21 +26,7 @@ for _name, _path in [
     _pkg.__path__ = [str(_path)]
     sys.modules[_name] = _pkg
 
-from custom_components.helman import tree_builder  # noqa: E402
 from custom_components.helman.tree_builder import HelmanTreeBuilder  # noqa: E402
-
-
-class _Registry:
-    """A registry that knows nothing: no device here carries labels.
-
-    The tree only consults the registries for the labels, which deferrability
-    does not depend on.
-    """
-
-    entities: dict = {}
-
-    def async_get(self, entity_id):
-        return None
 
 
 class _Hass:
@@ -64,8 +49,7 @@ def _controllable(controllable_id, energy_entity_id, *, schedulable=True):
 
 def _house_children(devices):
     builder = HelmanTreeBuilder(_Hass(), {"devices": {"consumers": devices}})
-    reg = _Registry()
-    children = builder._build_house_children(reg, reg, {})
+    children = builder._build_house_children([])
     return {node.id: node for node in children}
 
 
@@ -75,9 +59,7 @@ def _built_house_children(devices):
         "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {"consumers": devices},
     }
-    with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
-            mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):
-        tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
+    tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
     (house,) = tree["consumers"]
     return {node["id"]: node for node in house["children"]}
 

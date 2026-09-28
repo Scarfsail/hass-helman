@@ -15,7 +15,6 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,7 +26,6 @@ for _name, _path in [
     _pkg.__path__ = [str(_path)]
     sys.modules[_name] = _pkg
 
-from custom_components.helman import tree_builder as tree_builder_module  # noqa: E402
 from custom_components.helman.config_validation import validate_config_document  # noqa: E402
 from custom_components.helman.power_polarity import (  # noqa: E402
     IDLE_DIRECTION,
@@ -65,18 +63,8 @@ class _Hass:
 
 
 def _build(config: dict) -> dict:
-    """Run the real async build with the registries stubbed out.
-
-    None of them have any bearing on ``value_type``; they are only what stands
-    between this test and the code path that assigns it.
-    """
-    builder = HelmanTreeBuilder(_Hass(), config)
-    registry = types.SimpleNamespace(async_get=lambda *_a, **_k: None, entities={})
-    with (
-        mock.patch.object(tree_builder_module.er, "async_get", lambda _h: registry),
-        mock.patch.object(tree_builder_module.lr, "async_get", lambda _h: registry),
-    ):
-        return asyncio.run(builder.build())
+    """Run the real async build."""
+    return asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
 
 
 def _value_types(tree: dict) -> dict[str, str]:

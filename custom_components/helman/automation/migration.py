@@ -2,8 +2,9 @@
 
 Pure ``dict -> dict``: no Home Assistant and no storage, so its tests run on the
 host and every rule is table-checkable. What a step needs from Home Assistant —
-Energy preferences, for v20 -> v21, and entity suggestions, for v22 -> v23 — is
-an argument. The only side effects are those two steps' log lines.
+Energy preferences, for v20 -> v21, entity suggestions, for v22 -> v23, and
+device labels, for v25 -> v26 — is an argument. The only side effects are the
+log lines of the v20 and v22 steps.
 
 Runs on **load only**. The save path rejects the old shape instead of rewriting
 it (see ``validate_config_document``): hand-editing is a save-path concern, and
@@ -13,6 +14,8 @@ silently rewriting a user's YAML under them is worse than refusing it.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
@@ -25,6 +28,7 @@ from ..controllables.config import (
     iter_devices,
     own_meter,
     peek_controllable_kind,
+    running_signal,
 )
 from ..controllables.energy_import import import_energy_preferences, meter_device_id
 
@@ -34,6 +38,10 @@ from ..controllables.energy_import import import_energy_preferences, meter_devic
 EntitySuggestions = Callable[
     [Sequence[str], Mapping[str, Any]], Mapping[str, list[Mapping[str, Any]]]
 ]
+
+#: ``entity id -> label names on that entity's HA device`` — what the v25 ->
+#: v26 step reads a device's Home Assistant labels through.
+DeviceLabels = Callable[[str], list[str]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,13 +83,16 @@ def migrate_config_document(
     document: Mapping[str, Any] | None,
     energy_preferences: Mapping[str, Any] | None = None,
     entity_suggestions: EntitySuggestions | None = None,
+    device_labels: DeviceLabels | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Return ``(migrated_document, migrated_optimizer_ids)``.
 
     ``energy_preferences`` are Home Assistant's Energy preferences, which the
     v20 -> v21 step imports into ``devices``; ``None`` imports nothing.
     ``entity_suggestions`` ranks a meter's sibling entities for the v22 -> v23
-    power and switch backfill; ``None`` backfills nothing.
+    power and switch backfill; ``None`` backfills nothing. ``device_labels``
+    names the HA labels the v25 -> v26 step turns into group membership;
+    ``None`` assigns nothing.
 
     The document is returned unchanged (and the id list empty) when it is
     already at the current version. Optimizer order is preserved verbatim —
@@ -108,6 +119,7 @@ def migrate_config_document(
         **_MIGRATIONS,
         20: partial(_migrate_v20_to_v21, energy_preferences=energy_preferences),
         22: partial(_migrate_v22_to_v23, entity_suggestions=entity_suggestions),
+        25: partial(_migrate_v25_to_v26, device_labels=device_labels),
     }
     migrated_ids: list[str] = []
     while version < CONFIG_DOCUMENT_VERSION:
@@ -1481,6 +1493,99 @@ def _migrate_v24_to_v25(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v25_to_v26(
+    document: dict[str, Any],
+    device_labels: DeviceLabels | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """``visualization.device_label_text`` -> ``devices.groupings`` + device ``groups``.
+
+    Device groups were HA labels the card matched against a category -> label
+    name -> badge text map; they move into the config, and labels are read
+    here once and never again. Each category becomes a grouping named after
+    it, each of its labels a group (``name`` = the label, ``short_name`` = the
+    badge text), in document order, with ids slugged from the names.
+
+    A device's labels are those on the HA device of its own meter or, for a
+    meterless child, of its running signal: where the card read them. Per
+    category, the first label in the category's order that the device carries
+    is its group -- the card's first-match rule. The inverter is skipped.
+    ``device_labels=None`` still converts the groupings and assigns nothing.
+
+    A ``devices`` value that is neither an object nor absent is left alone,
+    with the old key, for the validator to report.
+    """
+    visualization = document.get("visualization")
+    if not isinstance(visualization, dict) or "device_label_text" not in visualization:
+        return (document, [])
+    section = document.get("devices")
+    if section is not None and not isinstance(section, dict):
+        return (document, [])
+    label_text = visualization.pop("device_label_text")
+    if not isinstance(label_text, Mapping) or not label_text:
+        return (document, [])
+
+    groupings: list[dict[str, Any]] = []
+    grouping_ids: set[str] = set()
+    for category, labels in label_text.items():
+        if not isinstance(labels, Mapping):
+            continue
+        group_ids: set[str] = set()
+        groups = [
+            {
+                "id": _slug_id(label, group_ids, "group"),
+                "name": label,
+                "short_name": badge,
+            }
+            for label, badge in labels.items()
+        ]
+        grouping_id = _slug_id(category, grouping_ids, "grouping")
+        groupings.append({"id": grouping_id, "name": category, "groups": groups})
+    section = section if section is not None else {}
+    section["groupings"] = groupings
+    document["devices"] = section
+
+    if device_labels is None:
+        return (document, [])
+    for device, parent in iter_devices(document):
+        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
+            continue
+        entity_id = own_meter(device)
+        if entity_id is None and parent is not None:
+            signal = running_signal(device)
+            entity_id = signal[0] if signal is not None else None
+        if entity_id is None:
+            continue
+        carried = set(device_labels(entity_id))
+        assigned: dict[str, str] = {}
+        # A group's name is the label it came from.
+        for grouping in groupings:
+            for group in grouping["groups"]:
+                if group["name"] in carried:
+                    assigned[grouping["id"]] = group["id"]
+                    break
+        if assigned:
+            device["groups"] = assigned
+    return (document, [])
+
+
+def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
+    """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
+
+    NFKD-folded to ASCII, lower-cased, every other run of characters becoming
+    ``_``; ``_2``, ``_3``... on a collision, and ``fallback`` when nothing is
+    left (an emoji-only name). Mirrors ``slugId`` in
+    ``frontend/cards/shared/config/devices.ts``, spelled here because this
+    module must not import Home Assistant's ``slugify``.
+    """
+    folded = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
+    base = re.sub(r"[^a-z0-9]+", "_", folded.lower()).strip("_") or fallback
+    slug, suffix = base, 2
+    while slug in taken:
+        slug, suffix = f"{base}_{suffix}", suffix + 1
+    taken.add(slug)
+    return slug
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1506,6 +1611,7 @@ _MIGRATIONS = {
     # 22 -> 23 needs the entity suggestions: bound in migrate_config_document.
     23: _migrate_v23_to_v24,
     24: _migrate_v24_to_v25,
+    # 25 -> 26 needs the HA labels: bound in migrate_config_document.
 }
 
 

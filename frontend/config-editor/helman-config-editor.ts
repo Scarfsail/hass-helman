@@ -46,18 +46,13 @@ import {
   asJsonObject,
   cloneJson,
   createInverterControllableDraft,
-  createCategoryKey,
   createDailyEnergyEntityDraft,
   createOptimizerDraft,
   createImportPriceWindowDraft,
-  createLabelKey,
-  type RenameObjectKeyResult,
   canonicalJson,
   getValueAtPath,
   moveListItem,
-  objectEntries,
   removeListItem,
-  renameObjectKey,
   setValueAtPath,
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
@@ -71,6 +66,8 @@ import {
   iterDevices,
   meterlessChildren,
   ownMeter,
+  slugId,
+  stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
 } from "../cards/shared/config/devices";
 import {
@@ -121,7 +118,6 @@ import {
   renderRequiredTextField,
   renderSvgIcon,
   formatError,
-  renameObjectKeyError,
   renderOptionalTextField,
   renderSimpleSection,
   setOptionalNumber,
@@ -309,7 +305,6 @@ export class HelmanConfigEditorPanel
     _importLoading: { state: true },
     _addDeviceTarget: { state: true },
     _liveApplianceMetadata: { state: true },
-    _haLabelNames: { state: true },
     _optimizerSchema: { state: true },
     _configDefaults: { state: true },
     _helpDialog: { state: true },
@@ -330,56 +325,70 @@ export class HelmanConfigEditorPanel
       color: var(--primary-text-color);
     }
 
-    /* One badge text, one line: label, text, remove -- wrapping only when the
-       card is too narrow to hold them. The two columns are named once, in a
-       head row, rather than labelled on every row. */
-    .label-entry-rows {
+    /* One group, one line: handle, name, short name, remove -- wrapping only
+       when the card is too narrow to hold them. The two columns are named
+       once, in a head row, rather than labelled on every row. */
+    .group-rows {
       display: grid;
       gap: 8px;
       padding: 0 16px 8px;
     }
 
-    .label-entry-row {
+    .group-rows-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .group-row {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 8px;
     }
 
-    .label-entry-row > .label-key-cell {
+    .group-row > .group-name-cell {
       flex: 2 1 220px;
       min-width: 150px;
     }
 
-    /* The badge text is usually a single emoji, so it takes what is left over
-       rather than half the row. */
-    .label-entry-row > .badge-text-cell {
+    /* The short name is usually an emoji or two, so it takes what is left
+       over rather than half the row. */
+    .group-row > .group-short-name-cell {
       flex: 1 1 120px;
       min-width: 100px;
       max-width: 240px;
     }
 
-    .label-entry-row > .list-actions {
+    .group-row > .group-id-cell {
+      flex: 1 1 100px;
+      min-width: 80px;
+      font-family: var(--code-font-family, monospace);
+      color: var(--secondary-text-color);
+      overflow-wrap: anywhere;
+    }
+
+    .group-row > .list-actions {
       margin-left: auto;
       flex: 0 0 auto;
     }
 
-    .label-entry-head label {
+    .group-row-head label {
       font-weight: 600;
       font-size: 0.93rem;
       color: var(--secondary-text-color);
     }
 
-    /* Holds the head row's columns over the ones below it, where the remove
-       button sits. Its width is the button's: 18px glyph plus its padding. */
-    .label-entry-actions-spacer {
+    /* Hold the head row's columns over the drag handle and the remove button
+       below them: each is its 18px glyph plus padding. */
+    .group-row-handle-spacer,
+    .group-row-actions-spacer {
       flex: 0 0 auto;
       width: 32px;
     }
 
-    /* The category name is the card's title, so it is edited where it is read
+    /* The grouping name is the card's title, so it is edited where it is read
        rather than in a field below the header. */
-    .category-key-input {
+    .grouping-name-input {
       font-size: 1rem;
       font-weight: var(--ha-font-weight-medium, 500);
       border-radius: 12px;
@@ -915,10 +924,6 @@ export class HelmanConfigEditorPanel
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
-  // The names of the labels configured in Home Assistant, for the badge-text
-  // picker. `null` means "not loaded" -- a registry that could not be read
-  // leaves the stored keys editable as free text rather than hiding them.
-  private _haLabelNames: string[] | null = null;
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
@@ -1795,24 +1800,6 @@ export class HelmanConfigEditorPanel
               "editor.fields.show_others_group",
               true,
             )}
-          </div>
-        `,
-        { initialOpen: false },
-      )}
-
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.visualization.device_label_text,
-        html`
-          <p class="inline-note">
-            ${this._t("editor.notes.device_label_text")}
-          </p>
-          <div class="list-stack">
-            ${this._renderDeviceLabelCategories()}
-          </div>
-          <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddDeviceLabelCategory}>
-              ${this._t("editor.actions.add_category")}
-            </button>
           </div>
         `,
         { initialOpen: false },
@@ -3255,6 +3242,20 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.devices.groupings,
+        html`
+          <p class="inline-note">${this._t("editor.notes.device_groupings")}</p>
+          ${this._renderGroupings()}
+          <div class="section-footer">
+            <button type="button" class="add-button add-grouping" @click=${this._handleAddGrouping}>
+              ${this._t("editor.actions.add_grouping")}
+            </button>
+          </div>
+        `,
+        { initialOpen: false },
+      )}
+
+      ${this._renderSectionScope(
         SECTION_SCOPE_IDS.devices.consumers,
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
@@ -3512,146 +3513,112 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _renderDeviceLabelCategories(): TemplateResult[] {
-    const categories = objectEntries(this._getValue(["visualization", "device_label_text"]));
-    if (categories.length === 0) {
-      return [html`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`];
+  /**
+   * `devices.groupings`: one card per grouping, its groups as sortable rows.
+   *
+   * Ids are slugged from the name once, when the entry is added, and never
+   * edited: a device names its group by id, so a rename touches the name only.
+   */
+  private _renderGroupings(): TemplateResult {
+    const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
+    if (groupings.length === 0) {
+      return html`<div class="message info">${this._t("editor.empty.no_device_groupings")}</div>`;
     }
-
-    return categories.map(([categoryKey, labels]) => {
-      const labelEntries = objectEntries(labels);
-      return html`
-        <div class="list-card">
-          <div class="card-header">
-            <div class="card-title">
-              <input
-                class="category-key-input"
-                .value=${categoryKey}
-                title=${this._t("editor.fields.category_key")}
-                aria-label=${this._t("editor.fields.category_key")}
-                @change=${(event: Event) => {
-                  this._handleRenameObjectKey(
-                    ["visualization", "device_label_text"],
-                    categoryKey,
-                    (event.currentTarget as HTMLInputElement).value,
-                  );
-                }}
-              />
-              <span class="card-subtitle">${this._t("editor.card.category")}</span>
-            </div>
-            <div class="inline-actions">
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removePath(["visualization", "device_label_text", categoryKey]),
-                label: this._t("editor.actions.remove_category"),
-              })}
-            </div>
-          </div>
-          <div class="label-entry-rows">
-            <div class="label-entry-row label-entry-head">
-              <label class="label-key-cell">${this._t("editor.fields.label_key")}</label>
-              <label class="badge-text-cell">${this._t("editor.fields.badge_text")}</label>
-              <span class="label-entry-actions-spacer"></span>
-            </div>
-            ${labelEntries.map(([labelKey, badgeText]) => html`
-              <div class="label-entry-row">
-                <div class="field field-compact label-key-cell">
-                  ${this._renderLabelKeyPicker(categoryKey, labelKey, labelEntries)}
-                </div>
-                <div class="field field-compact badge-text-cell">
-                  <input
-                    class="badge-text-input"
-                    .value=${this._stringValue(badgeText)}
-                    aria-label=${this._t("editor.fields.badge_text")}
-                    @change=${(event: Event) => {
-                      this._setRequiredString(
-                        ["visualization", "device_label_text", categoryKey, labelKey],
-                        (event.currentTarget as HTMLInputElement).value,
-                      );
-                    }}
-                  />
-                </div>
-                <div class="list-actions">
-                  ${renderRemoveButton(this, {
-                    className: "remove-label-entry",
-                    onRemove: () =>
-                      this._removePath(["visualization", "device_label_text", categoryKey, labelKey]),
-                  })}
-                </div>
-              </div>
-            `)}
-          </div>
-          <div class="section-footer">
-            <button
-              type="button"
-              class="add-button"
-              @click=${() => this._handleAddDeviceLabel(categoryKey)}
-            >
-              ${this._t("editor.actions.add_badge_text")}
-            </button>
-          </div>
-        </div>
-      `;
-    });
+    return html`
+      <div class="list-stack">
+        ${groupings.map((grouping, index) => this._renderGrouping(asJsonObject(grouping) ?? {}, index))}
+      </div>
+    `;
   }
 
-  /**
-   * The label a badge text applies to: Home Assistant's own labels, by name.
-   *
-   * `device_label_text` is keyed by label name, so the registry can offer the
-   * keys directly. Two cases keep it honest: a stored key the registry does not
-   * have is offered as its own option rather than silently rewritten, and a
-   * registry that could not be read falls back to the free-text input the
-   * section always had -- an editor that offered nothing would strand the keys.
-   */
-  private _renderLabelKeyPicker(
-    categoryKey: string,
-    labelKey: string,
-    labelEntries: [string, unknown][],
-  ): TemplateResult {
-    const rename = (value: string) =>
-      this._handleRenameObjectKey(["visualization", "device_label_text", categoryKey], labelKey, value);
-    const title = this._t("editor.fields.label_key");
-    // An empty registry is treated as no registry: a picker whose only entries
-    // are the keys already stored can only take editing away. A Home Assistant
-    // that simply has no labels yet is the common case for that.
-    if (this._haLabelNames === null || this._haLabelNames.length === 0) {
-      return html`
-        <input
-          class="label-key-input"
-          .value=${labelKey}
-          title=${title}
-          aria-label=${title}
-          @change=${(event: Event) => rename((event.currentTarget as HTMLInputElement).value)}
-        />
-      `;
-    }
-    // A name another row in this category already uses would collide on rename,
-    // so it is offered only by the row holding it.
-    const taken = new Set(
-      labelEntries.map(([key]) => key).filter((key) => key !== labelKey),
-    );
-    const options = this._haLabelNames.filter((name) => !taken.has(name));
+  private _renderGrouping(grouping: JsonObject, index: number): TemplateResult {
+    const path: PathSegment[] = ["devices", "groupings", index];
+    const groups = asJsonArray(grouping.groups) ?? [];
+    const nameLabel = this._t("editor.fields.grouping_name");
     return html`
-      <select
-        class="label-key-picker"
-        title=${title}
-        aria-label=${title}
-        @change=${(event: Event) => rename((event.currentTarget as HTMLSelectElement).value)}
-      >
-        <option value="" ?selected=${labelKey.length === 0}>
-          ${this._t("editor.values.select_label")}
-        </option>
-        ${labelKey.length > 0 && !options.includes(labelKey)
-          ? html`<option value=${labelKey} ?selected=${true}>
-              ${this._tFormat("editor.dynamic.unknown_label", { name: labelKey })}
-            </option>`
+      <div class="list-card grouping-card">
+        <div class="card-header">
+          <div class="card-title">
+            <input
+              class="grouping-name-input"
+              .value=${this._stringValue(grouping.name)}
+              title=${nameLabel}
+              aria-label=${nameLabel}
+              @change=${(event: Event) =>
+                this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
+            />
+            <span class="card-subtitle">${this._t("editor.card.grouping")} · ${this._stringValue(grouping.id)}</span>
+          </div>
+          <div class="inline-actions">
+            ${renderRemoveButton(this, {
+              className: "remove-grouping",
+              onRemove: () => this._handleRemoveGrouping(index),
+              label: this._t("editor.actions.remove_grouping"),
+            })}
+          </div>
+        </div>
+        ${groups.length > 0
+          ? html`
+              <div class="group-rows">
+                <div class="group-row group-row-head">
+                  <span class="group-row-handle-spacer"></span>
+                  <label class="group-name-cell">${this._t("editor.fields.group_name")}</label>
+                  <label class="group-short-name-cell">${this._t("editor.fields.group_short_name")}</label>
+                  <label class="group-id-cell">${this._t("editor.fields.group_id")}</label>
+                  <span class="group-row-actions-spacer"></span>
+                </div>
+                ${renderSortableList({
+                  items: groups,
+                  containerClass: "group-rows-list",
+                  renderItem: (group, groupIndex) =>
+                    this._renderGroupRow(asJsonObject(group) ?? {}, index, groupIndex),
+                  onMove: (oldIndex, newIndex) => this._moveListItem([...path, "groups"], oldIndex, newIndex),
+                })}
+              </div>
+            `
           : nothing}
-        ${options.map(
-          (name) => html`
-            <option value=${name} ?selected=${name === labelKey}>${name}</option>
-          `,
-        )}
-      </select>
+        <div class="section-footer">
+          <button type="button" class="add-button add-group" @click=${() => this._handleAddGroup(index)}>
+            ${this._t("editor.actions.add_group")}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderGroupRow(group: JsonObject, groupingIndex: number, groupIndex: number): TemplateResult {
+    const path: PathSegment[] = ["devices", "groupings", groupingIndex, "groups", groupIndex];
+    const nameLabel = this._t("editor.fields.group_name");
+    const shortNameLabel = this._t("editor.fields.group_short_name");
+    return html`
+      <div class="group-row">
+        ${renderDragHandle(this)}
+        <div class="field field-compact group-name-cell">
+          <input
+            class="group-name-input"
+            .value=${this._stringValue(group.name)}
+            aria-label=${nameLabel}
+            @change=${(event: Event) =>
+              this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field field-compact group-short-name-cell">
+          <input
+            class="group-short-name-input"
+            .value=${this._stringValue(group.short_name)}
+            aria-label=${shortNameLabel}
+            @change=${(event: Event) =>
+              this._setRequiredString([...path, "short_name"], (event.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+        <span class="group-id-cell">${this._stringValue(group.id)}</span>
+        <div class="list-actions">
+          ${renderRemoveButton(this, {
+            className: "remove-group",
+            onRemove: () => this._handleRemoveGroup(groupingIndex, groupIndex),
+          })}
+        </div>
+      </div>
     `;
   }
 
@@ -4286,13 +4253,11 @@ export class HelmanConfigEditorPanel
         liveApplianceMetadataResult,
         schemaResult,
         defaultsResult,
-        labelNamesResult,
       ] = await Promise.allSettled([
         this.hass.callWS<unknown>({ type: "helman/get_config" }),
         this._loadLiveApplianceMetadata(),
         fetchOptimizerSchema(this.hass),
         fetchConfigDefaults(this.hass),
-        this._loadHaLabelNames(),
       ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
@@ -4316,8 +4281,6 @@ export class HelmanConfigEditorPanel
         schemaResult.status === "fulfilled" ? schemaResult.value : null;
       this._configDefaults =
         defaultsResult.status === "fulfilled" ? defaultsResult.value : null;
-      this._haLabelNames =
-        labelNamesResult.status === "fulfilled" ? labelNamesResult.value : null;
       this._validation = null;
       this._dirty = this._config
         ? this._normalizeApplianceOptimizerTargets(this._config)
@@ -4648,29 +4611,43 @@ export class HelmanConfigEditorPanel
     return scopeId.replaceAll(":", "-").replaceAll(".", "-");
   }
 
-  private _handleAddDeviceLabelCategory = (): void => {
-    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text"])).map(
-      ([key]) => key,
-    );
-    const categoryKey = createCategoryKey(existingKeys);
+  private _handleAddGrouping = (): void => {
+    const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
+    const name = this._tFormat("editor.dynamic.new_grouping", { index: groupings.length + 1 });
+    const id = slugId(name, groupings.map((grouping) => this._stringValue(asJsonObject(grouping)?.id)), "grouping");
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey], {});
+      appendListItem(draft, ["devices", "groupings"], { id, name, groups: [] });
     });
   };
 
-  private _handleAddDeviceLabel(categoryKey: string): void {
-    const existingKeys = objectEntries(this._getValue(["visualization", "device_label_text", categoryKey])).map(
-      ([key]) => key,
-    );
-    // A new row starts on a label that exists, when the registry is in hand:
-    // the picker's whole point is that a key is a Home Assistant label, and a
-    // placeholder key would open as "not a Home Assistant label".
-    const firstFreeLabel = (this._haLabelNames ?? []).find(
-      (name) => !existingKeys.includes(name),
-    );
-    const labelKey = firstFreeLabel ?? createLabelKey(existingKeys);
+  private _handleAddGroup(groupingIndex: number): void {
+    const groupsPath: PathSegment[] = ["devices", "groupings", groupingIndex, "groups"];
+    const groups = asJsonArray(this._getValue(groupsPath)) ?? [];
+    const number = groups.length + 1;
+    const name = this._tFormat("editor.dynamic.new_group", { index: number });
+    const id = slugId(name, groups.map((group) => this._stringValue(asJsonObject(group)?.id)), "group");
     this._applyMutation((draft) => {
-      setValueAtPath(draft, ["visualization", "device_label_text", categoryKey, labelKey], "");
+      appendListItem(draft, groupsPath, { id, name, short_name: String(number) });
+    });
+  }
+
+  /** Removes a grouping and, in the same mutation, every device's reference to it. */
+  private _handleRemoveGrouping(index: number): void {
+    const groupingId = this._stringValue(this._getValue(["devices", "groupings", index, "id"]));
+    this._applyMutation((draft) => {
+      removeListItem(draft, ["devices", "groupings"], index);
+      stripGroupReferences(draft, groupingId);
+    });
+  }
+
+  /** Removes one group and, in the same mutation, every device's reference to it. */
+  private _handleRemoveGroup(groupingIndex: number, groupIndex: number): void {
+    const groupingPath: PathSegment[] = ["devices", "groupings", groupingIndex];
+    const groupingId = this._stringValue(this._getValue([...groupingPath, "id"]));
+    const groupId = this._stringValue(this._getValue([...groupingPath, "groups", groupIndex, "id"]));
+    this._applyMutation((draft) => {
+      removeListItem(draft, [...groupingPath, "groups"], groupIndex);
+      stripGroupReferences(draft, groupingId, groupId);
     });
   }
 
@@ -4736,29 +4713,6 @@ export class HelmanConfigEditorPanel
       );
     });
   };
-
-  private _handleRenameObjectKey(
-    path: PathSegment[],
-    currentKey: string,
-    nextKeyRaw: string,
-  ): void {
-    const nextKey = nextKeyRaw.trim();
-    if (!nextKey || nextKey === currentKey || !this._config) {
-      return;
-    }
-
-    const draft = cloneJson(this._config);
-    const result = renameObjectKey(draft, path, currentKey, nextKey);
-    if (!result.ok) {
-      this._message = { kind: "error", text: this._formatRenameObjectKeyError(result) };
-      return;
-    }
-
-    this._config = draft;
-    this._dirty = true;
-    this._validation = null;
-    this._message = null;
-  }
 
   private _moveListItem(path: PathSegment[], fromIndex: number, toIndex: number): void {
     this._applyMutation((draft) => {
@@ -5006,33 +4960,6 @@ export class HelmanConfigEditorPanel
     }
   }
 
-  /**
-   * The label names Home Assistant has, for the badge-text picker.
-   *
-   * ``device_label_text`` is keyed by label *name* -- that is what
-   * ``_apply_label_badge_texts`` matches a device's labels against -- so the
-   * picker offers names, not ids.
-   */
-  private async _loadHaLabelNames(): Promise<string[] | null> {
-    if (!this.hass) {
-      return null;
-    }
-    try {
-      const labels = await this.hass.callWS<{ name?: unknown }[]>({
-        type: "config/label_registry/list",
-      });
-      if (!Array.isArray(labels)) {
-        return null;
-      }
-      const names = labels
-        .map((label) => (typeof label?.name === "string" ? label.name.trim() : ""))
-        .filter((name) => name.length > 0);
-      return [...new Set(names)].sort((left, right) => left.localeCompare(right));
-    } catch {
-      return null;
-    }
-  }
-
   private _booleanValue(value: unknown, fallback: boolean): boolean {
     return booleanValue(value, fallback);
   }
@@ -5062,12 +4989,6 @@ export class HelmanConfigEditorPanel
           key: error.key ?? "",
         });
     }
-  }
-
-  private _formatRenameObjectKeyError(
-    result: Exclude<RenameObjectKeyResult, { ok: true }>,
-  ): string {
-    return renameObjectKeyError(this, result);
   }
 
   private _formatError(error: unknown, fallback: string): string {

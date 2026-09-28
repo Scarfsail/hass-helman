@@ -41,8 +41,10 @@ export interface TreeItemDTO extends TreeItemDTOBase {
     switchEntityId: string | null;
     isSource: boolean;
     isUnmeasured: boolean;
-    labels: string[];
-    labelBadgeTexts: string[];
+    /** A house device's own group per grouping: grouping id -> group id. */
+    groups: Record<string, string>;
+    /** The short names of those groups, in grouping order. */
+    groupBadgeTexts: string[];
     icon: string | null;
     compact: boolean;
     showAdditionalInfo: boolean;
@@ -69,6 +71,13 @@ export interface TreeItemDTO extends TreeItemDTOBase {
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────
 
+/** One entry of `devices.groupings`: an umbrella over groups, in display order. */
+export interface DeviceGrouping {
+    id: string;
+    name: string;
+    groups: { id: string; name: string; short_name: string }[];
+}
+
 export interface HelmanUiConfig {
     sources_title: string;
     consumers_title: string;
@@ -76,7 +85,7 @@ export interface HelmanUiConfig {
     others_group_label: string;
     show_empty_groups?: boolean;
     show_others_group?: boolean;
-    device_label_text: Record<string, Record<string, string>>;
+    device_groupings: DeviceGrouping[];
     history_buckets: number;
     history_bucket_duration: number;
 }

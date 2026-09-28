@@ -29,6 +29,7 @@ from .controllables.config import (
     peek_controllable_id,
     peek_controllable_kind,
     read_controllable_kinds_by_id,
+    read_groupings,
     read_schedulable_ids,
     running_signal,
     share_sensor_slug,
@@ -62,13 +63,13 @@ _RELOCATED_VISUALIZATION_KEYS = (
     "others_group_label",
     "show_empty_groups",
     "show_others_group",
-    "device_label_text",
 )
 
-#: Where config version 22 moved the device-level settings, old dotted path to
-#: new. The top-level regex is the v17-era spelling of the same key, and the
-#: house labels are refused under both the pre-v24 ``power_devices`` and the
-#: current ``energy_nodes`` spelling. Same reasoning as ``_RETIRED_CONFIG_KEYS``.
+#: Where config versions 22 and 26 moved the device-level settings, old dotted
+#: path to new. The top-level regex is the v17-era spelling of the same key,
+#: the house labels are refused under both the pre-v24 ``power_devices`` and
+#: the current ``energy_nodes`` spelling, and the label texts under both their
+#: pre-v18 and their v18 home. Same reasoning as ``_RETIRED_CONFIG_KEYS``.
 _RELOCATED_DEVICE_KEYS = {
     "power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
     "visualization.power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
@@ -76,12 +77,15 @@ _RELOCATED_DEVICE_KEYS = {
     "power_devices.house.power_switch_label": "devices.power_switch_label",
     "energy_nodes.house.power_sensor_label": "devices.power_sensor_label",
     "energy_nodes.house.power_switch_label": "devices.power_switch_label",
+    "device_label_text": "devices.groupings",
+    "visualization.device_label_text": "devices.groupings",
 }
 
 #: The keys the ``devices`` section object holds since config version 25.
 _DEVICES_SECTION_KEYS = (
     "consumers",
     "system",
+    "groupings",
     "name_cleaner_regex",
     "power_sensor_label",
     "power_switch_label",
@@ -234,10 +238,6 @@ def _validate_visualization_config(
         "visualization.show_others_group",
         visualization.get("show_others_group"),
     )
-
-    device_label_text = visualization.get("device_label_text")
-    if device_label_text is not None:
-        _validate_device_label_text(device_label_text, report)
 
 
 def _validate_energy_nodes_config(
@@ -1087,6 +1087,8 @@ def _validate_controllables_config(
             report, section, f"devices.{key}", raw_section.get(key)
         )
 
+    known_groups = _validate_groupings(read_groupings(config), report)
+
     for key in ("system", "consumers"):
         raw_list = raw_section.get(key)
         if raw_list is not None and not isinstance(raw_list, list):
@@ -1207,7 +1209,7 @@ def _validate_controllables_config(
             seen_inverter = True
             _validate_inverter_controllable(config, raw_device, path, report)
             # A system device never nests and is always schedulable.
-            for key in ("children", "schedulable"):
+            for key in ("children", "schedulable", "groups"):
                 if raw_device.get(key) is not None:
                     report.add_error(
                         section=section,
@@ -1216,6 +1218,8 @@ def _validate_controllables_config(
                         message=f"{path} is a system device and takes no {key}",
                     )
             continue
+
+        _validate_device_groups(raw_device.get("groups"), path, known_groups, report)
 
         schedulable = raw_device.get("schedulable")
         if schedulable is not None and not isinstance(schedulable, bool):
@@ -1267,6 +1271,142 @@ def _validate_controllables_config(
                     "a meter belongs to exactly one device — put the devices "
                     "behind it under that device as children without a meter"
                 ),
+            )
+
+
+def _validate_groupings(
+    raw_groupings: Any, report: ValidationReport
+) -> dict[str, set[str]]:
+    """``devices.groupings``: each grouping and its groups, with unique ids.
+
+    Returns ``grouping id -> its group ids`` for the ones whose id is valid,
+    which is what a device's ``groups`` may name.
+    """
+    section = "devices"
+    known: dict[str, set[str]] = {}
+    if raw_groupings is None:
+        return known
+    if not isinstance(raw_groupings, list):
+        report.add_error(
+            section=section,
+            path="devices.groupings",
+            code="invalid_type",
+            message="devices.groupings must be a list",
+        )
+        return known
+    for index, grouping in enumerate(raw_groupings):
+        path = f"devices.groupings[{index}]"
+        if not isinstance(grouping, Mapping):
+            report.add_error(
+                section=section,
+                path=path,
+                code="invalid_type",
+                message=f"{path} must be an object",
+            )
+            continue
+        group_ids = _validate_grouping_entries(grouping.get("groups"), path, report)
+        _validate_required_string(report, f"{path}.name", grouping.get("name"))
+        grouping_id = grouping.get("id")
+        if not _validate_required_string(report, f"{path}.id", grouping_id):
+            continue
+        if grouping_id in known:
+            report.add_error(
+                section=section,
+                path=f"{path}.id",
+                code="duplicate_grouping_id",
+                message=f"grouping id {grouping_id!r} is used more than once",
+            )
+            continue
+        known[grouping_id] = group_ids
+    return known
+
+
+def _validate_grouping_entries(
+    raw_groups: Any, path: str, report: ValidationReport
+) -> set[str]:
+    """One grouping's ``groups`` list; returns the valid, unique group ids."""
+    group_ids: set[str] = set()
+    if not isinstance(raw_groups, list):
+        report.add_error(
+            section="devices",
+            path=f"{path}.groups",
+            code="invalid_type",
+            message=f"{path}.groups must be a list",
+        )
+        return group_ids
+    for index, group in enumerate(raw_groups):
+        group_path = f"{path}.groups[{index}]"
+        if not isinstance(group, Mapping):
+            report.add_error(
+                section="devices",
+                path=group_path,
+                code="invalid_type",
+                message=f"{group_path} must be an object",
+            )
+            continue
+        for key in ("name", "short_name"):
+            _validate_required_string(report, f"{group_path}.{key}", group.get(key))
+        group_id = group.get("id")
+        if not _validate_required_string(report, f"{group_path}.id", group_id):
+            continue
+        if group_id in group_ids:
+            report.add_error(
+                section="devices",
+                path=f"{group_path}.id",
+                code="duplicate_group_id",
+                message=f"group id {group_id!r} is used more than once in {path}",
+            )
+            continue
+        group_ids.add(group_id)
+    return group_ids
+
+
+def _validate_required_string(report: ValidationReport, path: str, value: Any) -> bool:
+    """A non-empty string at ``path`` under ``devices``; reports and returns ``False`` if not."""
+    if _is_non_empty_string(value):
+        return True
+    report.add_error(
+        section="devices",
+        path=path,
+        code="required",
+        message=f"{path} must be a non-empty string",
+    )
+    return False
+
+
+def _validate_device_groups(
+    raw_groups: Any,
+    path: str,
+    known_groups: Mapping[str, set[str]],
+    report: ValidationReport,
+) -> None:
+    """A device's ``groups``: grouping id -> one group of that grouping."""
+    if raw_groups is None:
+        return
+    section = "devices"
+    if not isinstance(raw_groups, Mapping):
+        report.add_error(
+            section=section,
+            path=f"{path}.groups",
+            code="invalid_type",
+            message=f"{path}.groups must be an object of grouping id -> group id",
+        )
+        return
+    for grouping_id, group_id in raw_groups.items():
+        group_path = f"{path}.groups.{grouping_id}"
+        if grouping_id not in known_groups:
+            report.add_error(
+                section=section,
+                path=group_path,
+                code="unknown_grouping",
+                message=f"{group_path} names no grouping in devices.groupings",
+            )
+        elif not isinstance(group_id, str) or group_id not in known_groups[grouping_id]:
+            report.add_error(
+                section=section,
+                path=group_path,
+                code="unknown_group",
+                message=f"{group_path} names no group of grouping {grouping_id!r}",
             )
 
 
@@ -2030,59 +2170,6 @@ def _validate_training_time(value: object, report: ValidationReport) -> None:
             code="invalid_value",
             message=f"{path} must be a valid time",
         )
-
-
-def _validate_device_label_text(
-    value: object,
-    report: ValidationReport,
-) -> None:
-    section = "visualization"
-    if not isinstance(value, Mapping):
-        report.add_error(
-            section=section,
-            path="visualization.device_label_text",
-            code="invalid_type",
-            message="visualization.device_label_text must be an object",
-        )
-        return
-
-    for category_key, category_value in value.items():
-        if not _is_non_empty_string(category_key):
-            report.add_error(
-                section=section,
-                path="visualization.device_label_text",
-                code="invalid_key",
-                message="visualization.device_label_text keys must be non-empty strings",
-            )
-            continue
-        if not isinstance(category_value, Mapping):
-            report.add_error(
-                section=section,
-                path=f"visualization.device_label_text.{category_key}",
-                code="invalid_type",
-                message=f"visualization.device_label_text.{category_key} must be an object",
-            )
-            continue
-        for label_name, badge_text in category_value.items():
-            if not _is_non_empty_string(label_name):
-                report.add_error(
-                    section=section,
-                    path=f"visualization.device_label_text.{category_key}",
-                    code="invalid_key",
-                    message=(
-                        f"visualization.device_label_text.{category_key} keys must be non-empty strings"
-                    ),
-                )
-            if not _is_non_empty_string(badge_text):
-                report.add_error(
-                    section=section,
-                    path=f"visualization.device_label_text.{category_key}.{label_name}",
-                    code="invalid_type",
-                    message=(
-                        f"visualization.device_label_text.{category_key}.{label_name} must be a "
-                        "non-empty string"
-                    ),
-                )
 
 
 def _validate_entity_id_list(

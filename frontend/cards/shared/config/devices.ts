@@ -102,6 +102,41 @@ export function hasSwitch(device: JsonObject): boolean {
   });
 }
 
+/** Lower-case, every other run of characters `_`, trimmed -- as `share_sensor_slug` does. */
+const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+/**
+ * A stable id slugged from `name`: folded to ASCII, then {@link slug}ged, with
+ * `_2`, `_3`... on a clash and `fallback` when nothing is left (an emoji-only
+ * name). What a new grouping or group gets; generated once and never edited,
+ * so a rename changes only the name. Mirrors `_slug_id` in
+ * `custom_components/helman/automation/migration.py`.
+ */
+export function slugId(name: string, taken: Iterable<string>, fallback: string): string {
+  const takenIds = new Set(taken);
+  const base = slug(name.normalize("NFKD").replace(/[^\x00-\x7f]/g, "")) || fallback;
+  let candidate = base;
+  for (let suffix = 2; takenIds.has(candidate); suffix += 1) {
+    candidate = `${base}_${suffix}`;
+  }
+  return candidate;
+}
+
+/**
+ * Drops every device's reference to a grouping, or only to `groupId` of it,
+ * and a `groups` map left empty -- so removing a grouping or a group never
+ * leaves the draft naming one that is gone.
+ */
+export function stripGroupReferences(config: JsonObject, groupingId: string, groupId?: string): void {
+  for (const { device } of iterDevices(config)) {
+    const groups = asJsonObject(device.groups);
+    if (!groups || !(groupingId in groups)) continue;
+    if (groupId !== undefined && groups[groupingId] !== groupId) continue;
+    delete groups[groupingId];
+    if (Object.keys(groups).length === 0) delete device.groups;
+  }
+}
+
 /**
  * The id a device added for `entityId` gets: the entity's object id, or `_2`,
  * `_3`... on a clash. Mirrors `meter_device_id` in
@@ -115,7 +150,6 @@ export function deviceIdFor(
 ): string {
   const taken = new Set(takenIds);
   // Share sensors normalize punctuation and case, just like share_sensor_slug.
-  const slug = (id: string) => id.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const takenSlugs = new Set(Array.from(meterlessIds, slug));
   const base = entityId.split(".").slice(1).join(".") || entityId;
   let candidate = base;

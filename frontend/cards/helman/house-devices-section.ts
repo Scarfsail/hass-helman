@@ -4,7 +4,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { TreeItem } from "./tree-item";
 import "./tree-item-list";
-import type { HelmanUiConfig } from "../helman-api";
+import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
 
 @customElement("helman-house-devices-section")
@@ -24,6 +24,7 @@ export class HelmanHouseDevicesSection extends LitElement {
     @property({ type: Boolean }) public sortChildrenByPower: boolean = true;
     @property({ type: Number }) public initial_show_only_top_children: number = 3;
 
+    /** The id of the grouping the devices are grouped by, if any. */
     @state() private _activeCategory?: string;
     @state() private _showAll: boolean = false;
     @state() private _groupedDevices?: TreeItem[];
@@ -121,43 +122,30 @@ export class HelmanHouseDevicesSection extends LitElement {
         `;
     }
 
-    // No label filtering anymore – grouping replaces it
-
-    private _getCategories(): string[] {
-        const mapping = this.uiConfig?.device_label_text || {};
-        return Object.keys(mapping);
+    private _getGroupings(): DeviceGrouping[] {
+        return this.uiConfig?.device_groupings ?? [];
     }
 
-    private _groupByCategory(devices: TreeItem[], category: string): TreeItem[] {
-        const mapping = this.uiConfig?.device_label_text?.[category];
-        if (!mapping) return devices;
-        const order = Object.keys(mapping);
-        const groups: Record<string, TreeItem> = {};
-        for (const label of order) {
-            const id = `group:${category}:${label}`;
-            const emoji = mapping[label];
-            const group = new TreeItem(id, `${label} (${emoji})`, null, null, this.historyBuckets);
-            group.virtualType = 'labelCategory';
-            group.groupCategory = category;
-            group.groupLabel = label;
+    private _groupByCategory(devices: TreeItem[], groupingId: string): TreeItem[] {
+        const grouping = this._getGroupings().find((g) => g.id === groupingId);
+        if (!grouping) return devices;
+        const groups = new Map<string, TreeItem>();
+        for (const { id, name, short_name } of grouping.groups) {
+            const group = new TreeItem(`group:${groupingId}:${id}`, `${name} (${short_name})`, null, null, this.historyBuckets);
+            group.virtualType = 'group';
+            group.groupingId = groupingId;
+            group.groupId = id;
             group.children_full_width = true;
             group.sortChildrenByPower = true;
             group.childrenCollapsed = true; // default collapsed
-            groups[label] = group;
+            groups.set(id, group);
         }
         const unmatched: TreeItem[] = [];
         for (const dev of devices) {
             if (dev.isUnmeasured) continue;
-            const labels = new Set(dev.labels || []);
-            let assigned = false;
-            for (const label of order) {
-                if (labels.has(label)) {
-                    groups[label].children.push(dev);
-                    assigned = true;
-                    break;
-                }
-            }
-            if (!assigned) unmatched.push(dev);
+            const group = groups.get(dev.groups?.[groupingId] ?? '');
+            if (group) group.children.push(dev);
+            else unmatched.push(dev);
         }
         // Aggregate power for groups
         const aggregateGroup = (group: TreeItem) => {
@@ -194,17 +182,16 @@ export class HelmanHouseDevicesSection extends LitElement {
             }
         };
         const result: TreeItem[] = [];
-        for (const label of order) {
-            const group = groups[label];
+        for (const group of groups.values()) {
             if (group.children.length > 0 || this.uiConfig?.show_empty_groups) {
                 aggregateGroup(group);
                 result.push(group);
             }
         }
         if ((this.uiConfig?.show_others_group ?? true) && unmatched.length > 0) {
-            const others = new TreeItem(`group:${category}:others`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
+            const others = new TreeItem(`others:${groupingId}`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
             others.virtualType = 'others';
-            others.groupCategory = category;
+            others.groupingId = groupingId;
             others.children_full_width = true;
             others.sortChildrenByPower = true;
             others.childrenCollapsed = true; // default collapsed
@@ -217,7 +204,7 @@ export class HelmanHouseDevicesSection extends LitElement {
 
     render() {
     const filtered = this.devices || [];
-        const categories = this._getCategories();
+        const groupings = this._getGroupings();
         const activeCat = this._activeCategory;
         const devicesToShow = activeCat ? (this._groupedDevices ?? filtered) : filtered;
     const showTop = activeCat ? 0 : (this._showAll ? 0 : this.initial_show_only_top_children);
@@ -228,7 +215,7 @@ export class HelmanHouseDevicesSection extends LitElement {
 
         return html`
             <div class="house-section">
-                ${canToggleShowAll || categories.length > 0 ? html`
+                ${canToggleShowAll || groupings.length > 0 ? html`
                     <div class="categories-row">
                         ${canToggleShowAll ? html`
                             <button class="chip show-toggle"
@@ -238,13 +225,13 @@ export class HelmanHouseDevicesSection extends LitElement {
                                     : (this._localize?.('house_section.show_more') ?? 'Více')}
                             </button>
                         ` : nothing}
-                        ${categories.length > 0 ? html`
+                        ${groupings.length > 0 ? html`
                             <div class="categories-title">${this.uiConfig?.groups_title ?? this._localize?.('house_section.group_by') ?? 'Seskupit podle'}</div>
                             <div>
-                                ${categories.map((c) => {
-                                    const active = this._activeCategory === c;
+                                ${groupings.map((g) => {
+                                    const active = this._activeCategory === g.id;
                                     return html`<button class="chip ${active ? 'active' : ''}"
-                                        @click=${() => { this._activeCategory = active ? undefined : c; }}>${c}</button>`;
+                                        @click=${() => { this._activeCategory = active ? undefined : g.id; }}>${g.name}</button>`;
                                 })}
                             </div>
                         ` : nothing}

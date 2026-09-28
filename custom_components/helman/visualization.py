@@ -20,16 +20,11 @@ VISUALIZATION_DEFAULTS: dict[str, Any] = {
     "others_group_label": "Others",
     "show_empty_groups": False,
     "show_others_group": True,
-    "device_label_text": {},
 }
 
 
 def read_visualization(config: Mapping[str, Any]) -> dict[str, Any]:
-    """``config["visualization"]`` with every omitted key filled from the defaults.
-
-    A shallow merge: the result shares the default ``device_label_text``, so a
-    caller that stores it in a document copies it first.
-    """
+    """``config["visualization"]`` with every omitted key filled from the defaults."""
     visualization = config.get("visualization")
     if not isinstance(visualization, Mapping):
         visualization = {}

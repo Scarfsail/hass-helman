@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
 from .automation.migration import (
+    DeviceLabels,
     EntitySuggestions,
     migrate_config_document,
     needs_migration,
@@ -87,9 +88,10 @@ class HelmanStorage:
 
         Persists only when something actually changed, so a config already at
         the current version never rewrites the store on every start. Energy
-        preferences and the entity registry are read only then: the upgrade to
+        preferences and the registries are read only then: the upgrade to
         version 21 imports the former, the one to version 23 backfills devices
-        from the latter.
+        from the entity registry, and the one to version 26 turns HA labels
+        into device groups.
         """
         if not needs_migration(self._config):
             return
@@ -98,6 +100,7 @@ class HelmanStorage:
             self._config,
             preferences,
             self._entity_suggestions() if upgrade else None,
+            self._device_labels() if upgrade else None,
         )
         # Not every step reshapes optimizers any more, so only name them when
         # some were actually rewritten.
@@ -129,6 +132,37 @@ class HelmanStorage:
         from .controllables.suggestions import suggest_entities
 
         return partial(suggest_entities, self._hass)
+
+    def _device_labels(self) -> DeviceLabels:
+        """``entity id -> label names`` from every entity on its HA device.
+
+        What the card grouped devices by before version 26; read only by that
+        upgrade, so the registries are imported here for the same reason.
+        """
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers import label_registry as lr
+
+        ent_reg = er.async_get(self._hass)
+        lbl_reg = lr.async_get(self._hass)
+        entities_by_device: dict[str, list[Any]] = {}
+        for entity in ent_reg.entities.values():
+            if entity.device_id:
+                entities_by_device.setdefault(entity.device_id, []).append(entity)
+
+        def labels(entity_id: str) -> list[str]:
+            ent_entry = ent_reg.async_get(entity_id)
+            if not ent_entry or not ent_entry.device_id:
+                return []
+            label_ids: set[str] = set()
+            for entity in entities_by_device.get(ent_entry.device_id, []):
+                label_ids.update(entity.labels)
+            return [
+                label_entry.name
+                for label_id in label_ids
+                if (label_entry := lbl_reg.async_get_label(label_id))
+            ]
+
+        return labels
 
     @property
     def config(self) -> dict[str, Any]:

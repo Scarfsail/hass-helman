@@ -1676,10 +1676,26 @@ class VisualizationRelocationTests(unittest.TestCase):
 
         migrated, ids = self._migrate_from_v17(dict(document))
 
-        # v22 moves the regex on to the ``devices`` section.
+        # v22 moves the regex on to the ``devices`` section, and v26 turns the
+        # label texts into its groupings.
         regex = document.pop("power_sensor_name_cleaner_regex")
+        document.pop("device_label_text")
         self.assertEqual(migrated["visualization"], document)
-        self.assertEqual(migrated["devices"], {"name_cleaner_regex": regex})
+        self.assertEqual(
+            migrated["devices"],
+            {
+                "name_cleaner_regex": regex,
+                "groupings": [
+                    {
+                        "id": "rooms",
+                        "name": "rooms",
+                        "groups": [
+                            {"id": "kitchen", "name": "Kitchen", "short_name": "KT"}
+                        ],
+                    }
+                ],
+            },
+        )
         for key in document:
             self.assertNotIn(key, migrated)
         self.assertEqual(ids, [])
@@ -2479,6 +2495,167 @@ class DevicesSplitMigrationTests(unittest.TestCase):
 
         self.assertEqual(
             self._migrate_from_v24({"items": [parent]}), {"consumers": [parent]}
+        )
+
+
+class DeviceGroupingsMigrationTests(unittest.TestCase):
+    """v25 -> v26: ``visualization.device_label_text`` -> ``devices.groupings`` + ``groups``."""
+
+    LABEL_TEXT = {
+        "Jističe": {"Technická FV": "🔋T", "Technická síť": "⚡T"},
+        "Režimy": {"Vypnout na noc": "😴"},
+    }
+    GROUPINGS = [
+        {
+            "id": "jistice",
+            "name": "Jističe",
+            "groups": [
+                {"id": "technicka_fv", "name": "Technická FV", "short_name": "🔋T"},
+                {"id": "technicka_sit", "name": "Technická síť", "short_name": "⚡T"},
+            ],
+        },
+        {
+            "id": "rezimy",
+            "name": "Režimy",
+            "groups": [
+                {"id": "vypnout_na_noc", "name": "Vypnout na noc", "short_name": "😴"}
+            ],
+        },
+    ]
+    #: ``entity id -> label names on its HA device``.
+    LABELS = {
+        "sensor.boiler_energy": ["Vypnout na noc", "Technická FV"],
+        # Both breakers' labels: the first in the category's order wins.
+        "sensor.rack_energy": ["Technická síť", "Technická FV", "Unrelated"],
+        "climate.living": ["Technická síť"],
+        "sensor.washer_energy": ["Unrelated"],
+        "sensor.inverter_energy": ["Technická FV"],
+    }
+
+    def setUp(self) -> None:
+        self.requests: list[str] = []
+
+    def _labels(self, entity_id):
+        self.requests.append(entity_id)
+        return self.LABELS.get(entity_id, [])
+
+    def _migrate_from_v25(self, label_text, devices=None, labels="default"):
+        document = {
+            "config_version": 25,
+            "visualization": {"sources_title": "Zdroje", "device_label_text": label_text},
+        }
+        if devices is not None:
+            document["devices"] = deepcopy(devices)
+        migrated, _ids = migrate_config_document(
+            document, None, None, self._labels if labels == "default" else labels
+        )
+        return migrated
+
+    def _devices(self):
+        return {
+            "system": [
+                {
+                    "kind": "inverter",
+                    "id": "inverter",
+                    "consumption": {"energy_entity_id": "sensor.inverter_energy"},
+                }
+            ],
+            "consumers": [
+                {"id": "boiler", "consumption": {"energy_entity_id": "sensor.boiler_energy"}},
+                {
+                    "id": "rack",
+                    "consumption": {"energy_entity_id": "sensor.rack_energy"},
+                    "children": [
+                        {
+                            "kind": "climate",
+                            "id": "ac-living",
+                            "controls": {"climate": {"entity_id": "climate.living"}},
+                        }
+                    ],
+                },
+                {"id": "washer", "consumption": {"energy_entity_id": "sensor.washer_energy"}},
+            ],
+        }
+
+    def test_categories_and_labels_become_groupings_and_groups_in_order(self) -> None:
+        migrated = self._migrate_from_v25(self.LABEL_TEXT)
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(migrated["devices"], {"groupings": self.GROUPINGS})
+        self.assertEqual(migrated["visualization"], {"sources_title": "Zdroje"})
+
+    def test_membership_is_the_first_matching_label_per_category(self) -> None:
+        devices = self._migrate_from_v25(self.LABEL_TEXT, self._devices())["devices"]
+
+        boiler, rack, washer = devices["consumers"]
+        self.assertEqual(
+            boiler["groups"], {"jistice": "technicka_fv", "rezimy": "vypnout_na_noc"}
+        )
+        self.assertEqual(rack["groups"], {"jistice": "technicka_fv"})
+        self.assertNotIn("groups", washer)
+        self.assertEqual(devices["groupings"], self.GROUPINGS)
+
+    def test_a_meterless_child_reads_its_running_signals_labels(self) -> None:
+        devices = self._migrate_from_v25(self.LABEL_TEXT, self._devices())["devices"]
+
+        (child,) = devices["consumers"][1]["children"]
+        self.assertEqual(child["groups"], {"jistice": "technicka_sit"})
+        self.assertIn("climate.living", self.requests)
+
+    def test_system_devices_are_skipped(self) -> None:
+        devices = self._migrate_from_v25(self.LABEL_TEXT, self._devices())["devices"]
+
+        self.assertNotIn("groups", devices["system"][0])
+        self.assertNotIn("sensor.inverter_energy", self.requests)
+
+    def test_without_labels_the_groupings_still_convert(self) -> None:
+        migrated = self._migrate_from_v25(self.LABEL_TEXT, self._devices(), labels=None)
+
+        self.assertEqual(migrated["devices"]["groupings"], self.GROUPINGS)
+        self.assertFalse(
+            any("groups" in device for device in _all_devices(migrated))
+        )
+        self.assertNotIn("device_label_text", migrated["visualization"])
+
+    def test_colliding_and_emoji_only_names_get_distinct_ids(self) -> None:
+        migrated = self._migrate_from_v25(
+            {
+                "Rooms": {"Kuchyň": "K", "kuchyn": "k", "🍳": "p", "🛁": "b"},
+                "rooms": {},
+                "⚡": {},
+            }
+        )
+
+        groupings = migrated["devices"]["groupings"]
+        self.assertEqual(
+            [grouping["id"] for grouping in groupings], ["rooms", "rooms_2", "grouping"]
+        )
+        self.assertEqual(
+            [group["id"] for group in groupings[0]["groups"]],
+            ["kuchyn", "kuchyn_2", "group", "group_2"],
+        )
+
+    def test_a_document_without_label_texts_is_unchanged(self) -> None:
+        migrated = self._migrate_from_v25({}, self._devices())
+
+        self.assertEqual(migrated["devices"], self._devices())
+        self.assertNotIn("device_label_text", migrated["visualization"])
+        self.assertEqual(self.requests, [])
+
+    def test_a_devices_value_that_is_not_an_object_is_left_for_the_validator(
+        self,
+    ) -> None:
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 25,
+                "devices": ["oops"],
+                "visualization": {"device_label_text": self.LABEL_TEXT},
+            }
+        )
+
+        self.assertEqual(migrated["devices"], ["oops"])
+        self.assertEqual(
+            migrated["visualization"], {"device_label_text": self.LABEL_TEXT}
         )
 
 
