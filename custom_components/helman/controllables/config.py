@@ -64,6 +64,33 @@ def read_consumers(config: Mapping[str, Any] | None) -> Any:
     return read_devices_section(config).get("consumers")
 
 
+def read_groupings(config: Mapping[str, Any] | None) -> Any:
+    """The raw ``devices.groupings`` value — ``None`` when absent.
+
+    Since config version 26 each grouping (an umbrella such as "breakers")
+    lists its groups; a device names its group per grouping in
+    :func:`device_groups`. Unvalidated, with the same "absent vs wrong"
+    contract as :func:`read_consumers`.
+    """
+    return read_devices_section(config).get("groupings")
+
+
+def device_groups(device: Device) -> dict[str, str]:
+    """A device's own ``groups``: grouping id -> group id.
+
+    Only string pairs are read; anything else is the validator's to report.
+    A child without an entry here has no group of its own.
+    """
+    groups = device.get("groups")
+    if not isinstance(groups, Mapping):
+        return {}
+    return {
+        grouping_id: group_id
+        for grouping_id, group_id in groups.items()
+        if isinstance(grouping_id, str) and isinstance(group_id, str)
+    }
+
+
 def read_system_devices(config: Mapping[str, Any] | None) -> Any:
     """The raw ``devices.system`` value — ``None`` when absent.
 

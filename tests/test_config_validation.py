@@ -66,11 +66,6 @@ def _valid_config() -> dict:
             "show_others_group": True,
             "history_buckets": 60,
             "history_bucket_duration": 5,
-            "device_label_text": {
-                "rooms": {
-                    "Kitchen": "KT",
-                }
-            },
         },
         "energy_nodes": {
             "house": {
@@ -129,7 +124,13 @@ def _valid_config() -> dict:
                 "training_window_days": 56,
             },
         },
-        "devices": {"name_cleaner_regex": r"\s+", "system": [
+        "devices": {"name_cleaner_regex": r"\s+", "groupings": [
+            {
+                "id": "rooms",
+                "name": "Rooms",
+                "groups": [{"id": "garage", "name": "Garage", "short_name": "G"}],
+            }
+        ], "system": [
             _inverter_controllable(),
         ], "consumers": [
             {
@@ -137,6 +138,7 @@ def _valid_config() -> dict:
                 "schedulable": True,
                 "id": "garage-ev",
                 "name": "Garage EV",
+                "groups": {"rooms": "garage"},
                 "limits": {
                     "max_charging_power_kw": 11.0,
                 },
@@ -1238,16 +1240,87 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_invalid_device_label_text_shape_is_reported(self) -> None:
+    def test_invalid_groupings_are_reported(self) -> None:
         config = _valid_config()
-        config["visualization"]["device_label_text"] = {"rooms": {"Kitchen": 123}}
+        config["devices"]["groupings"] = [
+            {"id": "rooms", "name": "Rooms", "groups": [
+                {"id": "a", "name": "A", "short_name": "A"},
+                {"id": "a", "name": "", "short_name": 1},
+            ]},
+            {"id": "rooms", "name": "Again", "groups": []},
+            {"id": "", "groups": "x"},
+            "oops",
+        ]
+        config["devices"]["consumers"][0]["groups"] = {"rooms": "a"}
 
         report = validate_config_document(config)
 
-        self.assertFalse(report.valid)
         self.assertEqual(
-            report.errors[0].path,
-            "visualization.device_label_text.rooms.Kitchen",
+            _paths_and_codes(report),
+            [
+                ("devices.groupings[0].groups[1].name", "required"),
+                ("devices.groupings[0].groups[1].short_name", "required"),
+                ("devices.groupings[0].groups[1].id", "duplicate_group_id"),
+                ("devices.groupings[1].id", "duplicate_grouping_id"),
+                ("devices.groupings[2].groups", "invalid_type"),
+                ("devices.groupings[2].name", "required"),
+                ("devices.groupings[2].id", "required"),
+                ("devices.groupings[3]", "invalid_type"),
+            ],
+        )
+
+    def test_groupings_must_be_a_list(self) -> None:
+        config = _valid_config()
+        config["devices"]["groupings"] = {"rooms": {}}
+        del config["devices"]["consumers"][0]["groups"]
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report), [("devices.groupings", "invalid_type")]
+        )
+
+    def test_a_device_names_only_known_groupings_and_groups(self) -> None:
+        breaker = _ac_breaker()
+        breaker["groups"] = {"rooms": "cellar", "floors": "garage"}
+        breaker["children"][0]["groups"] = {"rooms": "garage"}
+        breaker["children"][1]["groups"] = ["garage"]
+        config = _valid_config()
+        config["devices"]["consumers"].append(breaker)
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [
+                ("devices.consumers[1].groups.rooms", "unknown_group"),
+                ("devices.consumers[1].groups.floors", "unknown_grouping"),
+                ("devices.consumers[1].children[1].groups", "invalid_type"),
+            ],
+        )
+
+    def test_an_unsupported_kind_still_names_only_known_groups(self) -> None:
+        config = _valid_config()
+        config["devices"]["consumers"].append(
+            {"kind": "heat_pump", "groups": {"floors": "garage"}}
+        )
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [("devices.consumers[1].groups.floors", "unknown_grouping")],
+        )
+
+    def test_a_system_device_takes_no_groups(self) -> None:
+        config = _valid_config()
+        config["devices"]["system"][0]["groups"] = {"rooms": "garage"}
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [("devices.system[0].groups", "groups_not_allowed")],
         )
 
     def test_top_level_card_key_is_refused_by_name(self) -> None:
@@ -1326,6 +1399,8 @@ class ConfigValidationTests(unittest.TestCase):
             ("power_devices.house.power_switch_label", "devices.power_switch_label"),
             ("energy_nodes.house.power_sensor_label", "devices.power_sensor_label"),
             ("energy_nodes.house.power_switch_label", "devices.power_switch_label"),
+            ("device_label_text", "devices.groupings"),
+            ("visualization.device_label_text", "devices.groupings"),
         ):
             with self.subTest(old_path=old_path):
                 config = _valid_config()

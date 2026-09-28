@@ -78,11 +78,11 @@ async function installOrderReader(page: Page): Promise<void> {
 }
 
 /** One consumer node shaped the way the card's hydrated tree shapes them. */
-function fakeNode(id: string, name: string, labels: string[] = []) {
+function fakeNode(id: string, name: string, groups: Record<string, string> = {}) {
     return {
         id,
         name,
-        labels,
+        groups,
         children: [],
         valueType: "default",
         isSource: false,
@@ -147,7 +147,10 @@ test.describe("history tick reaches the rendered bars", () => {
             el.historyBuckets = 3;
             el.historyBucketDuration = 1;
             el.historyRevision = 0;
-            el.uiConfig = { device_label_text: { Room: { Kitchen: "🍳" } }, show_others_group: false };
+            el.uiConfig = {
+                device_groupings: [{ id: "room", name: "Room", groups: [{ id: "kitchen", name: "Kitchen", short_name: "🍳" }] }],
+                show_others_group: false,
+            };
             document.body.appendChild(el);
             await el.updateComplete;
 
@@ -166,7 +169,7 @@ test.describe("history tick reaches the rendered bars", () => {
             const after = await (window as any).__rowColours(container.shadowRoot);
 
             return { before, after };
-        }, { GRID, node: fakeNode("washer", "Washer", ["Kitchen"]) });
+        }, { GRID, node: fakeNode("washer", "Washer", { room: "kitchen" }) });
 
         expect(colours.before["Kitchen (🍳)"]).toEqual([SOLAR_RGB, SOLAR_RGB]);
         expect(colours.after["Kitchen (🍳)"]).toEqual([SOLAR_RGB, SOLAR_RGB, GRID_RGB]);

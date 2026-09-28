@@ -17,8 +17,8 @@
       "validating": "Validating...",
       "save_and_reload": "Save and reload",
       "saving": "Saving...",
-      "add_category": "Add category",
-      "add_badge_text": "Add badge text",
+      "add_grouping": "Add grouping",
+      "add_group": "Add group",
       "add_daily_energy_entity": "Add daily energy entity",
       "add_import_price_window": "Add import price window",
       "add_inverter": "Add inverter",
@@ -30,7 +30,7 @@
       "add_use_mode": "Add use mode",
       "add_eco_gear": "Add eco gear",
       "remove": "Remove",
-      "remove_category": "Remove category",
+      "remove_grouping": "Remove grouping",
       "drag_to_reorder": "Drag to reorder",
       "add_condition_group": "+ Condition group",
       "rename_condition_group": "Rename group",
@@ -57,7 +57,7 @@
     },
     "sections": {
       "card_labels_and_history": "Card labels and history",
-      "device_label_text": "Device label text",
+      "device_groupings": "Device groupings",
       "house": "House",
       "solar": "Solar",
       "forecast": "Forecast",
@@ -87,7 +87,7 @@
       "children": "Children"
     },
     "notes": {
-      "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
+      "device_groupings": "Group devices by breaker box, room or mode. Each grouping is a chip on the card; a device is in at most one group per grouping: drag it between the groups and \"Unassigned\". A child follows its parent's group while \"Inherit from parent\" is on. The short name is the badge a member device shows. Removing a group or grouping also removes it from every device.",
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
       "automation": "Visual mode supports the automation enable switch plus the export_price and appliance_runtime optimizers. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
@@ -110,7 +110,7 @@
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
       "no_system_optimizers": "No system optimizers configured yet.",
-      "no_device_label_categories": "No device label categories configured.",
+      "no_device_groupings": "No groupings configured.",
       "no_entities_on_tab": "This tab configures no entities.",
       "no_devices": "No devices yet. Nothing is imported automatically after installation: add each device by picking its energy meter.",
       "no_inverter": "No inverter configured."
@@ -119,8 +119,7 @@
       "optimizer_warning": "Ordering warning"
     },
     "card": {
-      "category": "Category",
-      "badge_text_entry": "Badge text entry",
+      "grouping": "Grouping",
       "daily_energy_entity": "Daily energy entity",
       "import_window": "Import window",
       "local_time_window": "Local time window",
@@ -181,9 +180,9 @@
       "show_empty_groups": "Show empty groups",
       "show_others_group": "Show others group",
       "training_time": "Training time (HH:MM)",
-      "category_key": "Category key",
-      "label_key": "Label",
-      "badge_text": "Text",
+      "grouping_name": "Grouping name",
+      "group_name": "Group",
+      "group_short_name": "Short name",
       "house_power_entity": "House power entity",
       "power_sensor_label": "Power sensor label",
       "power_switch_label": "Power switch label",
@@ -429,7 +428,6 @@
       "cool": "Cool",
       "stop_export": "Stop export",
       "select_controllable": "Select controllable",
-      "select_label": "Select label",
       "live_modes_unavailable": "Live modes unavailable",
       "unknown": "unknown",
       "missing_id": "missing id",
@@ -472,7 +470,8 @@
       "optimizer": "Optimizer {index}",
       "vehicle": "Vehicle {index}",
       "stale_appliance": "{id} (no longer in current config)",
-      "unknown_label": "{name} (not a Home Assistant label)",
+      "new_grouping": "Grouping {index}",
+      "new_group": "Group {index}",
       "self_dependency": "{id} (this optimizer's own appliance — pick another)",
       "stale_climate_mode": "{mode} (no longer supported)",
       "unsupported_optimizer_kind": "Unsupported optimizer kind: {kind}",
@@ -583,6 +582,10 @@
       "all": "All",
       "schedulable": "Schedulable",
       "passive": "Passive"
+    },
+    "device_groups": {
+      "unassigned": "Unassigned",
+      "inherit": "Inherit from parent"
     },
     "device_badges": {
       "energy": "Energy",

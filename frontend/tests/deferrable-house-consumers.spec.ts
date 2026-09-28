@@ -36,7 +36,7 @@ interface FakeNode {
     name: string;
     deferrable?: boolean;
     controllableIds?: string[];
-    customLabelTexts?: string[];
+    groupBadgeTexts?: string[];
     isEstimated?: boolean;
     isUnmeasured?: boolean;
     powerValue?: number;
@@ -260,7 +260,7 @@ test.describe("deferrable house consumers on the power card", () => {
                 name: "Boiler",
                 deferrable: true,
                 controllableIds: ["boiler"],
-                customLabelTexts: ["heating"],
+                groupBadgeTexts: ["heating"],
             },
         ]);
 

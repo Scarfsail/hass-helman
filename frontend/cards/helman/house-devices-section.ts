@@ -4,8 +4,9 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { TreeItem } from "./tree-item";
 import "./tree-item-list";
-import type { HelmanUiConfig } from "../helman-api";
+import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
+import { effectiveGroup } from "../shared/config/devices";
 
 @customElement("helman-house-devices-section")
 export class HelmanHouseDevicesSection extends LitElement {
@@ -24,6 +25,7 @@ export class HelmanHouseDevicesSection extends LitElement {
     @property({ type: Boolean }) public sortChildrenByPower: boolean = true;
     @property({ type: Number }) public initial_show_only_top_children: number = 3;
 
+    /** The id of the grouping the devices are grouped by, if any. */
     @state() private _activeCategory?: string;
     @state() private _showAll: boolean = false;
     @state() private _groupedDevices?: TreeItem[];
@@ -121,90 +123,79 @@ export class HelmanHouseDevicesSection extends LitElement {
         `;
     }
 
-    // No label filtering anymore – grouping replaces it
-
-    private _getCategories(): string[] {
-        const mapping = this.uiConfig?.device_label_text || {};
-        return Object.keys(mapping);
+    private _getGroupings(): DeviceGrouping[] {
+        return this.uiConfig?.device_groupings ?? [];
     }
 
-    private _groupByCategory(devices: TreeItem[], category: string): TreeItem[] {
-        const mapping = this.uiConfig?.device_label_text?.[category];
-        if (!mapping) return devices;
-        const order = Object.keys(mapping);
-        const groups: Record<string, TreeItem> = {};
-        for (const label of order) {
-            const id = `group:${category}:${label}`;
-            const emoji = mapping[label];
-            const group = new TreeItem(id, `${label} (${emoji})`, null, null, this.historyBuckets);
-            group.virtualType = 'labelCategory';
-            group.groupCategory = category;
-            group.groupLabel = label;
+    private _groupByCategory(devices: TreeItem[], groupingId: string): TreeItem[] {
+        const grouping = this._getGroupings().find((g) => g.id === groupingId);
+        if (!grouping) return devices;
+        const groups = new Map<string, TreeItem>();
+        for (const { id, name, short_name } of grouping.groups) {
+            const group = new TreeItem(`group:${groupingId}:${id}`, `${name} (${short_name})`, null, null, this.historyBuckets);
+            group.virtualType = 'group';
+            group.groupingId = groupingId;
+            group.groupId = id;
             group.children_full_width = true;
             group.sortChildrenByPower = true;
             group.childrenCollapsed = true; // default collapsed
-            groups[label] = group;
+            groups.set(id, group);
         }
         const unmatched: TreeItem[] = [];
-        for (const dev of devices) {
-            if (dev.isUnmeasured) continue;
-            const labels = new Set(dev.labels || []);
-            let assigned = false;
-            for (const label of order) {
-                if (labels.has(label)) {
-                    groups[label].children.push(dev);
-                    assigned = true;
-                    break;
-                }
-            }
-            if (!assigned) unmatched.push(dev);
+        // Members still to file, with their effective group. A lifted descendant
+        // joins the queue and is filed, with its own subtree, like a top-level device.
+        const queue = devices
+            .filter((dev) => !dev.isUnmeasured)
+            .map((dev) => ({ item: dev, group: effectiveGroup(dev.groups?.[groupingId], null) }));
+        for (let index = 0; index < queue.length; index++) {
+            const next = queue[index];
+            const member = this._withoutLifted(next.item, next.group, groupingId, queue).item;
+            const group = groups.get(next.group ?? '');
+            if (group) group.children.push(member);
+            else unmatched.push(member);
         }
         // Aggregate power for groups
         const aggregateGroup = (group: TreeItem) => {
             const children = group.children || [];
             group.powerValue = children.reduce((sum, c) => sum + (c.powerValue || 0), 0);
-            // History aggregation
-            const childWithHist = children.find(c => c.powerHistory && c.powerHistory.length > 0);
-            if (childWithHist) {
-                const len = childWithHist.powerHistory.length;
+            // History aggregation, over the longest member series. Every series
+            // ends at the newest bucket, so a shorter one is aligned from the end.
+            const len = Math.max(0, ...children.map((c) => c.powerHistory?.length ?? 0));
+            if (len > 0) {
                 group.powerHistory = Array(len).fill(0);
-                for (let i = 0; i < len; i++) {
-                    for (const c of children) {
-                        group.powerHistory[i] += (c.powerHistory?.[i] || 0);
-                    }
-                }
-                // Aggregate sourcePowerHistory
-                group.sourcePowerHistory = [];
-                for (let i = 0; i < len; i++) {
-                    const bucket: { [sourceName: string]: { power: number; color: string } } = {};
-                    for (const c of children) {
-                        const src = c.sourcePowerHistory?.[i];
-                        if (!src) continue;
+                group.sourcePowerHistory = Array.from({ length: len }, () => ({}));
+                for (const c of children) {
+                    const offset = len - (c.powerHistory?.length ?? 0);
+                    c.powerHistory?.forEach((power, i) => {
+                        group.powerHistory[i + offset] += power || 0;
+                    });
+                    const sourceOffset = len - (c.sourcePowerHistory?.length ?? 0);
+                    c.sourcePowerHistory?.forEach((src, i) => {
+                        const bucket = group.sourcePowerHistory![i + sourceOffset];
+                        if (!src || !bucket) return;
                         for (const sName in src) {
                             if (!bucket[sName]) {
                                 bucket[sName] = { power: 0, color: src[sName].color };
                             }
                             bucket[sName].power += src[sName].power;
                         }
-                    }
-                    group.sourcePowerHistory.push(bucket);
+                    });
                 }
             } else {
                 group.powerHistory = [];
             }
         };
         const result: TreeItem[] = [];
-        for (const label of order) {
-            const group = groups[label];
+        for (const group of groups.values()) {
             if (group.children.length > 0 || this.uiConfig?.show_empty_groups) {
                 aggregateGroup(group);
                 result.push(group);
             }
         }
         if ((this.uiConfig?.show_others_group ?? true) && unmatched.length > 0) {
-            const others = new TreeItem(`group:${category}:others`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
+            const others = new TreeItem(`others:${groupingId}`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
             others.virtualType = 'others';
-            others.groupCategory = category;
+            others.groupingId = groupingId;
             others.children_full_width = true;
             others.sortChildrenByPower = true;
             others.childrenCollapsed = true; // default collapsed
@@ -215,9 +206,77 @@ export class HelmanHouseDevicesSection extends LitElement {
         return result;
     }
 
+    /**
+     * The item as filed under `group`, and the descendants lifted out of it.
+     * A descendant whose effective group differs from its parent's is queued to
+     * be filed on its own, with its subtree; every ancestor up to `item` is then
+     * a copy without it and without its power, so no watt is counted twice. The
+     * shared items are never mutated: the plain view and the history engine hold
+     * them. The unmeasured remainder is never lifted.
+     */
+    private _withoutLifted(
+        item: TreeItem,
+        group: string | null,
+        groupingId: string,
+        queue: { item: TreeItem; group: string | null }[],
+    ): { item: TreeItem; lifted: TreeItem[] } {
+        const lifted: TreeItem[] = [];
+        const children: TreeItem[] = [];
+        for (const child of item.children ?? []) {
+            const childGroup = child.isUnmeasured ? group : effectiveGroup(child.groups?.[groupingId], group);
+            if (childGroup !== group) {
+                lifted.push(child);
+                queue.push({ item: child, group: childGroup });
+                continue;
+            }
+            const kept = this._withoutLifted(child, group, groupingId, queue);
+            children.push(kept.item);
+            lifted.push(...kept.lifted);
+        }
+        if (lifted.length === 0) return { item, lifted };
+        // Summed once per copy. Histories are aligned from their newest end, as
+        // history-engine does: a series that started later is shorter.
+        const history = item.powerHistory ?? [];
+        const sources = item.sourcePowerHistory;
+        const takenPower = lifted.reduce((sum, l) => sum + (l.powerValue ?? 0), 0);
+        const takenHistory = history.map(() => 0);
+        const takenSources = (sources ?? []).map((): { [sourceName: string]: number } => ({}));
+        for (const l of lifted) {
+            const offset = (l.powerHistory?.length ?? 0) - history.length;
+            history.forEach((_, i) => {
+                takenHistory[i] += l.powerHistory?.[i + offset] ?? 0;
+            });
+            const sourceOffset = (l.sourcePowerHistory?.length ?? 0) - takenSources.length;
+            takenSources.forEach((taken, i) => {
+                const bucket = l.sourcePowerHistory?.[i + sourceOffset];
+                for (const name in bucket) taken[name] = (taken[name] ?? 0) + bucket[name].power;
+            });
+        }
+        const copy: TreeItem = Object.assign(Object.create(TreeItem.prototype), item);
+        copy.children = children;
+        // The copy is rebuilt every tick; expanding it must stick to the shared item.
+        Object.defineProperty(copy, 'childrenCollapsed', {
+            get: () => item.childrenCollapsed,
+            set: (collapsed: boolean) => { item.childrenCollapsed = collapsed; },
+        });
+        copy.powerValue = Math.max(0, (item.powerValue ?? 0) - takenPower);
+        copy.powerHistory = history.map((power, i) => Math.max(0, power - takenHistory[i]));
+        copy.sourcePowerHistory = sources?.map((bucket, i) => {
+            const rest: { [sourceName: string]: { power: number; color: string } } = {};
+            for (const name in bucket) {
+                rest[name] = {
+                    power: Math.max(0, bucket[name].power - (takenSources[i][name] ?? 0)),
+                    color: bucket[name].color,
+                };
+            }
+            return rest;
+        });
+        return { item: copy, lifted };
+    }
+
     render() {
     const filtered = this.devices || [];
-        const categories = this._getCategories();
+        const groupings = this._getGroupings();
         const activeCat = this._activeCategory;
         const devicesToShow = activeCat ? (this._groupedDevices ?? filtered) : filtered;
     const showTop = activeCat ? 0 : (this._showAll ? 0 : this.initial_show_only_top_children);
@@ -228,7 +287,7 @@ export class HelmanHouseDevicesSection extends LitElement {
 
         return html`
             <div class="house-section">
-                ${canToggleShowAll || categories.length > 0 ? html`
+                ${canToggleShowAll || groupings.length > 0 ? html`
                     <div class="categories-row">
                         ${canToggleShowAll ? html`
                             <button class="chip show-toggle"
@@ -238,13 +297,13 @@ export class HelmanHouseDevicesSection extends LitElement {
                                     : (this._localize?.('house_section.show_more') ?? 'Více')}
                             </button>
                         ` : nothing}
-                        ${categories.length > 0 ? html`
+                        ${groupings.length > 0 ? html`
                             <div class="categories-title">${this.uiConfig?.groups_title ?? this._localize?.('house_section.group_by') ?? 'Seskupit podle'}</div>
                             <div>
-                                ${categories.map((c) => {
-                                    const active = this._activeCategory === c;
+                                ${groupings.map((g) => {
+                                    const active = this._activeCategory === g.id;
                                     return html`<button class="chip ${active ? 'active' : ''}"
-                                        @click=${() => { this._activeCategory = active ? undefined : c; }}>${c}</button>`;
+                                        @click=${() => { this._activeCategory = active ? undefined : g.id; }}>${g.name}</button>`;
                                 })}
                             </div>
                         ` : nothing}

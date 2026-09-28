@@ -6,13 +6,12 @@ from functools import partial
 from typing import Literal
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .visualization import read_visualization
 from .controllables.config import (
     Device,
+    device_groups,
     entity_friendly_name,
     is_schedulable,
     iter_devices,
@@ -20,6 +19,7 @@ from .controllables.config import (
     peek_controllable_id,
     peek_controllable_kind,
     read_carved_meters,
+    read_groupings,
     read_name_cleaner_regex,
     read_shared_meters,
     share_sensor_slug,
@@ -46,8 +46,6 @@ class TreeItemDTO:
     is_unmeasured: bool
     is_virtual: bool
     value_type: Literal["default", "positive", "negative"]
-    labels: list[str]
-    label_badge_texts: list[str]
     source_config: dict | None
     icon: str | None
     compact: bool
@@ -78,6 +76,11 @@ class TreeItemDTO:
     # reading, so the card marks it ``≈`` and the own-power subtraction never
     # counts it.
     is_estimated: bool = False
+    # A house device's own group per grouping (grouping id -> group id) and
+    # the short names of those groups, in grouping order: what the card groups
+    # by and badges with. Empty for every other item.
+    groups: dict[str, str] = field(default_factory=dict)
+    group_badge_texts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -89,8 +92,8 @@ class TreeItemDTO:
             "isUnmeasured": self.is_unmeasured,
             "isVirtual": self.is_virtual,
             "valueType": self.value_type,
-            "labels": self.labels,
-            "labelBadgeTexts": self.label_badge_texts,
+            "groups": self.groups,
+            "groupBadgeTexts": self.group_badge_texts,
             "sourceConfig": self.source_config,
             "icon": self.icon,
             "compact": self.compact,
@@ -122,15 +125,13 @@ class HelmanTreeBuilder:
         """Build and return the full device tree as a serializable dict."""
         energy_nodes = self._config.get("energy_nodes", {})
         visualization = self._visualization()
-        device_label_text = visualization["device_label_text"]
+        groupings = read_groupings(self._config)
+        groupings = groupings if isinstance(groupings, list) else []
 
         solar_config = energy_nodes.get("solar")
         battery_config = energy_nodes.get("battery")
         grid_config = energy_nodes.get("grid")
         house_config = energy_nodes.get("house")
-
-        ent_reg = er.async_get(self._hass)
-        lbl_reg = lr.async_get(self._hass)
 
         # --- Sources ---
         sources: list[TreeItemDTO] = []
@@ -166,9 +167,7 @@ class HelmanTreeBuilder:
         consumers: list[TreeItemDTO] = []
 
         if house_config and house_config.get("entities", {}).get("power"):
-            house_children = self._build_house_children(
-                ent_reg, lbl_reg, device_label_text
-            )
+            house_children = self._build_house_children(groupings)
             own_carved = {
                 carve["energy_entity_id"]
                 for carve in read_carved_meters(self._config)
@@ -183,8 +182,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type=consumer_value_type(house_config, "house"),
-                labels=[],
-                label_badge_texts=[],
                 source_config=house_config,
                 source_type="house",
                 icon="mdi:home",
@@ -229,7 +226,7 @@ class HelmanTreeBuilder:
                 "others_group_label": visualization["others_group_label"],
                 "show_empty_groups": visualization["show_empty_groups"],
                 "show_others_group": visualization["show_others_group"],
-                "device_label_text": device_label_text,
+                "device_groupings": groupings,
                 "history_buckets": visualization["history_buckets"],
                 "history_bucket_duration": visualization["history_bucket_duration"],
             },
@@ -252,8 +249,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type=value_type,
-            labels=[],
-            label_badge_texts=[],
             source_config=config,
             icon=icon,
             compact=True,
@@ -283,8 +278,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type=value_type,
-            labels=[],
-            label_badge_texts=[],
             source_config=config,
             icon=icon,
             compact=True,
@@ -298,9 +291,7 @@ class HelmanTreeBuilder:
 
     def _build_house_children(
         self,
-        ent_reg: er.EntityRegistry,
-        lbl_reg: lr.LabelRegistry,
-        device_label_text: dict,
+        groupings: list,
     ) -> list[TreeItemDTO]:
         """One item per device, nested as the ``devices`` tree nests them.
 
@@ -315,25 +306,18 @@ class HelmanTreeBuilder:
         }
         shared = read_shared_meters(self._config)
         cleaner_regex = read_name_cleaner_regex(self._config)
+        # grouping id -> group id -> short name, in grouping order.
+        short_names: dict[str, dict[str, str]] = {
+            grouping["id"]: {group["id"]: group["short_name"] for group in grouping["groups"]}
+            for grouping in groupings
+        }
 
-        # Pre-group entities by device_id for efficient lookup
-        entities_by_device: dict[str, list] = {}
-        for entity in ent_reg.entities.values():
-            if entity.device_id:
-                entities_by_device.setdefault(entity.device_id, []).append(entity)
-
-        def labels_for(entity_id: str | None) -> list[str]:
-            """Labels from every entity on ``entity_id``'s HA device."""
-            ent_entry = ent_reg.async_get(entity_id) if entity_id else None
-            if not ent_entry or not ent_entry.device_id:
-                return []
-            label_ids: set[str] = set()
-            for entity in entities_by_device.get(ent_entry.device_id, []):
-                label_ids.update(entity.labels)
-            return [
-                label_entry.name
-                for label_id in label_ids
-                if (label_entry := lbl_reg.async_get_label(label_id))
+        def apply_groups(item: TreeItemDTO, device: Device) -> None:
+            item.groups = device_groups(device)
+            item.group_badge_texts = [
+                names[group_id]
+                for grouping_id, names in short_names.items()
+                if (group_id := item.groups.get(grouping_id)) in names
             ]
 
         tree: list[TreeItemDTO] = []
@@ -349,18 +333,11 @@ class HelmanTreeBuilder:
                         device, parent_device, shared, carved, cleaner_regex
                     )
                     if share_device is not None:
-                        # Its HA device is the running signal's: an AC's
-                        # climate entity, a plug's switch.
-                        share_device.labels = labels_for(share_device.switch_entity_id)
-                        share_device.label_badge_texts = self._apply_label_badge_texts(
-                            share_device.labels, device_label_text
-                        )
+                        apply_groups(share_device, device)
                         parent_device.children.append(share_device)
                 continue
             power_sensor_id = _consumption_entity(device, "power_entity_id")
             icon = resolve_device_icon(device, entity_icon=self._entity_icon)
-
-            labels = labels_for(meter)
 
             item = TreeItemDTO(
                 id=meter,
@@ -375,8 +352,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type="default",
-                labels=labels,
-                label_badge_texts=self._apply_label_badge_texts(labels, device_label_text),
                 source_config=None,
                 icon=icon,
                 compact=False,
@@ -395,6 +370,7 @@ class HelmanTreeBuilder:
                 ),
                 energy_entity_id=meter,
             )
+            apply_groups(item, device)
             devices[id(device)] = item
             (parent_device.children if parent_device is not None else tree).append(item)
 
@@ -433,8 +409,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type="default",
-            labels=[],
-            label_badge_texts=[],
             source_config=None,
             icon=resolve_device_icon(device, entity_icon=self._entity_icon),
             compact=False,
@@ -489,8 +463,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=True,
                 is_virtual=False,
                 value_type="default",
-                labels=[],
-                label_badge_texts=[],
                 source_config=None,
                 icon=None,
                 compact=False,
@@ -504,14 +476,6 @@ class HelmanTreeBuilder:
             item.children.append(unmeasured)
         for child in item.children:
             self._add_unmeasured_items(child, own_carved)
-
-    def _apply_label_badge_texts(self, labels: list[str], device_label_text: dict) -> list[str]:
-        result = []
-        for category_map in device_label_text.values():
-            for label_name, badge_text in category_map.items():
-                if label_name in labels:
-                    result.append(badge_text)
-        return result
 
 
 def _consumption_entity(device: Device, key: str) -> str | None:

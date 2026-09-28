@@ -24,7 +24,6 @@ export type ScopeId =
   | "tab:devices"
   | "tab:visualization"
   | "section:visualization.card_labels_and_history"
-  | "section:visualization.device_label_text"
   | "section:energy_nodes.house"
   | "section:energy_nodes.house.forecast"
   | "section:energy_nodes.solar"
@@ -42,6 +41,7 @@ export type ScopeId =
   | "section:automation.system_optimizer_pipeline"
   | "section:devices.settings"
   | "section:devices.system"
+  | "section:devices.groupings"
   | "section:devices.consumers";
 
 export interface EditorScope {
@@ -80,7 +80,6 @@ const FORECAST_ICON =
 
 export const SECTION_ICONS: Record<string, string> = {
   "section:visualization.card_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
-  "section:visualization.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:energy_nodes.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
   "section:energy_nodes.house.forecast": FORECAST_ICON,
   "section:energy_nodes.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
@@ -100,6 +99,7 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:devices.settings": CONFIGURATION_ICON,
   "section:devices.system": mdiSineWave,
+  "section:devices.groupings": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:devices.consumers": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
 };
 
@@ -133,7 +133,6 @@ export const TAB_SCOPE_IDS = {
 export const SECTION_SCOPE_IDS = {
   visualization: {
     card_labels_and_history: "section:visualization.card_labels_and_history",
-    device_label_text: "section:visualization.device_label_text",
   },
   energy_nodes: {
     house: "section:energy_nodes.house",
@@ -159,6 +158,7 @@ export const SECTION_SCOPE_IDS = {
   devices: {
     settings: "section:devices.settings",
     system: "section:devices.system",
+    groupings: "section:devices.groupings",
     consumers: "section:devices.consumers",
   },
 } as const;
@@ -267,17 +267,6 @@ export const EDITOR_SCOPES = {
     tabId: "visualization",
     labelKey: "editor.sections.card_labels_and_history",
     adapter: createProjectionScopeAdapter(CARD_LABELS_AND_HISTORY_MEMBERS),
-  },
-  [SECTION_SCOPE_IDS.visualization.device_label_text]: {
-    id: SECTION_SCOPE_IDS.visualization.device_label_text,
-    kind: "section",
-    parentId: TAB_SCOPE_IDS.visualization,
-    tabId: "visualization",
-    labelKey: "editor.sections.device_label_text",
-    adapter: createPathScopeAdapter(["visualization", "device_label_text"], {
-      emptyValue: EMPTY_OBJECT,
-      rootKind: "object",
-    }),
   },
   [SECTION_SCOPE_IDS.energy_nodes.house]: {
     id: SECTION_SCOPE_IDS.energy_nodes.house,
@@ -453,6 +442,17 @@ export const EDITOR_SCOPES = {
     tabId: "devices",
     labelKey: "editor.sections.system_devices",
     adapter: createPathScopeAdapter(["devices", "system"], {
+      emptyValue: EMPTY_ARRAY,
+      rootKind: "array",
+    }),
+  },
+  [SECTION_SCOPE_IDS.devices.groupings]: {
+    id: SECTION_SCOPE_IDS.devices.groupings,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.devices,
+    tabId: "devices",
+    labelKey: "editor.sections.device_groupings",
+    adapter: createPathScopeAdapter(["devices", "groupings"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),

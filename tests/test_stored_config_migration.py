@@ -671,6 +671,8 @@ class StoredV21LoadTests(unittest.TestCase):
         self.storage._entity_suggestions = lambda: (
             lambda anchors, document: {"power": [], "switch": []}
         )
+        # Nor labels: the document has no label texts for v26 to convert.
+        self.storage._device_labels = lambda: (lambda entity_id: [])
         asyncio.run(self.storage.async_load())
         self.config = self.storage.config
 

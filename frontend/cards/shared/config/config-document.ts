@@ -216,14 +216,6 @@ export function renameObjectKey(
   return { ok: true };
 }
 
-export function createCategoryKey(existingKeys: string[]): string {
-  return createUniqueKey(existingKeys, "category");
-}
-
-export function createLabelKey(existingKeys: string[]): string {
-  return createUniqueKey(existingKeys, "label");
-}
-
 /**
  * Seed the inverter controllable.
  *

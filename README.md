@@ -90,8 +90,6 @@ keys used to sit at the top level, and a stored config is migrated on load.
 - `history_buckets`: number — Number of history samples to keep/render. Default: 60.
 - `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
   interval). Default: 5.
-- `device_label_text`: object — Mapping to enable label grouping and per-device badges. See
-  "Grouping by labels".
 - `show_empty_groups` / `show_others_group` / `others_group_label`: control the "Others" group.
   Defaults: `false`, `true`, `"Others"`.
 
@@ -117,32 +115,40 @@ Common optional fields:
 **`devices`**
 The devices and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. Since config version 25 the single `items` list is split in two. A stored config is migrated on load.
 - `consumers`: list — The devices that draw power, as a tree, as described under "House consumption forecast" below.
-- `system`: list — The devices that control the site rather than draw power; today only the battery inverter (`kind: inverter`, `id: inverter`, at most one). A system device never nests and takes no `consumption` or `schedulable`.
+- `system`: list — The devices that control the site rather than draw power; today only the battery inverter (`kind: inverter`, `id: inverter`, at most one). A system device never nests and takes no `consumption`, `schedulable` or `groups`.
+- `groupings`: list — The ways devices are grouped (breaker boxes, rooms, modes, …), each with its groups; a consumer joins groups through its own `groups`. See "Grouping devices".
 - `name_cleaner_regex`: string — Python regular expression (`re.sub`) removed from an entity's friendly name wherever a device without a `name` is named from it: the card, the inspector, the schedulable runtimes and the Devices editor. E.g. `" - [Pp]ower$"`.
 - `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.consumers` configures. Label names must match HA Labels exactly.
 
 All energy sensors auto-detect units from `unit_of_measurement` (Wh, kWh, MWh, GWh supported).
 
-#### Grouping by labels (house devices)
-Group house devices into virtual groups based on HA Labels. Top-level keys are category names
-(rendered as chips); each category maps label names to an emoji/text badge.
+#### Grouping devices
+Group house devices into virtual groups defined in the Helman config. Each entry of `devices.groupings` is a grouping, rendered as a chip on the card; its `groups` are the groups a device can belong to, each with a `name` and a `short_name` (an emoji or short text) that the card shows as the device's badge and after the group's title. A consumer names its group per grouping in its own `groups`, grouping id to group id, and belongs to at most one group of each grouping. The order of `groupings` and of each `groups` list is the display order.
 
 ```yaml
+devices:
+  groupings:
+    - id: location
+      name: Location
+      groups:
+        - id: kitchen
+          name: Kitchen
+          short_name: "🍳"
+        - id: living_room
+          name: Living room
+          short_name: "🛋️"
+  consumers:
+    - id: dishwasher
+      groups: { location: kitchen }
 visualization:
-  device_label_text:
-    Location:
-      Kitchen: "🍳"
-      Living room: "🛋️"
-    Type:
-      Heating: "🔥"
-      Entertainment: "🎮"
   show_empty_groups: false
   show_others_group: true
   others_group_label: "Other devices"
 ```
 
-Devices inherit all labels assigned to any of their entities; the first matching label in a category
-determines the group. Per-device badges list all matching mappings across categories.
+Groupings and their groups are edited in the "Device groupings" section of the config editor's Devices tab, which is also where devices are assigned: each group lists its consumers as chips, children included, followed by an "Unassigned" area, and dragging a chip into another group or into "Unassigned" sets or removes that device's `groups` entry. A child whose parent has a group carries an "Inherit from parent" toggle. While it is on, the child has no group of its own, follows its parent (moving along when the parent is dragged) and cannot be dragged itself; turning it off pins the child to its parent's current group, after which it can be dragged to another group. Such a child cannot be dropped into "Unassigned": turn inherit back on instead. A child whose parent has no group is dragged like any other device. The order of devices inside a group is the device tree's and is not stored. Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included, and the card follows the same rule: a child that inherits its parent's group stays nested under it, while a child assigned to a different group than its parent is lifted out into that group with its own subtree, and the same applies to its descendants. Its power is taken out of every ancestor it was lifted from, so in the grouped view a parent row shows its reading minus its lifted children and the group totals add up to the house devices' total; the plain view still shows the raw reading. Validation refuses a `groups` entry naming an unknown grouping or group.
+
+Before config version 26 groups came from Home Assistant labels through `visualization.device_label_text` (category → label name → badge text). The upgrade converts it once: each category becomes a grouping, each label a group with its badge text as the short name, and each device joins, per category, the group of the first label in the category's order that its HA device carries (for a child without its own meter, the HA device of its switch or climate control). HA labels are not read after that, and the old key is refused on save.
 
 #### House consumption forecast
 Driven by the shared Helman config under `energy_nodes.house.forecast` for the entity, and under

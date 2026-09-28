@@ -14,7 +14,8 @@ are the point of the change — each asserted by name below:
 
 ``fixtures/energy_path_house_tree.json`` is the house tree the Energy path built
 for this very fixture, captured from the builder as it was before the change
-(commit c625ef0) — the Energy path itself no longer exists to be run.
+(commit c625ef0) — the Energy path itself no longer exists to be run. Its label
+fields are spelled as the groups the v26 upgrade derives from those labels.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -66,7 +66,7 @@ LABEL_NIGHT = "Elektřina - Vypnout na noc"
 
 #: ``(entity_id, HA device, labels)``. The AC breaker's HA device carries a
 #: switch that registry inference never resolved (its friendly name is not the
-#: device's), as live; its label still reaches the row.
+#: device's), as live; its label still becomes the row's group.
 REGISTRY = [
     ("sensor.jistic_klimatizace_energy", "dev_ac", []),
     ("sensor.jistic_klimatizace_power", "dev_ac", []),
@@ -75,29 +75,25 @@ REGISTRY = [
     ("sensor.zasuvka_pracovna_ondra_energy", "dev_plug", []),
     ("switch.zasuvka_pracovna_ondra", "dev_plug", ["night"]),
     (ENERGY_ONLY_METER, "dev_boiler", []),
-    # A meterless AC's own HA device: its labels reach its share row.
+    # A meterless AC's own HA device: its labels become its share row's group.
     ("climate.obyvak", "dev_ac_obyvak", ["night"]),
 ]
 LABELS = {"backed": LABEL_BACKED, "night": LABEL_NIGHT}
+#: The ids the v26 upgrade slugs from the label texts' category and label.
+NIGHT_GROUP = {"rezimy": "elektrina_vypnout_na_noc"}
 
 
-class _EntityRegistry:
-    def __init__(self) -> None:
-        self.entities = {
-            entity_id: SimpleNamespace(
-                entity_id=entity_id, device_id=device_id, labels=set(labels)
-            )
-            for entity_id, device_id, labels in REGISTRY
+def _device_labels(entity_id: str) -> list[str]:
+    """Label names on every entity of ``entity_id``'s HA device, as storage reads them."""
+    device = next((dev for entity, dev, _labels in REGISTRY if entity == entity_id), None)
+    return sorted(
+        {
+            LABELS[label]
+            for _entity, dev, labels in REGISTRY
+            if dev == device
+            for label in labels
         }
-
-    def async_get(self, entity_id):
-        return self.entities.get(entity_id)
-
-
-class _LabelRegistry:
-    def async_get_label(self, label_id):
-        name = LABELS.get(label_id)
-        return SimpleNamespace(name=name, label_id=label_id) if name else None
+    )
 
 
 def _friendly_name(entity_id: str) -> str:
@@ -186,16 +182,15 @@ def _preferences(*extra_rows: dict) -> dict:
 
 
 def _upgrade(*extra_rows: dict) -> dict:
-    migrated, _ids = migrate_config_document(_v20_document(), _preferences(*extra_rows))
+    migrated, _ids = migrate_config_document(
+        _v20_document(), _preferences(*extra_rows), None, _device_labels
+    )
     return migrated
 
 
 def _build(config: dict, states: _States | None = None) -> dict:
     hass = SimpleNamespace(states=states or _States())
-    with mock.patch.object(
-        tree_builder.er, "async_get", lambda _hass: _EntityRegistry()
-    ), mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _LabelRegistry()):
-        return asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
+    return asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
 
 
 def _house(tree: dict) -> dict:
@@ -208,8 +203,8 @@ _COMPARED = (
     "powerSensorId",
     "switchEntityId",
     "icon",
-    "labels",
-    "labelBadgeTexts",
+    "groups",
+    "groupBadgeTexts",
     "deferrable",
     "controllableIds",
     "isUnmeasured",
@@ -266,8 +261,8 @@ class TreeFromDevicesTests(unittest.TestCase):
             "powerSensorId": None,
             "switchEntityId": None,
             "icon": None,
-            "labels": [],
-            "labelBadgeTexts": [],
+            "groups": {},
+            "groupBadgeTexts": [],
             "deferrable": False,
             "controllableIds": [],
             "isUnmeasured": False,
@@ -288,8 +283,8 @@ class TreeFromDevicesTests(unittest.TestCase):
                     "powerSensorId": f"sensor.helman_share_power_klima_{room}",
                     "switchEntityId": f"climate.{room}",
                     "icon": None,
-                    "labels": [],
-                    "labelBadgeTexts": [],
+                    "groups": {},
+                    "groupBadgeTexts": [],
                     "deferrable": True,
                     "controllableIds": [f"klima-{room}"],
                     "isUnmeasured": False,
@@ -304,8 +299,8 @@ class TreeFromDevicesTests(unittest.TestCase):
                 "powerSensorId": "sensor.helman_unmeasured_power_jistic_klimatizace_energy",
                 "switchEntityId": None,
                 "icon": None,
-                "labels": [],
-                "labelBadgeTexts": [],
+                "groups": {},
+                "groupBadgeTexts": [],
                 "deferrable": False,
                 "controllableIds": [],
                 "isUnmeasured": True,
@@ -313,10 +308,10 @@ class TreeFromDevicesTests(unittest.TestCase):
                 "children": {},
             },
         }
-        # A meterless child's labels come from its running signal's HA device.
+        # A meterless child's group comes from its running signal's HA device.
         obyvak = breaker["children"]["klima-obyvak"]
-        obyvak["labels"] = [LABEL_NIGHT]
-        obyvak["labelBadgeTexts"] = ["⏻😴"]
+        obyvak["groups"] = NIGHT_GROUP
+        obyvak["groupBadgeTexts"] = ["⏻😴"]
         # A remainder carries no name of its own: the card names every one.
         _blank_remainder_names(expected)
 
@@ -443,6 +438,60 @@ class PowerlessParentTests(unittest.TestCase):
         self.assertEqual(
             [child["isUnmeasured"] for child in workshop["children"]], [False, True]
         )
+
+
+class DeviceGroupsTests(unittest.TestCase):
+    """A device's own ``groups`` and their short names reach its row and the card."""
+
+    GROUPINGS = [
+        {
+            "id": "breakers",
+            "name": "Jističe",
+            "groups": [{"id": "backed", "name": "Zálohované", "short_name": "🔋"}],
+        },
+        {
+            "id": "rooms",
+            "name": "Místnosti",
+            "groups": [{"id": "kitchen", "name": "Kuchyně", "short_name": "K"}],
+        },
+    ]
+
+    def _config(self, groupings):
+        devices = {
+            "consumers": [
+                {
+                    "id": "oven",
+                    # Written against the grouping order on purpose.
+                    "groups": {"rooms": "kitchen", "breakers": "backed"},
+                    "consumption": {
+                        "energy_entity_id": "sensor.oven_energy",
+                        "power_entity_id": "sensor.oven_power",
+                    },
+                },
+                {"id": "fridge", "consumption": {"energy_entity_id": "sensor.fridge_energy"}},
+            ]
+        }
+        if groupings is not None:
+            devices["groupings"] = groupings
+        return {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": devices,
+        }
+
+    def test_badges_follow_the_grouping_order(self) -> None:
+        tree = _build(self._config(self.GROUPINGS))
+        oven, fridge = [n for n in _house(tree)["children"] if not n["isUnmeasured"]]
+
+        self.assertEqual(oven["groups"], {"rooms": "kitchen", "breakers": "backed"})
+        self.assertEqual(oven["groupBadgeTexts"], ["🔋", "K"])
+        self.assertEqual((fridge["groups"], fridge["groupBadgeTexts"]), ({}, []))
+        self.assertEqual(tree["uiConfig"]["device_groupings"], self.GROUPINGS)
+        self.assertNotIn("device_label_text", tree["uiConfig"])
+
+    def test_without_groupings_the_card_gets_an_empty_list(self) -> None:
+        tree = _build(self._config(None))
+
+        self.assertEqual(tree["uiConfig"]["device_groupings"], [])
 
 
 class NameResolutionTests(unittest.TestCase):
