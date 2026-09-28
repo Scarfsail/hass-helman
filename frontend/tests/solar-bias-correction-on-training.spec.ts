@@ -187,6 +187,7 @@ async function setNumber(page: Page, label: string, value: string): Promise<void
 test("bias correction edited on Training saves under training.solar_bias", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Training");
+    await openSection(page, "Solar forecast correction");
 
     // One scope owns the whole solar bias config: no separate correction card.
     await expect(section(page, "Bias Correction")).toHaveCount(0);
@@ -265,6 +266,7 @@ test("the Solar bias panel's YAML view holds day counts and correction together"
 }) => {
     await mountEditor(page);
     await openTab(page, "Training");
+    await openSection(page, "Solar forecast correction");
     await openCard(solarBiasConfig(page));
     await setMode(solarBiasConfig(page), "YAML");
 

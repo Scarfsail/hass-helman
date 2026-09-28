@@ -160,6 +160,10 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
 async function openTrainingTab(page: Page): Promise<void> {
     await page.locator(".tabs button", { hasText: "Training" }).click();
     await expect(page.locator("helman-training-job-status")).toHaveCount(3);
+    // The tab's panels start collapsed; open them so their buttons are usable.
+    await page.locator("details.section-card").evaluateAll((sections) =>
+        sections.forEach((details) => ((details as HTMLDetailsElement).open = true)),
+    );
 }
 
 /** A job panel's rendered content, inside its shadow root. */

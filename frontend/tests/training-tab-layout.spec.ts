@@ -199,9 +199,9 @@ test("(a) each job panel is explanation, status, Configuration, Diagnostics", as
         "helman-training-job-status",
         "Diagnostics (closed)",
     ]);
-    // The parents themselves start open: the state is the point of the tab.
+    // The parents start collapsed, like the top-level cards on every other tab.
     for (const label of Object.values(JOB_PANELS)) {
-        await expect(parentPanel(page, label)).toHaveJSProperty("open", true);
+        await expect(parentPanel(page, label)).toHaveJSProperty("open", false);
     }
 });
 
@@ -285,6 +285,9 @@ test("(e) Diagnostics warns on issues or a short row, and lists issues styled", 
 
 test("(f) the explanation is clamped until Show more", async ({ page }) => {
     await mountEditor(page);
+    await parentPanel(page, JOB_PANELS.solar_bias).evaluate(
+        (details) => ((details as HTMLDetailsElement).open = true),
+    );
 
     const callout = parentPanel(page, JOB_PANELS.solar_bias).locator(
         ":scope > .section-content > helman-info-callout",

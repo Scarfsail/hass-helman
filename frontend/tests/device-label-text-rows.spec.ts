@@ -92,6 +92,13 @@ async function mountEditor(
     // opens on.
     await shadow(page).locator(".tabs button", { hasText: "Helman card" }).click();
     await expect.poll(() => rowCount(page)).toBeGreaterThan(0);
+    // The tab's sections start collapsed; open them so their rows are usable.
+    await page.evaluate(() => {
+        document
+            .querySelector("helman-config-editor-panel")
+            ?.shadowRoot?.querySelectorAll<HTMLDetailsElement>("details.section-card")
+            .forEach((details) => (details.open = true));
+    });
 }
 
 function shadow(page: Page) {

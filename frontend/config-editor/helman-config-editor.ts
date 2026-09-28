@@ -2094,6 +2094,7 @@ export class HelmanConfigEditorPanel
             )}
           </div>
         `,
+        { initialOpen: false },
       )}
 
       ${this._renderSectionScope(
@@ -2111,6 +2112,7 @@ export class HelmanConfigEditorPanel
             </button>
           </div>
         `,
+        { initialOpen: false },
       )}
     `;
   }
@@ -2411,7 +2413,7 @@ export class HelmanConfigEditorPanel
             { initialOpen: false },
           )}
         `,
-        { icon: TAB_ICONS.training },
+        { open: false, icon: TAB_ICONS.training },
       )}
 
       ${this._renderTrainingJobSection(
@@ -2662,6 +2664,7 @@ export class HelmanConfigEditorPanel
           : nothing}
       `,
       {
+        open: false,
         icon: TRAINING_JOB_ICONS[id],
         badge: job
           ? html`<helman-training-health-badge
