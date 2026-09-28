@@ -7,6 +7,8 @@ import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { formatPower } from "../../power-format";
 import "../../appliance-switch-badge";
+import type { HomeAssistantLike } from "../../shared/config/types";
+import "../../shared/devices/helman-device-edit-dialog";
 
 type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
 
@@ -68,6 +70,8 @@ export class NodeDetailDeviceContent extends LitElement {
     @state() private _today: Reading;
     @state() private _lastHour: Reading;
     @state() private _chart?: HistoryGraphCard;
+    /** The device's config form is open over this detail. */
+    @state() private _editing = false;
 
     /** The device the figures and chart were loaded for; the host rebuilds params every render. */
     private _loadedItem?: TreeItem;
@@ -100,6 +104,11 @@ export class NodeDetailDeviceContent extends LitElement {
                             @show-more-info=${this._showMoreInfo}
                         ></helman-appliance-switch-badge>
                     ` : nothing}
+                    ${item.deviceKey && this.hass.user?.is_admin === true ? html`
+                        <ha-button class="edit" @click=${() => { this._editing = true; }}>
+                            ${this.localize("node_detail.device.edit.button")}
+                        </ha-button>
+                    ` : nothing}
                 </div>
                 ${item.energyEntityId ? html`
                     <div class="tiles">
@@ -109,6 +118,25 @@ export class NodeDetailDeviceContent extends LitElement {
                 ` : nothing}
                 ${this._chart ?? nothing}
             </div>
+            ${this._renderEditDialog(item)}
+        `;
+    }
+
+    /**
+     * The device's own config form, stacked over this detail. Mounted per
+     * request, so each open loads the stored config afresh; closing it comes
+     * back here.
+     */
+    private _renderEditDialog(item: TreeItem) {
+        if (!this._editing || !item.deviceKey) return nothing;
+        return html`
+            <helman-device-edit-dialog
+                .hass=${this.hass as unknown as HomeAssistantLike}
+                .localize=${this.localize}
+                .open=${true}
+                .deviceKey=${item.deviceKey}
+                @closed=${() => { this._editing = false; }}
+            ></helman-device-edit-dialog>
         `;
     }
 

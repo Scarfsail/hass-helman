@@ -124,3 +124,17 @@ export function deviceIdFor(
   }
   return candidate;
 }
+
+/**
+ * The device a card row names, by the key the device tree carries for it: its
+ * `id`, else its own meter (meters are unique -- `duplicate_meter` in
+ * `config_validation.py`). `null` when neither matches.
+ */
+export function findDeviceByKey(config: JsonObject | null | undefined, key: string): DeviceEntry | null {
+  const devices = iterDevices(config);
+  return (
+    devices.find((entry) => entry.device.id === key) ??
+    devices.find((entry) => ownMeter(entry.device) === key) ??
+    null
+  );
+}
