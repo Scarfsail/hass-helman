@@ -405,7 +405,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         }
 
         if (sources.length > 0) {
-            const sourcesNode = new TreeItem("sources", uiConfig.sources_title, null, null, historyBuckets);
+            const sourcesNode = new TreeItem("sources", this._localize!('card.sources_title'), null, null, historyBuckets);
             sourcesNode.childrenCollapsed = false;
             sourcesNode.icon = 'mdi:lightning-bolt-outline';
             sourcesNode.powerSensorId = productionTotalSensorId;
@@ -414,7 +414,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         }
 
         if (consumers.length > 0) {
-            const consumersNode = new TreeItem("consumers", uiConfig.consumers_title, null, null, historyBuckets);
+            const consumersNode = new TreeItem("consumers", this._localize!('card.consumers_title'), null, null, historyBuckets);
             consumersNode.hideChildren = true;
             consumersNode.hideChildrenIndicator = true;
             consumersNode.icon = 'mdi:lightning-bolt-outline';

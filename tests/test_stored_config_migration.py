@@ -643,7 +643,7 @@ class StoredV21LoadTests(unittest.TestCase):
         document = {
             "config_version": 21,
             "visualization": {
-                "sources_title": "Zdroje",
+                "history_buckets": 90,
                 "power_sensor_name_cleaner_regex": " Výkon$",
             },
             "power_devices": {
@@ -691,7 +691,7 @@ class StoredV21LoadTests(unittest.TestCase):
             {"entities": {"power": "sensor.house_power"}},
         )
         self.assertNotIn("power_sensor_name_cleaner_regex", self.config["visualization"])
-        self.assertEqual(self.config["visualization"]["sources_title"], "Zdroje")
+        self.assertEqual(self.config["visualization"]["history_buckets"], 90)
         self.assertEqual(self.storage._store.saved, [self.config])
 
     def test_the_readers_find_the_moved_settings(self) -> None:

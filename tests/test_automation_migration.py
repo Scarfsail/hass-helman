@@ -1676,10 +1676,12 @@ class VisualizationRelocationTests(unittest.TestCase):
 
         migrated, ids = self._migrate_from_v17(dict(document))
 
-        # v22 moves the regex on to the ``devices`` section, and v26 turns the
-        # label texts into its groupings.
+        # v22 moves the regex on to the ``devices`` section, v26 turns the
+        # label texts into its groupings, and v27 drops the card texts.
         regex = document.pop("power_sensor_name_cleaner_regex")
         document.pop("device_label_text")
+        for key in ("sources_title", "consumers_title", "groups_title", "others_group_label"):
+            document.pop(key)
         self.assertEqual(migrated["visualization"], document)
         self.assertEqual(
             migrated["devices"],
@@ -2075,14 +2077,14 @@ class DevicesSectionMigrationTests(unittest.TestCase):
         migrated = self._migrate_from_v21(
             {
                 "visualization": {
-                    "sources_title": "Zdroje",
+                    "history_buckets": 90,
                     "power_sensor_name_cleaner_regex": " Power$",
                 },
                 "devices": [self.WASHER],
             }
         )
 
-        self.assertEqual(migrated["visualization"], {"sources_title": "Zdroje"})
+        self.assertEqual(migrated["visualization"], {"history_buckets": 90})
         self.assertEqual(
             migrated["devices"],
             {"name_cleaner_regex": " Power$", "consumers": [self.WASHER]},
@@ -2118,7 +2120,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
 
     def test_no_devices_object_is_created_when_nothing_goes_in_it(self) -> None:
         migrated = self._migrate_from_v21(
-            {"visualization": {"sources_title": "Zdroje"}, "power_devices": {"house": {}}}
+            {"visualization": {"history_buckets": 90}, "power_devices": {"house": {}}}
         )
 
         self.assertNotIn("devices", migrated)
@@ -2542,7 +2544,7 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
     def _migrate_from_v25(self, label_text, devices=None, labels="default"):
         document = {
             "config_version": 25,
-            "visualization": {"sources_title": "Zdroje", "device_label_text": label_text},
+            "visualization": {"history_buckets": 90, "device_label_text": label_text},
         }
         if devices is not None:
             document["devices"] = deepcopy(devices)
@@ -2582,7 +2584,7 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(migrated["devices"], {"groupings": self.GROUPINGS})
-        self.assertEqual(migrated["visualization"], {"sources_title": "Zdroje"})
+        self.assertEqual(migrated["visualization"], {"history_buckets": 90})
 
     def test_membership_is_the_first_matching_label_per_category(self) -> None:
         devices = self._migrate_from_v25(self.LABEL_TEXT, self._devices())["devices"]
@@ -2657,6 +2659,54 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
         self.assertEqual(
             migrated["visualization"], {"device_label_text": self.LABEL_TEXT}
         )
+
+
+
+class CardTextRetirementMigrationTests(unittest.TestCase):
+    """v26 -> v27: the card texts are dropped; the card localizes them."""
+
+    def test_the_card_texts_are_dropped(self) -> None:
+        document = {
+            "config_version": 26,
+            "visualization": {
+                "sources_title": "Zdroje",
+                "consumers_title": "Spotřebiče",
+                "groups_title": "Skupiny",
+                "others_group_label": "Zbytek",
+                "history_buckets": 90,
+                "show_others_group": False,
+            },
+            "energy_nodes": {
+                node: {
+                    "entities": {"power": f"sensor.{node}_power"},
+                    "source_name": node,
+                    "consumption_name": node,
+                }
+                for node in ("house", "solar", "battery", "grid")
+            },
+        }
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(
+            migrated,
+            {
+                "config_version": CONFIG_DOCUMENT_VERSION,
+                "visualization": {"history_buckets": 90, "show_others_group": False},
+                "energy_nodes": {
+                    node: {"entities": {"power": f"sensor.{node}_power"}}
+                    for node in ("house", "solar", "battery", "grid")
+                },
+            },
+        )
+        self.assertEqual(ids, [])
+
+    def test_a_document_without_either_section_is_unchanged(self) -> None:
+        document = {"config_version": 26, "devices": {"consumers": []}}
+
+        migrated, _ids = migrate_config_document(deepcopy(document))
+
+        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
 
 
 if __name__ == "__main__":

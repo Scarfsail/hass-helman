@@ -56,7 +56,7 @@
       "warnings": "Warnings"
     },
     "sections": {
-      "card_labels_and_history": "Card labels and history",
+      "card_labels_and_history": "Card history and groups",
       "device_groupings": "Device groupings",
       "house": "House",
       "solar": "Solar",
@@ -173,10 +173,6 @@
     "fields": {
       "history_buckets": "History buckets",
       "history_bucket_duration": "History bucket duration",
-      "sources_title": "Sources title",
-      "consumers_title": "Consumers title",
-      "groups_title": "Groups title",
-      "others_group_label": "Others group label",
       "power_sensor_name_cleaner_regex": "Device name cleaner regex",
       "show_empty_groups": "Show empty groups",
       "show_others_group": "Show others group",

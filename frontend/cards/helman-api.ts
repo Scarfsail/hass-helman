@@ -79,10 +79,6 @@ export interface DeviceGrouping {
 }
 
 export interface HelmanUiConfig {
-    sources_title: string;
-    consumers_title: string;
-    groups_title: string;
-    others_group_label: string;
     show_empty_groups?: boolean;
     show_others_group?: boolean;
     device_groupings: DeviceGrouping[];

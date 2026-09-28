@@ -57,7 +57,7 @@
       "warnings": "Varování"
     },
     "sections": {
-      "card_labels_and_history": "Popisky a historie karty",
+      "card_labels_and_history": "Historie a skupiny karty",
       "device_groupings": "Seskupení zařízení",
       "house": "Dům",
       "solar": "Solár",
@@ -174,10 +174,6 @@
     "fields": {
       "history_buckets": "Počet historických bucketů",
       "history_bucket_duration": "Délka bucketu historie",
-      "sources_title": "Název zdrojů",
-      "consumers_title": "Název spotřebičů",
-      "groups_title": "Název skupin",
-      "others_group_label": "Popisek skupiny Ostatní",
       "power_sensor_name_cleaner_regex": "Regex pro čištění názvu zařízení",
       "show_empty_groups": "Zobrazit prázdné skupiny",
       "show_others_group": "Zobrazit skupinu Ostatní",

@@ -1,4 +1,9 @@
 {
+  "card": {
+    "loading": "Loading energy data…",
+    "sources_title": "Energy Sources",
+    "consumers_title": "Energy Consumers"
+  },
   "bias_correction": {
     "inspector": {
       "title": "Visual inspector",
@@ -134,6 +139,8 @@
   "house_section": {
     "deferrable_tag": "deferrable",
     "unmeasured": "👻 Untracked consumption",
+    "group_by": "Group by",
+    "others": "Others",
     "show_more": "More",
     "show_less": "Less"
   },

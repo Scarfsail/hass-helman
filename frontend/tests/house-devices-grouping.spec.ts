@@ -60,7 +60,7 @@ async function mountSection(page: Page, uiConfig: Record<string, unknown>): Prom
     await page.evaluate(
         async ({ devices, uiConfig }) => {
             const el = document.createElement("helman-house-devices-section") as any;
-            el.hass = { states: {}, locale: { language: "en" } };
+            el.hass = { states: {}, language: "en", locale: { language: "en" } };
             el.devices = devices;
             el.historyBuckets = 3;
             el.historyBucketDuration = 1;
@@ -106,7 +106,7 @@ test("the chips are the groupings, by name and in order", async ({ page }) => {
 });
 
 test("a grouping files devices under their group, the rest under Others", async ({ page }) => {
-    await mountSection(page, { device_groupings: GROUPINGS, others_group_label: "Others" });
+    await mountSection(page, { device_groupings: GROUPINGS });
 
     expect(await groupedBy(page, "Jističe")).toEqual([
         {
@@ -145,7 +145,7 @@ test("a group whose id is others keeps apart from the Others group", async ({ pa
     const groupings = [
         { id: "breakers", name: "Jističe", groups: [{ id: "others", name: "Ostatní jističe", short_name: "O" }] },
     ];
-    await mountSection(page, { device_groupings: groupings, show_empty_groups: true, others_group_label: "Others" });
+    await mountSection(page, { device_groupings: groupings, show_empty_groups: true });
 
     expect((await groupedBy(page, "Jističe")).map(({ name }) => name)).toEqual(["Ostatní jističe (O)", "Others"]);
     const ids = await page.evaluate(() => {

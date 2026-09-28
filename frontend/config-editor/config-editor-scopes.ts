@@ -166,10 +166,6 @@ export const SECTION_SCOPE_IDS = {
 const CARD_LABELS_AND_HISTORY_KEYS = [
   "history_buckets",
   "history_bucket_duration",
-  "sources_title",
-  "consumers_title",
-  "groups_title",
-  "others_group_label",
   "show_empty_groups",
   "show_others_group",
 ] as const;

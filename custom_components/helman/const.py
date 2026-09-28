@@ -29,7 +29,18 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 26
+CONFIG_DOCUMENT_VERSION = 27
+
+# The card texts config version 27 retired, under ``visualization`` and under
+# each ``energy_nodes`` block: the card localizes them. The migration drops
+# them on load and validation refuses them on save.
+RETIRED_UI_TEXT_KEYS = (
+    "sources_title",
+    "consumers_title",
+    "groups_title",
+    "others_group_label",
+)
+RETIRED_ENERGY_NODE_TEXT_KEYS = ("source_name", "consumption_name")
 
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,

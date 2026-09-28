@@ -220,10 +220,6 @@ class HelmanTreeBuilder:
             "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
             "productionTotalSensorId": PRODUCTION_TOTAL_ENTITY_ID,
             "uiConfig": {
-                "sources_title": visualization["sources_title"],
-                "consumers_title": visualization["consumers_title"],
-                "groups_title": visualization["groups_title"],
-                "others_group_label": visualization["others_group_label"],
                 "show_empty_groups": visualization["show_empty_groups"],
                 "show_others_group": visualization["show_others_group"],
                 "device_groupings": groupings,

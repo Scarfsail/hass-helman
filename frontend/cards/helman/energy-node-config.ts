@@ -2,8 +2,6 @@ interface EnergyNodeConfigBase {
     entities: {
         power: string;
     }
-    source_name?: string;
-    consumption_name?: string;
 }
 
 export interface SolarForecastConfig {

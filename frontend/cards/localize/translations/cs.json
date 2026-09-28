@@ -1,6 +1,8 @@
 {
   "card": {
-    "loading": "Načítání energetických dat…"
+    "loading": "Načítání energetických dat…",
+    "sources_title": "Zdroje energie",
+    "consumers_title": "Spotřebiče energie"
   },
   "house_section": {
     "deferrable_tag": "odložitelná",
