@@ -146,7 +146,7 @@ visualization:
   others_group_label: "Other devices"
 ```
 
-Groupings and their groups are edited in the Devices tab of the config editor; a device's `groups` is set in its YAML. Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included; the card groups the top-level devices, and a child stays nested under its parent. Validation refuses a `groups` entry naming an unknown grouping or group.
+Groupings and their groups are edited in the Devices tab of the config editor. A device's `groups` is set there too: switch the Consumers list from "List" to a grouping to see every consumer, children included, under its group (a child without its own group follows its parent's), each with a picker that moves it to another group, "None" or, for a child, "Same as parent". Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included; the card groups the top-level devices, and a child stays nested under its parent. Validation refuses a `groups` entry naming an unknown grouping or group.
 
 Before config version 26 groups came from Home Assistant labels through `visualization.device_label_text` (category → label name → badge text). The upgrade converts it once: each category becomes a grouping, each label a group with its badge text as the short name, and each device joins, per category, the group of the first label in the category's order that its HA device carries (for a child without its own meter, the HA device of its switch or climate control). HA labels are not read after that, and the old key is refused on save.
 

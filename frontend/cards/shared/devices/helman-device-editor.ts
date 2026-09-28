@@ -200,7 +200,7 @@ export function devicePlaceholder(
 
 /** The override when there is one, else the backend's resolved name, else the id. */
 export function deviceName(
-    host: FormFieldHost,
+    host: Pick<FormFieldHost, "t">,
     inspections: Readonly<Record<string, EntityInspectionResult>>,
     device: JsonObject,
     path: PathSegment[],

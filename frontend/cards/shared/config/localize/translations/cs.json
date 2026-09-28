@@ -585,6 +585,14 @@
       "schedulable": "Plánovatelná",
       "passive": "Pasivní"
     },
+    "device_view": {
+      "label": "Zobrazení zařízení",
+      "list": "Seznam",
+      "unassigned": "Nezařazená",
+      "group": "Skupina",
+      "none": "Žádná",
+      "same_as_parent": "Stejná jako nadřazené"
+    },
     "device_badges": {
       "energy": "Energie",
       "power": "Výkon",

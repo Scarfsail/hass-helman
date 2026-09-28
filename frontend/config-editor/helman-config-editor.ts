@@ -58,6 +58,7 @@ import {
 } from "../cards/shared/config/config-document";
 import {
   canHaveChildren,
+  DEVICE_FILTERS,
   deviceChildren,
   deviceIdFor,
   deviceKind,
@@ -69,6 +70,7 @@ import {
   slugId,
   stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
+  type DeviceFilter,
 } from "../cards/shared/config/devices";
 import {
   configDefaultHint,
@@ -142,6 +144,7 @@ import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles"
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/devices/helman-device-editor";
+import { deviceGroupingViewStyles } from "./helman-device-grouping-view";
 import {
   TRAINING_STATUS_CHANGED,
   asTrainingStatus,
@@ -196,9 +199,6 @@ const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const INVERTER_CONTROLLABLE_KIND = "inverter";
 /** Reserved for the inverter; mirrors `CONTROLLABLE_ID_INVERTER` in Python. */
 const CONTROLLABLE_ID_INVERTER = "inverter";
-
-const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
-type DeviceFilter = (typeof DEVICE_FILTERS)[number];
 
 /** Which device sits at which path; changes only when an edit moves devices. */
 function devicePathSignature(config: JsonObject | null): string {
@@ -300,6 +300,7 @@ export class HelmanConfigEditorPanel
     _deviceYamlValues: { state: true },
     _deviceYamlErrors: { state: true },
     _deviceFilter: { state: true },
+    _deviceView: { state: true },
     _energyImport: { state: true },
     _deviceActionMessage: { state: true },
     _importLoading: { state: true },
@@ -317,6 +318,7 @@ export class HelmanConfigEditorPanel
     configFormStyles,
     optimizerCardStyles,
     deviceEditorStyles,
+    deviceGroupingViewStyles,
     css`
     :host {
       display: block;
@@ -814,7 +816,10 @@ export class HelmanConfigEditorPanel
       display: none;
     }
 
-    .device-filter {
+    .device-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       justify-self: start;
     }
 
@@ -916,6 +921,10 @@ export class HelmanConfigEditorPanel
   private _deviceYamlErrors: Partial<Record<string, string>> = {};
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
+  /** The consumers as a tree (`null`), or grouped by the grouping with this id. */
+  private _deviceView: string | null = null;
+  /** Bound once, so the grouped view does not re-render on every panel update. */
+  private _boundT = (key: string): string => this._t(key);
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
@@ -3260,7 +3269,7 @@ export class HelmanConfigEditorPanel
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
           ${consumers.length > 0
-            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices", "consumers"], null)}`
+            ? this._renderConsumers()
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
           ${this._renderAddDevice(
             ["devices", "consumers"],
@@ -3363,6 +3372,67 @@ export class HelmanConfigEditorPanel
       </button>
       </div>
     </div>`;
+  }
+
+  /**
+   * The consumers, as the list or grouped by the chosen grouping. A grouping
+   * gone from the draft falls back to the list, and so does the entities-only
+   * view, which keeps the cards that hold the entity pickers.
+   */
+  private _renderConsumers(): TemplateResult {
+    const groupings = (asJsonArray(this._getValue(["devices", "groupings"])) ?? []).flatMap((value) => {
+      const grouping = asJsonObject(value);
+      return grouping ? [grouping] : [];
+    });
+    const grouping = this._entitiesOnly
+      ? undefined
+      : groupings.find((candidate) => this._stringValue(candidate.id) === this._deviceView);
+    return html`
+      <div class="device-toolbar">
+        ${this._renderDeviceFilter()}
+        ${groupings.length > 0 ? this._renderDeviceViewToggle(groupings, grouping) : nothing}
+      </div>
+      ${grouping
+        ? html`<helman-device-grouping-view
+            .config=${this._config}
+            .grouping=${grouping}
+            .localize=${this._boundT}
+            .inspections=${this._inspections.results}
+            .filter=${this._deviceFilter}
+            @device-config-changed=${this._handleDeviceConfigChanged}
+          ></helman-device-grouping-view>`
+        : this._renderDeviceList(["devices", "consumers"], null)}
+    `;
+  }
+
+  /** "List", then one button per grouping. */
+  private _renderDeviceViewToggle(groupings: JsonObject[], active: JsonObject | undefined): TemplateResult {
+    const views = [
+      { id: null as string | null, label: this._t("editor.device_view.list") },
+      ...groupings.map((grouping) => ({
+        id: this._stringValue(grouping.id),
+        label: this._stringValue(grouping.name) || this._stringValue(grouping.id),
+      })),
+    ];
+    const activeId = active ? this._stringValue(active.id) : null;
+    return html`
+      <div class="mode-toggle device-view" role="group" aria-label=${this._t("editor.device_view.label")}>
+        ${views.map(
+          (view) => html`
+            <button
+              type="button"
+              class=${view.id === activeId ? "active" : ""}
+              aria-pressed=${view.id === activeId}
+              @click=${() => {
+                this._deviceView = view.id;
+              }}
+            >
+              ${view.label}
+            </button>
+          `,
+        )}
+      </div>
+    `;
   }
 
   private _renderDeviceFilter(): TemplateResult {
@@ -4634,6 +4704,8 @@ export class HelmanConfigEditorPanel
   /** Removes a grouping and, in the same mutation, every device's reference to it. */
   private _handleRemoveGrouping(index: number): void {
     const groupingId = this._stringValue(this._getValue(["devices", "groupings", index, "id"]));
+    // A later grouping may reuse the id; it should not reopen this view.
+    if (this._deviceView === groupingId) this._deviceView = null;
     this._applyMutation((draft) => {
       removeListItem(draft, ["devices", "groupings"], index);
       stripGroupReferences(draft, groupingId);
