@@ -89,7 +89,7 @@
       "children": "Podřízená zařízení"
     },
     "notes": {
-      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení.",
+      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
@@ -183,7 +183,9 @@
       "show_others_group": "Zobrazit skupinu Ostatní",
       "training_time": "Čas trénování (HH:MM)",
       "grouping_name": "Název seskupení",
+      "grouping_id": "Id seskupení",
       "group_name": "Skupina",
+      "group_id": "Id",
       "group_short_name": "Zkratka",
       "house_power_entity": "Entita výkonu domu",
       "power_sensor_label": "Popisek senzoru výkonu",

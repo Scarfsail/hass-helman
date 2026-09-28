@@ -165,8 +165,8 @@ const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_").
 /**
  * A stable id slugged from `name`: folded to ASCII, then {@link slug}ged, with
  * `_2`, `_3`... on a clash and `fallback` when nothing is left (an emoji-only
- * name). What a new grouping or group gets; generated once and never edited,
- * so a rename changes only the name. Mirrors `_slug_id` in
+ * name). What a new grouping or group gets, and what a typed id is committed
+ * as; a rename changes only the name. Mirrors `_slug_id` in
  * `custom_components/helman/automation/migration.py`.
  */
 export function slugId(name: string, taken: Iterable<string>, fallback: string): string {
@@ -190,6 +190,26 @@ export function stripGroupReferences(config: JsonObject, groupingId: string, gro
     if (!groups || !(groupingId in groups)) continue;
     if (groupId !== undefined && groups[groupingId] !== groupId) continue;
     setOwnGroup(device, groupingId, null);
+  }
+}
+
+/**
+ * Moves every device's reference to a grouping over to its new id `newId`,
+ * or, with `groupId`, every reference to that group of it -- so an id change
+ * never leaves the draft naming one that is gone.
+ */
+export function renameGroupReferences(config: JsonObject, groupingId: string, newId: string, groupId?: string): void {
+  for (const { device } of iterDevices(config)) {
+    const groups = asJsonObject(device.groups);
+    if (!groups || !(groupingId in groups)) continue;
+    if (groupId === undefined) {
+      // Rebuilt rather than re-keyed, so the grouping keeps its place in the map.
+      device.groups = Object.fromEntries(
+        Object.entries(groups).map(([key, value]) => [key === groupingId ? newId : key, value]),
+      );
+    } else if (groups[groupingId] === groupId) {
+      setOwnGroup(device, groupingId, newId);
+    }
   }
 }
 
