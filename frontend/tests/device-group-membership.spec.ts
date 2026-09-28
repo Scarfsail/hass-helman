@@ -1,25 +1,24 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
-import { consumerGroups, effectiveGroup } from "../cards/shared/config/devices";
+import { consumerGroups } from "../cards/shared/config/devices";
 
 /**
  * Group membership in the Devices tab's groupings section (#372).
  *
- * Every group row lists its consumers -- the ones whose effective group it is
- * -- as chips, and "Unassigned" lists the rest. A chip dropped into another
- * list of the same grouping sets or unsets its `groups.<grouping>`. A child
- * whose parent has a group carries an "inherit from parent" toggle: while on,
- * it follows its parent and is not draggable; off pins it to the parent's
- * group. A pinned child under an assigned parent cannot be unassigned.
+ * Every group row lists its consumers -- the ones whose own `groups` entry
+ * names it (#376: only a direct assignment counts) -- as chips, and
+ * "Unassigned" lists the rest, a child with no group of its own included.
+ * Every chip is draggable; one dropped into another list of the same grouping
+ * sets or unsets its `groups.<grouping>`, and only its own.
  *
  * `ha-sortable` is HA's own element and undefined in a bare page, so a drop is
  * played the way SortableJS plays it: the chip moves into the target list,
  * the target fires `item-added`, and the source's rollback puts the chip back
  * before Lit redraws.
  *
- * The fixture: an AC breaker in "Technická FV" with one climate child that
- * inherits it and one pinned elsewhere, a schedulable boiler in no group, and
- * a lamp grouped only in the other grouping, whose bulb inherits it there.
+ * The fixture: an AC breaker in "Technická FV" with one climate child in no
+ * group and one assigned elsewhere, a schedulable boiler in no group, and a
+ * lamp grouped only in the other grouping, with an ungrouped bulb.
  */
 
 const BUNDLE = resolve(
@@ -229,12 +228,7 @@ const INITIAL = {
     bulb: undefined,
 };
 
-test("effectiveGroup: own group first, else the parent's, else none", () => {
-    expect(effectiveGroup("a", null)).toBe("a");
-    expect(effectiveGroup("a", "b")).toBe("a");
-    expect(effectiveGroup(undefined, "b")).toBe("b");
-    expect(effectiveGroup(undefined, null)).toBeNull();
-
+test("consumerGroups: each consumer with its own group only", () => {
     const config = {
         devices: {
             system: [{ id: "inverter", kind: "inverter" }],
@@ -248,14 +242,12 @@ test("effectiveGroup: own group first, else the parent's, else none", () => {
             ],
         },
     };
-    expect(
-        consumerGroups(config, "g").map(({ device, group, parentGroup }) => [device.id, group, parentGroup]),
-    ).toEqual([
-        ["top", "x", null],
-        ["child", "x", "x"],
-        ["grandchild", "x", "x"],
-        ["other", "y", "x"],
-        ["loose", null, null],
+    expect(consumerGroups(config, "g").map(({ device, group }) => [device.id, group])).toEqual([
+        ["top", "x"],
+        ["child", null],
+        ["grandchild", null],
+        ["other", "y"],
+        ["loose", null],
     ]);
 });
 
@@ -269,14 +261,14 @@ test("the Consumers list is the plain tree, with no view toggle", async ({ page 
     await expect(panel.locator("details.device-card")).toHaveCount(6);
 });
 
-test("each group lists its members, an inheriting child marked, then Unassigned", async ({ page }) => {
+test("each group lists its own members, an ungrouped child under Unassigned", async ({ page }) => {
     await mountEditor(page);
 
     await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: ["ac", "klima_obyvak"],
+        technicka_fv: ["ac"],
         technicka_sit: ["klima_loznice"],
         garage: [],
-        "": ["boiler", "lamp", "bulb"],
+        "": ["klima_obyvak", "boiler", "lamp", "bulb"],
     });
     await expect(groupingCard(page, 0).locator(".group-unassigned strong")).toHaveText("Unassigned");
 
@@ -286,33 +278,34 @@ test("each group lists its members, an inheriting child marked, then Unassigned"
     await expect(chip(page, 0, "klima_obyvak").locator(".member-parent")).toHaveText("AC breaker");
     await expect(chip(page, 0, "boiler").locator(".member-parent")).toHaveCount(0);
 
-    // The inheriting child is marked, and not draggable; the pinned one is.
-    await expect(chip(page, 0, "klima_obyvak")).toHaveClass("member-chip inheriting");
-    await expect(chip(page, 0, "klima_obyvak").locator(".member-inherit input")).toBeChecked();
-    await expect(chip(page, 0, "klima_loznice")).toHaveClass("member-chip draggable");
-    await expect(chip(page, 0, "klima_loznice").locator(".member-inherit input")).not.toBeChecked();
-    // Only children of an assigned parent get the toggle.
-    await expect(chip(page, 0, "ac").locator(".member-inherit")).toHaveCount(0);
-    await expect(chip(page, 0, "bulb").locator(".member-inherit")).toHaveCount(0);
+    // Every chip is draggable, and none carries a checkbox.
+    for (const id of ["ac", "klima_obyvak", "klima_loznice", "bulb"]) {
+        await expect(chip(page, 0, id)).toHaveClass("member-chip draggable");
+        await expect(chip(page, 0, id).locator(".member-chip-glyph")).toHaveCount(1);
+    }
+    await expect(groupingCard(page, 0).locator(".member-chip input")).toHaveCount(0);
 
     await expect.poll(() => lists(page, 1)).toEqual({
-        night_off: ["lamp", "bulb"],
-        "": ["ac", "klima_obyvak", "klima_loznice", "boiler"],
+        night_off: ["lamp"],
+        "": ["ac", "klima_obyvak", "klima_loznice", "boiler", "bulb"],
     });
-    await expect(chip(page, 1, "bulb")).toHaveClass("member-chip inheriting");
 });
 
-test("a drop into another group writes groups, and inheriting children move along", async ({ page }) => {
+test("a drop into another group writes that device's groups only", async ({ page }) => {
     await mountEditor(page);
+    const sortable = groupingCard(page, 0).locator("ha-sortable:has(> .group-members)").first();
+    await expect(sortable).toHaveAttribute("draggable-selector", ".member-chip.draggable");
+    await expect(sortable).toHaveAttribute("group", "helman-grouping-breakers");
 
     await drop(page, 0, "boiler", "garage");
+    // A parent moves alone: its children keep their own assignments.
     await drop(page, 0, "ac", "technicka_sit");
 
     await expect.poll(() => lists(page, 0)).toEqual({
         technicka_fv: [],
-        technicka_sit: ["ac", "klima_obyvak", "klima_loznice"],
+        technicka_sit: ["ac", "klima_loznice"],
         garage: ["boiler"],
-        "": ["lamp", "bulb"],
+        "": ["klima_obyvak", "lamp", "bulb"],
     });
     expect(await memberships(page)).toEqual({
         ...INITIAL,
@@ -321,80 +314,38 @@ test("a drop into another group writes groups, and inheriting children move alon
     });
 });
 
+test("an ungrouped child drags into a group, whatever its parent's", async ({ page }) => {
+    await mountEditor(page);
+
+    await drop(page, 0, "klima_obyvak", "garage");
+
+    await expect.poll(() => lists(page, 0)).toEqual({
+        technicka_fv: ["ac"],
+        technicka_sit: ["klima_loznice"],
+        garage: ["klima_obyvak"],
+        "": ["boiler", "lamp", "bulb"],
+    });
+    expect(await memberships(page)).toEqual({ ...INITIAL, klima_obyvak: { breakers: "garage" } });
+});
+
 test("a drop into Unassigned removes the key, and an emptied map", async ({ page }) => {
     await mountEditor(page);
 
     await drop(page, 0, "ac", "");
     await drop(page, 1, "lamp", "");
-
-    await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: [],
-        technicka_sit: ["klima_loznice"],
-        garage: [],
-        "": ["ac", "klima_obyvak", "boiler", "lamp", "bulb"],
-    });
-    expect(await memberships(page)).toEqual({ ...INITIAL, ac: undefined, lamp: undefined });
-});
-
-test("an inheriting child is not draggable, and a drop of it is refused", async ({ page }) => {
-    await mountEditor(page);
-    const sortable = groupingCard(page, 0).locator("ha-sortable:has(> .group-members)").first();
-    await expect(sortable).toHaveAttribute("draggable-selector", ".member-chip.draggable");
-    await expect(sortable).toHaveAttribute("group", "helman-grouping-breakers");
-
-    await drop(page, 0, "klima_obyvak", "garage");
-
-    await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: ["ac", "klima_obyvak"],
-        technicka_sit: ["klima_loznice"],
-        garage: [],
-        "": ["boiler", "lamp", "bulb"],
-    });
-    expect(await memberships(page)).toEqual(INITIAL);
-});
-
-test("inherit off pins the child to its parent's group, and on removes the key", async ({ page }) => {
-    await mountEditor(page);
-
-    await chip(page, 0, "klima_obyvak").locator(".member-inherit input").uncheck();
-    await expect(chip(page, 0, "klima_obyvak")).toHaveClass("member-chip draggable");
-    expect((await memberships(page)).klima_obyvak).toEqual({ breakers: "technicka_fv" });
-
-    // Pinned, it stays behind when its parent moves, and it can be dragged.
-    await drop(page, 0, "ac", "garage");
-    await drop(page, 0, "klima_obyvak", "technicka_sit");
-    await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: [],
-        technicka_sit: ["klima_obyvak", "klima_loznice"],
-        garage: ["ac"],
-        "": ["boiler", "lamp", "bulb"],
-    });
-
-    await chip(page, 0, "klima_obyvak").locator(".member-inherit input").check();
-    await chip(page, 0, "klima_loznice").locator(".member-inherit input").check();
-    await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: [],
-        technicka_sit: [],
-        garage: ["ac", "klima_obyvak", "klima_loznice"],
-        "": ["boiler", "lamp", "bulb"],
-    });
-    expect(await memberships(page)).toEqual({ ...INITIAL, ac: { breakers: "garage" }, klima_loznice: undefined });
-});
-
-test("a pinned child under an assigned parent cannot be unassigned", async ({ page }) => {
-    await mountEditor(page);
-
+    // A child drops into Unassigned too, even while its parent has a group.
+    await drop(page, 0, "ac", "technicka_fv");
     await drop(page, 0, "klima_loznice", "");
 
     await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: ["ac", "klima_obyvak"],
-        technicka_sit: ["klima_loznice"],
+        technicka_fv: ["ac"],
+        technicka_sit: [],
         garage: [],
-        "": ["boiler", "lamp", "bulb"],
+        "": ["klima_obyvak", "klima_loznice", "boiler", "lamp", "bulb"],
     });
-    // The refused chip is back in its own list, once.
+    // The dropped chip is in its new list, once.
     await expect(chip(page, 0, "klima_loznice")).toHaveCount(1);
-    expect(await memberships(page)).toEqual(INITIAL);
+    expect(await memberships(page)).toEqual({ ...INITIAL, klima_loznice: undefined, lamp: undefined });
 });
 
 test("a child of an unassigned parent drags like a top-level device", async ({ page }) => {
@@ -403,10 +354,10 @@ test("a child of an unassigned parent drags like a top-level device", async ({ p
 
     await drop(page, 0, "bulb", "technicka_fv");
     await expect.poll(() => lists(page, 0)).toEqual({
-        technicka_fv: ["ac", "klima_obyvak", "bulb"],
+        technicka_fv: ["ac", "bulb"],
         technicka_sit: ["klima_loznice"],
         garage: [],
-        "": ["boiler", "lamp"],
+        "": ["klima_obyvak", "boiler", "lamp"],
     });
     expect((await memberships(page)).bulb).toEqual({ breakers: "technicka_fv" });
 
@@ -424,8 +375,6 @@ test("removing a group moves its members to Unassigned", async ({ page }) => {
         garage: [],
         "": ["ac", "klima_obyvak", "boiler", "lamp", "bulb"],
     });
-    // Its parent has no group now, so the pinned child has nothing to inherit.
-    await expect(chip(page, 0, "klima_loznice").locator(".member-inherit")).toHaveCount(0);
     expect(await memberships(page)).toEqual({ ...INITIAL, ac: undefined });
 });
 

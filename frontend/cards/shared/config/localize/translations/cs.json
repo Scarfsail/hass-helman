@@ -67,6 +67,7 @@
       "automation_settings": "Nastavení automatizace",
       "appliance_optimizer_pipeline": "Optimalizátory spotřebičů",
       "system_optimizer_pipeline": "Systémové optimalizátory",
+      "groups": "Skupiny",
       "identity": "Identita",
       "action_options": "Volby akcí",
       "controls": "Ovládání",
@@ -88,7 +89,7 @@
       "children": "Podřízená zařízení"
     },
     "notes": {
-      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Podřízené zařízení sleduje skupinu nadřazeného, dokud je zapnuto „Zdědit od nadřazeného“. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení.",
+      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
@@ -586,7 +587,7 @@
     },
     "device_groups": {
       "unassigned": "Nezařazená",
-      "inherit": "Zdědit od nadřazeného"
+      "none": "Žádná"
     },
     "device_badges": {
       "energy": "Energie",
