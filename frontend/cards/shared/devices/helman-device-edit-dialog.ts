@@ -233,7 +233,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                               </ha-button>
                           `
                         : nothing}
-                    <ha-button slot="secondaryAction" @click=${this._handleCloseRequest}>
+                    <ha-button slot="secondaryAction" .disabled=${this._saving} @click=${this._handleCloseRequest}>
                         ${this._view.kind === "ready" ? this._text("cancel") : this._text("close")}
                     </ha-button>
                 </ha-dialog-footer>
@@ -470,7 +470,19 @@ export class HelmanDeviceEditDialog extends LitElement {
     };
 
     /** Closing on an unsaved draft asks first; the draft is the user's work. */
+    /**
+     * Close as Cancel does, asking first when the draft is dirty. Also what the
+     * device detail calls when Back is pressed with this dialog on top of it.
+     * Refused while a save is in flight, which would still land after a discard.
+     */
+    public requestClose(): void {
+        this._handleCloseRequest();
+    }
+
     private _handleCloseRequest = (): void => {
+        if (this._saving) {
+            return;
+        }
         if (this._dirty && !window.confirm(this._text("discard"))) {
             return;
         }
@@ -487,7 +499,14 @@ export class HelmanDeviceEditDialog extends LitElement {
             return;
         }
         event.stopPropagation();
-        if (this._closing || !this._dirty) {
+        if (this._closing) {
+            return;
+        }
+        if (this._saving) {
+            event.preventDefault();
+            return;
+        }
+        if (!this._dirty) {
             return;
         }
         event.preventDefault();

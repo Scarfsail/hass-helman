@@ -8,6 +8,7 @@ import "./node-detail/node-detail-battery-content";
 import "./node-detail/node-detail-solar-content";
 import "./node-detail/node-detail-grid-content";
 import "./node-detail/node-detail-house-content";
+import type { NodeDetailDeviceContent } from "./node-detail/node-detail-device-content";
 import "./node-detail/node-detail-device-content";
 
 const DIALOG_HISTORY_STATE_KEY = "__helmanNodeDetailDialogId";
@@ -33,6 +34,13 @@ export class NodeDetailDialog extends LitElement {
         }
 
         this._clearHistoryEntry();
+        // A device's edit dialog on top takes the Back for itself: the detail
+        // stays open and gets its history entry back.
+        const device = this.shadowRoot?.querySelector<NodeDetailDeviceContent>("node-detail-device-content");
+        if (device?.handleBack()) {
+            this._pushHistoryEntry();
+            return;
+        }
         this._closeDialogElement();
     };
 

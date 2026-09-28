@@ -59,12 +59,15 @@ const VALID = { valid: true, errors: [], warnings: [] };
 interface MountOptions {
     deviceKey?: string;
     saveResponse?: unknown;
+    /** Leave the save request unanswered, so the save stays in flight. */
+    hangSave?: boolean;
 }
 
 async function mountDetail(page: Page, options: MountOptions = {}): Promise<void> {
     const {
         deviceKey = "sensor.boiler_energy",
         saveResponse = { success: true, validation: VALID, reloadStarted: true },
+        hangSave = false,
     } = options;
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -72,7 +75,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
     await page.addScriptTag({ content: HA_DIALOG_STUB });
 
     await page.evaluate(
-        ({ config, key, save, strings }) => {
+        ({ config, key, save, hang, strings }) => {
             const calls: { type: string; config?: unknown; targets?: { key: string }[] }[] = [];
             (window as any).__calls = calls;
             const content = document.createElement("node-detail-device-content") as any;
@@ -86,7 +89,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                 callWS: async (request: any) => {
                     calls.push({ type: request.type, config: request.config, targets: request.targets });
                     if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
-                    if (request.type === "helman/save_config") return save;
+                    if (request.type === "helman/save_config") return hang ? new Promise(() => undefined) : save;
                     if (request.type === "helman/inspect_entities") {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
@@ -111,7 +114,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
             };
             document.body.appendChild(content);
         },
-        { config: CONFIG, key: deviceKey, save: saveResponse, strings: STRINGS },
+        { config: CONFIG, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS },
     );
 }
 
@@ -184,6 +187,39 @@ test.describe("editing a device from its detail", () => {
         await dialog(page).getByText("Cancel").click();
         await expect(dialog(page)).toHaveCount(0);
         await expect(editButton(page)).toHaveCount(1);
+    });
+
+    test("Cancel cannot discard a save already in flight", async ({ page }) => {
+        await mountDetail(page, { hangSave: true });
+        await openEdit(page);
+        await nameInput(page).fill("Hot water");
+        await nameInput(page).dispatchEvent("change");
+        await dialog(page).getByText("Save and reload").click();
+        await expect.poll(async () =>
+            (await calls(page)).filter((call) => call.type === "helman/save_config").length).toBe(1);
+
+        const cancel = dialog(page).locator("ha-button[slot='secondaryAction']");
+        await expect.poll(() => cancel.evaluate((button) => (button as any).disabled)).toBe(true);
+        await page.evaluate(() => (document.querySelector("node-detail-device-content") as any).handleBack());
+        await expect(dialog(page)).toHaveCount(1);
+    });
+
+    test("Back with a dirty draft asks first, and closes only the edit dialog", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await nameInput(page).fill("Hot water");
+        await nameInput(page).dispatchEvent("change");
+        const content = page.locator("node-detail-device-content");
+
+        page.once("dialog", (prompt) => void prompt.dismiss());
+        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(true);
+        await expect(dialog(page)).toHaveCount(1);
+
+        page.once("dialog", (prompt) => void prompt.accept());
+        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(true);
+        await expect(dialog(page)).toHaveCount(0);
+        await expect(editButton(page)).toHaveCount(1);
+        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(false);
     });
 
     test("an unknown key is named, not drawn as a blank form", async ({ page }) => {

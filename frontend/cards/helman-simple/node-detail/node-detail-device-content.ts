@@ -8,6 +8,7 @@ import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { formatPower } from "../../power-format";
 import "../../appliance-switch-badge";
 import type { HomeAssistantLike } from "../../shared/config/types";
+import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
 
 type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
@@ -72,6 +73,16 @@ export class NodeDetailDeviceContent extends LitElement {
     @state() private _chart?: HistoryGraphCard;
     /** The device's config form is open over this detail. */
     @state() private _editing = false;
+
+    /**
+     * Back pressed while the detail is open. With the edit dialog on top, only
+     * that closes, through its own discard check; returns whether it was.
+     */
+    public handleBack(): boolean {
+        if (!this._editing) return false;
+        this.renderRoot.querySelector<HelmanDeviceEditDialog>("helman-device-edit-dialog")?.requestClose();
+        return true;
+    }
 
     /** The device the figures and chart were loaded for; the host rebuilds params every render. */
     private _loadedItem?: TreeItem;
