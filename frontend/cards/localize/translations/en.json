@@ -115,6 +115,22 @@
       "net_cost": "Net cost"
     }
   },
+  "node_detail": {
+    "device": {
+      "today": "Today",
+      "last_hour": "Last hour",
+      "edit": {
+        "button": "Edit",
+        "title": "Edit device",
+        "loading": "Loading configuration…",
+        "load_failed": "Could not load the configuration",
+        "not_found": "Device \"{key}\" is not in the stored configuration. It may have been renamed or removed.",
+        "close": "Close",
+        "cancel": "Cancel",
+        "discard": "Discard unsaved changes?"
+      }
+    }
+  },
   "house_section": {
     "deferrable_tag": "deferrable",
     "unmeasured": "👻 Untracked consumption",

@@ -8,6 +8,8 @@ import "./node-detail/node-detail-battery-content";
 import "./node-detail/node-detail-solar-content";
 import "./node-detail/node-detail-grid-content";
 import "./node-detail/node-detail-house-content";
+import type { NodeDetailDeviceContent } from "./node-detail/node-detail-device-content";
+import "./node-detail/node-detail-device-content";
 
 const DIALOG_HISTORY_STATE_KEY = "__helmanNodeDetailDialogId";
 let nextDialogHistoryEntryId = 0;
@@ -32,6 +34,13 @@ export class NodeDetailDialog extends LitElement {
         }
 
         this._clearHistoryEntry();
+        // A device's edit dialog on top takes the Back for itself: the detail
+        // stays open and gets its history entry back.
+        const device = this.shadowRoot?.querySelector<NodeDetailDeviceContent>("node-detail-device-content");
+        if (device?.handleBack()) {
+            this._pushHistoryEntry();
+            return;
+        }
         this._closeDialogElement();
     };
 
@@ -93,6 +102,9 @@ export class NodeDetailDialog extends LitElement {
 
     // Private helper methods
     private _title(): string {
+        if (this.params.nodeType === "device") {
+            return this.params.item.displayName || this.params.item.name;
+        }
         return this.localize(`node_detail.title.${this.params.nodeType}`);
     }
 
@@ -127,6 +139,14 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .params=${this.params}
                     ></node-detail-house-content>
+                `;
+            case "device":
+                return html`
+                    <node-detail-device-content
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .params=${this.params}
+                    ></node-detail-device-content>
                 `;
         }
     }

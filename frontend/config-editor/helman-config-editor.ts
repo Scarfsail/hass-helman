@@ -1,4 +1,4 @@
-import { fetchDeviceSuggestions, fetchEnergyImportPreview, type DeviceSuggestions, type EnergyImportPreview } from "../cards/helman-api";
+import { fetchEnergyImportPreview, type EnergyImportPreview } from "../cards/helman-api";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
@@ -49,15 +49,10 @@ import {
   createCategoryKey,
   createDailyEnergyEntityDraft,
   createOptimizerDraft,
-  createEcoGearEntry,
-  createGearKey,
   createImportPriceWindowDraft,
   createLabelKey,
-  createModeKey,
   type RenameObjectKeyResult,
-  createUseModeEntry,
   canonicalJson,
-  createVehicleDraft,
   getValueAtPath,
   moveListItem,
   objectEntries,
@@ -71,7 +66,6 @@ import {
   deviceChildren,
   deviceIdFor,
   deviceKind,
-  hasSwitch,
   isCarvedMeterOwner,
   isSchedulable,
   iterDevices,
@@ -126,6 +120,10 @@ import {
   renderRequiredNumberField,
   renderRequiredTextField,
   renderSvgIcon,
+  formatError,
+  renameObjectKeyError,
+  renderOptionalTextField,
+  renderSimpleSection,
   setOptionalNumber,
   setOptionalString,
   setRequiredNumber,
@@ -147,6 +145,7 @@ import {
 import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles";
 import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/optimizer/helman-optimizer-editor";
+import "../cards/shared/devices/helman-device-editor";
 import {
   TRAINING_STATUS_CHANGED,
   asTrainingStatus,
@@ -160,16 +159,28 @@ import {
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
 import "./info-callout";
-import "./entity-group";
+import "../cards/shared/config/entity-group";
 import {
-  ENTITY_GROUP_CONNECTED,
-  ENTITY_GROUP_REVERT,
   entityGroupKey,
+  renderEntityGroup,
   type EntityFact,
-  type EntityGroupRevertDetail,
-  type EntityInspectionResult,
-  type HelmanEntityGroup,
-} from "./entity-group";
+  type EntityGroupOptions,
+} from "../cards/shared/config/entity-group";
+import { EntityInspectionController } from "../cards/shared/config/entity-inspection-controller";
+import {
+  EDITABLE_DEVICE_KINDS,
+  SEEDED_PROJECTION,
+  deviceEditorStyles,
+  deviceIdentityTargets,
+  deviceIssues,
+  deviceName,
+  renderDeviceIssues,
+  renderIssueCountBadge,
+  trainingDepthCell,
+  type ApplianceEnergyEstimate,
+  type DeviceConfigChangedDetail,
+  type HelmanDeviceEditor,
+} from "../cards/shared/devices/helman-device-editor";
 import type {
   HomeAssistantLike,
   JsonObject,
@@ -184,40 +195,19 @@ import type {
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
 
-const USE_MODE_BEHAVIORS = [
-  { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
-  { value: "surplus_aware", labelKey: "editor.values.surplus_aware" },
-];
-
-/**
- * The projection a device gets when it becomes schedulable: the strategy the
- * editor displays by default, and the figure the backend requires with it.
- */
-const SEEDED_PROJECTION = { strategy: "fixed", hourly_energy_kwh: 1 } as const;
-
-const GENERIC_PROJECTION_STRATEGIES = [
-  { value: "fixed", labelKey: "editor.values.fixed" },
-  { value: "history_average", labelKey: "editor.values.history_average" },
-];
-
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const INVERTER_CONTROLLABLE_KIND = "inverter";
 /** Reserved for the inverter; mirrors `CONTROLLABLE_ID_INVERTER` in Python. */
 const CONTROLLABLE_ID_INVERTER = "inverter";
 
-/** The kinds the Devices tab edits; anything else is shown read-only. */
-const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as const;
-
 const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
 type DeviceFilter = (typeof DEVICE_FILTERS)[number];
 
-/** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
-function validationPath(path: readonly PathSegment[]): string {
-  return path
-    .map((segment, index) =>
-      typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
-    )
-    .join("");
+/** Which device sits at which path; changes only when an edit moves devices. */
+function devicePathSignature(config: JsonObject | null): string {
+  return iterDevices(config)
+    .map(({ device, path }) => `${entityGroupKey(path)}=${stringValue(device.id)}`)
+    .join("|");
 }
 
 /** The two config buckets `automation` splits its optimizers into (#271, P1). */
@@ -242,66 +232,11 @@ const INVERTER_ACTION_OPTIONS = [
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
 /**
- * How often the editor asks what its picked entities currently read.
- *
- * A poll rather than a state subscription: the reading is a hint the reader
- * glances at while configuring, not a live dashboard, and a couple of seconds
- * of lag costs nothing. Subscribing would mean tracking which entities the
- * draft names as it is edited -- and *which* entities a path resolves to is
- * knowledge this editor deliberately does not have.
- */
-const ENTITY_INSPECTION_INTERVAL_MS = 2000;
-
-/**
  * How often the editor asks `helman/training/status`, for the Training tab's
  * panels and its tab-bar badge alike. Slower than the entity poll: a training
  * run takes minutes, and the answer is read from memory on every tick.
  */
 const TRAINING_STATUS_INTERVAL_MS = 5000;
-
-/**
- * Every match under `root`, including the ones inside nested shadow roots.
- *
- * `querySelectorAll` does not cross a shadow boundary, and the editor renders
- * part of itself through child elements that have one. Anything looking for
- * "all the groups on screen" has to walk.
- */
-function queryDeep<T extends Element>(root: ParentNode | null | undefined, selector: string): T[] {
-  if (!root) return [];
-  const found: T[] = [...root.querySelectorAll<T>(selector)];
-  for (const element of root.querySelectorAll("*")) {
-    if (element.shadowRoot) {
-      found.push(...queryDeep<T>(element.shadowRoot, selector));
-    }
-  }
-  return found;
-}
-
-/**
- * How long an immediate re-read waits before it can fire again.
- *
- * Every write into the draft asks for a fresh reading, because a reading the
- * user just invalidated is worse than no reading -- flipping a polarity and
- * watching the old direction sit there for two seconds reads as a control that
- * did nothing. But text fields write on every keystroke, and one whole config
- * document per character is not a poll, it is a flood.
- *
- * So the trigger is leading-edge: the *first* change of a burst goes out at
- * once -- which is every discrete change, a select or a picker -- and anything
- * that arrives inside the window is collapsed into a single trailing call once
- * it closes. A click costs no delay at all.
- *
- * The window has to outlast a keystroke to be worth anything. Ordinary typing
- * runs 150-300 ms per character, so a shorter window would put every character
- * on its own leading edge and send exactly the flood it was meant to stop --
- * a synthetic burst of writes with no gaps is the only case a short window
- * actually covers, and no user types that way.
- */
-const ENTITY_INSPECTION_DEBOUNCE_MS = 400;
-
-const APPLIANCE_ICON_SELECTOR = {
-  icon: {},
-} as const;
 
 // DUMMY: reuse Home Assistant's visual condition builder. Value is not persisted
 // yet — this only proves the editor renders and round-trips inside our panel.
@@ -313,7 +248,7 @@ const OPTIMIZER_CONDITION_SELECTOR = {
 interface TrainingDepthRow {
   /** Already localized, or (for a controllable) the reader's own name. */
   label: string;
-  /** Where the entity id lives -- also the key `_entityInspections` is read by. */
+  /** Where the entity id lives -- also the key the entity readings are read by. */
   path: PathSegment[];
   /** i18n key for what the trainer takes from this entity; the appliance table has no role column. */
   roleKey?: string;
@@ -342,12 +277,6 @@ interface ApplianceEnergyDepthDevice {
   entities: TrainingDepthRow[];
 }
 
-/** A device's learned energy, as the appliance-energy job reports it. */
-type ApplianceEnergyEstimate =
-  | { state: "learned"; kwh: number }
-  | { state: "failed"; reason: string }
-  | { state: "not_trained" };
-
 export class HelmanConfigEditorPanel
   extends LitElement
   implements FormFieldHost
@@ -374,7 +303,6 @@ export class HelmanConfigEditorPanel
     _deviceYamlValues: { state: true },
     _deviceYamlErrors: { state: true },
     _deviceFilter: { state: true },
-    _deviceSuggestions: { state: true },
     _energyImport: { state: true },
     _deviceActionMessage: { state: true },
     _importLoading: { state: true },
@@ -384,7 +312,6 @@ export class HelmanConfigEditorPanel
     _optimizerSchema: { state: true },
     _configDefaults: { state: true },
     _helpDialog: { state: true },
-    _entityInspections: { state: true },
     _entitiesOnly: { state: true },
     _trainingStatus: { state: true },
     _inspectorCardError: { state: true },
@@ -393,6 +320,7 @@ export class HelmanConfigEditorPanel
   static styles = [
     configFormStyles,
     optimizerCardStyles,
+    deviceEditorStyles,
     css`
     :host {
       display: block;
@@ -601,11 +529,6 @@ export class HelmanConfigEditorPanel
       gap: 8px;
     }
 
-    .issue-path {
-      font-family: var(--code-font-family, monospace);
-      font-size: 0.9rem;
-    }
-
     .tab-body {
       display: grid;
       gap: 16px;
@@ -623,104 +546,11 @@ export class HelmanConfigEditorPanel
       gap: 12px;
     }
 
-    details.section-card {
-      padding: 0 18px 18px;
-    }
-
-    details.section-card > summary {
-      list-style: none;
-      cursor: pointer;
-      padding: 14px 0;
-      font-size: 1.06rem;
-      font-weight: 700;
-      border-bottom: 1px solid transparent;
-      transition: border-color 0.15s ease;
-      user-select: none;
-    }
-
-    details.section-card[open] > summary {
-      border-bottom-color: var(--divider-color);
-      margin-bottom: 14px;
-    }
-
-    .section-summary-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .section-summary-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-
-    .section-icon {
-      flex-shrink: 0;
-      width: 18px;
-      height: 18px;
-      fill: var(--primary-color);
-      opacity: 0.85;
-    }
-
-    .section-summary-label {
-      min-width: 0;
-    }
-
-    .section-summary-badge {
-      display: flex;
-      align-items: center;
-      margin-left: auto;
-    }
-
-    .section-chevron {
-      flex-shrink: 0;
-      width: 18px;
-      height: 18px;
-      fill: var(--secondary-text-color);
-      transition: transform 0.2s ease;
-      transform: rotate(0deg);
-    }
-
-    details.section-card[open] > summary .section-chevron {
-      transform: rotate(90deg);
-    }
-
-    details.section-card > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    .section-content {
-      display: grid;
-      gap: 18px;
-    }
-
     .tab-icon {
       flex-shrink: 0;
       width: 16px;
       height: 16px;
       fill: currentColor;
-    }
-
-    .toggle-field {
-      display: block;
-    }
-
-    .toggle-field .field-label-row ha-formfield {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .toggle-field ha-formfield {
-      display: block;
-      width: 100%;
-      padding: 12px 14px;
-      border-radius: 12px;
-      border: 1px solid var(--divider-color);
-      background: var(--secondary-background-color);
-      color: var(--primary-text-color);
     }
 
     .yaml-field--document ha-yaml-editor {
@@ -730,24 +560,6 @@ export class HelmanConfigEditorPanel
 
     .yaml-error {
       margin: 0;
-    }
-
-    .list-stack {
-      display: grid;
-      gap: 14px;
-    }
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-
-    .inline-note {
-      color: var(--secondary-text-color);
-      font-size: 0.9rem;
     }
 
     /*
@@ -891,12 +703,6 @@ export class HelmanConfigEditorPanel
       fill: var(--warning-color, #ffa600);
     }
 
-    .section-footer {
-      display: flex;
-      justify-content: flex-start;
-      margin-top: 4px;
-    }
-
     .entities-only-toggle {
       /* The toolbar packs to the right; this one control belongs on the left,
          away from the tab's YAML toggle it must not be mistaken for. */
@@ -1002,56 +808,6 @@ export class HelmanConfigEditorPanel
       justify-self: start;
     }
 
-    .device-icon {
-      flex-shrink: 0;
-      --mdc-icon-size: 20px;
-      color: var(--secondary-text-color);
-    }
-
-    .device-badges {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: 6px;
-      margin-left: auto;
-    }
-
-    .device-badge {
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 0.78rem;
-      border: 1px solid var(--divider-color);
-      color: var(--secondary-text-color);
-      white-space: nowrap;
-    }
-
-    .device-badge[data-badge="schedulable"] {
-      border-color: var(--primary-color);
-      color: var(--primary-color);
-    }
-
-    .device-badge.error {
-      border-color: var(--error-color);
-      color: var(--error-color);
-    }
-
-    .device-badge.warning {
-      border-color: var(--warning-color, #ef6c00);
-      color: var(--warning-color, #ef6c00);
-    }
-
-    .device-issues {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      gap: 8px;
-    }
-
-    .device-id {
-      font-family: var(--code-font-family, monospace);
-    }
-
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -1150,17 +906,10 @@ export class HelmanConfigEditorPanel
   private _deviceYamlErrors: Partial<Record<string, string>> = {};
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
-  // Bound to the draft they were fetched for, like `_energyImport`: the draft
-  // is replaced by paths that bypass `_markDraftChanged` (YAML, reload).
-  private _deviceSuggestions: {
-    draft: JsonObject | null;
-    byId: Record<string, DeviceSuggestions>;
-  } = { draft: null, byId: {} };
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
   private _energyImportRequest = 0;
-  private _deviceSuggestionRequests: Record<string, number> = {};
 
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
@@ -1182,49 +931,19 @@ export class HelmanConfigEditorPanel
 
   // --- Entity inspection ---------------------------------------------------
   //
-  // One owner for the whole editor. Every mounted `helman-entity-group`
-  // announces its config path here, and one `helman/inspect_entities` call per
-  // tick answers for all of them; the appliances tab alone will hold twenty
-  // groups, and a call per group would be twenty round trips every two seconds
-  // for readings that all come out of the same document.
-  //
-  // The draft document is sent whole on every tick. It is a few KB over a local
-  // socket, and any scheme for sending only what changed would be more code
-  // than it saves.
+  // One collector for the whole editor: see `EntityInspectionController`.
 
   /** The stored document, as read. What a revert restores from. */
   private _savedConfig: JsonObject | null = null;
-  /** The last answer, keyed by group. Groups read their own row from here. */
-  private _entityInspections: Record<string, EntityInspectionResult> = {};
-  private _inspectionTimer?: ReturnType<typeof setInterval>;
-  /** Open while a burst is being coalesced; see the debounce constant. */
-  private _inspectionDebounce?: ReturnType<typeof setTimeout>;
-  /** Something changed while the window was open, so send once more at its end. */
-  private _inspectionTrailing = false;
-  /**
-   * Request ids, so a slow answer cannot overwrite a newer one.
-   *
-   * Requests are allowed to overlap rather than being serialised behind an
-   * in-flight flag: dropping a request because an older one is still out would
-   * drop exactly the state the user just typed, which is the bug this whole
-   * mechanism exists to prevent. Instead every request takes the next id and
-   * only an id newer than the last one applied may reach the screen -- a
-   * response that arrives out of order is discarded, not rendered.
-   */
-  private _inspectionSequence = 0;
-  private _inspectionApplied = 0;
-  /**
-   * How many requests are out.
-   *
-   * Ordering is the sequence numbers' job; this is the separate concern of not
-   * piling up. The interval restarts when a request *starts*, so a websocket
-   * that has stalled -- HA reconnecting, a slow handler -- would otherwise put
-   * another whole config document on the wire every two seconds with nothing
-   * capping the pile. The idle tick yields while one is out; a poll the user
-   * caused never does, because dropping that one drops the state they just
-   * typed.
-   */
-  private _inspectionInFlight = 0;
+  private _inspections = new EntityInspectionController(this, {
+    hass: () => this.hass,
+    config: () => this._config,
+    saved: () => this._savedConfig,
+    // The training tab's depth tables and the devices tab's names and icons
+    // (both empty outside their tab) ride the same poll and cache.
+    extraTargets: () => [...this._trainingDepthTargets(), ...this._deviceIdentityTargets()],
+    mutate: (mutator) => this._applyMutation(mutator),
+  });
 
   // --- Training status -------------------------------------------------------
   //
@@ -1286,9 +1005,6 @@ export class HelmanConfigEditorPanel
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
-    this.addEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
-    this._restartEntityInspectionTimer();
     this._trainingStatusTimer = setInterval(
       () => void this._pollTrainingStatus(),
       TRAINING_STATUS_INTERVAL_MS,
@@ -1317,17 +1033,6 @@ export class HelmanConfigEditorPanel
     super.disconnectedCallback();
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
-    this.removeEventListener(ENTITY_GROUP_CONNECTED, this._handleEntityGroupConnected);
-    this.removeEventListener(ENTITY_GROUP_REVERT, this._handleEntityGroupRevert);
-    if (this._inspectionTimer !== undefined) {
-      clearInterval(this._inspectionTimer);
-      this._inspectionTimer = undefined;
-    }
-    if (this._inspectionDebounce !== undefined) {
-      clearTimeout(this._inspectionDebounce);
-      this._inspectionDebounce = undefined;
-    }
-    this._inspectionTrailing = false;
     if (this._trainingStatusTimer !== undefined) {
       clearInterval(this._trainingStatusTimer);
       this._trainingStatusTimer = undefined;
@@ -1350,6 +1055,24 @@ export class HelmanConfigEditorPanel
     // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
     if (this._entitiesOnly || changedProperties.has("_entitiesOnly")) {
       this._applyEntitiesOnlyOpenState();
+    }
+    // Device cards are elements that render in their own update, after this
+    // one, so their sections reach the DOM only once they have settled.
+    if (this._entitiesOnly) {
+      void this._deviceCardsRendered().then(() => {
+        if (this._entitiesOnly) this._applyEntitiesOnlyOpenState();
+      });
+    }
+  }
+
+  /** Resolves once no mounted device card, nested ones included, has an update pending. */
+  private async _deviceCardsRendered(): Promise<void> {
+    for (;;) {
+      const pending = [
+        ...this.renderRoot.querySelectorAll<HelmanDeviceEditor>("helman-device-editor"),
+      ].filter((editor) => editor.isUpdatePending);
+      if (pending.length === 0) return;
+      await Promise.all(pending.map((editor) => editor.updateComplete));
     }
   }
 
@@ -1524,7 +1247,7 @@ export class HelmanConfigEditorPanel
                 // `helman-entity-group` announces -- nothing else triggers a
                 // poll on a plain tab switch, so this one does.
                 if (tab.id === "training" || tab.id === "devices") {
-                  this._requestEntityInspection();
+                  this._inspections.request();
                 }
               }}
             >
@@ -1671,7 +1394,8 @@ export class HelmanConfigEditorPanel
   /**
    * Every `details` the current tab body renders.
    *
-   * Deliberately *not* a shadow-crossing walk, unlike `_mountedEntityGroups`.
+   * Deliberately *not* a shadow-crossing walk, unlike the entity inspection
+   * collector's.
    * These are the editor's own section cards; a `details` inside a child
    * element's shadow root belongs to that element and is not this panel's to
    * force open. See `_applyEntitiesOnlyOpenState` for what that costs.
@@ -1791,29 +1515,7 @@ export class HelmanConfigEditorPanel
       onToggle?: (open: boolean) => void;
     } = {},
   ): TemplateResult {
-    const { open = true, icon, badge, onToggle } = options;
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    return html`
-      <details
-        class="section-card"
-        ?open=${open}
-        @toggle=${onToggle
-          ? (event: Event) => onToggle((event.target as HTMLDetailsElement).open)
-          : nothing}
-      >
-        <summary>
-          <div class="section-summary-row">
-            <div class="section-summary-left">
-              ${icon ? this._renderSvgIcon(icon, "section-icon") : nothing}
-              <span class="section-summary-label">${label}</span>
-            </div>
-            ${badge ? html`<div class="section-summary-badge">${badge}</div>` : nothing}
-            ${this._renderSvgIcon(chevronPath, "section-chevron")}
-          </div>
-        </summary>
-        <div class="section-content">${content}</div>
-      </details>
-    `;
+    return renderSimpleSection(label, content, options);
   }
 
   private _getDeviceMode(path: PathSegment[]): EditorMode {
@@ -2987,7 +2689,7 @@ export class HelmanConfigEditorPanel
    *
    * Computed only while the training tab is active: the tables render
    * nothing otherwise, and asking about entities nobody can see would be a
-   * poll that never pays for itself. `_pollEntityInspections` merges this
+   * poll that never pays for itself. The inspection collector merges this
    * list with the mounted `helman-entity-group` paths and de-duplicates by
    * key, so this is not a second call and not a second cache.
    */
@@ -3052,7 +2754,7 @@ export class HelmanConfigEditorPanel
 
   /** The inspection draft behind a depth row, and its history fact. */
   private _trainingDepthInspection(row: TrainingDepthRow) {
-    const draft = this._entityInspections[entityGroupKey(row.path)]?.draft ?? null;
+    const draft = this._inspections.results[entityGroupKey(row.path)]?.draft ?? null;
     const historyFact: EntityFact | undefined = draft?.facts?.find(
       (fact) => fact.id === "history",
     );
@@ -3250,7 +2952,7 @@ export class HelmanConfigEditorPanel
 
   /** A measured cell: the number, or a dash while it is unknown. */
   private _trainingDepthCell(value: unknown): string {
-    return typeof value === "number" && Number.isFinite(value) ? String(value) : "—";
+    return trainingDepthCell(value);
   }
 
   private _renderAutomationTab(): TemplateResult {
@@ -3650,159 +3352,6 @@ export class HelmanConfigEditorPanel
         ${this._t("editor.actions.cancel")}
       </button>
       </div>
-    </div>`;
-  }
-
-  private _suggestionPath(
-    path: PathSegment[],
-    field: keyof DeviceSuggestions,
-  ): PathSegment[] {
-    return field === "switch"
-      ? [...path, "controls", "switch", "entity_id"]
-      : [...path, "consumption", `${field}_entity_id`];
-  }
-
-  /**
-   * The entities suggestions may come from, most telling first; empty when
-   * the device names none.
-   *
-   * The backend uses the first one with an HA device, so a helper meter never
-   * blocks them. Only the meters and the control the device switches by
-   * qualify: a mode or gear select may belong to another integration's device
-   * (evcc, the car, the inverter's battery), whose sensors would then be
-   * offered, or auto-filled, as this device's meter.
-   */
-  private _suggestionAnchors(device: JsonObject): string[] {
-    const controls = asJsonObject(device.controls) ?? {};
-    const entity = (value: unknown) =>
-      this._stringValue(asJsonObject(value)?.entity_id).trim();
-    const anchors = [
-      ownMeter(device),
-      this._stringValue(asJsonObject(device.consumption)?.power_entity_id).trim(),
-      ...["switch", "charge", "climate"].map((key) => entity(controls[key])),
-    ].filter(Boolean);
-    return [...new Set(anchors)];
-  }
-
-  private async _applySuggestions(device: JsonObject): Promise<void> {
-    if (!this.hass || !this._config) return;
-    const id = this._stringValue(device.id);
-    const anchors = this._suggestionAnchors(device);
-    if (!anchors.length) return;
-    this._deviceActionMessage = "";
-    const draft = this._config;
-    const hass = this.hass;
-    const request = (this._deviceSuggestionRequests[id] ?? 0) + 1;
-    this._deviceSuggestionRequests[id] = request;
-    try {
-      const suggestions = await fetchDeviceSuggestions(hass, anchors, draft);
-      if (this._config !== draft || request !== this._deviceSuggestionRequests[id])
-        return;
-      const current = iterDevices(draft).find(
-        (entry) => entry.device.id === id,
-      );
-      if (!current) return;
-      // A selected meter already belongs to one device.
-      suggestions.energy = suggestions.energy.filter(
-        (candidate) =>
-          !iterDevices(draft).some(
-            (entry) =>
-              entry.device.id !== id &&
-              ownMeter(entry.device) === candidate.entityId,
-          ),
-      );
-      const energyNeedsPower =
-        current.parent !== null &&
-        deviceChildren(current.parent).some(
-          (child) => child.id !== id && !ownMeter(child),
-        ) &&
-        !getValueAtPath(draft, this._suggestionPath(current.path, "power")) &&
-        suggestions.power.length !== 1;
-      const fills = (["energy", "power", "switch"] as const).flatMap((field) => {
-        const fieldPath = this._suggestionPath(current.path, field);
-        if (
-          (field === "switch" && deviceKind(current.device) !== "generic") ||
-          (field === "energy" && energyNeedsPower) ||
-          getValueAtPath(draft, fieldPath) ||
-          suggestions[field].length !== 1
-        ) return [];
-        return [{ path: fieldPath, entityId: suggestions[field][0].entityId }];
-      });
-      if (fills.length) {
-        this._applyMutation((next) => {
-          for (const fill of fills) setValueAtPath(next, fill.path, fill.entityId);
-        });
-      }
-      this._storeSuggestions(id, suggestions);
-    } catch (error) {
-      if (this._config === draft && request === this._deviceSuggestionRequests[id])
-        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.suggestions_failed"));
-    }
-  }
-
-  private _storeSuggestions(id: string, suggestions: DeviceSuggestions): void {
-    const { draft, byId } = this._deviceSuggestions;
-    this._deviceSuggestions = {
-      draft: this._config,
-      byId: { ...(draft === this._config ? byId : {}), [id]: suggestions },
-    };
-  }
-
-  private _renderSuggestions(
-    device: JsonObject,
-    path: PathSegment[],
-  ): TemplateResult {
-    const id = this._stringValue(device.id);
-    const suggestions =
-      this._deviceSuggestions.draft === this._config
-        ? this._deviceSuggestions.byId[id]
-        : undefined;
-    return html`<div class="device-suggestions">
-      <button
-        class="add-button apply-suggestions"
-        type="button"
-        ?disabled=${!this._suggestionAnchors(device).length}
-        @click=${() => this._applySuggestions(device)}
-      >
-        ${this._t("editor.actions.apply_suggestions")}
-      </button>
-      ${
-        suggestions
-          ? (["energy", "power", "switch"] as const).map((field) => {
-              if (field === "switch" && deviceKind(device) !== "generic")
-                return nothing;
-              const fieldPath = this._suggestionPath(path, field);
-              if (this._getValue(fieldPath) || suggestions[field].length === 0)
-                return nothing;
-              return html`<div class="field">
-                <label>${this._t(`editor.suggestions.${field}`)}</label>
-                <select
-                  class="suggestion-candidates"
-                  data-field=${field}
-                  @change=${(event: Event) => {
-                    const value = (event.currentTarget as HTMLSelectElement)
-                      .value;
-                    if (
-                      value &&
-                      !this._getValue(fieldPath) &&
-                      suggestions[field].some(
-                        (candidate) => candidate.entityId === value,
-                      )
-                    ) {
-                      this._setRequiredString(fieldPath, value);
-                      this._storeSuggestions(id, suggestions);
-                    }
-                  }}
-                >
-                  <option value="">
-                    ${this._t("editor.suggestions.choose")}
-                  </option>
-                  ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.map((reason) => this._tFormat(`editor.suggestions.reasons.${reason.code}`, { value: reason.value ?? "" })).join(", ")}</option>`)}
-                </select>
-              </div>`;
-            })
-          : nothing
-      }
     </div>`;
   }
 
@@ -4238,7 +3787,7 @@ export class HelmanConfigEditorPanel
     const inverterId = this._stringValue(inverter.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const isYaml = this._getDeviceMode(path) === "yaml";
-    const issues = this._deviceIssues(path);
+    const issues = deviceIssues(this._validation, path);
 
     return html`
       <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
@@ -4251,7 +3800,7 @@ export class HelmanConfigEditorPanel
                 <span class="card-subtitle">${inverterId}</span>
               </div>
             </div>
-            <div class="device-badges">${this._renderIssueCountBadge(issues)}</div>
+            <div class="device-badges">${renderIssueCountBadge(this, this._validation, issues)}</div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
               ${this._renderDeviceModeToggle(path)}
               ${renderRemoveButton(this, {
@@ -4261,7 +3810,7 @@ export class HelmanConfigEditorPanel
           </div>
         </summary>
         <div class="appliance-body">
-          ${this._renderDeviceIssues(issues)}
+          ${renderDeviceIssues(this._validation, issues)}
           ${isYaml
             ? this._renderDeviceYamlEditor(path)
             : html`
@@ -4320,7 +3869,7 @@ export class HelmanConfigEditorPanel
               ${renderDragHandle(this)}
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
-                <strong>${this._deviceName(device, path)}</strong>
+                <strong>${deviceName(this, this._inspections.results, device, path)}</strong>
                 <span class="card-subtitle">${subtitle}</span>
               </div>
             </div>
@@ -4332,7 +3881,7 @@ export class HelmanConfigEditorPanel
           </div>
         </summary>
         <div class="appliance-body">
-          ${this._renderDeviceIssues(this._deviceIssues(path))}
+          ${renderDeviceIssues(this._validation, deviceIssues(this._validation, path))}
           <pre class="raw-preview">${JSON.stringify(device, null, 2)}</pre>
         </div>
       </details>
@@ -4340,558 +3889,75 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * One device of the tree, and -- through `_renderDeviceChildren` -- the
-   * devices under it, with this same card.
+   * One device of the tree, drawn by the element the device edit dialog also
+   * mounts, and -- through `_renderDeviceChildren` -- the devices under it.
    *
-   * The summary is the overview row: the resolved name and icon, what the
-   * device measures, whether it has a switch, whether it is schedulable, and
-   * how many validation issues point at it. The name and icon are the
-   * override when there is one, else what the backend resolves them to (see
-   * `_devicePlaceholder`).
+   * The panel keeps what is list- and document-level: the drag handle, the
+   * YAML toggle and remove in the summary, the YAML editor those toggle to,
+   * the children list, and the filter that hides the card. Everything inside
+   * the form belongs to the element.
    */
   private _renderDeviceCard(
     device: JsonObject,
     path: PathSegment[],
     parent: JsonObject | null,
   ): TemplateResult {
-    const kind = deviceKind(device);
-    const id = this._stringValue(device.id);
-    const schedulable = isSchedulable(device);
-    const meterless = parent !== null && !ownMeter(device);
-    const icon = this._stringValue(device.icon) || this._devicePlaceholder(path, "icon");
-    const issues = this._deviceIssues(path);
-    const isYaml = this._getDeviceMode(path) === "yaml";
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-
     return html`
-      <details
-        class="list-card device-card ${isYaml ? "scope-yaml" : ""}"
-        data-device-id=${id}
+      <helman-device-editor
         ?hidden=${!this._deviceMatchesFilter(device)}
-      >
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${renderDragHandle(this)}
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              ${icon ? html`<ha-icon class="device-icon" .icon=${icon}></ha-icon>` : nothing}
-              <div class="card-title">
-                <strong>${this._deviceName(device, path)}</strong>
-                <span class="card-subtitle">${id || this._t("editor.values.missing_id")}</span>
-              </div>
-            </div>
-            <div class="device-badges">
-              ${this._renderDeviceBadges(device)}${this._renderIssueCountBadge(issues)}
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderDeviceModeToggle(path)}
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removeDevice(path),
-              })}
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          ${this._renderDeviceIssues(issues)}
-          ${isYaml
-            ? this._renderDeviceYamlEditor(path)
-            : html`
-              ${this._renderSuggestions(device, path)}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.identity"),
-                html`<div class="field-grid">
-                  ${this._renderOptionalTextField(
-                    [...path, "name"],
-                    "editor.fields.device_name",
-                    "editor.helpers.device_name",
-                    undefined,
-                    this._devicePlaceholder(path, "name") || id,
-                  )}
-                  ${this._renderOptionalIconField(
-                    [...path, "icon"],
-                    "editor.fields.device_icon",
-                    "editor.helpers.device_icon",
-                    this._devicePlaceholder(path, "icon"),
-                  )}
-                  <div class="field">
-                    <div class="field-label-row">
-                      <label>${this._t("editor.fields.device_id")}</label>
-                      ${this._renderHelpIcon("editor.fields.device_id", "editor.help.device_id")}
-                    </div>
-                    <input class="device-id" .value=${id} readonly />
-                  </div>
-                  ${this._renderDeviceKindField(path, kind)}
-                  ${this._renderDeviceParentField(path, parent)}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.measurements"),
-                html`<div class="field-grid">
-                  ${this._renderEntityGroup(
-                    [...path, "consumption", "energy_entity_id"],
-                    "editor.fields.consumption_energy_entity",
-                    {
-                      includeDomains: ["sensor"],
-                      helperKey: meterless
-                        ? "editor.helpers.consumption_energy_entity_child"
-                        : "editor.helpers.consumption_energy_entity",
-                      helpKey: "editor.help.consumption_energy_entity",
-                      // Only a child may draw from its parent's meter.
-                      required: parent === null,
-                    },
-                  )}
-                  ${this._renderEntityGroup(
-                    [...path, "consumption", "power_entity_id"],
-                    "editor.fields.consumption_power_entity",
-                    {
-                      includeDomains: ["sensor"],
-                      helperKey: "editor.helpers.consumption_power_entity",
-                    },
-                  )}
-                </div>`,
-              )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.controls"),
-                html`<div class="field-grid">
-                  ${this._renderSchedulableField(device, path, parent)}
-                  ${this._renderDeviceControls(kind, path, schedulable || meterless)}
-                </div>`,
-              )}
-              ${schedulable && kind !== "ev_charger"
-                ? this._renderProjectionSection(kind, path)
-                : nothing}
-              ${kind === "ev_charger" ? this._renderEvChargerSections(path) : nothing}
-              ${this._renderDeviceChildren(device, path)}
-            `}
-        </div>
-      </details>
+        .config=${this._config}
+        .path=${path}
+        .parent=${parent}
+        .hass=${this.hass}
+        .narrow=${this.narrow ?? false}
+        .localize=${(key: string) => this._t(key)}
+        .validation=${this._validation}
+        .inspections=${this._inspections.results}
+        .energyEstimate=${this._applianceEnergyEstimate(this._stringValue(device.id))}
+        .listActions=${(devicePath: PathSegment[]) => this._renderDeviceListActions(devicePath)}
+        .renderChildren=${(child: JsonObject, childPath: PathSegment[]) =>
+          this._renderDeviceChildren(child, childPath)}
+        .renderYaml=${(devicePath: PathSegment[]) =>
+          this._getDeviceMode(devicePath) === "yaml" ? this._renderDeviceYamlEditor(devicePath) : null}
+        @device-config-changed=${this._handleDeviceConfigChanged}
+      ></helman-device-editor>
     `;
   }
 
-  /** The derived badges of a device's overview row. */
-  private _renderDeviceBadges(device: JsonObject): TemplateResult[] {
-    const consumption = asJsonObject(device.consumption) ?? {};
-    const badges: [boolean, string][] = [
-      [!!ownMeter(device), "energy"],
-      [this._stringValue(consumption.power_entity_id) !== "", "power"],
-      [hasSwitch(device), "switch"],
-      [isSchedulable(device), "schedulable"],
-    ];
-    return badges
-      .filter(([shown]) => shown)
-      .map(
-        ([, key]) => html`
-          <span class="device-badge" data-badge=${key}>${this._t(`editor.device_badges.${key}`)}</span>
-        `,
-      );
-  }
-
-  private _renderIssueCountBadge(issues: ValidationIssue[]): TemplateResult | typeof nothing {
-    if (issues.length === 0) return nothing;
-    const hasError = issues.some((issue) => this._validation?.errors.includes(issue));
+  /** A device card's pipeline row: drag, Visual / YAML, remove. */
+  private _renderDeviceListActions(path: PathSegment[]): TemplateResult {
     return html`
-      <span class="device-badge ${hasError ? "error" : "warning"}" data-badge="issues">
-        ${this._tFormat("editor.device_badges.issues", { count: issues.length })}
-      </span>
+      <div class="list-actions" @click=${this._preventSummaryToggle}>
+        ${renderDragHandle(this)}
+        ${this._renderDeviceModeToggle(path)}
+        ${renderRemoveButton(this, {
+          onRemove: () => this._removeDevice(path),
+        })}
+      </div>
     `;
   }
 
   /**
-   * The validation issues that point at this device itself.
+   * A device card's edit, applied to the draft like any field of the panel's.
    *
-   * The backend reports a device's issues under its document path --
-   * `devices[1].children[2].controls` -- so a card owns every issue under its
-   * own path except those under one of its children, which their own cards
-   * show. `devices[1].children` itself (a rule about the children as a set) is
-   * the parent's.
+   * The YAML state is keyed by device path, so an edit that moves devices to
+   * other paths -- a new parent -- returns every card to visual mode, as a
+   * drag or a remove does.
    */
-  private _deviceIssues(path: PathSegment[]): ValidationIssue[] {
-    if (!this._validation) return [];
-    const own = validationPath(path);
-    return [...this._validation.errors, ...this._validation.warnings].filter(
-      (issue) =>
-        (issue.path === own || issue.path.startsWith(`${own}.`)) &&
-        !issue.path.startsWith(`${own}.children[`),
-    );
-  }
-
-  private _renderDeviceIssues(issues: ValidationIssue[]): TemplateResult | typeof nothing {
-    if (issues.length === 0) return nothing;
-    const errors = this._validation?.errors ?? [];
-    return html`
-      <ul class="device-issues">
-        ${issues.map(
-          (issue) => html`
-            <li class="message ${errors.includes(issue) ? "error" : "info"}">
-              <div class="issue-path">${issue.path}</div>
-              <div>${issue.message}</div>
-            </li>
-          `,
-        )}
-      </ul>
-    `;
-  }
-
-  /** The override when there is one, else the backend's resolved name, else the id. */
-  private _deviceName(device: JsonObject, path: PathSegment[]): string {
-    return (
-      this._stringValue(device.name) ||
-      this._devicePlaceholder(path, "name") ||
-      this._stringValue(device.id) ||
-      this._t("editor.values.missing_id")
-    );
-  }
-
-  /**
-   * What the device's `name` or `icon` resolves to when left unset.
-   *
-   * Answered by the backend through the entity inspection poll -- see
-   * `_deviceIdentityTargets` -- so the cleaner regex and the fallback order
-   * live in one place, `resolve_device_name`. Empty until the first answer.
-   */
-  private _devicePlaceholder(path: PathSegment[], field: "name" | "icon"): string {
-    return this._stringValue(
-      this._entityInspections[entityGroupKey([...path, field])]?.draft?.placeholder,
-    );
-  }
+  private _handleDeviceConfigChanged = (event: Event): void => {
+    const { path, value } = (event as CustomEvent<DeviceConfigChangedDetail>).detail;
+    const before = devicePathSignature(this._config);
+    this._applyMutation((draft) => {
+      if (value === undefined) unsetValueAtPath(draft, path);
+      else setValueAtPath(draft, path, value);
+    });
+    if (devicePathSignature(this._config) !== before) this._resetDeviceModes();
+  };
 
   /** Every device's name and icon path, for the shared poll, while the tab is open. */
   private _deviceIdentityTargets(): { key: string; path: PathSegment[]; always: boolean }[] {
     if (this._activeTab !== "devices") return [];
-    return iterDevices(this._config).flatMap(({ path }) =>
-      (["name", "icon"] as const).map((field) => {
-        const fieldPath = [...path, field];
-        return { key: entityGroupKey(fieldPath), path: fieldPath, always: true };
-      }),
-    );
-  }
-
-  private _renderDeviceKindField(path: PathSegment[], kind: string): TemplateResult {
-    return html`
-      <div class="field">
-        <label>${this._t("editor.fields.kind")}</label>
-        <select
-          class="device-kind"
-          @change=${(event: Event) =>
-            this._applyMutation((draft) => {
-              const nextKind = (event.currentTarget as HTMLSelectElement).value;
-              if (nextKind !== kind) unsetValueAtPath(draft, [...path, "controls"]);
-              setValueAtPath(draft, [...path, "kind"], nextKind);
-              this._seedDeviceProjection(draft, path);
-            })}
-        >
-          ${EDITABLE_DEVICE_KINDS.map(
-            (option) => html`
-              <option value=${option} ?selected=${option === kind}>
-                ${this._t(`editor.values.kind_${option}`)}
-              </option>
-            `,
-          )}
-        </select>
-      </div>
-    `;
-  }
-
-  /**
-   * Where the device sits: at the top level or under a device.
-   *
-   * Offers only consumers that can hold children (they own a meter and are not
-   * schedulable), never the device itself or anything under it, plus the
-   * current parent whatever it is, so the select never misstates it.
-   */
-  private _renderDeviceParentField(
-    path: PathSegment[],
-    parent: JsonObject | null,
-  ): TemplateResult {
-    const key = entityGroupKey(path);
-    const parentKey = parent ? entityGroupKey(path.slice(0, -2)) : "";
-    const candidates = iterDevices(this._config).filter((entry) => {
-      // A system device never nests or holds children.
-      if (entry.path[1] !== "consumers") return false;
-      const candidateKey = entityGroupKey(entry.path);
-      if (candidateKey === key || candidateKey.startsWith(`${key}.`)) return false;
-      return candidateKey === parentKey || canHaveChildren(entry.device);
-    });
-    return html`
-      <div class="field">
-        <label>${this._t("editor.fields.parent")}</label>
-        <select
-          class="device-parent"
-          @change=${(event: Event) =>
-            this._moveDeviceUnder(path, (event.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value="" ?selected=${parentKey === ""}>
-            ${this._t("editor.values.top_level")}
-          </option>
-          ${candidates.map((entry) => {
-            const candidateKey = entityGroupKey(entry.path);
-            return html`
-              <option value=${candidateKey} ?selected=${candidateKey === parentKey}>
-                ${this._deviceName(entry.device, entry.path)}
-              </option>
-            `;
-          })}
-        </select>
-        <div class="helper">${this._t("editor.helpers.parent")}</div>
-      </div>
-    `;
-  }
-
-  /** Move a device, with everything under it, to the end of another parent's children. */
-  private _moveDeviceUnder(path: PathSegment[], parentKey: string): void {
-    const currentParentKey = path.length > 3 ? entityGroupKey(path.slice(0, -2)) : "";
-    if (parentKey === currentParentKey) return;
-    const target = parentKey
-      ? iterDevices(this._config).find((entry) => entityGroupKey(entry.path) === parentKey)
-      : undefined;
-    const device = this._getValue(path);
-    if ((parentKey && !target) || device === undefined) return;
-    this._resetDeviceModes();
-    this._applyMutation((draft) => {
-      // Appended first: appending never shifts an existing index, so `path`
-      // still names the device when it is removed.
-      appendListItem(
-        draft,
-        target ? [...target.path, "children"] : ["devices", "consumers"],
-        cloneJson(device as JsonValue),
-      );
-      removeListItem(draft, path.slice(0, -1), path[path.length - 1] as number);
-    });
-  }
-
-  /**
-   * The one flag a device carries: may Helman plan and run it.
-   *
-   * A meterless child's siblings are all schedulable or all passive, so on one
-   * of them the toggle sets the whole set. A device with children cannot be
-   * schedulable (a schedulable device is a leaf), so there it is disabled --
-   * unless it is on, which only a hand edit can do, and then it may be turned off.
-   */
-  private _renderSchedulableField(
-    device: JsonObject,
-    path: PathSegment[],
-    parent: JsonObject | null,
-  ): TemplateResult {
-    const checked = isSchedulable(device);
-    const hasChildren = deviceChildren(device).length > 0;
-    const meterless = parent !== null && !ownMeter(device);
-    const siblings = meterless && parent ? meterlessChildren(parent).length : 0;
-    const note = hasChildren
-      ? this._t("editor.helpers.schedulable_has_children")
-      : siblings > 1
-        ? this._tFormat("editor.helpers.schedulable_siblings", { count: siblings })
-        : "";
-    return html`
-      <div class="field toggle-field schedulable-field">
-        <div class="field-label-row">
-          <ha-formfield .label=${this._t("editor.fields.schedulable")}>
-            <ha-switch
-              .checked=${checked}
-              ?disabled=${hasChildren && !checked}
-              @change=${(event: Event) =>
-                this._setSchedulable(
-                  path,
-                  meterless,
-                  (event.currentTarget as HTMLElement & { checked: boolean }).checked,
-                )}
-            ></ha-switch>
-          </ha-formfield>
-          ${this._renderHelpIcon("editor.fields.schedulable", "editor.help.schedulable")}
-        </div>
-        <div class="helper">${this._t("editor.helpers.schedulable")}</div>
-        ${note ? html`<div class="helper schedulable-note">${note}</div>` : nothing}
-      </div>
-    `;
-  }
-
-  private _setSchedulable(path: PathSegment[], meterless: boolean, value: boolean): void {
-    const listPath = path.slice(0, -1);
-    const targets = meterless
-      ? (asJsonArray(this._getValue(listPath)) ?? []).flatMap((sibling, index) => {
-          const object = asJsonObject(sibling);
-          return object && !ownMeter(object) ? [[...listPath, index]] : [];
-        })
-      : [path];
-    this._applyMutation((draft) => {
-      for (const target of targets) {
-        if (value) {
-          setValueAtPath(draft, [...target, "schedulable"], true);
-          this._seedDeviceProjection(draft, target);
-        } else {
-          unsetValueAtPath(draft, [...target, "schedulable"]);
-        }
-      }
-    });
-  }
-
-  /** Persist the projection default shown for a newly schedulable device. */
-  private _seedDeviceProjection(draft: JsonObject, path: PathSegment[]): void {
-    const device = asJsonObject(getValueAtPath(draft, path));
-    if (!device || !isSchedulable(device) || deviceKind(device) === "ev_charger") return;
-    const projectionPath = [...path, "consumption", "projection"];
-    // Configured fields stay; only missing ones are seeded. The backend needs
-    // `hourly_energy_kwh` for every strategy (a learner's fallback), so a
-    // partial projection gains it too.
-    for (const [key, value] of Object.entries(SEEDED_PROJECTION)) {
-      if (getValueAtPath(draft, [...projectionPath, key]) === undefined) {
-        setValueAtPath(draft, [...projectionPath, key], value);
-      }
-    }
-  }
-
-  /**
-   * The kind's controls, always editable: a passive device may still have a
-   * switch, and a meterless child needs its switch or climate entity as the
-   * running signal its share of the parent's meter follows.
-   */
-  private _renderDeviceControls(
-    kind: string,
-    path: PathSegment[],
-    required: boolean,
-  ): TemplateResult {
-    const controlsPath: PathSegment[] = [...path, "controls"];
-    if (kind === "climate") {
-      return this._renderEntityGroup(
-        [...controlsPath, "climate", "entity_id"],
-        "editor.fields.climate_entity",
-        { includeDomains: ["climate"], helpKey: "editor.help.appliance_climate_entity", required },
-      );
-    }
-    if (kind === "ev_charger") {
-      return html`
-        ${this._renderEntityGroup(
-          [...controlsPath, "charge", "entity_id"],
-          "editor.fields.charge_switch_entity",
-          { includeDomains: ["switch"], helpKey: "editor.help.ev_charge_switch_entity", required },
-        )}
-        ${this._renderEntityGroup(
-          [...controlsPath, "use_mode", "entity_id"],
-          "editor.fields.use_mode_entity",
-          { includeDomains: ["input_select", "select"], helpKey: "editor.help.ev_use_mode_entity", required },
-        )}
-        ${this._renderEntityGroup(
-          [...controlsPath, "eco_gear", "entity_id"],
-          "editor.fields.eco_gear_entity",
-          { includeDomains: ["input_select", "select"], helpKey: "editor.help.ev_eco_gear_entity", required },
-        )}
-        ${this._renderRequiredNumberField([...path, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
-      `;
-    }
-    return this._renderEntityGroup(
-      [...controlsPath, "switch", "entity_id"],
-      "editor.fields.switch_entity",
-      { includeDomains: [...SWITCH_CONTROL_DOMAINS], helpKey: "editor.help.appliance_switch_entity", required },
-    );
-  }
-
-  /** The EV charger's own lists: use modes, eco gears and vehicles. */
-  private _renderEvChargerSections(path: PathSegment[]): TemplateResult {
-    const useModes = objectEntries(this._getValue([...path, "controls", "use_mode", "values"]));
-    const ecoGears = objectEntries(this._getValue([...path, "controls", "eco_gear", "values"]));
-    const vehicles = asJsonArray(this._getValue([...path, "vehicles"])) ?? [];
-    return html`
-      ${this._renderSimpleSection(
-        this._t("editor.sections.use_modes"),
-        html`<div class="list-stack">
-          ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(path, modeKey, modeConfig))}
-        </div>
-        <div class="section-footer">
-          <button type="button" class="add-button" @click=${() => this._handleAddUseMode(path)}>${this._t("editor.actions.add_use_mode")}</button>
-        </div>`,
-      )}
-      ${this._renderSimpleSection(
-        this._t("editor.sections.eco_gears"),
-        html`<div class="list-stack">
-          ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(path, gearKey, gearConfig))}
-        </div>
-        <div class="section-footer">
-          <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(path)}>${this._t("editor.actions.add_eco_gear")}</button>
-        </div>`,
-      )}
-      ${this._renderSimpleSection(
-        this._t("editor.sections.vehicles"),
-        html`${renderSortableList({
-          items: vehicles,
-          containerClass: "list-stack",
-          renderItem: (vehicle, vehicleIndex) => this._renderVehicle(path, vehicle, vehicleIndex),
-          onMove: (oldIndex, newIndex) =>
-            this._moveListItem([...path, "vehicles"], oldIndex, newIndex),
-        })}
-        <div class="section-footer">
-          <button type="button" class="add-button" @click=${() => this._handleAddVehicle(path)}>${this._t("editor.actions.add_vehicle")}</button>
-        </div>`,
-      )}
-    `;
-  }
-
-  /**
-   * A schedulable device's demand projection. Whether its meter is carved out
-   * of the house baseline is not a setting here: it follows `schedulable`.
-   */
-  private _renderProjectionSection(kind: string, path: PathSegment[]): TemplateResult {
-    const projectionPath: PathSegment[] = [...path, "consumption", "projection"];
-    const strategy =
-      this._stringValue(this._getValue([...projectionPath, "strategy"])) || "fixed";
-    return this._renderSimpleSection(
-      this._t("editor.sections.projection"),
-      html`
-        <p class="inline-note">
-          ${this._t(
-            kind === "climate"
-              ? "editor.notes.climate_appliance_projection"
-              : "editor.notes.generic_appliance_projection",
-          )}
-        </p>
-        <div class="field-grid">
-          <div class="field">
-            <div class="field-label-row">
-              <label>${this._t("editor.fields.projection_strategy")}</label>
-              ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
-            </div>
-            <select
-              class="projection-strategy"
-              @change=${(event: Event) =>
-                this._handleProjectionStrategyChange(
-                  path,
-                  (event.currentTarget as HTMLSelectElement).value,
-                )}
-            >
-              ${GENERIC_PROJECTION_STRATEGIES.map(
-                (option) => html`
-                  <option value=${option.value} ?selected=${option.value === strategy}>
-                    ${this._t(option.labelKey)}
-                  </option>
-                `,
-              )}
-            </select>
-          </div>
-          ${this._renderRequiredNumberField(
-            [...projectionPath, "hourly_energy_kwh"],
-            strategy === "history_average"
-              ? "editor.fields.fallback_hourly_energy_kwh"
-              : "editor.fields.hourly_energy_kwh",
-            undefined,
-            "any",
-            "editor.help.appliance_hourly_energy_kwh",
-          )}
-          ${strategy === "history_average"
-            ? this._renderRequiredNumberField(
-                [...projectionPath, "lookback_days"],
-                "editor.fields.history_lookback_days",
-                undefined,
-                "1",
-                "editor.help.appliance_history_lookback_days",
-              )
-            : nothing}
-        </div>
-        ${strategy === "history_average"
-          ? this._renderApplianceEnergyEstimateLine(
-              this._stringValue(this._getValue([...path, "id"])),
-              this._getValue([...projectionPath, "hourly_energy_kwh"]),
-            )
-          : nothing}
-      `,
-    );
+    return iterDevices(this._config).flatMap(({ path }) => deviceIdentityTargets(path));
   }
 
   /** A device's children, and -- when it can hold them -- a way to add one. */
@@ -4911,209 +3977,6 @@ export class HelmanConfigEditorPanel
     );
   }
 
-  /**
-   * The learned figure a `history_average` device projects with, read-only.
-   *
-   * Same source as the Training tab's appliance table, so the two agree. The
-   * fallback is the draft's `hourly_energy_kwh`, the figure the backend uses
-   * until an estimate exists.
-   */
-  private _renderApplianceEnergyEstimateLine(
-    controllableId: string,
-    fallbackKwh: unknown,
-  ): TemplateResult {
-    const estimate = this._applianceEnergyEstimate(controllableId);
-    const kwh = this._trainingDepthCell(fallbackKwh);
-    const text =
-      estimate.state === "learned"
-        ? this._tFormat("editor.appliance_estimate.learned", { kwh: estimate.kwh.toFixed(2) })
-        : estimate.state === "failed"
-          ? this._tFormat("editor.appliance_estimate.failed", { reason: estimate.reason, kwh })
-          : this._tFormat("editor.appliance_estimate.not_trained", { kwh });
-    return html`<p class="inline-note appliance-energy-estimate">${text}</p>`;
-  }
-
-  private _renderUseMode(
-    appliancePath: PathSegment[],
-    modeKey: string,
-    modeConfig: unknown,
-  ): TemplateResult {
-    const modeObject = asJsonObject(modeConfig) ?? {};
-    const valuesPath: PathSegment[] = [
-      ...appliancePath,
-      "controls",
-      "use_mode",
-      "values",
-    ];
-    return html`
-      <div class="nested-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${modeKey}</strong>
-            <span class="card-subtitle">${this._t("editor.card.use_mode_mapping")}</span>
-          </div>
-          <div class="inline-actions">
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removePath([...valuesPath, modeKey])}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-        <div class="field-grid">
-          <div class="field">
-            <label>${this._t("editor.fields.mode_id")}</label>
-            <input
-              .value=${modeKey}
-              @change=${(event: Event) =>
-                this._handleRenameObjectKey(
-                  valuesPath,
-                  modeKey,
-                  (event.currentTarget as HTMLInputElement).value,
-                )}
-            />
-          </div>
-          <div class="field">
-            <label>${this._t("editor.fields.behavior")}</label>
-            <select
-              @change=${(event: Event) =>
-                this._setRequiredString(
-                  [...valuesPath, modeKey, "behavior"],
-                  (event.currentTarget as HTMLSelectElement).value,
-                )}
-            >
-              ${USE_MODE_BEHAVIORS.map(
-                (option) => html`
-                  <option
-                    value=${option.value}
-                    ?selected=${option.value ===
-                    (this._stringValue(modeObject.behavior) || "fixed_max_power")}
-                  >${this._t(option.labelKey)}</option>
-                `,
-              )}
-            </select>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderEcoGear(
-    appliancePath: PathSegment[],
-    gearKey: string,
-    gearConfig: unknown,
-  ): TemplateResult {
-    const gearObject = asJsonObject(gearConfig) ?? {};
-    const valuesPath: PathSegment[] = [
-      ...appliancePath,
-      "controls",
-      "eco_gear",
-      "values",
-    ];
-    return html`
-      <div class="nested-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${gearKey}</strong>
-            <span class="card-subtitle">${this._t("editor.card.eco_gear_mapping")}</span>
-          </div>
-          <div class="inline-actions">
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removePath([...valuesPath, gearKey])}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-        <div class="field-grid">
-          <div class="field">
-            <label>${this._t("editor.fields.gear_id")}</label>
-            <input
-              .value=${gearKey}
-              @change=${(event: Event) =>
-                this._handleRenameObjectKey(
-                  valuesPath,
-                  gearKey,
-                  (event.currentTarget as HTMLInputElement).value,
-                )}
-            />
-          </div>
-          ${this._renderRequiredNumberField(
-            [...valuesPath, gearKey, "min_power_kw"],
-            "editor.fields.min_power_kw",
-            gearObject.min_power_kw,
-          )}
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderVehicle(
-    appliancePath: PathSegment[],
-    vehicle: unknown,
-    index: number,
-  ): TemplateResult {
-    const vehicleObject = asJsonObject(vehicle) ?? {};
-    const basePath: PathSegment[] = [...appliancePath, "vehicles", index];
-    return html`
-      <div class="nested-card">
-        <div class="card-header">
-          <div class="appliance-summary-left">
-            ${renderDragHandle(this)}
-            <div class="card-title">
-              <strong>${this._stringValue(vehicleObject.name) || this._tFormat("editor.dynamic.vehicle", { index: index + 1 })}</strong>
-              <span class="card-subtitle">${this._stringValue(vehicleObject.id) || this._t("editor.values.missing_id")}</span>
-            </div>
-          </div>
-          <div class="list-actions">
-            ${renderRemoveButton(this, {
-              onRemove: () => this._removeListItem([...appliancePath, "vehicles"], index),
-            })}
-          </div>
-        </div>
-        <div class="field-grid">
-          ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.vehicle_id", undefined, "editor.help.vehicle_id")}
-          ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.vehicle_name")}
-          ${this._renderEntityGroup(
-            [...basePath, "telemetry", "soc_entity_id"],
-            "editor.fields.soc_entity",
-            {
-              includeDomains: ["sensor"],
-              helpKey: "editor.help.vehicle_soc_entity",
-              required: true,
-            },
-          )}
-          ${this._renderEntityGroup(
-            [...basePath, "telemetry", "charge_limit_entity_id"],
-            "editor.fields.charge_limit_entity",
-            {
-              includeDomains: ["number"],
-              helpKey: "editor.help.vehicle_charge_limit_entity",
-            },
-          )}
-          ${this._renderRequiredNumberField(
-            [...basePath, "limits", "battery_capacity_kwh"],
-            "editor.fields.battery_capacity_kwh",
-            undefined,
-            "any",
-            "editor.help.vehicle_battery_capacity_kwh",
-          )}
-          ${this._renderRequiredNumberField(
-            [...basePath, "limits", "max_charging_power_kw"],
-            "editor.fields.max_charging_power_kw",
-            undefined,
-            "any",
-            "editor.help.vehicle_max_charging_power_kw",
-          )}
-        </div>
-      </div>
-    `;
-  }
-
   private _renderOptionalTextField(
     path: PathSegment[],
     labelKey: string,
@@ -5121,21 +3984,7 @@ export class HelmanConfigEditorPanel
     helpKey?: string,
     placeholder?: string,
   ): TemplateResult {
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <input
-          placeholder=${placeholder || this.configDefaultHint(path)}
-          .value=${this._stringValue(this._getValue(path))}
-          @change=${(event: Event) =>
-            this._setOptionalString(path, (event.currentTarget as HTMLInputElement).value)}
-        />
-        ${helperKey ? html`<div class="helper">${this._t(helperKey)}</div>` : nothing}
-      </div>
-    `;
+    return renderOptionalTextField(this, path, labelKey, helperKey, helpKey, placeholder);
   }
 
   private _renderRequiredTextField(
@@ -5223,31 +4072,6 @@ export class HelmanConfigEditorPanel
     return renderOptionalSelectField(this, path, labelKey, options, helpKey);
   }
 
-  private _renderOptionalIconField(
-    path: PathSegment[],
-    labelKey: string,
-    helperKey?: string,
-    placeholder?: string,
-  ): TemplateResult {
-    return html`
-      <div class="field">
-        <ha-selector
-          .hass=${this.hass}
-          .narrow=${this.narrow ?? false}
-          .selector=${placeholder ? { icon: { placeholder } } : APPLIANCE_ICON_SELECTOR}
-          .label=${this._t(labelKey)}
-          .helper=${helperKey ? this._t(helperKey) : undefined}
-          .required=${false}
-          .value=${this._stringValue(this._getValue(path))}
-          @value-changed=${(event: Event) => {
-            const nextValue = (event as CustomEvent<{ value?: string }>).detail?.value ?? "";
-            this._setOptionalString(path, nextValue);
-          }}
-        ></ha-selector>
-      </div>
-    `;
-  }
-
   private _renderBooleanField(
     path: PathSegment[],
     labelKey: string,
@@ -5303,27 +4127,10 @@ export class HelmanConfigEditorPanel
   private _renderEntityGroup(
     path: PathSegment[],
     labelKey: string,
-    options: {
-      includeDomains?: string[];
-      helperKey?: string;
-      helpKey?: string;
-      required?: boolean;
-    } = {},
+    options: EntityGroupOptions = {},
     slotted: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
-    return html`
-      <helman-entity-group
-        .hass=${this.hass}
-        .fieldHost=${this}
-        .path=${path}
-        .labelKey=${labelKey}
-        .helpKey=${options.helpKey}
-        .helperKey=${options.helperKey}
-        .includeDomains=${options.includeDomains}
-        ?required=${options.required ?? false}
-        .inspection=${this._entityInspections[entityGroupKey(path)] ?? null}
-      >${slotted}</helman-entity-group>
-    `;
+    return renderEntityGroup(this, this._inspections.results, path, labelKey, options, slotted);
   }
 
   /**
@@ -5349,197 +4156,6 @@ export class HelmanConfigEditorPanel
       },
       this._renderPolarityField(device),
     );
-  }
-
-  /**
-   * Put this group's owned paths back to what the stored document says.
-   *
-   * The editor does the write because it is what holds both documents; the
-   * group only knows which paths are its own. A path the saved document does
-   * not have is removed rather than blanked, so reverting an entity that was
-   * never saved leaves the same document as never having picked one.
-   */
-  private _handleEntityGroupRevert = (event: Event): void => {
-    const detail = (event as CustomEvent<EntityGroupRevertDetail>).detail;
-    const saved = this._savedConfig;
-    if (!saved || !detail?.paths?.length) return;
-    this._applyMutation((draft) => {
-      for (const path of detail.paths) {
-        const value = getValueAtPath(saved, path);
-        if (value === undefined) {
-          unsetValueAtPath(draft, path);
-        } else {
-          setValueAtPath(draft, path, cloneJson(value as JsonValue));
-        }
-      }
-    });
-  };
-
-  /**
-   * Read again now, because something the reading depends on moved.
-   *
-   * The single trigger for everything that is not the timer: a group mounting,
-   * and every write into the draft document. It deliberately does *not* ask
-   * which paths changed or which group owns them. The poll is one batched call
-   * over the groups the collector finds in the DOM, and a config write is rare
-   * enough that asking unconditionally is both simpler than a dependency map
-   * and impossible to get subtly wrong -- a field added later cannot forget to
-   * opt in.
-   *
-   * Leading edge, with a trailing call when the burst had more in it. Expanding
-   * a section mounts several groups at once and the first of them fires before
-   * its siblings exist, so the trailing call is what picks the rest up.
-   */
-  /**
-   * A group announcing itself as it mounts.
-   *
-   * Deferred to a microtask, unlike a config write, because this one arrives
-   * from inside the panel's own render commit: the group's `connectedCallback`
-   * runs while Lit is inserting children, after the update is marked done, so
-   * writing the reactive `_entityInspections` synchronously would schedule an
-   * update from inside one -- the dev warning, and an extra render pass. The
-   * write the user caused has no such problem and keeps its leading edge.
-   */
-  private _handleEntityGroupConnected = (): void => {
-    queueMicrotask(() => this._requestEntityInspection());
-  };
-
-  private _requestEntityInspection = (): void => {
-    if (this._inspectionDebounce !== undefined) {
-      this._inspectionTrailing = true;
-      return;
-    }
-    this._inspectionDebounce = setTimeout(() => {
-      this._inspectionDebounce = undefined;
-      if (this._inspectionTrailing) {
-        this._inspectionTrailing = false;
-        this._requestEntityInspection();
-      }
-    }, ENTITY_INSPECTION_DEBOUNCE_MS);
-    void this._pollEntityInspections();
-  };
-
-  /**
-   * Start the idle tick over.
-   *
-   * Called whenever a request actually goes out, so an immediate poll *resets*
-   * the two-second rhythm instead of running beside it. Without this, a burst
-   * of edits would leave the timer firing in the gaps between the polls the
-   * edits already caused.
-   */
-  private _restartEntityInspectionTimer(): void {
-    if (this._inspectionTimer !== undefined) {
-      clearInterval(this._inspectionTimer);
-    }
-    this._inspectionTimer = setInterval(
-      () => void this._pollEntityInspections("idle"),
-      ENTITY_INSPECTION_INTERVAL_MS,
-    );
-  }
-
-  /**
-   * The groups actually on screen, read from the DOM at the moment of asking.
-   *
-   * Deliberately not a set maintained by mount/unmount events. A group cannot
-   * announce its own removal — `disconnectedCallback` runs after the browser
-   * has detached it, and an event dispatched from a detached node never
-   * reaches this element — so a bookkeeping set would grow monotonically and
-   * keep polling for groups that are gone. Querying is also simply true: a
-   * collapsed `details` renders no group, and a tab switch removes them all.
-   *
-   * It descends nested shadow roots because a plain `querySelectorAll` stops
-   * at the first one: `helman-optimizer-editor` renders the Automation tab
-   * inside its own, and a group placed there would simply never be polled —
-   * mounted, bordered and permanently blank, with nothing to say it was
-   * missed. The whole invariant is that no picker goes factless, so the
-   * collector has to reach every group that exists rather than every group
-   * this element happened to render itself.
-   */
-  private _mountedEntityGroups(): HelmanEntityGroup[] {
-    return queryDeep<HelmanEntityGroup>(this.shadowRoot, "helman-entity-group");
-  }
-
-  /**
-   * One call for every mounted group, or none at all.
-   *
-   * A group is worth asking about when *either* document has something at its
-   * path. The draft one is obvious; the saved one is the case that is easy to
-   * get wrong — clearing a configured sensor leaves the draft blank, and that
-   * is exactly when the saved reading and its revert control need to appear.
-   * Skipping it would remove the revert affordance from the single edit most
-   * likely to want it. When neither document has anything there is genuinely
-   * nothing to ask, and no call goes out at all.
-   *
-   * A failed tick is swallowed — the last reading stays on screen rather than
-   * the panel growing an error banner that reappears every two seconds.
-   */
-  private async _pollEntityInspections(trigger: "idle" | "change" = "change"): Promise<void> {
-    if (!this.hass || !this._config) return;
-    if (trigger === "idle" && this._inspectionInFlight > 0) return;
-    const saved = this._savedConfig;
-    // The mounted groups plus the training tab's depth-table targets (empty
-    // outside that tab) -- one poll, one cache, deduplicated by key so a path
-    // both a group and the table care about is asked about once.
-    const seenKeys = new Set<string>();
-    const candidates = [
-      ...this._mountedEntityGroups().map((group) => ({
-        key: group.key,
-        path: group.path,
-        always: false,
-      })),
-      ...this._trainingDepthTargets(),
-      ...this._deviceIdentityTargets(),
-    ];
-    const targets = candidates
-      .filter((target) => {
-        if (seenKeys.has(target.key)) return false;
-        seenKeys.add(target.key);
-        return true;
-      })
-      .filter(
-        ({ path, always }) =>
-          always ||
-          stringValue(this._getValue(path)) !== "" ||
-          (!!saved && stringValue(getValueAtPath(saved, path)) !== ""),
-      );
-    if (targets.length === 0) {
-      // Clearing is an answer like any other, so it takes an id too. Without
-      // one, a slow earlier request could resolve after this and repaint the
-      // reading for the entity that was just cleared.
-      this._inspectionApplied = ++this._inspectionSequence;
-      if (Object.keys(this._entityInspections).length > 0) {
-        this._entityInspections = {};
-      }
-      return;
-    }
-    const sequence = ++this._inspectionSequence;
-    this._restartEntityInspectionTimer();
-    this._inspectionInFlight += 1;
-    try {
-      const response = await this.hass.callWS<{ results?: EntityInspectionResult[] }>({
-        type: "helman/inspect_entities",
-        config: this._config,
-        ...(saved ? { saved_config: saved } : {}),
-        // ``always`` is this element's own bookkeeping about which rows
-        // survive the "is the picker set" filter. The request carries paths and
-        // nothing else, so it is dropped here rather than sent and ignored.
-        targets: targets.map(({ key, path }) => ({ key, path })),
-      });
-      // A slower earlier request must never repaint over a newer answer: that
-      // would put the stale reading back on screen, which is the whole defect
-      // the immediate poll exists to remove.
-      if (sequence < this._inspectionApplied) return;
-      this._inspectionApplied = sequence;
-      const next: Record<string, EntityInspectionResult> = {};
-      for (const row of response?.results ?? []) {
-        next[row.key] = row;
-      }
-      this._entityInspections = next;
-    } catch {
-      // Polled: a dropped tick costs a stale badge, not a message.
-    } finally {
-      this._inspectionInFlight -= 1;
-    }
   }
 
   private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
@@ -6109,65 +4725,6 @@ export class HelmanConfigEditorPanel
     });
   };
 
-  private _handleAddVehicle(devicePath: PathSegment[]): void {
-    const vehiclePath: PathSegment[] = [...devicePath, "vehicles"];
-    const existingIds = (asJsonArray(this._getValue(vehiclePath)) ?? [])
-      .map((vehicle) => this._stringValue(asJsonObject(vehicle)?.id))
-      .filter((value) => value.length > 0);
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        vehiclePath,
-        createVehicleDraft(
-          existingIds,
-          this._tFormat("editor.dynamic.vehicle", { index: existingIds.length + 1 }),
-        ),
-      );
-    });
-  }
-
-  private _handleAddUseMode(devicePath: PathSegment[]): void {
-    const path: PathSegment[] = [...devicePath, "controls", "use_mode", "values"];
-    const modeKey = createModeKey(objectEntries(this._getValue(path)).map(([key]) => key));
-    this._applyMutation((draft) => {
-      setValueAtPath(draft, [...path, modeKey], createUseModeEntry());
-    });
-  }
-
-  private _handleAddEcoGear(devicePath: PathSegment[]): void {
-    const path: PathSegment[] = [...devicePath, "controls", "eco_gear", "values"];
-    const gearKey = createGearKey(objectEntries(this._getValue(path)).map(([key]) => key));
-    this._applyMutation((draft) => {
-      setValueAtPath(draft, [...path, gearKey], createEcoGearEntry());
-    });
-  }
-
-  private _handleProjectionStrategyChange(devicePath: PathSegment[], strategy: string): void {
-    if (!["fixed", "history_average"].includes(strategy)) {
-      return;
-    }
-
-    this._applyMutation((draft) => {
-      const basePath: PathSegment[] = [...devicePath, "consumption", "projection"];
-      setValueAtPath(draft, [...basePath, "strategy"], strategy);
-      if (strategy !== "history_average") {
-        return;
-      }
-
-      // Only the window is seeded. The meter lives on the consumption block
-      // now, where it may already have been picked for the baseline split
-      // alone — writing it from here would either clobber that or invent an
-      // empty one.
-      const existingLookbackDays = getValueAtPath(draft, [...basePath, "lookback_days"]);
-      if (
-        typeof existingLookbackDays !== "number" ||
-        !Number.isFinite(existingLookbackDays)
-      ) {
-        setValueAtPath(draft, [...basePath, "lookback_days"], 30);
-      }
-    });
-  }
-
   private _handleRenameObjectKey(
     path: PathSegment[],
     currentKey: string,
@@ -6365,11 +4922,10 @@ export class HelmanConfigEditorPanel
    */
   private _markDraftChanged(): void {
     this._energyImport = null;
-    this._deviceSuggestions = { draft: null, byId: {} };
     this._dirty = true;
     this._validation = null;
     this._message = null;
-    this._requestEntityInspection();
+    this._inspections.request();
   }
 
   // --- FormFieldHost -------------------------------------------------------
@@ -6499,29 +5055,10 @@ export class HelmanConfigEditorPanel
   private _formatRenameObjectKeyError(
     result: Exclude<RenameObjectKeyResult, { ok: true }>,
   ): string {
-    switch (result.reason) {
-      case "target_not_available":
-        return this._t("editor.rename.target_not_available");
-      case "empty_key":
-        return this._t("editor.rename.key_empty");
-      case "duplicate_key":
-        return this._tFormat("editor.rename.key_exists", {
-          key: result.key ?? "",
-        });
-      case "missing_key":
-        return this._tFormat("editor.rename.key_missing", {
-          key: result.key ?? "",
-        });
-    }
+    return renameObjectKeyError(this, result);
   }
 
   private _formatError(error: unknown, fallback: string): string {
-    if (typeof error === "object" && error !== null && "message" in error) {
-      const message = (error as { message?: unknown }).message;
-      if (typeof message === "string" && message) {
-        return message;
-      }
-    }
-    return fallback;
+    return formatError(error, fallback);
   }
 }

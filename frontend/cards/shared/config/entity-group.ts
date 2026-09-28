@@ -8,12 +8,12 @@ import {
     setRequiredString,
     stringValue,
     type FormFieldHost,
-} from "../cards/shared/config/form-fields";
+} from "./form-fields";
 import {
     MISSING_TRANSLATION_PREFIX,
     getLocalizeFunction,
-} from "../cards/shared/config/localize/localize";
-import type { PathSegment } from "../cards/shared/config/types";
+} from "./localize/localize";
+import type { PathSegment } from "./types";
 
 /**
  * One entity, its settings, and what it currently reads -- as one control.
@@ -609,4 +609,42 @@ declare global {
 
 if (!customElements.get("helman-entity-group")) {
     customElements.define("helman-entity-group", HelmanEntityGroup);
+}
+
+/** What a call site says about one picker; everything else comes from the host. */
+export interface EntityGroupOptions {
+    includeDomains?: string[];
+    helperKey?: string;
+    helpKey?: string;
+    required?: boolean;
+}
+
+/**
+ * One `helman-entity-group`, wired to the host that edits its path.
+ *
+ * The one way a config surface mounts a group, so the panel and the device
+ * editor cannot drift in what they hand it. `inspections` is the host's
+ * collector's last answer -- see `entity-inspection-controller.ts`.
+ */
+export function renderEntityGroup(
+    host: FormFieldHost & { hass?: unknown },
+    inspections: Readonly<Record<string, EntityInspectionResult>>,
+    path: PathSegment[],
+    labelKey: string,
+    options: EntityGroupOptions = {},
+    slotted: TemplateResult | typeof nothing = nothing,
+): TemplateResult {
+    return html`
+        <helman-entity-group
+            .hass=${host.hass}
+            .fieldHost=${host}
+            .path=${path}
+            .labelKey=${labelKey}
+            .helpKey=${options.helpKey}
+            .helperKey=${options.helperKey}
+            .includeDomains=${options.includeDomains}
+            ?required=${options.required ?? false}
+            .inspection=${inspections[entityGroupKey(path)] ?? null}
+        >${slotted}</helman-entity-group>
+    `;
 }

@@ -83,6 +83,7 @@ import {
   type MoneyTotals,
 } from "./money-model";
 import "../helman/tree-item-list";
+import "../helman-simple/node-detail-dialog";
 import { TreeItem } from "../helman/tree-item";
 import {
   findTrainingSlot,
@@ -682,6 +683,11 @@ export class HelmanSolarInspector extends LitElement {
   @query("scheduling-day-editor-host")
   private _editorHostElement?: SchedulingDayEditorHost;
   @state() private _editorHost: SchedulingDayEditorHost | null = null;
+  /**
+   * The composition box whose device detail is open. The dialog shows the
+   * device now, live, not the selected slots.
+   */
+  @state() private _deviceDetail: TreeItem | null = null;
   @state() private _payload: InspectorPayload | null = null;
   /**
    * The composition panels' group nodes, kept across renders so their
@@ -2015,7 +2021,11 @@ export class HelmanSolarInspector extends LitElement {
     // exactly the jump this shell exists to remove.
     const empty = content === "";
     return html`
-      <div class="body" @helman-open-schedule-editor=${this._handleOpenScheduleEditor}>
+      <div
+        class="body"
+        @helman-open-schedule-editor=${this._handleOpenScheduleEditor}
+        @show-device-detail=${this._handleShowDeviceDetail}
+      >
         <!-- One editor for the whole card. The band strip draws its day off
              this host and opens it on a lane press; a badge in the composition
              panel opens the same instance, so the two never disagree about
@@ -2036,6 +2046,17 @@ export class HelmanSolarInspector extends LitElement {
                 .preload=${!this.hideScheduleStrip}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
               ></scheduling-day-editor-host>
+            `
+          : ""}
+        ${this._deviceDetail
+          ? html`
+              <node-detail-dialog
+                .hass=${this.hass}
+                .localize=${this._localize}
+                .open=${true}
+                .params=${{ nodeType: "device", item: this._deviceDetail }}
+                @closed=${() => { this._deviceDetail = null; }}
+              ></node-detail-dialog>
             `
           : ""}
         ${this._renderNavigation()}
@@ -2080,6 +2101,11 @@ export class HelmanSolarInspector extends LitElement {
   private _handleOpenScheduleEditor = (event: CustomEvent<OpenScheduleEditorDetail>): void => {
     event.stopPropagation();
     this._editorHost?.openFor(event.detail.target);
+  };
+
+  private _handleShowDeviceDetail = (event: CustomEvent<{ item: TreeItem }>): void => {
+    event.stopPropagation();
+    this._deviceDetail = event.detail.item;
   };
 
   private _renderNavigation() {
@@ -5589,6 +5615,13 @@ export class HelmanSolarInspector extends LitElement {
     // cannot stand in for it: it is a meter, not the key assignments are stored
     // under, and a scheduled appliance may have no meter at all.
     node.controllableIds = controllableIds;
+    // The device this box is, for its detail dialog: the same identity
+    // applianceKey keys the box by, minus the label fallback, so a scheduled
+    // appliance with neither a single controllable nor a meter, and the
+    // unmeasured remainder, open nothing.
+    node.energyEntityId = entityId ?? undefined;
+    node.deviceKey = controllableIds.length === 1 ? controllableIds[0] : entityId ?? undefined;
+    node.deviceKeyIsMeter = controllableIds.length !== 1 && !!entityId;
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

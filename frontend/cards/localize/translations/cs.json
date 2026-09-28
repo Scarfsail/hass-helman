@@ -58,6 +58,20 @@
     },
     "house": {
       "power": "Výkon"
+    },
+    "device": {
+      "today": "Dnes",
+      "last_hour": "Poslední hodina",
+      "edit": {
+        "button": "Upravit",
+        "title": "Upravit zařízení",
+        "loading": "Načítám konfiguraci…",
+        "load_failed": "Konfiguraci se nepodařilo načíst",
+        "not_found": "Zařízení „{key}“ v uložené konfiguraci není. Mohlo být přejmenováno nebo odstraněno.",
+        "close": "Zavřít",
+        "cancel": "Zrušit",
+        "discard": "Zahodit neuložené změny?"
+      }
     }
   },
   "scheduling": {

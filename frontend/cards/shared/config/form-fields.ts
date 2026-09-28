@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 
+import type { RenameObjectKeyResult } from "./config-document";
 import type { JsonValue, PathSegment } from "./types";
 
 /**
@@ -364,4 +365,105 @@ export function renderDayClassificationField(
             </div>
         </div>
     `;
+}
+
+/**
+ * A free-text field that may be left blank, which removes the key.
+ *
+ * The placeholder is the caller's when it has one to show -- a device's
+ * resolved name -- else the backend's default for the path.
+ */
+export function renderOptionalTextField(
+    host: FormFieldHost,
+    path: PathSegment[],
+    labelKey: string,
+    helperKey?: string,
+    helpKey?: string,
+    placeholder?: string,
+): TemplateResult {
+    return html`
+        <div class="field">
+            ${renderLabelRow(host, labelKey, helpKey)}
+            <input
+                placeholder=${placeholder || defaultHint(host, path)}
+                .value=${stringValue(host.getValue(path))}
+                @change=${(event: Event) =>
+                    setOptionalString(host, path, (event.currentTarget as HTMLInputElement).value)}
+            />
+            ${helperKey ? html`<div class="helper">${host.t(helperKey)}</div>` : nothing}
+        </div>
+    `;
+}
+
+const SECTION_CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+
+/**
+ * A collapsible section: a labelled `details.section-card`, open by default.
+ *
+ * `onToggle` reports the reader opening or closing it. A closed `details`
+ * renders its content all the same, so anything that must not run until a
+ * reader asks for it -- a fetch, a lazily loaded bundle -- has to hang off
+ * this rather than off the template.
+ */
+export function renderSimpleSection(
+    label: string,
+    content: TemplateResult,
+    options: {
+        open?: boolean;
+        icon?: string;
+        badge?: TemplateResult;
+        onToggle?: (open: boolean) => void;
+    } = {},
+): TemplateResult {
+    const { open = true, icon, badge, onToggle } = options;
+    return html`
+        <details
+            class="section-card"
+            ?open=${open}
+            @toggle=${onToggle
+                ? (event: Event) => onToggle((event.target as HTMLDetailsElement).open)
+                : nothing}
+        >
+            <summary>
+                <div class="section-summary-row">
+                    <div class="section-summary-left">
+                        ${icon ? renderSvgIcon(icon, "section-icon") : nothing}
+                        <span class="section-summary-label">${label}</span>
+                    </div>
+                    ${badge ? html`<div class="section-summary-badge">${badge}</div>` : nothing}
+                    ${renderSvgIcon(SECTION_CHEVRON, "section-chevron")}
+                </div>
+            </summary>
+            <div class="section-content">${content}</div>
+        </details>
+    `;
+}
+
+/** A failure's own message when it carries one, else the caller's fallback. */
+export function formatError(error: unknown, fallback: string): string {
+    if (typeof error === "object" && error !== null && "message" in error) {
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === "string" && message) {
+            return message;
+        }
+    }
+    return fallback;
+}
+
+/** Why `renameObjectKey` refused, in the reader's words. */
+export function renameObjectKeyError(
+    host: FormFieldHost,
+    result: Exclude<RenameObjectKeyResult, { ok: true }>,
+): string {
+    const key = result.key ?? "";
+    switch (result.reason) {
+        case "target_not_available":
+            return host.t("editor.rename.target_not_available");
+        case "empty_key":
+            return host.t("editor.rename.key_empty");
+        case "duplicate_key":
+            return host.t("editor.rename.key_exists").replaceAll("{key}", key);
+        case "missing_key":
+            return host.t("editor.rename.key_missing").replaceAll("{key}", key);
+    }
 }
