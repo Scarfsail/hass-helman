@@ -58,6 +58,10 @@
     },
     "house": {
       "power": "Výkon"
+    },
+    "device": {
+      "today": "Dnes",
+      "last_hour": "Poslední hodina"
     }
   },
   "scheduling": {

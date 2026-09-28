@@ -63,6 +63,24 @@ export class HelmanTreeItem extends LitElement {
         }
     }
 
+    private _onChevronClick(e: Event) {
+        e.stopPropagation();
+        this._toggleChildren();
+    }
+
+    /** A config device opens its detail; anything else keeps toggling its children. */
+    private _onNameClick() {
+        if (!this.device.deviceKey) {
+            this._toggleChildren();
+            return;
+        }
+        this.dispatchEvent(new CustomEvent("show-device-detail", {
+            bubbles: true,
+            composed: true,
+            detail: { item: this.device },
+        }));
+    }
+
     static get styles() {
         return css`
             .border{
@@ -130,8 +148,16 @@ export class HelmanTreeItem extends LitElement {
                 z-index: 2;
                 text-shadow: 0px 0px 4px rgba(0,0,0,1);
             }
-            .deviceName.has-children {
+            .deviceName.has-children, .deviceName.is-device {
                 cursor: pointer;
+            }
+            .childrenToggle {
+                cursor: pointer;
+                flex-shrink: 0;
+                padding: 0 4px;
+                position: relative;
+                z-index: 2;
+                text-shadow: 0px 0px 4px rgba(0,0,0,1);
             }
             .childrenContainer{
                 width:100%;
@@ -244,7 +270,8 @@ export class HelmanTreeItem extends LitElement {
                                 @toggle-children=${this._toggleChildren}
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
                             ></helman-tree-item-icon>
-                            <div class="deviceName ${hasChildren ? 'has-children' : ''}" @click=${this._toggleChildren}>${device.displayName || device.name} ${indicator}</div>
+                            ${indicator ? html`<span class="childrenToggle" @click=${this._onChevronClick}>${indicator}</span>` : nothing}
+                            <div class="deviceName ${hasChildren ? 'has-children' : ''} ${device.deviceKey ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
                             <helman-tree-item-power-display
                                 .powerValue=${this.device.powerValue ?? 0}
                                 .powerSensorId=${this.device.powerSensorId ?? undefined}

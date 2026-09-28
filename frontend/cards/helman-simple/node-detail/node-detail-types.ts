@@ -1,5 +1,6 @@
 export type {
     BatteryDetailParams,
+    DeviceDetailParams,
     GridDetailParams,
     HouseDetailParams,
     NodeDetailParams,

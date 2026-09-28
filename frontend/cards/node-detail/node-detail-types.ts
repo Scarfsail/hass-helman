@@ -51,8 +51,18 @@ export interface HouseDetailParams {
     houseNode: TreeItem | null;
 }
 
+/**
+ * One config device, opened from its name. Not a `NodeType`: that union is also
+ * the animated-icon vocabulary, and a device has no animated icon.
+ */
+export interface DeviceDetailParams {
+    nodeType: "device";
+    item: TreeItem;
+}
+
 export type NodeDetailParams =
     | BatteryDetailParams
     | SolarDetailParams
     | GridDetailParams
-    | HouseDetailParams;
+    | HouseDetailParams
+    | DeviceDetailParams;

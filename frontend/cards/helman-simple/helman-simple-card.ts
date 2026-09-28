@@ -209,7 +209,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     @state() private _hass?: HomeAssistant;
     @state() private _energy: EnergyValues = EMPTY_ENERGY;
     @state() private _loading = true;
-    @state() private _dialogNodeType: NodeType | null = null;
+    /** What the node detail dialog shows: a top-level node by type, or one device. */
+    @state() private _dialogRequest: NodeType | TreeItem | null = null;
     @state() private _houseDevices: TreeItem[] = [];
 
     // 7. HA-specific property setter
@@ -247,6 +248,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         // answer — so this card hosts the editor too rather than leaving a
         // control that does nothing.
         this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        // A device name in the house detail swaps the open dialog to that device.
+        this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
             await this._loadFromBackend();
         }
@@ -255,6 +258,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
         this._loadGeneration += 1;
         this._historyEngine?.stop();
     }
@@ -360,13 +364,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     <div class="energy-grid" style=${gridStyle}>
 
                         <!-- ── Row 1: Solar  ─── connector ─── Grid ── -->
-                        <div class="node-cell" @click=${() => this._dialogNodeType = 'solar'}>
+                        <div class="node-cell" @click=${() => this._dialogRequest = 'solar'}>
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
                             ${solarExportingToGrid ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, solarToGridT, 22.5, 33) : ""}
                         </div>
-                        <div class="node-cell" @click=${() => this._dialogNodeType = 'grid'}>
+                        <div class="node-cell" @click=${() => this._dialogRequest = 'grid'}>
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
                         </div>
 
@@ -381,11 +385,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
-                        <div class="node-cell" @click=${() => this._dialogNodeType = 'house'}>
+                        <div class="node-cell" @click=${() => this._dialogRequest = 'house'}>
                             <simple-card-house .power=${housePower} .sourceColor=${houseSourceColor}></simple-card-house>
                         </div>
                         <div class="connector-h"></div>
-                        <div class="node-cell" @click=${() => this._dialogNodeType = 'battery'}>
+                        <div class="node-cell" @click=${() => this._dialogRequest = 'battery'}>
                             <simple-card-battery
                                 .power=${batteryPower}
                                 .soc=${batterySoc}
@@ -399,13 +403,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     </div>
                 </div>
             </ha-card>
-            ${this._dialogNodeType !== null ? html`
+            ${this._dialogRequest !== null ? html`
                 <node-detail-dialog
                     .hass=${this._hass!}
                     .localize=${this._localize!}
                     .open=${true}
-                    .params=${this._buildDialogParams(this._dialogNodeType)}
-                    @closed=${() => { this._dialogNodeType = null; }}
+                    .params=${this._buildDialogParams(this._dialogRequest)}
+                    @closed=${() => { this._dialogRequest = null; }}
                 ></node-detail-dialog>
             ` : ''}
             <scheduling-day-editor-host
@@ -606,9 +610,16 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         };
     }
 
-    private _buildDialogParams(nodeType: NodeType): NodeDetailParams {
-        return buildNodeDetailParams(this._buildNodeDetailContext(), nodeType);
+    private _buildDialogParams(request: NodeType | TreeItem): NodeDetailParams {
+        return typeof request === "string"
+            ? buildNodeDetailParams(this._buildNodeDetailContext(), request)
+            : { nodeType: "device", item: request };
     }
+
+    private _handleShowDeviceDetail = (event: Event): void => {
+        event.stopPropagation();
+        this._dialogRequest = (event as CustomEvent<{ item: TreeItem }>).detail.item;
+    };
 
     private _readEnergyValues(hass: HomeAssistant, map: EnergyEntityMap): EnergyValues {
         const rawPower = (entityId: string | null): number =>
