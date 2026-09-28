@@ -91,5 +91,52 @@
         "name": "Prodejní cena elektřiny"
       }
     }
+  },
+  "services": {
+    "get_group_entities": {
+      "name": "Získat entity skupiny",
+      "description": "Vrátí entity skupiny zařízení Helman: vypínač, nabíjecí vypínač EV nebo klimatizační ovládání každého přímého člena. Členové bez něj jsou uvedeni ve skipped.",
+      "fields": {
+        "grouping": {
+          "name": "Seskupení",
+          "description": "Id seskupení (devices.groupings[].id)."
+        },
+        "group": {
+          "name": "Skupina",
+          "description": "Id skupiny v rámci seskupení."
+        }
+      }
+    },
+    "group_action": {
+      "name": "Akce skupiny",
+      "description": "Zapne, vypne nebo přepne každou entitu skupiny zařízení Helman v pořadí stromu zařízení.",
+      "fields": {
+        "grouping": {
+          "name": "Seskupení",
+          "description": "Id seskupení (devices.groupings[].id)."
+        },
+        "group": {
+          "name": "Skupina",
+          "description": "Id skupiny v rámci seskupení."
+        },
+        "action": {
+          "name": "Akce",
+          "description": "Co udělat s každou entitou."
+        },
+        "delay_ms": {
+          "name": "Prodleva",
+          "description": "Pauza mezi dvěma po sobě jdoucími entitami v milisekundách."
+        }
+      }
+    }
+  },
+  "selector": {
+    "group_action": {
+      "options": {
+        "turn_on": "Zapnout",
+        "turn_off": "Vypnout",
+        "toggle": "Přepnout"
+      }
+    }
   }
 }

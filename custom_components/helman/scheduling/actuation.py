@@ -10,6 +10,12 @@ gate -- the executors hold an actuator instead of a ``HomeAssistant``, so
 The gate reads the persisted flag fresh on every call rather than caching it,
 and fails closed when it cannot be read.
 
+The one exception to the gate is the always-open actuator of the
+``helman.group_action`` service (:mod:`..group_services`): that command comes
+from the user's own automation, not from a schedule, so the schedule execution
+flag must not block it. It still goes through this class for the single call
+site and its timeout.
+
 Every call is also bounded: a service that never returns would otherwise hold
 the executor's execution lock forever and stall every later reconcile.
 """

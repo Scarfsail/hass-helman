@@ -91,6 +91,54 @@ def device_groups(device: Device) -> dict[str, str]:
     }
 
 
+def group_exists(
+    config: Mapping[str, Any] | None, grouping_id: str, group_id: str
+) -> bool:
+    """Whether ``devices.groupings`` declares ``group_id`` under ``grouping_id``.
+
+    Tells an unknown group apart from an empty one.
+    """
+    groupings = read_groupings(config)
+    if not isinstance(groupings, list):
+        return False
+    for grouping in groupings:
+        if not isinstance(grouping, Mapping) or grouping.get("id") != grouping_id:
+            continue
+        groups = grouping.get("groups")
+        return isinstance(groups, list) and any(
+            isinstance(group, Mapping) and group.get("id") == group_id
+            for group in groups
+        )
+    return False
+
+
+def group_member_entities(
+    config: Mapping[str, Any] | None, grouping_id: str, group_id: str
+) -> tuple[list[str], list[str]]:
+    """``(entity ids, skipped device ids)`` of a group's direct members.
+
+    A member is a consumer whose own :func:`device_groups` puts it in the
+    group; a child does not inherit its parent's group here. Each member's
+    entity is its :func:`running_signal`, in tree order, de-duplicated; a
+    member without one is reported by id in the second list instead.
+    """
+    entity_ids: list[str] = []
+    skipped: list[str] = []
+    for device, _parent in iter_devices(config):
+        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
+            continue
+        if device_groups(device).get(grouping_id) != group_id:
+            continue
+        signal = running_signal(device)
+        if signal is None:
+            device_id = peek_controllable_id(device)
+            if device_id is not None:
+                skipped.append(device_id)
+        elif signal[0] not in entity_ids:
+            entity_ids.append(signal[0])
+    return entity_ids, skipped
+
+
 def read_system_devices(config: Mapping[str, Any] | None) -> Any:
     """The raw ``devices.system`` value — ``None`` when absent.
 

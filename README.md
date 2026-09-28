@@ -150,6 +150,45 @@ Groupings and their groups are edited in the "Device groupings" section of the c
 
 Before config version 26 groups came from Home Assistant labels through `visualization.device_label_text` (category → label name → badge text). The upgrade converts it once: each category becomes a grouping, each label a group with its badge text as the short name, and each device joins, per category, the group of the first label in the category's order that its HA device carries (for a child without its own meter, the HA device of its switch or climate control). HA labels are not read after that, and the old key is refused on save.
 
+#### Acting on a group from automations
+Two HA actions let automations and scripts use helman groups in place of HA labels. Both take the `grouping` id and the `group` id (ids, not names) and read the config on every call, so an edit in the config editor applies at once. An unknown grouping or group is an error.
+
+- `helman.get_group_entities` returns `{"entity_ids": [...], "skipped": [...]}` and must be called with a response variable.
+- `helman.group_action` runs `turn_on`, `turn_off` or `toggle` (`action`) on each of the group's entities in device tree order, waiting `delay_ms` milliseconds (default `0`) between two entities. It works whether or not schedule execution is enabled. An entity that fails is logged and the rest still run; the action then fails naming the entities that did not respond.
+
+A group's entities are those of its **direct members**: consumers whose own `groups` entry names the group. A child that only inherits its parent's group is not included, so switching a breaker's parent does not also switch the plugs behind it. The entity of each member is its on/off control: `controls.switch` (a switch or a light), else an EV charger's `charge` switch, else `controls.climate`. A member with none of these is listed in `skipped` and logged as a warning; it is never silently left out. The inverter is never included.
+
+The night/away automation, with the device lists kept in helman instead of HA labels:
+
+```yaml
+actions:
+  - action: helman.group_action
+    data:
+      grouping: rezimy
+      group: elektrina_vypnout_na_noc
+      action: turn_off
+      delay_ms: 500
+```
+
+When each entity needs its own handling, list them and loop:
+
+```yaml
+sequence:
+  - action: helman.get_group_entities
+    data:
+      grouping: rezimy
+      group: elektrina_vypnout_pryc
+    response_variable: group
+  - repeat:
+      for_each: "{{ group.entity_ids }}"
+      sequence:
+        - action: homeassistant.turn_off
+          target:
+            entity_id: "{{ repeat.item }}"
+        - delay:
+            milliseconds: 500
+```
+
 #### House consumption forecast
 Driven by the shared Helman config under `energy_nodes.house.forecast` for the entity, and under
 `training.house_consumption` for the history windows (not a Lovelace YAML option):

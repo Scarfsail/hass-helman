@@ -75,6 +75,15 @@ def _load_helman_init_with_stubs():
     websockets_mod.async_register_websocket_commands = async_register_websocket_commands
     sys.modules["custom_components.helman.websockets"] = websockets_mod
 
+    group_services_mod = types.ModuleType("custom_components.helman.group_services")
+    group_services_mod.register_calls = 0
+
+    def async_register_group_services(_hass) -> None:
+        group_services_mod.register_calls += 1
+
+    group_services_mod.async_register_group_services = async_register_group_services
+    sys.modules["custom_components.helman.group_services"] = group_services_mod
+
     storage_mod = types.ModuleType("custom_components.helman.storage")
 
     class HelmanStorage:
@@ -110,7 +119,14 @@ def _load_helman_init_with_stubs():
     sys.modules["custom_components.helman.coordinator"] = coordinator_mod
 
     module = importlib.import_module("custom_components.helman")
-    return module, panel_mod, websockets_mod, storage_mod, coordinator_mod
+    return (
+        module,
+        panel_mod,
+        websockets_mod,
+        storage_mod,
+        coordinator_mod,
+        group_services_mod,
+    )
 
 
 class FakeConfigEntry:
@@ -145,6 +161,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.websockets_mod,
             self.storage_mod,
             self.coordinator_mod,
+            self.group_services_mod,
         ) = _load_helman_init_with_stubs()
         self.storage_mod.HelmanStorage.load_calls = 0
         self.coordinator_mod.HelmanCoordinator.fail_setup = False
@@ -162,6 +179,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.storage_mod.HelmanStorage.load_calls, 1)
         self.assertEqual(self.panel_mod.register_calls, 1)
         self.assertEqual(self.websockets_mod.register_calls, 1)
+        self.assertEqual(self.group_services_mod.register_calls, 1)
 
     async def test_setup_entry_failure_keeps_storage_available_for_recovery(self) -> None:
         hass = FakeHass()

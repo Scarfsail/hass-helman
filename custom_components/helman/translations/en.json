@@ -91,5 +91,52 @@
         "name": "Grid export price"
       }
     }
+  },
+  "services": {
+    "get_group_entities": {
+      "name": "Get group entities",
+      "description": "Returns the entities of a Helman device group: each direct member's switch, EV charge switch or climate control. Members without one are listed under skipped.",
+      "fields": {
+        "grouping": {
+          "name": "Grouping",
+          "description": "Id of the grouping (devices.groupings[].id)."
+        },
+        "group": {
+          "name": "Group",
+          "description": "Id of the group within the grouping."
+        }
+      }
+    },
+    "group_action": {
+      "name": "Group action",
+      "description": "Turns on, turns off or toggles every entity of a Helman device group, in device tree order.",
+      "fields": {
+        "grouping": {
+          "name": "Grouping",
+          "description": "Id of the grouping (devices.groupings[].id)."
+        },
+        "group": {
+          "name": "Group",
+          "description": "Id of the group within the grouping."
+        },
+        "action": {
+          "name": "Action",
+          "description": "What to do with each entity."
+        },
+        "delay_ms": {
+          "name": "Delay",
+          "description": "Pause between two consecutive entities, in milliseconds."
+        }
+      }
+    }
+  },
+  "selector": {
+    "group_action": {
+      "options": {
+        "turn_on": "Turn on",
+        "turn_off": "Turn off",
+        "toggle": "Toggle"
+      }
+    }
   }
 }
