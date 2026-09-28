@@ -13,6 +13,10 @@ export interface HomeAssistantLike {
   // caller predates it.
   connection?: DataChangedConnection | null;
   states: Record<string, unknown>;
+  // The entity and device registries, as far as the device editor reads them
+  // to say which HA device a helman device's entities belong to.
+  entities?: Record<string, { device_id?: string | null }>;
+  devices?: Record<string, { name: string | null; name_by_user: string | null }>;
   localize?: (key: string) => string | undefined;
   // Lazily loads a frontend translation fragment (e.g. "config") so reused HA
   // components such as the condition builder show their own localized text.

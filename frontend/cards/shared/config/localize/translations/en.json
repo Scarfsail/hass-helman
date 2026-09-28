@@ -299,6 +299,8 @@
       "device_icon": "Icon",
       "device_id": "Id",
       "parent": "Parent",
+      "ha_device": "Home Assistant device",
+      "ha_device_show_all": "Show entities from all devices",
       "consumption_power_entity": "Power entity",
       "add_device_entity": "Energy meter of the new device",
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child"
@@ -369,6 +371,7 @@
       "device_name": "Optional. Leave empty to use the name derived from the device's entities.",
       "device_icon": "Optional. Leave empty to use the icon of the device's power entity.",
       "parent": "Only devices that own a meter and are not schedulable can hold children. The device moves with everything under it.",
+      "ha_device": "The Home Assistant device this device's meters and controls belong to. Its meter, power and control pickers offer only that device's entities.",
       "schedulable": "Helman may plan and run it; it can be an optimizer target; its consumption then leaves the baseline forecast.",
       "schedulable_has_children": "A device with children cannot be schedulable; make its children schedulable instead.",
       "schedulable_siblings": "Applies to all {count} devices drawing from the parent's meter: they are either all schedulable or all passive.",
