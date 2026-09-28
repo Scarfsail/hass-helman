@@ -39,6 +39,44 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
   return entries;
 }
 
+/**
+ * A device's group in one grouping: its own assignment, else (for a child)
+ * its parent's effective group, else none. The editor's grouped view uses it,
+ * and the card's grouping is meant to follow the same rule.
+ */
+export function effectiveGroup(ownGroup: string | undefined, parentEffective: string | null): string | null {
+  return ownGroup || parentEffective;
+}
+
+/** A consumer and the group it effectively belongs to in one grouping. */
+export interface GroupedDeviceEntry extends DeviceEntry {
+  group: string | null;
+}
+
+/**
+ * Every consumer, in {@link iterDevices} order, with its {@link effectiveGroup}
+ * in `groupingId`. System devices are never grouped, so they are left out.
+ */
+export function consumerGroups(config: JsonObject | null | undefined, groupingId: string): GroupedDeviceEntry[] {
+  const effective = new Map<JsonObject, string | null>();
+  // Depth first, so a parent's group is known before its children's.
+  return iterDevices(config)
+    .filter((entry) => entry.path[1] === "consumers")
+    .map((entry) => {
+      const own = asJsonObject(entry.device.groups)?.[groupingId];
+      const group = effectiveGroup(
+        typeof own === "string" ? own : undefined,
+        entry.parent ? effective.get(entry.parent) ?? null : null,
+      );
+      effective.set(entry.device, group);
+      return { ...entry, group };
+    });
+}
+
+/** The Devices tab's filter: every device, or only the schedulable or passive ones. */
+export const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
+export type DeviceFilter = (typeof DEVICE_FILTERS)[number];
+
 export function deviceKind(device: JsonObject): string {
   const kind = device.kind;
   if (kind === undefined) return "generic";

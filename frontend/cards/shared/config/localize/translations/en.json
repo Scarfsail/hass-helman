@@ -584,6 +584,14 @@
       "schedulable": "Schedulable",
       "passive": "Passive"
     },
+    "device_view": {
+      "label": "View devices",
+      "list": "List",
+      "unassigned": "Unassigned",
+      "group": "Group",
+      "none": "None",
+      "same_as_parent": "Same as parent"
+    },
     "device_badges": {
       "energy": "Energy",
       "power": "Power",
