@@ -5,11 +5,11 @@ import { resolve } from "node:path";
  * The Devices tab's groupings section (#363): `devices.groupings` edited in place.
  *
  * A grouping is a card named by its title input, its groups one row each. Ids
- * are slugged from the name when the entry is added and never edited, because
- * a device names its group by id: a rename touches the name only. What would
- * silently break a saved config if it regressed is removal -- a device still
- * naming a removed group fails validation -- so a removal strips every device
- * reference to it in the same mutation.
+ * are slugged from the name when the entry is added and editable beside it
+ * (#379): a typed id is slugged on commit and a rename touches the name only.
+ * What would silently break a saved config if it regressed is a device still
+ * naming a group that is gone -- it fails validation -- so a removal strips,
+ * and an id change rewrites, every device reference in the same mutation.
  */
 
 const BUNDLE = resolve(
@@ -218,15 +218,92 @@ test("removing a grouping strips every device reference to it", async ({ page })
     });
 });
 
-test("a grouping card starts collapsed and shows no ids", async ({ page }) => {
+test("a grouping card starts collapsed and each row shows its id", async ({ page }) => {
     await mountEditor(page);
 
     await section(page).locator(".add-grouping").click();
 
     const added = section(page).locator("details.grouping-card").last();
     expect(await added.evaluate((card) => (card as HTMLDetailsElement).open)).toBe(false);
-    // Opening the others earlier does not open it, and ids are not shown anywhere.
-    await expect(section(page).locator(".group-id-cell")).toHaveCount(0);
-    await expect(groupingCard(page, 0).locator("summary")).toContainText("Jističe");
-    await expect(groupingCard(page, 0).locator("summary")).not.toContainText("breakers");
+    // Opening the others earlier does not open it.
+    await expect(groupingCard(page, 0).locator("input.grouping-id-input")).toHaveValue("breakers");
+    const rows = groupingCard(page, 0).locator(".group-rows-list .group-row");
+    await expect(rows.nth(0).locator("input.group-id-input")).toHaveValue("technicka_fv");
+    await expect(rows.nth(1).locator("input.group-id-input")).toHaveValue("technicka_sit");
+    await expect(added.locator("input.grouping-id-input")).toHaveValue("grouping_3");
+});
+
+/** Types `value` into an id input and commits it, as leaving the field does. */
+async function commit(input: ReturnType<Page["locator"]>, value: string): Promise<void> {
+    await input.fill(value);
+    await input.dispatchEvent("change");
+}
+
+test("renaming a grouping id rewrites every device's key and keeps the card open", async ({ page }) => {
+    await mountEditor(page);
+
+    await commit(groupingCard(page, 0).locator("input.grouping-id-input"), "jistice");
+
+    expect((await groupings(page))[0]).toEqual({ ...BREAKERS, id: "jistice" });
+    expect(await memberships(page)).toEqual({
+        boiler: { jistice: "technicka_fv", modes: "night_off" },
+        pump: { jistice: "technicka_sit" },
+        washer: { jistice: "technicka_fv" },
+    });
+    const card = groupingCard(page, 0);
+    await expect(card).toHaveAttribute("data-grouping-id", "jistice");
+    await expect.poll(() => card.evaluate((details) => (details as HTMLDetailsElement).open)).toBe(true);
+    // A new card, so its lists drag under the new id.
+    await expect(card.locator("ha-sortable[group]").first()).toHaveAttribute("group", "helman-grouping-jistice");
+});
+
+test("renaming a group id rewrites only that grouping's matching members", async ({ page }) => {
+    await mountEditor(page);
+
+    await commit(
+        groupingCard(page, 0).locator(".group-rows-list .group-row").first().locator("input.group-id-input"),
+        "fv",
+    );
+
+    expect((await groupings(page))[0].groups).toEqual([{ ...BREAKERS.groups[0], id: "fv" }, BREAKERS.groups[1]]);
+    expect(await memberships(page)).toEqual({
+        boiler: { breakers: "fv", modes: "night_off" },
+        pump: { breakers: "technicka_sit" },
+        washer: { breakers: "fv" },
+    });
+});
+
+test("a typed id is slugged, and a clash with a sibling gets a suffix", async ({ page }) => {
+    await mountEditor(page);
+
+    const rows = groupingCard(page, 0).locator(".group-rows-list .group-row");
+    await commit(rows.nth(0).locator("input.group-id-input"), "Night Off!");
+    await expect(rows.nth(0).locator("input.group-id-input")).toHaveValue("night_off");
+    await commit(rows.nth(1).locator("input.group-id-input"), "night_off");
+    await expect(rows.nth(1).locator("input.group-id-input")).toHaveValue("night_off_2");
+
+    expect((await groupings(page))[0].groups.map((group: { id: string }) => group.id)).toEqual([
+        "night_off",
+        "night_off_2",
+    ]);
+    // Only the breakers grouping's references move; the modes group of the same id stays.
+    expect(await memberships(page)).toEqual({
+        boiler: { breakers: "night_off", modes: "night_off" },
+        pump: { breakers: "night_off_2" },
+        washer: { breakers: "night_off" },
+    });
+});
+
+test("clearing an id reverts it and leaves the config unchanged", async ({ page }) => {
+    await mountEditor(page);
+    const before = await page.evaluate(() => JSON.stringify(window.__editorConfig()));
+
+    const groupingInput = groupingCard(page, 0).locator("input.grouping-id-input");
+    await commit(groupingInput, "  ");
+    await expect(groupingInput).toHaveValue("breakers");
+    const groupInput = groupingCard(page, 0).locator("input.group-id-input").first();
+    await commit(groupInput, "");
+    await expect(groupInput).toHaveValue("technicka_fv");
+
+    expect(await page.evaluate(() => JSON.stringify(window.__editorConfig()))).toBe(before);
 });

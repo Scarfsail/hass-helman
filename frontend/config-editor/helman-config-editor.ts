@@ -3,6 +3,7 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 
 /**
@@ -71,6 +72,7 @@ import {
   iterDevices,
   meterlessChildren,
   ownMeter,
+  renameGroupReferences,
   slugId,
   stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
@@ -337,8 +339,8 @@ export class HelmanConfigEditorPanel
       color: var(--primary-text-color);
     }
 
-    /* One group, one line: handle, name, short name, remove -- wrapping only
-       when the card is too narrow to hold them. The two columns are named
+    /* One group, one line: handle, name, id, short name, remove -- wrapping
+       only when the card is too narrow to hold them. The columns are named
        once, in a head row, rather than labelled on every row. */
     .group-rows {
       display: grid;
@@ -363,8 +365,9 @@ export class HelmanConfigEditorPanel
       min-width: 150px;
     }
 
-    /* The short name is usually an emoji or two, so it takes what is left
-       over rather than half the row. */
+    /* An id is a short slug and the short name usually an emoji or two, so
+       they take what is left over rather than half the row. */
+    .group-row > .group-id-cell,
     .group-row > .group-short-name-cell {
       flex: 1 1 120px;
       min-width: 100px;
@@ -447,10 +450,14 @@ export class HelmanConfigEditorPanel
     }
 
     .grouping-name {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       padding: 16px 16px 8px;
     }
 
-    .grouping-name-input {
+    .grouping-name-input,
+    .grouping-id-input {
       font-size: 1rem;
       font-weight: var(--ha-font-weight-medium, 500);
       border-radius: 12px;
@@ -3578,8 +3585,9 @@ export class HelmanConfigEditorPanel
   /**
    * `devices.groupings`: one card per grouping, its groups as sortable rows.
    *
-   * Ids are slugged from the name once, when the entry is added, and never
-   * edited: a device names its group by id, so a rename touches the name only.
+   * Ids are slugged from the name when the entry is added and editable after:
+   * a typed id is slugged on commit, and every device reference to the old id
+   * is rewritten in the same mutation. A rename touches the name only.
    */
   private _renderGroupings(): TemplateResult {
     const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
@@ -3605,8 +3613,9 @@ export class HelmanConfigEditorPanel
     const members = consumerGroups(this._config, groupingId);
     const groupIds = new Set(groups.map((group) => this._stringValue(asJsonObject(group)?.id)));
     const nameLabel = this._t("editor.fields.grouping_name");
+    const idLabel = this._t("editor.fields.grouping_id");
     return html`
-      <details class="list-card grouping-card">
+      <details class="list-card grouping-card" data-grouping-id=${groupingId}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -3634,6 +3643,14 @@ export class HelmanConfigEditorPanel
             @change=${(event: Event) =>
               this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
           />
+          <input
+            class="grouping-id-input"
+            .value=${live(groupingId)}
+            title=${idLabel}
+            aria-label=${idLabel}
+            @change=${(event: Event) =>
+              this._handleRenameGrouping(index, (event.currentTarget as HTMLInputElement).value)}
+          />
         </div>
         ${groups.length > 0
           ? html`
@@ -3641,6 +3658,7 @@ export class HelmanConfigEditorPanel
                 <div class="group-row group-row-head">
                   <span class="group-row-handle-spacer"></span>
                   <label class="group-name-cell">${this._t("editor.fields.group_name")}</label>
+                  <label class="group-id-cell">${this._t("editor.fields.group_id")}</label>
                   <label class="group-short-name-cell">${this._t("editor.fields.group_short_name")}</label>
                   <span class="group-row-actions-spacer"></span>
                 </div>
@@ -3683,6 +3701,7 @@ export class HelmanConfigEditorPanel
     const path: PathSegment[] = ["devices", "groupings", groupingIndex, "groups", groupIndex];
     const groupId = this._stringValue(group.id);
     const nameLabel = this._t("editor.fields.group_name");
+    const idLabel = this._t("editor.fields.group_id");
     const shortNameLabel = this._t("editor.fields.group_short_name");
     return html`
       <div class="group-row">
@@ -3694,6 +3713,15 @@ export class HelmanConfigEditorPanel
             aria-label=${nameLabel}
             @change=${(event: Event) =>
               this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field field-compact group-id-cell">
+          <input
+            class="group-id-input"
+            .value=${live(groupId)}
+            aria-label=${idLabel}
+            @change=${(event: Event) =>
+              this._handleRenameGroup(groupingIndex, groupIndex, (event.currentTarget as HTMLInputElement).value)}
           />
         </div>
         <div class="field field-compact group-short-name-cell">
@@ -4790,6 +4818,68 @@ export class HelmanConfigEditorPanel
       removeListItem(draft, ["devices", "groupings"], index);
       stripGroupReferences(draft, groupingId);
     });
+  }
+
+  /**
+   * Commits a typed grouping id -- see {@link _commitId} -- and reopens its
+   * card: the card is keyed by id, so it comes back as a new, collapsed one.
+   */
+  private async _handleRenameGrouping(index: number, raw: string): Promise<void> {
+    const newId = this._commitId(["devices", "groupings"], index, raw, "grouping", (draft, oldId, id) =>
+      renameGroupReferences(draft, oldId, id),
+    );
+    if (newId === null) return;
+    await this.updateComplete;
+    const card = this.shadowRoot?.querySelector<HTMLDetailsElement>(
+      `details.grouping-card[data-grouping-id="${newId}"]`,
+    );
+    if (card) card.open = true;
+  }
+
+  /** Commits a typed group id among its sibling groups -- see {@link _commitId}. */
+  private _handleRenameGroup(groupingIndex: number, groupIndex: number, raw: string): void {
+    const groupingPath: PathSegment[] = ["devices", "groupings", groupingIndex];
+    const groupingId = this._stringValue(this._getValue([...groupingPath, "id"]));
+    this._commitId([...groupingPath, "groups"], groupIndex, raw, "group", (draft, oldId, id) =>
+      renameGroupReferences(draft, groupingId, id, oldId),
+    );
+  }
+
+  /**
+   * Commits a typed id for the entry at `listPath[index]`: slugged, unique
+   * among its siblings, and every device reference moved over by `rewrite` in
+   * the same mutation. Device YAML editors and the consumers section's go back
+   * to visual mode, as their snapshot still names the old id and its next edit
+   * would put it back. An empty or unchanged id leaves the draft
+   * alone and the field shows the stored id again; that returns `null`.
+   */
+  private _commitId(
+    listPath: PathSegment[],
+    index: number,
+    raw: string,
+    fallback: string,
+    rewrite: (draft: JsonObject, oldId: string, newId: string) => void,
+  ): string | null {
+    const entries = asJsonArray(this._getValue(listPath)) ?? [];
+    const oldId = this._stringValue(asJsonObject(entries[index])?.id);
+    const siblings = entries
+      .filter((_, otherIndex) => otherIndex !== index)
+      .map((entry) => this._stringValue(asJsonObject(entry)?.id));
+    const newId = raw.trim() ? slugId(raw, siblings, fallback) : oldId;
+    if (newId === oldId) {
+      this.requestUpdate();
+      return null;
+    }
+    this._resetDeviceModes();
+    const consumersScope = [SECTION_SCOPE_IDS.devices.consumers];
+    this._scopeModes = this._omitScopeIds(this._scopeModes, consumersScope);
+    this._scopeYamlValues = this._omitScopeIds(this._scopeYamlValues, consumersScope);
+    this._scopeYamlErrors = this._omitScopeIds(this._scopeYamlErrors, consumersScope);
+    this._applyMutation((draft) => {
+      setValueAtPath(draft, [...listPath, index, "id"], newId);
+      rewrite(draft, oldId, newId);
+    });
+    return newId;
   }
 
   /** Removes one group and, in the same mutation, every device's reference to it. */
