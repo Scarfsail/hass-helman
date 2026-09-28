@@ -502,6 +502,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     "editor.fields.consumption_energy_entity",
                                     {
                                         includeDomains: ["sensor"],
+                                        sensorKind: "energy",
                                         helperKey: meterless
                                             ? "editor.helpers.consumption_energy_entity_child"
                                             : "editor.helpers.consumption_energy_entity",
@@ -515,6 +516,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     "editor.fields.consumption_power_entity",
                                     {
                                         includeDomains: ["sensor"],
+                                        sensorKind: "power",
                                         helperKey: "editor.helpers.consumption_power_entity",
                                     },
                                 )}
@@ -1173,6 +1175,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         "editor.fields.soc_entity",
                         {
                             includeDomains: ["sensor"],
+                            sensorKind: "soc",
                             helpKey: "editor.help.vehicle_soc_entity",
                             required: true,
                         },

@@ -166,6 +166,7 @@ import {
   type EntityFact,
   type EntityGroupOptions,
 } from "../cards/shared/config/entity-group";
+import { SENSOR_KIND_FILTERS } from "../cards/shared/config/sensor-kind";
 import { EntityInspectionController } from "../cards/shared/config/entity-inspection-controller";
 import {
   EDITABLE_DEVICE_KINDS,
@@ -1847,6 +1848,7 @@ export class HelmanConfigEditorPanel
                   "editor.fields.forecast_total_energy_entity",
                   {
                     includeDomains: ["sensor"],
+                    sensorKind: "energy",
                     helpKey: "editor.help.house_forecast_total_energy_entity",
                   },
                 )}
@@ -1872,6 +1874,7 @@ export class HelmanConfigEditorPanel
               "editor.fields.today_energy_entity",
               {
                 includeDomains: ["sensor"],
+                sensorKind: "energy",
                 helpKey: "editor.help.solar_today_energy_entity",
               },
             )}
@@ -1887,6 +1890,7 @@ export class HelmanConfigEditorPanel
                   "editor.fields.forecast_total_energy_entity",
                   {
                     includeDomains: ["sensor"],
+                    sensorKind: "energy",
                     helpKey: "editor.help.solar_forecast_total_energy_entity",
                   },
                 )}
@@ -1932,6 +1936,7 @@ export class HelmanConfigEditorPanel
               "editor.fields.remaining_energy_entity",
               {
                 includeDomains: ["sensor"],
+                sensorKind: "energy",
                 helpKey: "editor.help.battery_remaining_energy_entity",
               },
             )}
@@ -1940,6 +1945,7 @@ export class HelmanConfigEditorPanel
               "editor.fields.capacity_entity",
               {
                 includeDomains: ["sensor"],
+                sensorKind: "energy",
                 helpKey: "editor.help.battery_capacity_entity",
               },
             )}
@@ -1948,6 +1954,7 @@ export class HelmanConfigEditorPanel
               "editor.fields.min_soc_entity",
               {
                 includeDomains: ["sensor"],
+                sensorKind: "soc",
                 helpKey: "editor.help.battery_min_soc_entity",
               },
             )}
@@ -1956,6 +1963,7 @@ export class HelmanConfigEditorPanel
               "editor.fields.max_soc_entity",
               {
                 includeDomains: ["sensor"],
+                sensorKind: "soc",
                 helpKey: "editor.help.battery_max_soc_entity",
               },
             )}
@@ -2190,6 +2198,7 @@ export class HelmanConfigEditorPanel
                 "editor.fields.bias_correction_total_energy_entity",
                 {
                   includeDomains: ["sensor"],
+                  sensorKind: "energy",
                   helpKey: "editor.help.bias_correction_total_energy_entity",
                 },
               )}
@@ -3451,6 +3460,7 @@ export class HelmanConfigEditorPanel
         <ha-entity-picker
           .hass=${this.hass}
           .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"] : ["sensor"]}
+          .entityFilter=${SENSOR_KIND_FILTERS.energy}
           @value-changed=${(event: CustomEvent<{ value?: string }>) =>
             this._addDevice(listPath, parent, event.detail?.value ?? "")}
         ></ha-entity-picker>
@@ -3681,6 +3691,7 @@ export class HelmanConfigEditorPanel
         </div>
         ${this._renderEntityGroup(path, "editor.fields.entity_id", {
           includeDomains: ["sensor"],
+          sensorKind: "energy",
           helpKey: "editor.help.solar_daily_energy_entity",
           required: true,
         })}
@@ -4151,6 +4162,7 @@ export class HelmanConfigEditorPanel
       labelKey,
       {
         includeDomains: ["sensor"],
+        sensorKind: "power",
         helpKey,
         required,
       },
