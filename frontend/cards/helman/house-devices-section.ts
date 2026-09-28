@@ -6,6 +6,7 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-list";
 import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
+import { effectiveGroup } from "../shared/config/devices";
 
 @customElement("helman-house-devices-section")
 export class HelmanHouseDevicesSection extends LitElement {
@@ -141,41 +142,44 @@ export class HelmanHouseDevicesSection extends LitElement {
             groups.set(id, group);
         }
         const unmatched: TreeItem[] = [];
-        for (const dev of devices) {
-            if (dev.isUnmeasured) continue;
-            const group = groups.get(dev.groups?.[groupingId] ?? '');
-            if (group) group.children.push(dev);
-            else unmatched.push(dev);
+        // Members still to file, with their effective group. A lifted descendant
+        // joins the queue and is filed, with its own subtree, like a top-level device.
+        const queue = devices
+            .filter((dev) => !dev.isUnmeasured)
+            .map((dev) => ({ item: dev, group: effectiveGroup(dev.groups?.[groupingId], null) }));
+        for (let index = 0; index < queue.length; index++) {
+            const next = queue[index];
+            const member = this._withoutLifted(next.item, next.group, groupingId, queue).item;
+            const group = groups.get(next.group ?? '');
+            if (group) group.children.push(member);
+            else unmatched.push(member);
         }
         // Aggregate power for groups
         const aggregateGroup = (group: TreeItem) => {
             const children = group.children || [];
             group.powerValue = children.reduce((sum, c) => sum + (c.powerValue || 0), 0);
-            // History aggregation
-            const childWithHist = children.find(c => c.powerHistory && c.powerHistory.length > 0);
-            if (childWithHist) {
-                const len = childWithHist.powerHistory.length;
+            // History aggregation, over the longest member series. Every series
+            // ends at the newest bucket, so a shorter one is aligned from the end.
+            const len = Math.max(0, ...children.map((c) => c.powerHistory?.length ?? 0));
+            if (len > 0) {
                 group.powerHistory = Array(len).fill(0);
-                for (let i = 0; i < len; i++) {
-                    for (const c of children) {
-                        group.powerHistory[i] += (c.powerHistory?.[i] || 0);
-                    }
-                }
-                // Aggregate sourcePowerHistory
-                group.sourcePowerHistory = [];
-                for (let i = 0; i < len; i++) {
-                    const bucket: { [sourceName: string]: { power: number; color: string } } = {};
-                    for (const c of children) {
-                        const src = c.sourcePowerHistory?.[i];
-                        if (!src) continue;
+                group.sourcePowerHistory = Array.from({ length: len }, () => ({}));
+                for (const c of children) {
+                    const offset = len - (c.powerHistory?.length ?? 0);
+                    c.powerHistory?.forEach((power, i) => {
+                        group.powerHistory[i + offset] += power || 0;
+                    });
+                    const sourceOffset = len - (c.sourcePowerHistory?.length ?? 0);
+                    c.sourcePowerHistory?.forEach((src, i) => {
+                        const bucket = group.sourcePowerHistory![i + sourceOffset];
+                        if (!src || !bucket) return;
                         for (const sName in src) {
                             if (!bucket[sName]) {
                                 bucket[sName] = { power: 0, color: src[sName].color };
                             }
                             bucket[sName].power += src[sName].power;
                         }
-                    }
-                    group.sourcePowerHistory.push(bucket);
+                    });
                 }
             } else {
                 group.powerHistory = [];
@@ -200,6 +204,74 @@ export class HelmanHouseDevicesSection extends LitElement {
             result.push(others);
         }
         return result;
+    }
+
+    /**
+     * The item as filed under `group`, and the descendants lifted out of it.
+     * A descendant whose effective group differs from its parent's is queued to
+     * be filed on its own, with its subtree; every ancestor up to `item` is then
+     * a copy without it and without its power, so no watt is counted twice. The
+     * shared items are never mutated: the plain view and the history engine hold
+     * them. The unmeasured remainder is never lifted.
+     */
+    private _withoutLifted(
+        item: TreeItem,
+        group: string | null,
+        groupingId: string,
+        queue: { item: TreeItem; group: string | null }[],
+    ): { item: TreeItem; lifted: TreeItem[] } {
+        const lifted: TreeItem[] = [];
+        const children: TreeItem[] = [];
+        for (const child of item.children ?? []) {
+            const childGroup = child.isUnmeasured ? group : effectiveGroup(child.groups?.[groupingId], group);
+            if (childGroup !== group) {
+                lifted.push(child);
+                queue.push({ item: child, group: childGroup });
+                continue;
+            }
+            const kept = this._withoutLifted(child, group, groupingId, queue);
+            children.push(kept.item);
+            lifted.push(...kept.lifted);
+        }
+        if (lifted.length === 0) return { item, lifted };
+        // Summed once per copy. Histories are aligned from their newest end, as
+        // history-engine does: a series that started later is shorter.
+        const history = item.powerHistory ?? [];
+        const sources = item.sourcePowerHistory;
+        const takenPower = lifted.reduce((sum, l) => sum + (l.powerValue ?? 0), 0);
+        const takenHistory = history.map(() => 0);
+        const takenSources = (sources ?? []).map((): { [sourceName: string]: number } => ({}));
+        for (const l of lifted) {
+            const offset = (l.powerHistory?.length ?? 0) - history.length;
+            history.forEach((_, i) => {
+                takenHistory[i] += l.powerHistory?.[i + offset] ?? 0;
+            });
+            const sourceOffset = (l.sourcePowerHistory?.length ?? 0) - takenSources.length;
+            takenSources.forEach((taken, i) => {
+                const bucket = l.sourcePowerHistory?.[i + sourceOffset];
+                for (const name in bucket) taken[name] = (taken[name] ?? 0) + bucket[name].power;
+            });
+        }
+        const copy: TreeItem = Object.assign(Object.create(TreeItem.prototype), item);
+        copy.children = children;
+        // The copy is rebuilt every tick; expanding it must stick to the shared item.
+        Object.defineProperty(copy, 'childrenCollapsed', {
+            get: () => item.childrenCollapsed,
+            set: (collapsed: boolean) => { item.childrenCollapsed = collapsed; },
+        });
+        copy.powerValue = Math.max(0, (item.powerValue ?? 0) - takenPower);
+        copy.powerHistory = history.map((power, i) => Math.max(0, power - takenHistory[i]));
+        copy.sourcePowerHistory = sources?.map((bucket, i) => {
+            const rest: { [sourceName: string]: { power: number; color: string } } = {};
+            for (const name in bucket) {
+                rest[name] = {
+                    power: Math.max(0, bucket[name].power - (takenSources[i][name] ?? 0)),
+                    color: bucket[name].color,
+                };
+            }
+            return rest;
+        });
+        return { item: copy, lifted };
     }
 
     render() {

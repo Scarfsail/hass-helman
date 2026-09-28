@@ -41,8 +41,8 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
 
 /**
  * A device's group in one grouping: its own assignment, else (for a child)
- * its parent's effective group, else none. The editor's grouped view uses it,
- * and the card's grouping is meant to follow the same rule.
+ * its parent's effective group, else none. Both the editor's grouped view and
+ * the card's grouped view use it.
  */
 export function effectiveGroup(ownGroup: string | undefined, parentEffective: string | null): string | null {
   return ownGroup || parentEffective;
