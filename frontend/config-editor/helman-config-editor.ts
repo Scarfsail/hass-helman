@@ -3,7 +3,6 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import { keyed } from "lit/directives/keyed.js";
-import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 
 /**
@@ -69,11 +68,9 @@ import {
   deviceKind,
   isCarvedMeterOwner,
   isSchedulable,
-  inheritsGroup,
   iterDevices,
   meterlessChildren,
   ownMeter,
-  setGroupInherited,
   slugId,
   stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
@@ -210,11 +207,8 @@ const CONTROLLABLE_ID_INVERTER = "inverter";
 /** The chevron of a collapsible card, as the device cards draw it. */
 const GROUPING_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
-/**
- * A group's device chips move between lists but never sort within one. The
- * inherit toggle on a chip must click, not start a drag.
- */
-const MEMBER_SORTABLE_OPTIONS = { sort: false, filter: "input, label", preventOnFilter: false };
+/** A group's device chips move between lists but never sort within one. */
+const MEMBER_SORTABLE_OPTIONS = { sort: false };
 
 const stopEvent = (event: Event): void => event.stopPropagation();
 
@@ -438,11 +432,6 @@ export class HelmanConfigEditorPanel
       touch-action: none;
     }
 
-    .member-chip.inheriting {
-      border-style: dashed;
-      background: transparent;
-    }
-
     .member-chip-glyph {
       width: 16px;
       height: 16px;
@@ -455,14 +444,6 @@ export class HelmanConfigEditorPanel
 
     .member-parent::before {
       content: "· ";
-    }
-
-    .member-inherit {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      color: var(--secondary-text-color);
-      cursor: pointer;
     }
 
     .grouping-name {
@@ -3744,9 +3725,8 @@ export class HelmanConfigEditorPanel
    * between the lists of one grouping. Their order is the tree's: it is not
    * stored, so the list does not sort.
    *
-   * A drop is applied from the target's item-added, or refused; either way
-   * ha-sortable's rollback first puts the dragged chip back where it came
-   * from, so the DOM is Lit's again before it redraws from the document.
+   * A drop is applied from the target's item-added; ha-sortable's rollback
+   * first puts the dragged chip back where it came from, so the DOM is Lit's again before it redraws from the document.
    * The events are stopped here because they bubble, and the group rows'
    * own list would take an item-moved for a reorder of the groups.
    */
@@ -3773,41 +3753,22 @@ export class HelmanConfigEditorPanel
           ${repeat(
             members,
             (entry) => entry.path.join("."),
-            (entry) => this._renderMemberChip(entry, groupingId),
+            (entry) => this._renderMemberChip(entry),
           )}
         </div>
       </ha-sortable>
     `;
   }
 
-  /**
-   * A device in a group: its name and, for a child, its parent's. A child
-   * whose parent has a group carries the inherit toggle, and while it
-   * inherits it moves only with its parent, so it cannot be dragged.
-   */
-  private _renderMemberChip(entry: GroupedDeviceEntry, groupingId: string): TemplateResult {
+  /** A device in a group: its name and, for a child, its parent's. */
+  private _renderMemberChip(entry: GroupedDeviceEntry): TemplateResult {
     const { device, parent, path } = entry;
-    const inheriting = inheritsGroup(entry, groupingId);
-    const classes = ["member-chip", inheriting ? "inheriting" : "draggable"].join(" ");
     return html`
-      <div class=${classes} data-device-id=${this._stringValue(device.id)} .sortableData=${path}>
-        ${inheriting ? nothing : this._renderSvgIcon(mdiDragVertical, "member-chip-glyph")}
+      <div class="member-chip draggable" data-device-id=${this._stringValue(device.id)} .sortableData=${path}>
+        ${this._renderSvgIcon(mdiDragVertical, "member-chip-glyph")}
         <span class="member-name">${deviceName(this, this._inspections.results, device, path)}</span>
         ${parent
           ? html`<span class="member-parent">${deviceName(this, this._inspections.results, parent, path.slice(0, -2))}</span>`
-          : nothing}
-        ${entry.parentGroup !== null
-          ? html`<label class="member-inherit">
-              <input
-                type="checkbox"
-                .checked=${live(inheriting)}
-                @change=${(event: Event) => {
-                  const inherit = (event.currentTarget as HTMLInputElement).checked;
-                  this._applyMutation((draft) => setGroupInherited(draft, path, groupingId, inherit));
-                }}
-              />
-              ${this._t("editor.device_groups.inherit")}
-            </label>`
           : nothing}
       </div>
     `;

@@ -6,7 +6,6 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-list";
 import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { effectiveGroup } from "../shared/config/devices";
 
 @customElement("helman-house-devices-section")
 export class HelmanHouseDevicesSection extends LitElement {
@@ -142,11 +141,12 @@ export class HelmanHouseDevicesSection extends LitElement {
             groups.set(id, group);
         }
         const unmatched: TreeItem[] = [];
-        // Members still to file, with their effective group. A lifted descendant
-        // joins the queue and is filed, with its own subtree, like a top-level device.
+        // Members still to file, with the group each is filed under: its own,
+        // else it stays nested with its parent. A lifted descendant joins the
+        // queue and is filed, with its own subtree, like a top-level device.
         const queue = devices
             .filter((dev) => !dev.isUnmeasured)
-            .map((dev) => ({ item: dev, group: effectiveGroup(dev.groups?.[groupingId], null) }));
+            .map((dev) => ({ item: dev, group: dev.groups?.[groupingId] || null }));
         for (let index = 0; index < queue.length; index++) {
             const next = queue[index];
             const member = this._withoutLifted(next.item, next.group, groupingId, queue).item;
@@ -208,7 +208,8 @@ export class HelmanHouseDevicesSection extends LitElement {
 
     /**
      * The item as filed under `group`, and the descendants lifted out of it.
-     * A descendant whose effective group differs from its parent's is queued to
+     * A descendant is filed under its own group, else it stays nested with its
+     * parent; one filed under a different group than its parent's is queued to
      * be filed on its own, with its subtree; every ancestor up to `item` is then
      * a copy without it and without its power, so no watt is counted twice. The
      * shared items are never mutated: the plain view and the history engine hold
@@ -223,7 +224,7 @@ export class HelmanHouseDevicesSection extends LitElement {
         const lifted: TreeItem[] = [];
         const children: TreeItem[] = [];
         for (const child of item.children ?? []) {
-            const childGroup = child.isUnmeasured ? group : effectiveGroup(child.groups?.[groupingId], group);
+            const childGroup = child.isUnmeasured ? group : child.groups?.[groupingId] || group;
             if (childGroup !== group) {
                 lifted.push(child);
                 queue.push({ item: child, group: childGroup });

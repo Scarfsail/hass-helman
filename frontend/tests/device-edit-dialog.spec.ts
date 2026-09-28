@@ -58,6 +58,7 @@ const VALID = { valid: true, errors: [], warnings: [] };
 
 interface MountOptions {
     deviceKey?: string;
+    config?: unknown;
     saveResponse?: unknown;
     /** Leave the save request unanswered, so the save stays in flight. */
     hangSave?: boolean;
@@ -66,6 +67,7 @@ interface MountOptions {
 async function mountDetail(page: Page, options: MountOptions = {}): Promise<void> {
     const {
         deviceKey = "sensor.boiler_energy",
+        config = CONFIG,
         saveResponse = { success: true, validation: VALID, reloadStarted: true },
         hangSave = false,
     } = options;
@@ -114,7 +116,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
             };
             document.body.appendChild(content);
         },
-        { config: CONFIG, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS },
+        { config, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS },
     );
 }
 
@@ -178,6 +180,30 @@ test.describe("editing a device from its detail", () => {
         // A successful save closes the edit dialog and returns to the detail.
         await expect(dialog(page)).toHaveCount(0);
         await expect(editButton(page)).toHaveCount(1);
+    });
+
+    test("changing a group saves it on the device only", async ({ page }) => {
+        const grouped = {
+            ...CONFIG,
+            devices: {
+                groupings: [{ id: "breakers", name: "Breakers", groups: [{ id: "garage", name: "Garage", short_name: "G" }] }],
+                consumers: [BOILER],
+            },
+        };
+        await mountDetail(page, { config: grouped });
+        await openEdit(page);
+        // The Groups section starts collapsed.
+        await dialog(page).locator("summary", { hasText: /^\s*Groups\s*$/ }).click();
+        await dialog(page).locator("select.device-group[data-grouping-id=breakers]").selectOption("garage");
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect.poll(async () =>
+            (await calls(page)).filter((call) => call.type === "helman/save_config").length).toBe(1);
+        const saved = (await calls(page)).find((call) => call.type === "helman/save_config")!;
+        expect(saved.config).toEqual({
+            ...grouped,
+            devices: { ...grouped.devices, consumers: [{ ...BOILER, groups: { breakers: "garage" } }] },
+        });
     });
 
     test("Cancel closes the edit dialog and leaves the detail open", async ({ page }) => {

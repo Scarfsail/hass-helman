@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 
 import { fetchDeviceSuggestions, type DeviceSuggestions } from "../../helman-api";
 import {
@@ -21,6 +22,7 @@ import {
     unsetValueAtPath,
 } from "../config/config-document";
 import {
+    assignGroup,
     canHaveChildren,
     deviceChildren,
     deviceKind,
@@ -28,6 +30,7 @@ import {
     isSchedulable,
     iterDevices,
     meterlessChildren,
+    ownGroup,
     ownMeter,
     SWITCH_CONTROL_DOMAINS,
 } from "../config/devices";
@@ -512,6 +515,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 ${haDevice || showAll ? this._renderHaDeviceField(haDevice, id) : nothing}
                             </div>`,
                         )}
+                        ${this._renderGroupsSection(device)}
                         ${renderSimpleSection(
                             this.t("editor.sections.measurements"),
                             html`<div class="field-grid">
@@ -750,6 +754,76 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                   })
                 : nothing}
         </div>`;
+    }
+
+    /**
+     * The device's own group in each grouping: a badge per assigned group, and
+     * one picker per grouping to add, change or remove it. Only for consumers
+     * (a system device is never grouped), and only once a grouping exists.
+     */
+    private _renderGroupsSection(device: JsonObject): TemplateResult | typeof nothing {
+        const path = this.path;
+        const groupings = (asJsonArray(asJsonObject(this.config?.devices)?.groupings) ?? []).flatMap((value) => {
+            const grouping = asJsonObject(value);
+            return grouping ? [grouping] : [];
+        });
+        if (path[1] !== "consumers" || groupings.length === 0) return nothing;
+        const rows = groupings.map((grouping) => {
+            const groupingId = stringValue(grouping.id);
+            const groups = (asJsonArray(grouping.groups) ?? []).flatMap((value) => {
+                const group = asJsonObject(value);
+                return group ? [group] : [];
+            });
+            const current = ownGroup(device, groupingId) ?? "";
+            return { grouping, groupingId, groups, current, group: groups.find((group) => group.id === current) };
+        });
+        const assigned = rows.filter((row) => row.current);
+        const badge = assigned.length
+            ? html`<div class="device-badges">
+                  ${assigned.map(
+                      (row) => html`<span class="device-badge" data-badge="group">
+                          ${stringValue(row.group?.name) || row.current}
+                      </span>`,
+                  )}
+              </div>`
+            : undefined;
+        return renderSimpleSection(
+            this.t("editor.sections.groups"),
+            html`<div class="field-grid">
+                ${rows.map(
+                    ({ grouping, groupingId, groups, current, group }) => html`
+                        <div class="field">
+                            <label>${stringValue(grouping.name) || groupingId}</label>
+                            <select
+                                class="device-group"
+                                data-grouping-id=${groupingId}
+                                .value=${live(current)}
+                                @change=${(event: Event) => {
+                                    const value = (event.currentTarget as HTMLSelectElement).value;
+                                    this._mutate(path, (draft) => assignGroup(draft, path, groupingId, value || null));
+                                }}
+                            >
+                                <option value="" ?selected=${current === ""}>
+                                    ${this.t("editor.device_groups.none")}
+                                </option>
+                                ${groups.map((option) => {
+                                    const optionId = stringValue(option.id);
+                                    return html`
+                                        <option value=${optionId} ?selected=${optionId === current}>
+                                            ${stringValue(option.name) || optionId}
+                                        </option>
+                                    `;
+                                })}
+                                ${current && !group
+                                    ? html`<option value=${current} selected>${current}</option>`
+                                    : nothing}
+                            </select>
+                        </div>
+                    `,
+                )}
+            </div>`,
+            { open: false, badge },
+        );
     }
 
     private _renderDeviceKindField(kind: string): TemplateResult {
@@ -1323,9 +1397,10 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      * Apply `mutator` to a clone of the document and report what is now at
      * `scope` -- the device itself, or the list an edit reaching past it rewrote.
      */
-    private _mutate(scope: PathSegment[], mutator: (draft: JsonObject) => void): void {
+    /** A mutator returning `false` changed nothing, so no edit is reported. */
+    private _mutate(scope: PathSegment[], mutator: (draft: JsonObject) => void | boolean): void {
         const draft = cloneJson(this.config ?? {});
-        mutator(draft);
+        if (mutator(draft) === false) return;
         this._emit(scope, getValueAtPath(draft, scope) as JsonValue | undefined);
     }
 

@@ -1,4 +1,4 @@
-import { asJsonArray, asJsonObject } from "./config-document";
+import { asJsonArray, asJsonObject, getValueAtPath } from "./config-document";
 import type { JsonObject, JsonValue, PathSegment } from "./types";
 
 /**
@@ -39,51 +39,27 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
   return entries;
 }
 
-/**
- * A device's group in one grouping: its own assignment, else (for a child)
- * its parent's effective group, else none. Both the editor's groupings section
- * and the card's grouped view use it.
- */
-export function effectiveGroup(ownGroup: string | undefined, parentEffective: string | null): string | null {
-  return ownGroup || parentEffective;
-}
-
-/** A consumer, the group it effectively belongs to in one grouping, and its parent's. */
+/** A consumer and its own group in one grouping. */
 export interface GroupedDeviceEntry extends DeviceEntry {
   group: string | null;
-  /** The parent's effective group; `null` for a top-level consumer too. */
-  parentGroup: string | null;
 }
 
 /** The device's own group in `groupingId`, or `undefined`. */
-function ownGroup(device: JsonObject, groupingId: string): string | undefined {
+export function ownGroup(device: JsonObject, groupingId: string): string | undefined {
   const own = asJsonObject(device.groups)?.[groupingId];
   return typeof own === "string" && own ? own : undefined;
 }
 
 /**
- * Every consumer, in {@link iterDevices} order, with its {@link effectiveGroup}
- * in `groupingId`. System devices are never grouped, so they are left out.
+ * Every consumer, in {@link iterDevices} order, with its own group in
+ * `groupingId`. Only a direct assignment counts: a child with none is
+ * ungrouped, whatever its parent's group. System devices are never grouped,
+ * so they are left out.
  */
 export function consumerGroups(config: JsonObject | null | undefined, groupingId: string): GroupedDeviceEntry[] {
-  const effective = new Map<JsonObject, string | null>();
-  // Depth first, so a parent's group is known before its children's.
   return iterDevices(config)
     .filter((entry) => entry.path[1] === "consumers")
-    .map((entry) => {
-      const parentGroup = entry.parent ? effective.get(entry.parent) ?? null : null;
-      const group = effectiveGroup(ownGroup(entry.device, groupingId), parentGroup);
-      effective.set(entry.device, group);
-      return { ...entry, group, parentGroup };
-    });
-}
-
-/**
- * Whether a consumer follows its parent's group: it has none of its own and
- * its parent has one. It moves with its parent and is not assigned on its own.
- */
-export function inheritsGroup(entry: GroupedDeviceEntry, groupingId: string): boolean {
-  return entry.parentGroup !== null && ownGroup(entry.device, groupingId) === undefined;
+    .map((entry) => ({ ...entry, group: ownGroup(entry.device, groupingId) ?? null }));
 }
 
 /** Sets or unsets `groups.<groupingId>`, dropping a `groups` map left empty. */
@@ -95,16 +71,11 @@ function setOwnGroup(device: JsonObject, groupingId: string, groupId: string | n
   else delete device.groups;
 }
 
-function consumerAt(config: JsonObject, devicePath: readonly PathSegment[], groupingId: string) {
-  const key = devicePath.join(".");
-  return consumerGroups(config, groupingId).find((entry) => entry.path.join(".") === key);
-}
-
 /**
- * A device dropped into group `groupId` of a grouping, or into its
- * "Unassigned" (`null`). Refused -- `false`, nothing changed -- for a child
- * that inherits its parent's group, which moves only with its parent, and for
- * unassigning a child whose parent has a group: inheriting is its way back.
+ * Puts the consumer at `devicePath` into group `groupId` of a grouping, or
+ * takes it out (`null`). The one setter behind both the groupings section's
+ * drag and drop and the device editor's picker. `false` when that path is no
+ * consumer or nothing changes.
  */
 export function assignGroup(
   config: JsonObject,
@@ -112,29 +83,12 @@ export function assignGroup(
   groupingId: string,
   groupId: string | null,
 ): boolean {
-  const entry = consumerAt(config, devicePath, groupingId);
-  if (!entry || inheritsGroup(entry, groupingId)) return false;
-  if (groupId === null && entry.parentGroup !== null) return false;
-  if ((ownGroup(entry.device, groupingId) ?? null) === groupId) return false;
-  setOwnGroup(entry.device, groupingId, groupId);
-  return true;
-}
-
-/**
- * A child's "inherit from parent" toggle. Off pins it to its parent's current
- * group, on removes its own. `false` when its parent has no group to inherit.
- */
-export function setGroupInherited(
-  config: JsonObject,
-  devicePath: readonly PathSegment[],
-  groupingId: string,
-  inherit: boolean,
-): boolean {
-  const entry = consumerAt(config, devicePath, groupingId);
-  if (!entry || entry.parentGroup === null) return false;
-  const target = inherit ? null : entry.parentGroup;
-  if ((ownGroup(entry.device, groupingId) ?? null) === target) return false;
-  setOwnGroup(entry.device, groupingId, target);
+  // A device path ends at its list index; anything deeper is no device.
+  const isConsumerPath = devicePath[1] === "consumers" && typeof devicePath[devicePath.length - 1] === "number";
+  const device = isConsumerPath ? asJsonObject(getValueAtPath(config, [...devicePath])) : undefined;
+  if (!device) return false;
+  if ((ownGroup(device, groupingId) ?? null) === groupId) return false;
+  setOwnGroup(device, groupingId, groupId);
   return true;
 }
 
