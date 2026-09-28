@@ -893,7 +893,7 @@ export async function breakdownGroups(
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
                     .replace(/\s+/g, " ")
                     .trim(),
-                collapsed: name.endsWith("\u25ba"),
+                collapsed: (content.querySelector(".childrenToggle")?.textContent ?? "").trim() === "\u25ba",
             };
         });
     });

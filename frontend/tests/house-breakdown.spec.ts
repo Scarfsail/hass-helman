@@ -419,7 +419,7 @@ async function breakdownGroups(
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
                     .replace(/\s+/g, " ")
                     .trim(),
-                collapsed: name.endsWith("►"),
+                collapsed: (content.querySelector(".childrenToggle")?.textContent ?? "").trim() === "►",
             };
         });
     }, panel);

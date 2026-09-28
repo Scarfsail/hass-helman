@@ -16,7 +16,7 @@ import {
     buildNodeDetailParams,
     type NodeDetailContext,
 } from "../node-detail/node-detail-params-builder";
-import type { NodeType } from "../node-detail/node-detail-types";
+import type { NodeDetailParams, NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
 import "./power-flow-arrows"
 import "./tree-item-info"
@@ -76,7 +76,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     // 5. State properties
     @state() private _hass?: HomeAssistant;
     @state() private _deviceTree: TreeItem[] = [];
-    @state() private _dialogNodeType: NodeType | null = null;
+    /** What the node detail dialog shows: a top-level node by type, or one device. */
+    @state() private _dialogRequest: NodeType | TreeItem | null = null;
     /**
      * Bumped once per history tick. `HistoryEngine` mutates the item histories in
      * place, so nothing a child is handed changes identity when a bucket rolls —
@@ -139,10 +140,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     async connectedCallback() {
         super.connectedCallback();
         // On the card itself rather than on `ha-card`: the node detail dialog is
-        // rendered beside it and draws the very same house rows, badges and all,
-        // so a listener inside the card body would hear nothing from there.
+        // rendered beside it and draws the very same house rows, badges and
+        // device names and all, so a listener inside the card body would hear
+        // nothing from there.
         this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         this.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
+        this.addEventListener("show-node-detail", this._handleShowNodeDetail);
+        this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
             await this._loadBackendData();
         }
@@ -152,6 +156,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         super.disconnectedCallback();
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
+        this.removeEventListener("show-node-detail", this._handleShowNodeDetail);
+        this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
         this._loadGeneration += 1;
         this._historyEngine?.stop();
     }
@@ -180,12 +186,12 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseArrowDevices, houseDevices } = this._computedNodes;
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
-        const dialogParams = this._dialogNodeType !== null
-            ? this._buildDialogParams(this._dialogNodeType)
+        const dialogParams = this._dialogRequest !== null
+            ? this._buildDialogParams(this._dialogRequest)
             : null;
 
         return html`
-            <ha-card @show-node-detail=${this._handleShowNodeDetail}>
+            <ha-card>
                 <div class="card-content">
                     <helman-tree-item-list
                         .hass=${this._hass!}
@@ -252,13 +258,20 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     // 12. Private helper methods
-    private _handleShowNodeDetail(event: CustomEvent<{ nodeType: NodeType }>): void {
+    // A request while the dialog is open (a device name inside the house
+    // detail) swaps its content in place, with no second history entry.
+    private _handleShowNodeDetail = (event: Event): void => {
         event.stopPropagation();
-        this._dialogNodeType = event.detail.nodeType;
-    }
+        this._dialogRequest = (event as CustomEvent<{ nodeType: NodeType }>).detail.nodeType;
+    };
+
+    private _handleShowDeviceDetail = (event: Event): void => {
+        event.stopPropagation();
+        this._dialogRequest = (event as CustomEvent<{ item: TreeItem }>).detail.item;
+    };
 
     private _closeNodeDetail(): void {
-        this._dialogNodeType = null;
+        this._dialogRequest = null;
     }
 
     /**
@@ -295,8 +308,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._rebuildWatchedEntityIds();
     };
 
-    private _buildDialogParams(nodeType: NodeType) {
-        return buildNodeDetailParams(this._buildNodeDetailContext(), nodeType);
+    private _buildDialogParams(request: NodeType | TreeItem): NodeDetailParams {
+        return typeof request === "string"
+            ? buildNodeDetailParams(this._buildNodeDetailContext(), request)
+            : { nodeType: "device", item: request };
     }
 
     private _buildNodeDetailContext(): NodeDetailContext {
