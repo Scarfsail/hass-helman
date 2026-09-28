@@ -267,6 +267,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         .path=${entry.path}
                         .parent=${entry.parent}
                         .expanded=${true}
+                        ?inert=${this._saving}
                         .hass=${this.hass}
                         .localize=${(key: string) => this._editorText(key)}
                         .validation=${this._validation}
@@ -328,7 +329,9 @@ export class HelmanDeviceEditDialog extends LitElement {
         this._inspections.request();
     }
 
+    /** Frozen while saving: the save has already taken its snapshot of the draft. */
     private _handleConfigChanged = (event: Event): void => {
+        if (this._saving) return;
         const { path, value } = (event as CustomEvent<DeviceConfigChangedDetail>).detail;
         this._applyToDraft((draft) => {
             if (value === undefined) unsetValueAtPath(draft, path);

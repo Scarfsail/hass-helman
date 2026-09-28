@@ -189,7 +189,7 @@ test.describe("editing a device from its detail", () => {
         await expect(editButton(page)).toHaveCount(1);
     });
 
-    test("Cancel cannot discard a save already in flight", async ({ page }) => {
+    test("Cancel and edits are refused while a save is in flight", async ({ page }) => {
         await mountDetail(page, { hangSave: true });
         await openEdit(page);
         await nameInput(page).fill("Hot water");
@@ -202,6 +202,8 @@ test.describe("editing a device from its detail", () => {
         await expect.poll(() => cancel.evaluate((button) => (button as any).disabled)).toBe(true);
         await page.evaluate(() => (document.querySelector("node-detail-device-content") as any).handleBack());
         await expect(dialog(page)).toHaveCount(1);
+        // The form is frozen too: the save already took its snapshot of the draft.
+        await expect(dialog(page).locator("helman-device-editor")).toHaveAttribute("inert", "");
     });
 
     test("Back with a dirty draft asks first, and closes only the edit dialog", async ({ page }) => {
