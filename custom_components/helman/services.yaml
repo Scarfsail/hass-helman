@@ -1,0 +1,43 @@
+get_group_entities:
+  fields:
+    grouping:
+      required: true
+      example: breakers
+      selector:
+        text:
+    group:
+      required: true
+      example: off_at_night
+      selector:
+        text:
+
+group_action:
+  fields:
+    grouping:
+      required: true
+      example: breakers
+      selector:
+        text:
+    group:
+      required: true
+      example: off_at_night
+      selector:
+        text:
+    action:
+      required: true
+      selector:
+        select:
+          translation_key: group_action
+          options:
+            - turn_on
+            - turn_off
+            - toggle
+    delay_ms:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60000
+          step: 100
+          unit_of_measurement: ms
+          mode: box

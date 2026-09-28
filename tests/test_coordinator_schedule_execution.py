@@ -426,7 +426,7 @@ class FakeServices:
         self.entered = asyncio.Event()
 
     async def async_call(
-        self, domain: str, service: str, data: dict, *, blocking: bool
+        self, domain: str, service: str, data: dict, *, blocking: bool, context=None
     ) -> None:
         self.calls.append((domain, service, data))
         if self.release is not None:
