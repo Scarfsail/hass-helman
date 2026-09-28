@@ -119,10 +119,6 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
             consumptionTotalSensorId: "sensor.consumption_total",
             productionTotalSensorId: "sensor.production_total",
             uiConfig: {
-                sources_title: "Sources",
-                consumers_title: "Consumers",
-                groups_title: "Groups",
-                others_group_label: "Others",
                 show_others_group: false,
                 device_groupings: [],
                 history_buckets: 3,
@@ -321,3 +317,35 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         });
     });
 }
+
+test.describe("helman-card: root titles", () => {
+    test.beforeEach(async ({ page }) => {
+        await installFixture(page, BUCKET_SECONDS);
+    });
+
+    for (const [language, sources, consumers] of [
+        ["en", "Energy Sources", "Energy Consumers"],
+        ["cs", "Zdroje energie", "Spotřebiče energie"],
+    ] as const) {
+        test(`the roots are titled in the HA language (${language})`, async ({ page }) => {
+            const names = await page.evaluate(async (lang) => {
+                window.__hass.language = lang;
+                window.__hass.locale = { language: lang };
+                const card = document.createElement("helman-card") as any;
+                await card.setConfig({ type: "custom:helman-card" });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+                await new Promise<void>((done) => setTimeout(done, 0));
+
+                window.__resolveTree();
+                await new Promise<void>((done) => setTimeout(done, 0));
+                window.__resolveHistory();
+                await new Promise<void>((done) => window.__rawRaf(() => setTimeout(done, 0)));
+
+                return (card._deviceTree ?? []).map((item: { name: string }) => item.name);
+            }, language);
+
+            expect(names).toEqual([sources, consumers]);
+        });
+    }
+});

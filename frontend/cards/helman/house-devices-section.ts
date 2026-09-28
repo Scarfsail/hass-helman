@@ -50,7 +50,7 @@ export class HelmanHouseDevicesSection extends LitElement {
         // The revision is part of the key because the group items hold *copies* of
         // their children's histories: a tick mutates the children in place and the
         // aggregate would otherwise keep painting the bucket it was built from.
-        const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${ui?.others_group_label ?? ''}|${this.historyRevision ?? 0}`;
+        const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${this.historyRevision ?? 0}`;
 
         const inputsChanged =
             changedProperties.has('devices') ||
@@ -193,7 +193,7 @@ export class HelmanHouseDevicesSection extends LitElement {
             }
         }
         if ((this.uiConfig?.show_others_group ?? true) && unmatched.length > 0) {
-            const others = new TreeItem(`others:${groupingId}`, this.uiConfig?.others_group_label || this._localize?.('house_section.others') || 'Ostatní', null, null, this.historyBuckets);
+            const others = new TreeItem(`others:${groupingId}`, this._localize?.('house_section.others') ?? 'Others', null, null, this.historyBuckets);
             others.virtualType = 'others';
             others.groupingId = groupingId;
             others.children_full_width = true;
@@ -299,7 +299,7 @@ export class HelmanHouseDevicesSection extends LitElement {
                             </button>
                         ` : nothing}
                         ${groupings.length > 0 ? html`
-                            <div class="categories-title">${this.uiConfig?.groups_title ?? this._localize?.('house_section.group_by') ?? 'Seskupit podle'}</div>
+                            <div class="categories-title">${this._localize?.('house_section.group_by') ?? 'Group by'}</div>
                             <div>
                                 ${groupings.map((g) => {
                                     const active = this._activeCategory === g.id;

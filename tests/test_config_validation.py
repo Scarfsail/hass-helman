@@ -58,10 +58,6 @@ from custom_components.helman.controllables.config import running_signal
 def _valid_config() -> dict:
     return {
         "visualization": {
-            "sources_title": "Energy Sources",
-            "consumers_title": "Energy Consumers",
-            "groups_title": "Group by:",
-            "others_group_label": "Others",
             "show_empty_groups": False,
             "show_others_group": True,
             "history_buckets": 60,
@@ -1463,6 +1459,46 @@ class ConfigValidationTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_the_card_texts_are_retired(self) -> None:
+        paths = [
+            f"{prefix}{key}"
+            for prefix in ("", "visualization.")
+            for key in (
+                "sources_title",
+                "consumers_title",
+                "groups_title",
+                "others_group_label",
+            )
+        ] + [
+            f"energy_nodes.{node}.{key}"
+            for node in ("house", "solar", "battery", "grid")
+            for key in ("source_name", "consumption_name")
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                config = _valid_config()
+                *parents, key = path.split(".")
+                container = config
+                for part in parents:
+                    container = container[part]
+                container[key] = "x"
+
+                report = validate_config_document(config)
+
+                self.assertEqual(
+                    [
+                        (issue.path, issue.code, issue.message)
+                        for issue in report.errors
+                    ],
+                    [
+                        (
+                            path,
+                            "retired_config_key",
+                            "the card localizes this text; remove this key",
+                        )
+                    ],
+                )
 
     def test_devices_as_a_list_is_refused_with_the_new_shape(self) -> None:
         config = _valid_config()

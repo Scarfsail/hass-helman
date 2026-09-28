@@ -14,10 +14,6 @@ from typing import Any
 VISUALIZATION_DEFAULTS: dict[str, Any] = {
     "history_buckets": 60,
     "history_bucket_duration": 5,
-    "sources_title": "Energy Sources",
-    "consumers_title": "Energy Consumers",
-    "groups_title": "Group by:",
-    "others_group_label": "Others",
     "show_empty_groups": False,
     "show_others_group": True,
 }

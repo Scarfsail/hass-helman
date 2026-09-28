@@ -41,7 +41,11 @@ from .controllables.spec import (
     appliance_controllable_kinds,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
-from .const import SOLAR_BIAS_AGGREGATION_METHODS
+from .const import (
+    RETIRED_ENERGY_NODE_TEXT_KEYS,
+    RETIRED_UI_TEXT_KEYS,
+    SOLAR_BIAS_AGGREGATION_METHODS,
+)
 from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
 
 #: The config keys config versions 7 and 20 retired. Named here so the save path
@@ -57,13 +61,11 @@ _RETIRED_CONFIG_KEYS = ("appliances", "scheduler", "controllables")
 _RELOCATED_VISUALIZATION_KEYS = (
     "history_buckets",
     "history_bucket_duration",
-    "sources_title",
-    "consumers_title",
-    "groups_title",
-    "others_group_label",
     "show_empty_groups",
     "show_others_group",
 )
+
+_RETIRED_UI_TEXT_MESSAGE = "the card localizes this text; remove this key"
 
 #: Where config versions 22 and 26 moved the device-level settings, old dotted
 #: path to new. The top-level regex is the v17-era spelling of the same key,
@@ -186,6 +188,7 @@ def _validate_visualization_config(
                     f"visualization.{retired_key}"
                 ),
             )
+    _report_retired_ui_texts(config, "", RETIRED_UI_TEXT_KEYS, section, report)
 
     raw_visualization = config.get("visualization")
     if raw_visualization is None:
@@ -196,23 +199,8 @@ def _validate_visualization_config(
     if visualization is None:
         return
 
-    _validate_optional_string(
-        report, section, "visualization.sources_title", visualization.get("sources_title")
-    )
-    _validate_optional_string(
-        report,
-        section,
-        "visualization.consumers_title",
-        visualization.get("consumers_title"),
-    )
-    _validate_optional_string(
-        report, section, "visualization.groups_title", visualization.get("groups_title")
-    )
-    _validate_optional_string(
-        report,
-        section,
-        "visualization.others_group_label",
-        visualization.get("others_group_label"),
+    _report_retired_ui_texts(
+        visualization, "visualization.", RETIRED_UI_TEXT_KEYS, section, report
     )
     _validate_optional_positive_int(
         report,
@@ -269,10 +257,37 @@ def _validate_energy_nodes_config(
         )
         return
 
+    for node, raw_node in raw_energy_nodes.items():
+        if isinstance(raw_node, Mapping):
+            _report_retired_ui_texts(
+                raw_node,
+                f"energy_nodes.{node}.",
+                RETIRED_ENERGY_NODE_TEXT_KEYS,
+                "energy_nodes",
+                report,
+            )
     _validate_house_config(raw_energy_nodes.get("house"), report)
     _validate_solar_config(config, raw_energy_nodes.get("solar"), report)
     _validate_battery_config(config, raw_energy_nodes.get("battery"), report)
     _validate_grid_config(config, raw_energy_nodes.get("grid"), report)
+
+
+def _report_retired_ui_texts(
+    block: Mapping[str, Any],
+    prefix: str,
+    keys: tuple[str, ...],
+    section: str,
+    report: ValidationReport,
+) -> None:
+    """Refuse the card texts v27 retired; see ``RETIRED_UI_TEXT_KEYS``."""
+    for key in keys:
+        if key in block:
+            report.add_error(
+                section=section,
+                path=f"{prefix}{key}",
+                code="retired_config_key",
+                message=_RETIRED_UI_TEXT_MESSAGE,
+            )
 
 
 def _validate_training_config(

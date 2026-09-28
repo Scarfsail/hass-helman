@@ -85,20 +85,16 @@ Top-level schema is `HelmanCardConfig`. Only `energy_nodes` is required; everyth
 **`visualization`**
 Everything the Helman card renders with. Under `visualization` since config version 18; the same
 keys used to sit at the top level, and a stored config is migrated on load.
-- `sources_title` / `consumers_title` / `groups_title`: panel titles. Defaults: "Energy Sources",
-  "Energy Consumers", "Group by".
+Config version 27 dropped the panel texts and the energy node display names, which the card now localizes; a stored config is migrated on load and the old keys are refused on save.
 - `history_buckets`: number — Number of history samples to keep/render. Default: 60.
 - `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
   interval). Default: 5.
-- `show_empty_groups` / `show_others_group` / `others_group_label`: control the "Others" group.
-  Defaults: `false`, `true`, `"Others"`.
+- `show_empty_groups` / `show_others_group`: control the "Others" group.
+  Defaults: `false`, `true`.
 
 **`energy_nodes`**
 Defines entities for the four power endpoints. At least `house.entities.power` should be provided to
 build the consumer tree around the house. Config version 24 renamed the key from `power_devices`; a stored config is migrated on load.
-
-Common optional fields:
-- `source_name` / `consumption_name`: display name overrides.
 
 - `energy_nodes.house`: `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
@@ -143,7 +139,6 @@ devices:
 visualization:
   show_empty_groups: false
   show_others_group: true
-  others_group_label: "Other devices"
 ```
 
 Groupings and their groups are edited in the "Device groupings" section of the config editor's Devices tab. A device is in a group only through its own `groups` entry; a child does not take its parent's group. That entry is set in two places. In the groupings section each group lists its consumers as chips, children included, followed by an "Unassigned" area with every consumer that has no group of its own, and dragging a chip into another group or into "Unassigned" sets or removes that device's `groups` entry and nothing else. In the device editor, on the Devices tab and in the card's device dialog, a consumer's collapsed "Groups" section lists its groups and has one picker per grouping, where "None" removes the entry. The order of devices inside a group is the device tree's and is not stored. Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included. On the card, a child with no group of its own stays nested under its parent, wherever the parent is filed, while a child assigned to a different group than its parent is lifted out into that group with its own subtree, and the same applies to its descendants. Its power is taken out of every ancestor it was lifted from, so in the grouped view a parent row shows its reading minus its lifted children and the group totals add up to the house devices' total; the plain view still shows the raw reading. Validation refuses a `groups` entry naming an unknown grouping or group.

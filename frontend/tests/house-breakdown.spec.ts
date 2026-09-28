@@ -601,10 +601,6 @@ test.describe("solar inspector house composition", () => {
                 consumptionTotalSensorId: null,
                 productionTotalSensorId: null,
                 uiConfig: {
-                    sources_title: "Sources",
-                    consumers_title: "Consumers",
-                    groups_title: "Groups",
-                    others_group_label: "Others",
                     show_others_group: false,
                     device_groupings: [],
                     history_buckets: 3,

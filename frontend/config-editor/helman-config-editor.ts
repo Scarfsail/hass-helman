@@ -1855,10 +1855,6 @@ export class HelmanConfigEditorPanel
               "editor.helpers.history_bucket_duration",
               "editor.help.history_bucket_duration",
             )}
-            ${this._renderOptionalTextField(["visualization", "sources_title"], "editor.fields.sources_title")}
-            ${this._renderOptionalTextField(["visualization", "consumers_title"], "editor.fields.consumers_title")}
-            ${this._renderOptionalTextField(["visualization", "groups_title"], "editor.fields.groups_title")}
-            ${this._renderOptionalTextField(["visualization", "others_group_label"], "editor.fields.others_group_label")}
             ${this._renderBooleanField(
               ["visualization", "show_empty_groups"],
               "editor.fields.show_empty_groups",

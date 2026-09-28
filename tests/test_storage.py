@@ -158,13 +158,14 @@ def test_a_partial_visualization_keeps_the_defaults_it_omits() -> None:
     # default object, so an omitted `history_bucket_duration` fell back to 5 s
     # in the tick and 1 s in the history payload.
     storage = _load(
-        {"config_version": 18, "visualization": {"sources_title": "Zdroje"}}
+        {"config_version": 18, "visualization": {"history_buckets": 90}}
     )
 
     visualization = storage.config["visualization"]
-    assert visualization["sources_title"] == "Zdroje"
+    assert visualization["history_buckets"] == 90
     assert visualization["history_bucket_duration"] == 5
-    assert visualization["history_buckets"] == 60
+    assert visualization["show_empty_groups"] is False
+    assert visualization["show_others_group"] is True
     assert "power_sensor_name_cleaner_regex" not in visualization
 
 

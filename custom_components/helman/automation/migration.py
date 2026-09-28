@@ -21,7 +21,12 @@ from copy import deepcopy
 from functools import partial
 from typing import Any
 
-from ..const import CONFIG_DOCUMENT_VERSION, DAY_CLASSIFICATIONS
+from ..const import (
+    CONFIG_DOCUMENT_VERSION,
+    DAY_CLASSIFICATIONS,
+    RETIRED_ENERGY_NODE_TEXT_KEYS,
+    RETIRED_UI_TEXT_KEYS,
+)
 from ..controllables.config import (
     CONTROLLABLE_KIND_GENERIC,
     CONTROLLABLE_KIND_INVERTER,
@@ -1568,6 +1573,28 @@ def _migrate_v25_to_v26(
     return (document, [])
 
 
+def _migrate_v26_to_v27(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The panel titles and display-name overrides are dropped.
+
+    ``visualization.sources_title``, ``consumers_title``, ``groups_title`` and
+    ``others_group_label``, and ``source_name`` / ``consumption_name`` under
+    each ``energy_nodes`` block: the card localizes these texts itself, so the
+    config no longer carries them.
+    """
+    visualization = document.get("visualization")
+    if isinstance(visualization, dict):
+        for key in RETIRED_UI_TEXT_KEYS:
+            visualization.pop(key, None)
+
+    energy_nodes = document.get("energy_nodes")
+    if isinstance(energy_nodes, dict):
+        for node in energy_nodes.values():
+            if isinstance(node, dict):
+                for key in RETIRED_ENERGY_NODE_TEXT_KEYS:
+                    node.pop(key, None)
+    return (document, [])
+
+
 def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
     """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
 
@@ -1612,6 +1639,7 @@ _MIGRATIONS = {
     23: _migrate_v23_to_v24,
     24: _migrate_v24_to_v25,
     # 25 -> 26 needs the HA labels: bound in migrate_config_document.
+    26: _migrate_v26_to_v27,
 }
 
 

@@ -79,11 +79,11 @@ async function mountSection(page: Page, devices: unknown[] = DEVICES): Promise<v
     await page.evaluate(
         async ({ devices, groupings }) => {
             const el = document.createElement("helman-house-devices-section") as any;
-            el.hass = { states: {}, locale: { language: "en" } };
+            el.hass = { states: {}, language: "en", locale: { language: "en" } };
             el.devices = devices;
             el.historyBuckets = 2;
             el.historyBucketDuration = 1;
-            el.uiConfig = { device_groupings: groupings, others_group_label: "Others" };
+            el.uiConfig = { device_groupings: groupings };
             document.body.appendChild(el);
             await el.updateComplete;
         },
