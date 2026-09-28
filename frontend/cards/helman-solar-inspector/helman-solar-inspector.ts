@@ -5621,6 +5621,7 @@ export class HelmanSolarInspector extends LitElement {
     // unmeasured remainder, open nothing.
     node.energyEntityId = entityId ?? undefined;
     node.deviceKey = controllableIds.length === 1 ? controllableIds[0] : entityId ?? undefined;
+    node.deviceKeyIsMeter = controllableIds.length !== 1 && !!entityId;
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

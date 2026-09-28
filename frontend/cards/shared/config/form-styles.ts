@@ -530,4 +530,129 @@ export const configFormStyles = css`
         border-color: var(--primary-color);
         background: rgba(3, 169, 244, 0.08);
     }
+
+    /* Collapsible sections and the list furniture inside them. Lifted from
+       the config panel when the device card became an element the card
+       bundle mounts too: the device form is drawn with them. */
+    .issue-path {
+        font-family: var(--code-font-family, monospace);
+        font-size: 0.9rem;
+    }
+
+    details.section-card {
+        padding: 0 18px 18px;
+    }
+
+    details.section-card > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 14px 0;
+        font-size: 1.06rem;
+        font-weight: 700;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.15s ease;
+        user-select: none;
+    }
+
+    details.section-card[open] > summary {
+        border-bottom-color: var(--divider-color);
+        margin-bottom: 14px;
+    }
+
+    .section-summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .section-summary-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .section-icon {
+        flex-shrink: 0;
+        width: 18px;
+        height: 18px;
+        fill: var(--primary-color);
+        opacity: 0.85;
+    }
+
+    .section-summary-label {
+        min-width: 0;
+    }
+
+    .section-summary-badge {
+        display: flex;
+        align-items: center;
+        margin-left: auto;
+    }
+
+    .section-chevron {
+        flex-shrink: 0;
+        width: 18px;
+        height: 18px;
+        fill: var(--secondary-text-color);
+        transition: transform 0.2s ease;
+        transform: rotate(0deg);
+    }
+
+    details.section-card[open] > summary .section-chevron {
+        transform: rotate(90deg);
+    }
+
+    details.section-card > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .section-content {
+        display: grid;
+        gap: 18px;
+    }
+
+    .toggle-field {
+        display: block;
+    }
+
+    .toggle-field .field-label-row ha-formfield {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .toggle-field ha-formfield {
+        display: block;
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--divider-color);
+        background: var(--secondary-background-color);
+        color: var(--primary-text-color);
+    }
+
+    .list-stack {
+        display: grid;
+        gap: 14px;
+    }
+
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 14px;
+    }
+
+    .inline-note {
+        color: var(--secondary-text-color);
+        font-size: 0.9rem;
+    }
+
+    .section-footer {
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 4px;
+    }
 `;
