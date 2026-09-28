@@ -86,6 +86,27 @@ suggestions_mod = types.ModuleType("custom_components.helman.controllables.sugge
 suggestions_mod.suggest_entities = _suggest_entities
 sys.modules["custom_components.helman.controllables.suggestions"] = suggestions_mod
 
+#: What the stubbed entity and label registries hold: the oven's meter and its
+#: switch share an HA device, and only the switch carries the label.
+_ENTITIES = {
+    "sensor.oven_energy": types.SimpleNamespace(device_id="dev_oven", labels=set()),
+    "switch.oven": types.SimpleNamespace(device_id="dev_oven", labels={"kitchen"}),
+}
+entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
+    entities=_ENTITIES, async_get=_ENTITIES.get
+)
+label_registry_mod = types.ModuleType("homeassistant.helpers.label_registry")
+label_registry_mod.async_get = lambda hass: types.SimpleNamespace(
+    async_get_label=lambda label_id: types.SimpleNamespace(name="Kitchen")
+    if label_id == "kitchen"
+    else None
+)
+helpers_mod.entity_registry = entity_registry_mod
+helpers_mod.label_registry = label_registry_mod
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+sys.modules["homeassistant.helpers.label_registry"] = label_registry_mod
+
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION  # noqa: E402
 from custom_components.helman.storage import HelmanStorage  # noqa: E402
 
@@ -154,13 +175,30 @@ def test_a_relocated_v17_value_still_beats_the_defaults() -> None:
     assert "history_bucket_duration" not in storage.config
 
 
-def test_loaded_documents_do_not_share_the_default_label_map() -> None:
-    first = _load({"config_version": 18})
-    second = _load({"config_version": 18})
+def test_an_upgrade_turns_ha_labels_into_device_groups() -> None:
+    oven = {"id": "oven", "consumption": {"energy_entity_id": "sensor.oven_energy"}}
 
-    first.config["visualization"]["device_label_text"]["Room"] = {}
+    storage = _load(
+        {
+            "config_version": 25,
+            "visualization": {"device_label_text": {"Rooms": {"Kitchen": "K"}}},
+            "devices": {"consumers": [oven]},
+        }
+    )
 
-    assert second.config["visualization"]["device_label_text"] == {}
+    expected = {
+        "groupings": [
+            {
+                "id": "rooms",
+                "name": "Rooms",
+                "groups": [{"id": "kitchen", "name": "Kitchen", "short_name": "K"}],
+            }
+        ],
+        "consumers": [{**oven, "groups": {"rooms": "kitchen"}}],
+    }
+    assert "device_label_text" not in storage.config["visualization"]
+    assert storage.config["devices"] == expected
+    assert storage._store.saved[-1]["devices"] == expected
 
 
 def test_an_upgrade_imports_the_energy_devices() -> None:

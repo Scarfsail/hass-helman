@@ -17,7 +17,6 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest import mock
 
 _ROOT = os.path.dirname(os.path.dirname(__file__))
 if _ROOT not in sys.path:
@@ -90,16 +89,6 @@ class _States:
         return SimpleNamespace(state=raw, attributes={})
 
 
-class _Registry:
-    entities: dict = {}
-
-    def async_get(self, entity_id):
-        return None
-
-    def async_get_label(self, label_id):
-        return None
-
-
 class _Sensor:
     def __init__(self) -> None:
         self.values: list[float | None] = []
@@ -115,9 +104,7 @@ def _make_coordinator(states: dict[str, str], *, metered_child: bool = False):
         "devices": {"consumers": _devices(metered_child=metered_child)},
     }
     hass = SimpleNamespace(states=_States(states))
-    with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
-            mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):
-        tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
+    tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
 
     c = object.__new__(coordinator_module.HelmanCoordinator)
     c._active_config = config
@@ -209,11 +196,9 @@ class SharePowerTests(unittest.TestCase):
         # and it is unavailable, not a sensor stuck at "unknown".
         c, _ = self._run(("obyvak",))
         del c._active_config["devices"]["consumers"][0]["consumption"]["power_entity_id"]
-        with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
-                mock.patch.object(tree_builder.lr, "async_get", lambda _hass: _Registry()):
-            c._cached_tree = asyncio.run(
-                tree_builder.HelmanTreeBuilder(c._hass, c._active_config).build()
-            )
+        c._cached_tree = asyncio.run(
+            tree_builder.HelmanTreeBuilder(c._hass, c._active_config).build()
+        )
         c._init_buffers(c._cached_tree)
 
         unmeasured, shares = c._compute_derived_powers()

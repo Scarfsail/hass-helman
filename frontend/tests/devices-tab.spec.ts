@@ -200,6 +200,7 @@ test("the device settings sit above the list and the regex renames the cards", a
     expect(await tabSections(page)).toEqual([
         { label: "Device settings", open: false },
         { label: "System", open: false },
+        { label: "Device groupings", open: false },
         { label: "Consumers", open: false },
     ]);
     await expect

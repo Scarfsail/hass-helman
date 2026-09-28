@@ -68,7 +68,7 @@ export class HelmanTreeItemInfo extends LitElement {
         }
 
         const hasAdditionalInfo = this.device.show_additional_info;
-        const customLabels = this.device.customLabelTexts ?? [];
+        const customLabels = this.device.groupBadgeTexts ?? [];
         const hasCustomLabels = customLabels.length > 0;
         // What the box says about the schedule. Decided here — beside
         // helman-tree-item's tint, off the same `deferrable` flag — which is what

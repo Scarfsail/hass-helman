@@ -72,8 +72,8 @@ function dto(overrides: Record<string, unknown>) {
         isSource: false,
         isUnmeasured: false,
         isEstimated: false,
-        labels: [],
-        labelBadgeTexts: [],
+        groups: {},
+        groupBadgeTexts: [],
         icon: null,
         compact: false,
         showAdditionalInfo: false,
@@ -116,7 +116,7 @@ async function mountCard(page: Page): Promise<void> {
                         switchEntityId: "switch.boiler",
                         energyEntityId: "sensor.boiler_energy",
                         icon: "mdi:water-boiler",
-                        labels: ["Kitchen"],
+                        groups: { room: "kitchen" },
                         children: [
                             dto({
                                 id: "pump",
@@ -144,7 +144,7 @@ async function mountCard(page: Page): Promise<void> {
             groups_title: "Groups",
             others_group_label: "Others",
             show_others_group: true,
-            device_label_text: { Room: { Kitchen: "K" } },
+            device_groupings: [{ id: "room", name: "Room", groups: [{ id: "kitchen", name: "Kitchen", short_name: "K" }] }],
             history_buckets: 3,
             history_bucket_duration: 5,
         },
