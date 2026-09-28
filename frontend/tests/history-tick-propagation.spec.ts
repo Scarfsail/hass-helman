@@ -32,7 +32,7 @@ const GRID_RGB = "rgb(56, 189, 248)";
 async function loadCardBundle(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("power-devices-container"));
+    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
 }
 
 /**
@@ -44,7 +44,7 @@ async function installReader(page: Page): Promise<void> {
     await page.evaluate(() => {
         (window as any).__rowColours = async (root: any) => {
             const out: Record<string, string[]> = {};
-            const rows = Array.from(root.querySelectorAll("power-device")) as any[];
+            const rows = Array.from(root.querySelectorAll("helman-tree-item")) as any[];
             for (const row of rows) {
                 await row.updateComplete;
                 // The row's own name, minus the expand/collapse indicator glued to it.
@@ -70,7 +70,7 @@ async function installReader(page: Page): Promise<void> {
 async function installOrderReader(page: Page): Promise<void> {
     await page.evaluate(() => {
         (window as any).__rowNames = (root: any) =>
-            Array.from(root.querySelectorAll("power-device")).map((row: any) =>
+            Array.from(root.querySelectorAll("helman-tree-item")).map((row: any) =>
                 (row.shadowRoot?.querySelector(".deviceName")?.textContent ?? "?")
                     .replace(/[\u25BA\u25BC]\s*$/, "")
                     .trim());
@@ -105,7 +105,7 @@ test.describe("history tick reaches the rendered bars", () => {
 
     test("a consumer row repaints on a bumped revision alone", async ({ page }) => {
         const colours = await page.evaluate(async (c) => {
-            const el = document.createElement("power-devices-container") as any;
+            const el = document.createElement("helman-tree-item-list") as any;
             const hass = { states: {}, locale: { language: "en" } };
             const nodes = [c.node];
             el.hass = hass;
@@ -140,7 +140,7 @@ test.describe("history tick reaches the rendered bars", () => {
         // histories, rebuilt behind a memo. The memo has to see the revision too,
         // or the aggregate keeps painting the bucket it was built from.
         const colours = await page.evaluate(async (c) => {
-            const el = document.createElement("power-house-devices-section") as any;
+            const el = document.createElement("helman-house-devices-section") as any;
             const child = c.node;
             el.hass = { states: {}, locale: { language: "en" } };
             el.devices = [child];
@@ -154,7 +154,7 @@ test.describe("history tick reaches the rendered bars", () => {
             // Activate the grouping — that is what puts the aggregate rows on screen.
             (el.shadowRoot.querySelector("button.chip:not(.show-toggle)") as HTMLButtonElement).click();
             await el.updateComplete;
-            const container = el.shadowRoot.querySelector("power-devices-container") as any;
+            const container = el.shadowRoot.querySelector("helman-tree-item-list") as any;
             await container.updateComplete;
             const before = await (window as any).__rowColours(container.shadowRoot);
 
@@ -190,7 +190,7 @@ test.describe("an unchanged history costs nothing", () => {
 
     test("repeated hass replacements re-render the row but rebuild no paths", async ({ page }) => {
         const counts = await page.evaluate(async (node) => {
-            const el = document.createElement("power-devices-container") as any;
+            const el = document.createElement("helman-tree-item-list") as any;
             el.hass = { states: {}, locale: { language: "en" } };
             el.devices = [node];
             el.historyBuckets = 3;
@@ -200,7 +200,7 @@ test.describe("an unchanged history costs nothing", () => {
             document.body.appendChild(el);
             await el.updateComplete;
 
-            const row = el.shadowRoot.querySelector("power-device") as any;
+            const row = el.shadowRoot.querySelector("helman-tree-item") as any;
             await row.updateComplete;
             const bars = row.shadowRoot.querySelector("helman-power-history-bars") as any;
             await bars.updateComplete;
@@ -257,7 +257,7 @@ test.describe("sorting follows the histories", () => {
 
     test("a rolling history reorders rows while the current power stands still", async ({ page }) => {
         const order = await page.evaluate(async (nodes) => {
-            const el = document.createElement("power-devices-container") as any;
+            const el = document.createElement("helman-tree-item-list") as any;
             el.hass = { states: {}, locale: { language: "en" } };
             el.devices = nodes;
             el.historyBuckets = 3;

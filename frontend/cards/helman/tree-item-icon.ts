@@ -1,8 +1,8 @@
 import { LitElement, TemplateResult, css, html, nothing } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import { DeviceNode } from "./DeviceNode";
-import { BatteryDeviceConfig } from "./DeviceConfig";
+import { TreeItem } from "./tree-item";
+import { BatteryNodeConfig } from "./energy-node-config";
 import { sharedStyles } from "./shared-styles";
 import { computeDominantSourceColorCached } from "../color-utils";
 import type { NodeType } from "../node-detail/node-detail-types";
@@ -12,8 +12,8 @@ import "../helman-simple/simple-card-battery";
 import "../helman-simple/simple-card-grid";
 import "../helman-simple/simple-card-house";
 
-@customElement("power-device-icon")
-export class PowerDeviceIcon extends LitElement {
+@customElement("helman-tree-item-icon")
+export class HelmanTreeItemIcon extends LitElement {
     // Static styles
     static get styles() {
         return [sharedStyles, css`
@@ -43,7 +43,7 @@ export class PowerDeviceIcon extends LitElement {
 
     // Public properties
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public device!: DeviceNode;
+    @property({ attribute: false }) public device!: TreeItem;
     @property({ type: Boolean }) public openNodeDetailOnClick = false;
 
     // Render method
@@ -132,7 +132,7 @@ export class PowerDeviceIcon extends LitElement {
             // isSource=true → discharging (negative in simple-card convention); isSource=false → charging (positive)
             const signedPower = device.isSource ? -power : power;
             const sourceColor = device.isSource ? undefined : computeDominantSourceColorCached(this.device);
-            const battConfig = device.deviceConfig as BatteryDeviceConfig;
+            const battConfig = device.nodeConfig as BatteryNodeConfig;
             const soc = battConfig?.entities?.capacity
                 ? parseFloat(this.hass.states[battConfig.entities.capacity]?.state ?? '0') || 0
                 : 0;

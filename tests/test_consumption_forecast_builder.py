@@ -176,7 +176,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             async_add_executor_job=_inline_executor_job,
         )
         config = {
-            "power_devices": {
+            "energy_nodes": {
                 "house": {
                     "forecast": {
                         "total_energy_entity_id": "sensor.house_total",
@@ -295,7 +295,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_reads_the_minimum_from_training_house_consumption(self) -> None:
         """A non-default value proves the field is read from its new home --
-        the v14 relocation moved it out from under power_devices.house.forecast."""
+        the v14 relocation moved it out from under energy_nodes.house.forecast."""
         consumption_module, recorder_module, builder = self._make_builder(
             min_history_days=21, training_window_days=90
         )

@@ -882,12 +882,12 @@ export async function breakdownGroups(
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
-            ?.querySelector("power-devices-container");
-        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+            ?.querySelector("helman-tree-item-list");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])];
         return groups.map((group: any) => {
             const content = group.shadowRoot.querySelector(".deviceContent");
             const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
-            const display = content.querySelector("power-device-power-display");
+            const display = content.querySelector("helman-tree-item-power-display");
             return {
                 label: name.replace(/[\u25ba\u25bc]\s*$/, "").trim(),
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
@@ -908,8 +908,8 @@ export async function expandBreakdownGroups(page: Page): Promise<void> {
             const el = document.querySelector("helman-solar-inspector") as any;
             const container = el.shadowRoot
                 .querySelector(".house-breakdown")
-                .querySelector("power-devices-container");
-            const group = container.shadowRoot.querySelectorAll("power-device")[i] as any;
+                .querySelector("helman-tree-item-list");
+            const group = container.shadowRoot.querySelectorAll("helman-tree-item")[i] as any;
             (group.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
             return el.updateComplete;
         }, index);
@@ -925,16 +925,16 @@ export async function breakdownBoxes(
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
-            ?.querySelector("power-devices-container");
-        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+            ?.querySelector("helman-tree-item-list");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])];
         const devices = groups.flatMap((group: any) => [
             ...(group.shadowRoot
-                ?.querySelector("power-devices-container")
-                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+                ?.querySelector("helman-tree-item-list")
+                ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
         ]);
         return devices.map((device: any) => {
             const content = device.shadowRoot.querySelector(".deviceContent");
-            const display = content.querySelector("power-device-power-display");
+            const display = content.querySelector("helman-tree-item-power-display");
             const bars = content.querySelector("helman-power-history-bars") as any;
             return {
                 label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),

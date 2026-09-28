@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 /**
  * Solar bias correction is edited on the Training tab (issue #306), and its
  * data lives there too (issue #312): the v19 migration flattened
- * `power_devices.solar.forecast.bias_correction` into `training.solar_bias`.
+ * `energy_nodes.solar.forecast.bias_correction` into `training.solar_bias`.
  * So the round trip is the claim -- edit on Training, save, and the document
  * the backend receives holds every solar bias setting in that one block.
  */
@@ -16,7 +16,7 @@ const BUNDLE = resolve(
 
 const CONFIG = {
     config_version: 19,
-    power_devices: {
+    energy_nodes: {
         solar: {
             entities: { power: "sensor.solar_power" },
             forecast: {
@@ -193,7 +193,7 @@ test("bias correction edited on Training saves under training.solar_bias", async
     const solarBias = solarBiasConfig(page);
     await openCard(solarBias);
     await openSection(page, "Invalidate training slot data");
-    await expect(solarBias).not.toContainText("power_devices.solar.forecast.bias_correction");
+    await expect(solarBias).not.toContainText("energy_nodes.solar.forecast.bias_correction");
 
     const enabled = solarBias.locator(".toggle-field", {
         has: page.locator("ha-formfield"),
@@ -219,13 +219,13 @@ test("bias correction edited on Training saves under training.solar_bias", async
         total_energy_entity_id: "sensor.solar_bias_energy",
         slot_invalidation: { max_battery_soc_percent: 95 },
     });
-    expect(saved.power_devices.solar.forecast).not.toHaveProperty("bias_correction");
-    expect(saved.power_devices.solar.forecast).toEqual(CONFIG.power_devices.solar.forecast);
+    expect(saved.energy_nodes.solar.forecast).not.toHaveProperty("bias_correction");
+    expect(saved.energy_nodes.solar.forecast).toEqual(CONFIG.energy_nodes.solar.forecast);
 });
 
-test("Power devices -> Solar holds only its entities and forecast sources", async ({ page }) => {
+test("Energy nodes -> Solar holds only its entities and forecast sources", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Power devices");
+    await openTab(page, "Energy nodes");
 
     const solar = section(page, "Solar");
     // One sub-panel, matching the YAML: `forecast`. The "General" wrappers
@@ -288,5 +288,5 @@ test("a validation issue on a bias field counts on the Training tab", async ({ p
 
     const tab = (label: string) => page.locator(".tabs button", { hasText: label });
     await expect(tab("Training").locator(".tab-count.errors")).toHaveText("1");
-    await expect(tab("Power devices").locator(".tab-count")).toHaveCount(0);
+    await expect(tab("Energy nodes").locator(".tab-count")).toHaveCount(0);
 });

@@ -1419,6 +1419,21 @@ def _sole_candidate(
     return pool[0]["entityId"] if len(pool) == 1 else None
 
 
+def _migrate_v23_to_v24(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``power_devices`` -> ``energy_nodes``.
+
+    The four site-level blocks (house, grid, solar, battery) sat beside
+    ``devices`` under a near-synonym. The moved value overwrites an existing
+    ``energy_nodes``, as in :func:`_migrate_v17_to_v18`: a version-23 document
+    cannot have authored that key, so one found there is the ``DEFAULT_CONFIG``
+    merged in ahead of this step. A document without ``power_devices`` is
+    unchanged.
+    """
+    if "power_devices" in document:
+        document["energy_nodes"] = document.pop("power_devices")
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1442,6 +1457,7 @@ _MIGRATIONS = {
     # 20 -> 21 needs the Energy preferences: bound in migrate_config_document.
     21: _migrate_v21_to_v22,
     # 22 -> 23 needs the entity suggestions: bound in migrate_config_document.
+    23: _migrate_v23_to_v24,
 }
 
 

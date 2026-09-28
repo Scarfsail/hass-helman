@@ -10,7 +10,7 @@ import type { JsonArray, JsonObject } from "../cards/shared/config/types";
 
 export type EditorMode = "visual" | "yaml";
 export type TabId =
-  | "power_devices"
+  | "energy_nodes"
   | "training"
   | "automation"
   | "devices"
@@ -18,21 +18,21 @@ export type TabId =
 
 export type ScopeId =
   | "document"
-  | "tab:power_devices"
+  | "tab:energy_nodes"
   | "tab:training"
   | "tab:automation"
   | "tab:devices"
   | "tab:visualization"
   | "section:visualization.card_labels_and_history"
   | "section:visualization.device_label_text"
-  | "section:power_devices.house"
-  | "section:power_devices.house.forecast"
-  | "section:power_devices.solar"
-  | "section:power_devices.solar.forecast"
-  | "section:power_devices.battery"
-  | "section:power_devices.battery.forecast"
-  | "section:power_devices.grid"
-  | "section:power_devices.grid.forecast"
+  | "section:energy_nodes.house"
+  | "section:energy_nodes.house.forecast"
+  | "section:energy_nodes.solar"
+  | "section:energy_nodes.solar.forecast"
+  | "section:energy_nodes.battery"
+  | "section:energy_nodes.battery.forecast"
+  | "section:energy_nodes.grid"
+  | "section:energy_nodes.grid.forecast"
   | "section:training.settings"
   | "section:training.house_consumption"
   | "section:training.solar_bias"
@@ -66,7 +66,7 @@ export const TRAINING_JOB_ICONS: Record<"solar_bias" | "house_consumption" | "ap
 };
 
 export const TAB_ICONS: Record<TabId, string> = {
-  power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
+  energy_nodes: "M7,2V13H10V22L17,11H13L17,2H7Z",
   training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   devices: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
@@ -80,14 +80,14 @@ const FORECAST_ICON =
 export const SECTION_ICONS: Record<string, string> = {
   "section:visualization.card_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:visualization.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
-  "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
-  "section:power_devices.house.forecast": FORECAST_ICON,
-  "section:power_devices.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
-  "section:power_devices.solar.forecast": FORECAST_ICON,
-  "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
-  "section:power_devices.battery.forecast": FORECAST_ICON,
-  "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
-  "section:power_devices.grid.forecast": FORECAST_ICON,
+  "section:energy_nodes.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
+  "section:energy_nodes.house.forecast": FORECAST_ICON,
+  "section:energy_nodes.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
+  "section:energy_nodes.solar.forecast": FORECAST_ICON,
+  "section:energy_nodes.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
+  "section:energy_nodes.battery.forecast": FORECAST_ICON,
+  "section:energy_nodes.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
+  "section:energy_nodes.grid.forecast": FORECAST_ICON,
   "section:training.settings": CONFIGURATION_ICON,
   "section:training.house_consumption": CONFIGURATION_ICON,
   // What the panel does is drop slots from the training data, not explain
@@ -102,7 +102,7 @@ export const SECTION_ICONS: Record<string, string> = {
 };
 
 export const TABS: Array<{ id: TabId; labelKey: string }> = [
-  { id: "power_devices", labelKey: "editor.tabs.power_devices" },
+  { id: "energy_nodes", labelKey: "editor.tabs.energy_nodes" },
   { id: "devices", labelKey: "editor.tabs.devices" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "training", labelKey: "editor.tabs.training" },
@@ -111,17 +111,17 @@ export const TABS: Array<{ id: TabId; labelKey: string }> = [
 
 export const TAB_SECTIONS: Record<string, TabId> = {
   visualization: "visualization",
-  power_devices: "power_devices",
+  energy_nodes: "energy_nodes",
   training: "training",
   automation: "automation",
   devices: "devices",
-  root: "power_devices",
+  root: "energy_nodes",
 };
 
 export const DOCUMENT_SCOPE_ID = "document" as const;
 
 export const TAB_SCOPE_IDS = {
-  power_devices: "tab:power_devices",
+  energy_nodes: "tab:energy_nodes",
   training: "tab:training",
   automation: "tab:automation",
   devices: "tab:devices",
@@ -133,15 +133,15 @@ export const SECTION_SCOPE_IDS = {
     card_labels_and_history: "section:visualization.card_labels_and_history",
     device_label_text: "section:visualization.device_label_text",
   },
-  power_devices: {
-    house: "section:power_devices.house",
-    house_forecast: "section:power_devices.house.forecast",
-    solar: "section:power_devices.solar",
-    solar_forecast: "section:power_devices.solar.forecast",
-    battery: "section:power_devices.battery",
-    battery_forecast: "section:power_devices.battery.forecast",
-    grid: "section:power_devices.grid",
-    grid_forecast: "section:power_devices.grid.forecast",
+  energy_nodes: {
+    house: "section:energy_nodes.house",
+    house_forecast: "section:energy_nodes.house.forecast",
+    solar: "section:energy_nodes.solar",
+    solar_forecast: "section:energy_nodes.solar.forecast",
+    battery: "section:energy_nodes.battery",
+    battery_forecast: "section:energy_nodes.battery.forecast",
+    grid: "section:energy_nodes.grid",
+    grid_forecast: "section:energy_nodes.grid.forecast",
   },
   training: {
     settings: "section:training.settings",
@@ -202,13 +202,13 @@ export const EDITOR_SCOPES = {
     labelKey: "editor.title",
     adapter: createDocumentScopeAdapter(),
   },
-  [TAB_SCOPE_IDS.power_devices]: {
-    id: TAB_SCOPE_IDS.power_devices,
+  [TAB_SCOPE_IDS.energy_nodes]: {
+    id: TAB_SCOPE_IDS.energy_nodes,
     kind: "tab",
     parentId: DOCUMENT_SCOPE_ID,
-    tabId: "power_devices",
-    labelKey: "editor.tabs.power_devices",
-    adapter: createPathScopeAdapter(["power_devices"], {
+    tabId: "energy_nodes",
+    labelKey: "editor.tabs.energy_nodes",
+    adapter: createPathScopeAdapter(["energy_nodes"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
@@ -276,90 +276,90 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.house]: {
-    id: SECTION_SCOPE_IDS.power_devices.house,
+  [SECTION_SCOPE_IDS.energy_nodes.house]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.house,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.power_devices,
-    tabId: "power_devices",
+    parentId: TAB_SCOPE_IDS.energy_nodes,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.house",
-    adapter: createPathScopeAdapter(["power_devices", "house"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "house"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.house_forecast]: {
-    id: SECTION_SCOPE_IDS.power_devices.house_forecast,
+  [SECTION_SCOPE_IDS.energy_nodes.house_forecast]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.house_forecast,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.house,
-    tabId: "power_devices",
+    parentId: SECTION_SCOPE_IDS.energy_nodes.house,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.forecast",
-    adapter: createPathScopeAdapter(["power_devices", "house", "forecast"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "house", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.solar]: {
-    id: SECTION_SCOPE_IDS.power_devices.solar,
+  [SECTION_SCOPE_IDS.energy_nodes.solar]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.solar,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.power_devices,
-    tabId: "power_devices",
+    parentId: TAB_SCOPE_IDS.energy_nodes,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.solar",
-    adapter: createPathScopeAdapter(["power_devices", "solar"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "solar"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.solar_forecast]: {
-    id: SECTION_SCOPE_IDS.power_devices.solar_forecast,
+  [SECTION_SCOPE_IDS.energy_nodes.solar_forecast]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.solar_forecast,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.solar,
-    tabId: "power_devices",
+    parentId: SECTION_SCOPE_IDS.energy_nodes.solar,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.forecast",
-    adapter: createPathScopeAdapter(["power_devices", "solar", "forecast"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "solar", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.battery]: {
-    id: SECTION_SCOPE_IDS.power_devices.battery,
+  [SECTION_SCOPE_IDS.energy_nodes.battery]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.battery,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.power_devices,
-    tabId: "power_devices",
+    parentId: TAB_SCOPE_IDS.energy_nodes,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.battery",
-    adapter: createPathScopeAdapter(["power_devices", "battery"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "battery"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.battery_forecast]: {
-    id: SECTION_SCOPE_IDS.power_devices.battery_forecast,
+  [SECTION_SCOPE_IDS.energy_nodes.battery_forecast]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.battery_forecast,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.battery,
-    tabId: "power_devices",
+    parentId: SECTION_SCOPE_IDS.energy_nodes.battery,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.forecast",
-    adapter: createPathScopeAdapter(["power_devices", "battery", "forecast"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "battery", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.grid]: {
-    id: SECTION_SCOPE_IDS.power_devices.grid,
+  [SECTION_SCOPE_IDS.energy_nodes.grid]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.grid,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.power_devices,
-    tabId: "power_devices",
+    parentId: TAB_SCOPE_IDS.energy_nodes,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.grid",
-    adapter: createPathScopeAdapter(["power_devices", "grid"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "grid"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.grid_forecast]: {
-    id: SECTION_SCOPE_IDS.power_devices.grid_forecast,
+  [SECTION_SCOPE_IDS.energy_nodes.grid_forecast]: {
+    id: SECTION_SCOPE_IDS.energy_nodes.grid_forecast,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.grid,
-    tabId: "power_devices",
+    parentId: SECTION_SCOPE_IDS.energy_nodes.grid,
+    tabId: "energy_nodes",
     labelKey: "editor.sections.forecast",
-    adapter: createPathScopeAdapter(["power_devices", "grid", "forecast"], {
+    adapter: createPathScopeAdapter(["energy_nodes", "grid", "forecast"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),

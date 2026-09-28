@@ -339,7 +339,7 @@ async function selectSlotAtMinutes(
 /**
  * Read the rendered composition boxes in order.
  *
- * The panel renders the power card's own `power-device` boxes, so everything is
+ * The panel renders the power card's own `helman-tree-item` boxes, so everything is
  * reached through their shadow roots exactly as it is on the card itself.
  */
 async function breakdownBoxes(
@@ -354,25 +354,25 @@ async function breakdownBoxes(
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelectorAll(".house-breakdown")
-            [index]?.querySelector("power-devices-container");
-        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+            [index]?.querySelector("helman-tree-item-list");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])];
         const devices = groups.flatMap((group: any) => [
             ...(group.shadowRoot
-                ?.querySelector("power-devices-container")
-                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+                ?.querySelector("helman-tree-item-list")
+                ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
         ]);
         return [...devices].map((device: any) => {
             const content = device.shadowRoot.querySelector(".deviceContent");
-            const display = content.querySelector("power-device-power-display");
+            const display = content.querySelector("helman-tree-item-power-display");
             const badge = content
-                .querySelector("power-device-icon")
+                .querySelector("helman-tree-item-icon")
                 ?.shadowRoot?.querySelector("helman-appliance-switch-badge") as any;
             return {
                 label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),
                 // The badge channel the card already uses for label texts, and the
                 // per-box tint that overrides the panel's house colour.
                 tag: (content
-                    .querySelector("power-device-info")
+                    .querySelector("helman-tree-item-info")
                     ?.shadowRoot?.querySelector(".custom-labels")?.textContent ?? "").trim(),
                 tint: content.style.getPropertyValue("--device-tint").trim(),
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
@@ -384,7 +384,7 @@ async function breakdownBoxes(
                 // The scheduling badge, by the controllable it asks about — the
                 // marker that replaced the "deferrable" word in `tag`.
                 scheduleBadge: (content
-                    .querySelector("power-device-info")
+                    .querySelector("helman-tree-item-info")
                     ?.shadowRoot?.querySelector("helman-schedule-badge") as any)?.controllableId ?? null,
             };
         });
@@ -405,16 +405,16 @@ async function breakdownGroups(
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelectorAll(".house-breakdown")
-            [index]?.querySelector("power-devices-container");
-        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+            [index]?.querySelector("helman-tree-item-list");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])];
         return groups.map((group: any) => {
             const content = group.shadowRoot.querySelector(".deviceContent");
             const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
-            const display = content.querySelector("power-device-power-display");
+            const display = content.querySelector("helman-tree-item-power-display");
             return {
                 label: name.replace(/[►▼]\s*$/, "").trim(),
                 tag: (content
-                    .querySelector("power-device-info")
+                    .querySelector("helman-tree-item-info")
                     ?.shadowRoot?.querySelector(".custom-labels")?.textContent ?? "").trim(),
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
                     .replace(/\s+/g, " ")
@@ -440,8 +440,8 @@ async function toggleBreakdownGroup(page: Page, index: number, panel = 0): Promi
             const el = document.querySelector("helman-solar-inspector") as any;
             const container = el.shadowRoot
                 .querySelectorAll(".house-breakdown")
-                [o.panel]?.querySelector("power-devices-container");
-            const group = container.shadowRoot.querySelectorAll("power-device")[o.index] as any;
+                [o.panel]?.querySelector("helman-tree-item-list");
+            const group = container.shadowRoot.querySelectorAll("helman-tree-item")[o.index] as any;
             (group.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
         },
         { index, panel },
@@ -459,16 +459,16 @@ async function clickBoxPower(page: Page, index: number): Promise<void> {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
-            .querySelector("power-devices-container");
-        const groups = [...container.shadowRoot.querySelectorAll("power-device")];
+            .querySelector("helman-tree-item-list");
+        const groups = [...container.shadowRoot.querySelectorAll("helman-tree-item")];
         const device = groups.flatMap((group: any) => [
             ...(group.shadowRoot
-                ?.querySelector("power-devices-container")
-                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+                ?.querySelector("helman-tree-item-list")
+                ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
         ])[i] as any;
         const display = device.shadowRoot
             .querySelector(".deviceContent")
-            .querySelector("power-device-power-display");
+            .querySelector("helman-tree-item-power-display");
         (display.shadowRoot.querySelector(".powerDisplay") as HTMLElement).click();
     }, index);
 }
@@ -486,10 +486,10 @@ async function barSegmentColours(page: Page): Promise<string[]> {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
-            .querySelector("power-devices-container");
-        const device = (container.shadowRoot.querySelector("power-device") as any).shadowRoot
-            ?.querySelector("power-devices-container")
-            ?.shadowRoot?.querySelector("power-device") as any;
+            .querySelector("helman-tree-item-list");
+        const device = (container.shadowRoot.querySelector("helman-tree-item") as any).shadowRoot
+            ?.querySelector("helman-tree-item-list")
+            ?.shadowRoot?.querySelector("helman-tree-item") as any;
         const bars = device.shadowRoot
             .querySelector(".deviceContent")
             .querySelector("helman-power-history-bars");
@@ -790,20 +790,20 @@ test.describe("solar inspector house composition", () => {
             const groups = [
                 ...el.shadowRoot
                     .querySelector(".house-breakdown")
-                    .querySelector("power-devices-container")
-                    .shadowRoot.querySelectorAll("power-device"),
+                    .querySelector("helman-tree-item-list")
+                    .shadowRoot.querySelectorAll("helman-tree-item"),
             ];
             const devices = groups.flatMap((group: any) => [
                 ...(group.shadowRoot
-                    ?.querySelector("power-devices-container")
-                    ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+                    ?.querySelector("helman-tree-item-list")
+                    ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
             ]);
             // The remainder outranks the dishwasher here, so find the box that
             // actually carries a badge rather than assuming a position.
             const badge = [...devices]
                 .map((device: any) =>
                     device.shadowRoot
-                        .querySelector("power-device-icon")
+                        .querySelector("helman-tree-item-icon")
                         ?.shadowRoot?.querySelector("helman-appliance-switch-badge"),
                 )
                 .find(Boolean) as any;

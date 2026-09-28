@@ -68,8 +68,8 @@ class GridPriceForecastBuilder:
         Elapsed entries are kept alongside future ones -- the schedule is what
         the source said, not a forward horizon.
         """
-        power_devices = self._read_dict(self._config.get("power_devices"))
-        grid_config = self._read_dict(power_devices.get("grid"))
+        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
+        grid_config = self._read_dict(energy_nodes.get("grid"))
         grid_forecast = self._read_dict(grid_config.get("forecast"))
 
         sell_price_entity_id = self._read_entity_id(
@@ -327,27 +327,27 @@ class GridPriceForecastBuilder:
     def _parse_window_time(raw_value: Any, *, field_name: str) -> int:
         if not isinstance(raw_value, str):
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.{field_name} must be an HH:MM string"
+                f"energy_nodes.grid.forecast.{field_name} must be an HH:MM string"
             )
 
         try:
             parsed = time.fromisoformat(raw_value)
         except ValueError as err:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.{field_name} must be an HH:MM string"
+                f"energy_nodes.grid.forecast.{field_name} must be an HH:MM string"
             ) from err
 
         if parsed.tzinfo is not None:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.{field_name} must not include a timezone offset"
+                f"energy_nodes.grid.forecast.{field_name} must not include a timezone offset"
             )
         if parsed.second or parsed.microsecond:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.{field_name} must not include seconds"
+                f"energy_nodes.grid.forecast.{field_name} must not include seconds"
             )
         if parsed.minute % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.{field_name} must align to {FORECAST_CANONICAL_GRANULARITY_MINUTES}-minute boundaries"
+                f"energy_nodes.grid.forecast.{field_name} must align to {FORECAST_CANONICAL_GRANULARITY_MINUTES}-minute boundaries"
             )
 
         return parsed.hour * 60 + parsed.minute
@@ -361,8 +361,8 @@ class GridPriceForecastBuilder:
 def read_grid_import_price_config(
     config: dict[str, Any] | Any,
 ) -> FixedGridImportPriceConfig | None:
-    power_devices = GridPriceForecastBuilder._read_dict(config.get("power_devices"))
-    grid_config = GridPriceForecastBuilder._read_dict(power_devices.get("grid"))
+    energy_nodes = GridPriceForecastBuilder._read_dict(config.get("energy_nodes"))
+    grid_config = GridPriceForecastBuilder._read_dict(energy_nodes.get("grid"))
     grid_forecast = GridPriceForecastBuilder._read_dict(grid_config.get("forecast"))
 
     raw_unit = grid_forecast.get("import_price_unit")
@@ -373,11 +373,11 @@ def read_grid_import_price_config(
 
     if not isinstance(raw_unit, str) or not raw_unit.strip():
         raise GridImportPriceConfigError(
-            "power_devices.grid.forecast.import_price_unit must be a non-empty string"
+            "energy_nodes.grid.forecast.import_price_unit must be a non-empty string"
         )
     if not isinstance(raw_windows, list) or not raw_windows:
         raise GridImportPriceConfigError(
-            "power_devices.grid.forecast.import_price_windows must be a non-empty list"
+            "energy_nodes.grid.forecast.import_price_windows must be a non-empty list"
         )
 
     windows = tuple(
@@ -421,7 +421,7 @@ def _read_grid_import_price_window(
 ) -> FixedGridImportPriceWindow:
     if not isinstance(raw_value, dict):
         raise GridImportPriceConfigError(
-            f"power_devices.grid.forecast.import_price_windows[{index}] must be an object"
+            f"energy_nodes.grid.forecast.import_price_windows[{index}] must be an object"
         )
 
     start_minutes = GridPriceForecastBuilder._parse_window_time(
@@ -434,13 +434,13 @@ def _read_grid_import_price_window(
     )
     if start_minutes == end_minutes:
         raise GridImportPriceConfigError(
-            f"power_devices.grid.forecast.import_price_windows[{index}] must not have the same start and end"
+            f"energy_nodes.grid.forecast.import_price_windows[{index}] must not have the same start and end"
         )
 
     price = GridPriceForecastBuilder._read_float(raw_value.get("price"))
     if price is None:
         raise GridImportPriceConfigError(
-            f"power_devices.grid.forecast.import_price_windows[{index}].price must be numeric"
+            f"energy_nodes.grid.forecast.import_price_windows[{index}].price must be numeric"
         )
 
     return FixedGridImportPriceWindow(
@@ -462,11 +462,11 @@ def _validate_grid_import_price_window_coverage(
         formatted_time = GridPriceForecastBuilder._format_minute_of_day(minute_of_day)
         if not matching_windows:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.import_price_windows leave a gap at {formatted_time}"
+                f"energy_nodes.grid.forecast.import_price_windows leave a gap at {formatted_time}"
             )
         if len(matching_windows) > 1:
             raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.import_price_windows overlap at {formatted_time}"
+                f"energy_nodes.grid.forecast.import_price_windows overlap at {formatted_time}"
             )
 
 

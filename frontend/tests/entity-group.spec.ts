@@ -24,12 +24,12 @@ const BUNDLE = resolve(
 );
 
 /** The group under test, and the key the editor derives for it from its path. */
-const GRID_PATH = ["power_devices", "grid", "entities", "power"];
+const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 
 const STORED_CONFIG = {
     config_version: 6,
-    power_devices: {
+    energy_nodes: {
         grid: {
             entities: {
                 power: "sensor.grid_power",
@@ -73,13 +73,13 @@ const SAVED_FACTS = [
  * That is exactly what the tests below assert: the fixture chooses the
  * severity, and the badge follows it.
  */
-const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_id"];
+const HOUSE_PATH = ["energy_nodes", "house", "forecast", "total_energy_entity_id"];
 const HOUSE_KEY = HOUSE_PATH.join(".");
 
 const HISTORY_CONFIG = {
     ...STORED_CONFIG,
-    power_devices: {
-        ...STORED_CONFIG.power_devices,
+    energy_nodes: {
+        ...STORED_CONFIG.energy_nodes,
         house: {
             forecast: {
                 total_energy_entity_id: "sensor.house_energy",
@@ -138,7 +138,7 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
         factsByKey = {},
         savedKeys = [],
         dependsOnByKey = {
-            [GRID_KEY]: [GRID_PATH, ["power_devices", "grid", "entities", "power_polarity"]],
+            [GRID_KEY]: [GRID_PATH, ["energy_nodes", "grid", "entities", "power_polarity"]],
         },
     } = options;
 
@@ -181,7 +181,7 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                         // sent and picks the token. Nothing on the editor side
                         // knows that a polarity has anything to do with this.
                         const polarity =
-                            request.config?.power_devices?.grid?.entities?.power_polarity;
+                            request.config?.energy_nodes?.grid?.entities?.power_polarity;
                         const gridFacts = draftFacts.map((fact: any) =>
                             fact.id === "reading"
                                 ? {
@@ -252,7 +252,7 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
             page.evaluate(() => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Power devices",
+                    (button) => button.textContent?.trim() === "Energy nodes",
                 );
                 if (!tab) return false;
                 tab.click();
@@ -397,7 +397,7 @@ test("reverting restores both the entity and the setting beside it", async ({ pa
     await page.evaluate((path) => {
         const editor = document.querySelector("helman-config-editor-panel") as any;
         editor.setValue(path, "sensor.some_other_meter");
-        editor.setValue(["power_devices", "grid", "entities", "power_polarity"], "positive_is_export");
+        editor.setValue(["energy_nodes", "grid", "entities", "power_polarity"], "positive_is_export");
     }, GRID_PATH);
 
     await expect
@@ -416,7 +416,7 @@ test("reverting restores both the entity and the setting beside it", async ({ pa
         .poll(async () =>
             page.evaluate(() => {
                 const editor = document.querySelector("helman-config-editor-panel") as any;
-                return editor.getValue(["power_devices", "grid", "entities"]);
+                return editor.getValue(["energy_nodes", "grid", "entities"]);
             }),
         )
         .toEqual({ power: "sensor.grid_power", power_polarity: "positive_is_import" });
@@ -471,7 +471,7 @@ test("unmounting every group stops the polling", async ({ page }) => {
 
     // And coming back brings the readings straight back, so the fix did not
     // simply stop the poll for good.
-    await openTab(page, "Power devices");
+    await openTab(page, "Energy nodes");
     await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
         Array.from(root?.querySelectorAll("details") ?? []).forEach((section) =>
@@ -520,7 +520,7 @@ test("clearing a configured entity keeps the saved reading and its revert", asyn
         .poll(async () =>
             page.evaluate(() => {
                 const editor = document.querySelector("helman-config-editor-panel") as any;
-                return editor.getValue(["power_devices", "grid", "entities", "power"]);
+                return editor.getValue(["energy_nodes", "grid", "entities", "power"]);
             }),
         )
         .toBe("sensor.grid_power");
@@ -606,7 +606,7 @@ test("a slow answer cannot repaint a reading the user has already cleared", asyn
     await mountEditor(page, {
         config: {
             config_version: 6,
-            power_devices: { grid: { entities: { power: "", power_polarity: "positive_is_import" } } },
+            energy_nodes: { grid: { entities: { power: "", power_polarity: "positive_is_import" } } },
         },
     });
     // No tick sync here: with nothing at the path the poll rightly sends
@@ -619,14 +619,14 @@ test("a slow answer cannot repaint a reading the user has already cleared", asyn
         (window as any).__inspectDelayMs = 700;
         const editor = document.querySelector("helman-config-editor-panel") as any;
         // The slow request goes out first, carrying the entity...
-        editor.setValue(["power_devices", "grid", "entities", "power"], "sensor.grid_power");
+        editor.setValue(["energy_nodes", "grid", "entities", "power"], "sensor.grid_power");
     });
     // ...and the clear lands while it is still out, with nothing left to ask
     // about, so it takes the empty-targets path.
     await page.waitForTimeout(450);
     await page.evaluate(() => {
         const editor = document.querySelector("helman-config-editor-panel") as any;
-        editor.setValue(["power_devices", "grid", "entities", "power"], "");
+        editor.setValue(["energy_nodes", "grid", "entities", "power"], "");
     });
 
     // The slow answer resolves inside this window. It must not come back.
@@ -752,7 +752,7 @@ test("a revert restores what the reading was made of, and nothing else", async (
         savedKeys: [HOUSE_KEY],
         factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
         dependsOnByKey: {
-            [GRID_KEY]: [GRID_PATH, ["power_devices", "grid", "entities", "power_polarity"]],
+            [GRID_KEY]: [GRID_PATH, ["energy_nodes", "grid", "entities", "power_polarity"]],
             [HOUSE_KEY]: [HOUSE_PATH, MIN_DAYS_PATH],
         },
     });
@@ -784,7 +784,7 @@ test("a revert restores what the reading was made of, and nothing else", async (
         .poll(async () =>
             page.evaluate(() => {
                 const editor = document.querySelector("helman-config-editor-panel") as any;
-                return editor.getValue(["power_devices", "house", "forecast"]);
+                return editor.getValue(["energy_nodes", "house", "forecast"]);
             }),
         )
         .toEqual({

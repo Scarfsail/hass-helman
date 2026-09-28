@@ -58,7 +58,7 @@ and surface custom label badges per device.
 #### Quick start
 ```yaml
 type: custom:helman-card
-power_devices:
+energy_nodes:
   house:
     entities:
       power: sensor.house_power
@@ -75,7 +75,7 @@ power_devices:
 
 #### Configuration reference
 
-Top-level schema is `HelmanCardConfig`. Only `power_devices` is required; everything else is optional.
+Top-level schema is `HelmanCardConfig`. Only `energy_nodes` is required; everything else is optional.
 
 **Top-level options**
 - `type`: string — Must be `custom:helman-card`.
@@ -95,22 +95,22 @@ keys used to sit at the top level, and a stored config is migrated on load.
 - `show_empty_groups` / `show_others_group` / `others_group_label`: control the "Others" group.
   Defaults: `false`, `true`, `"Others"`.
 
-**`power_devices`**
+**`energy_nodes`**
 Defines entities for the four power endpoints. At least `house.entities.power` should be provided to
-build the consumer tree around the house.
+build the consumer tree around the house. Config version 24 renamed the key from `power_devices`; a stored config is migrated on load.
 
 Common optional fields:
 - `source_name` / `consumption_name`: display name overrides.
 
-- `power_devices.house`: `entities.power`, `entities.today_energy`.
+- `energy_nodes.house`: `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
-- `power_devices.grid`: `entities.power` (positive export, negative import),
+- `energy_nodes.grid`: `entities.power` (positive export, negative import),
   `entities.today_export`, `entities.today_import`. Solar bias correction reads the signed power
   sensor too, to tell a clipped slot from an exporting one.
-- `power_devices.battery`: `entities.power`, `entities.capacity` (% SoC), `entities.min_soc`,
+- `energy_nodes.battery`: `entities.power`, `entities.capacity` (% SoC), `entities.min_soc`,
   `entities.max_soc`, `entities.remaining_energy` (Wh). When enough fields are present and current
   power is significant, the card shows target SoC, ETA time, and wall clock time.
-- `power_devices.solar`: `entities.power`, `entities.today_energy`. The "remaining today" figure
+- `energy_nodes.solar`: `entities.power`, `entities.today_energy`. The "remaining today" figure
   next to it on the card is Helman's own bias-corrected
   `sensor.helman_solar_forecast_today_remaining` and is not configurable.
 
@@ -144,11 +144,11 @@ Devices inherit all labels assigned to any of their entities; the first matching
 determines the group. Per-device badges list all matching mappings across categories.
 
 #### House consumption forecast
-Driven by the shared Helman config under `power_devices.house.forecast` for the entity, and under
+Driven by the shared Helman config under `energy_nodes.house.forecast` for the entity, and under
 `training.house_consumption` for the history windows (not a Lovelace YAML option):
 
 ```yaml
-power_devices:
+energy_nodes:
   house:
     forecast:
       total_energy_entity_id: sensor.house_energy_total
@@ -159,7 +159,7 @@ training:
     training_window_days: 42
 ```
 
-- `power_devices.house.forecast.total_energy_entity_id`: required cumulative energy sensor used as
+- `energy_nodes.house.forecast.total_energy_entity_id`: required cumulative energy sensor used as
   the forecast source.
 - `training.house_consumption.min_history_days` (default 14): minimum history span (from the oldest
   hourly statistics row) before charts can be shown.
@@ -240,14 +240,14 @@ The mechanism, the trace codes and the config migration are documented in [docs/
 - No devices shown under house: ensure Energy → Device consumption is configured and your power
   sensors feed the statistics used there.
 - House forecast not visible or only showing a status message: confirm
-  `power_devices.house.forecast.total_energy_entity_id` is set,
+  `energy_nodes.house.forecast.total_energy_entity_id` is set,
   `training.house_consumption.training_window_days` ≥
   `training.house_consumption.min_history_days`, and Recorder has hourly statistics spanning at
   least `min_history_days` from the oldest available row.
 - Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
   sub-meter already included in the configured house total.
 - Card resource not auto-registering: auto-registration only works with storage-mode (UI) dashboards.
-- Solar inspector price strip empty or missing bars on past days: neither `sensor.helman_grid_import_price` nor your configured `power_devices.grid.forecast.sell_price_entity_id` may be excluded from Recorder. The inspector reads a past day's rates back out of their recorded history, so an `exclude` entry (or a `purge_keep_days` shorter than the inspector's day range) silently costs you that history. The import side falls back to the `import_price_windows` table where history is missing; the export side has no fallback, because a spot price is not derivable from config.
+- Solar inspector price strip empty or missing bars on past days: neither `sensor.helman_grid_import_price` nor your configured `energy_nodes.grid.forecast.sell_price_entity_id` may be excluded from Recorder. The inspector reads a past day's rates back out of their recorded history, so an `exclude` entry (or a `purge_keep_days` shorter than the inspector's day range) silently costs you that history. The import side falls back to the `import_price_windows` table where history is missing; the export side has no fallback, because a spot price is not derivable from config.
 
 ## Scheduled work
 

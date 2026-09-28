@@ -1,4 +1,4 @@
-import type { DeviceNode } from "../helman/DeviceNode";
+import type { TreeItem } from "../helman/tree-item";
 import type { HelmanUiConfig } from "../helman-api";
 import type { NodeDetailParams, NodeType } from "./node-detail-types";
 
@@ -7,16 +7,16 @@ export interface NodeDetailContext {
     batterySoc: number;
     batterySocEntityId: string | null;
     batteryRemainingEnergyEntityId: string | null;
-    batteryProducerNode: DeviceNode | null;
-    batteryConsumerNode: DeviceNode | null;
-    solarNode: DeviceNode | null;
-    gridProducerNode: DeviceNode | null;
-    gridConsumerNode: DeviceNode | null;
-    productionNode: DeviceNode | null;
-    consumptionNode: DeviceNode | null;
+    batteryProducerNode: TreeItem | null;
+    batteryConsumerNode: TreeItem | null;
+    solarNode: TreeItem | null;
+    gridProducerNode: TreeItem | null;
+    gridConsumerNode: TreeItem | null;
+    productionNode: TreeItem | null;
+    consumptionNode: TreeItem | null;
     housePower: number;
-    houseDevices: DeviceNode[];
-    houseNode: DeviceNode | null;
+    houseDevices: TreeItem[];
+    houseNode: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
     /**

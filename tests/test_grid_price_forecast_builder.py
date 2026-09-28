@@ -102,7 +102,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_combines_export_entity_prices_with_fixed_import_windows(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "sell_price_entity_id": "sensor.export_price",
@@ -169,7 +169,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
         # views price off, and one poisons its bucket for good.
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {"forecast": {"sell_price_entity_id": "sensor.export_price"}}
                 }
             },
@@ -198,7 +198,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     ) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {"forecast": {"sell_price_entity_id": "sensor.export_price"}}
                 }
             },
@@ -265,7 +265,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_export_ingestion_keeps_a_schedule_with_no_current_price(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {"forecast": {"sell_price_entity_id": "sensor.export_price"}}
                 }
             },
@@ -287,7 +287,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_does_not_read_the_source_for_the_export_channel(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "sell_price_entity_id": "sensor.export_price",
@@ -323,7 +323,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_rejects_gap_in_import_windows(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "import_price_unit": "CZK/kWh",
@@ -351,7 +351,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_rejects_overlap_in_import_windows(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "import_price_unit": "CZK/kWh",
@@ -379,7 +379,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_rejects_timezone_aware_import_window_time(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "import_price_unit": "CZK/kWh",
@@ -407,7 +407,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_build_import_points_skip_spring_forward_gap(self) -> None:
         module, builder = self._make_builder(
             config={
-                "power_devices": {
+                "energy_nodes": {
                     "grid": {
                         "forecast": {
                             "import_price_unit": "CZK/kWh",

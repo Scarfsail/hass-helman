@@ -639,7 +639,7 @@ def _read_number(raw_value: Any, default: float) -> float:
 
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = (
-        config.get("power_devices", {}).get("solar", {}).get("forecast", {})
+        config.get("energy_nodes", {}).get("solar", {}).get("forecast", {})
     )
     # Every solar bias setting lives under ``training.solar_bias`` since the
     # v19 relocation -- read on load, so what arrives here has already been

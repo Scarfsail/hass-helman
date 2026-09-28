@@ -303,7 +303,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                 "helman": {
                     "coordinator": SimpleNamespace(
                         config={
-                            "power_devices": {
+                            "energy_nodes": {
                                 "battery": {
                                     "entities": {
                                         "capacity": "sensor.battery_soc",
@@ -371,7 +371,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                 "helman": {
                     "coordinator": SimpleNamespace(
                         config={
-                            "power_devices": {
+                            "energy_nodes": {
                                 "battery": {"entities": {"capacity": "sensor.battery_soc"}},
                                 "grid": {"entities": grid_entities},
                             }
@@ -513,7 +513,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                 "helman": {
                     "coordinator": SimpleNamespace(
                         config={
-                            "power_devices": {
+                            "energy_nodes": {
                                 "battery": {
                                     "entities": {"capacity": "sensor.battery_soc"}
                                 }
@@ -569,7 +569,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                 "helman": {
                     "coordinator": SimpleNamespace(
                         config={
-                            "power_devices": {
+                            "energy_nodes": {
                                 "battery": {
                                     "entities": {
                                         "capacity": "sensor.battery_soc",

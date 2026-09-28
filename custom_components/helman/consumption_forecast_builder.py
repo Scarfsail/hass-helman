@@ -102,8 +102,8 @@ class ConsumptionForecastBuilder:
         recorder scan this path exists to be rid of. The only queries left are
         today-scoped.
         """
-        power_devices = self._read_dict(self._config.get("power_devices"))
-        house_config = self._read_dict(power_devices.get("house"))
+        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
+        house_config = self._read_dict(energy_nodes.get("house"))
         forecast_config = self._read_dict(house_config.get("forecast"))
 
         total_energy_entity_id = self._read_entity_id(

@@ -111,7 +111,7 @@ class _Sensor:
 def _make_coordinator(states: dict[str, str], *, metered_child: bool = False):
     config = {
         "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
-        "power_devices": {"house": {"entities": {"power": HOUSE}}},
+        "energy_nodes": {"house": {"entities": {"power": HOUSE}}},
         "devices": {"items": _devices(metered_child=metered_child)},
     }
     hass = SimpleNamespace(states=_States(states))

@@ -62,10 +62,10 @@ async def async_setup_entry(
 
     tree = await coordinator.get_device_tree()
     qualifying_nodes = coordinator.collect_qualifying_nodes(tree)
-    share_nodes = coordinator.collect_share_nodes(tree)
+    share_devices = coordinator.collect_share_devices(tree)
 
     battery_entities = (
-        coordinator.config.get("power_devices", {})
+        coordinator.config.get("energy_nodes", {})
         .get("battery", {})
         .get("entities", {})
     )
@@ -82,7 +82,7 @@ async def async_setup_entry(
     }
     share_sensors: dict[str, HelmanSharePowerSensor] = {
         node_id: HelmanSharePowerSensor(coordinator, entry, node_id, entity_id, name)
-        for node_id, (entity_id, name) in share_nodes.items()
+        for node_id, (entity_id, name) in share_devices.items()
     }
     total_power = HelmanConsumptionTotalSensor(coordinator, entry)
     production_total = HelmanProductionTotalSensor(coordinator, entry)

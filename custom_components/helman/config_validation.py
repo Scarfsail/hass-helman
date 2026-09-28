@@ -66,13 +66,16 @@ _RELOCATED_VISUALIZATION_KEYS = (
 )
 
 #: Where config version 22 moved the device-level settings, old dotted path to
-#: new. The top-level regex is the v17-era spelling of the same key. Same
-#: reasoning as ``_RETIRED_CONFIG_KEYS``.
+#: new. The top-level regex is the v17-era spelling of the same key, and the
+#: house labels are refused under both the pre-v24 ``power_devices`` and the
+#: current ``energy_nodes`` spelling. Same reasoning as ``_RETIRED_CONFIG_KEYS``.
 _RELOCATED_DEVICE_KEYS = {
     "power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
     "visualization.power_sensor_name_cleaner_regex": "devices.name_cleaner_regex",
     "power_devices.house.power_sensor_label": "devices.power_sensor_label",
     "power_devices.house.power_switch_label": "devices.power_switch_label",
+    "energy_nodes.house.power_sensor_label": "devices.power_sensor_label",
+    "energy_nodes.house.power_switch_label": "devices.power_switch_label",
 }
 
 #: The keys the ``devices`` section object holds since config version 22.
@@ -148,7 +151,7 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
         return report
 
     _validate_visualization_config(config, report)
-    _validate_power_devices_config(config, report)
+    _validate_energy_nodes_config(config, report)
     _validate_training_config(config, report)
     _validate_controllables_config(config, report)
     _validate_automation_config(config, report)
@@ -236,26 +239,39 @@ def _validate_visualization_config(
         _validate_device_label_text(device_label_text, report)
 
 
-def _validate_power_devices_config(
+def _validate_energy_nodes_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    raw_power_devices = config.get("power_devices")
-    if raw_power_devices is None:
-        return
-    if not isinstance(raw_power_devices, Mapping):
+    """The house, solar, battery and grid blocks, under ``energy_nodes`` since v24.
+
+    The save-side half of "load migrates, save refuses" for the old
+    ``power_devices`` spelling.
+    """
+    if "power_devices" in config:
         report.add_error(
-            section="power_devices",
+            section="energy_nodes",
             path="power_devices",
+            code="relocated_config_key",
+            message="'power_devices' was renamed to 'energy_nodes'",
+        )
+
+    raw_energy_nodes = config.get("energy_nodes")
+    if raw_energy_nodes is None:
+        return
+    if not isinstance(raw_energy_nodes, Mapping):
+        report.add_error(
+            section="energy_nodes",
+            path="energy_nodes",
             code="invalid_type",
-            message="power_devices must be an object",
+            message="energy_nodes must be an object",
         )
         return
 
-    _validate_house_config(raw_power_devices.get("house"), report)
-    _validate_solar_config(config, raw_power_devices.get("solar"), report)
-    _validate_battery_config(config, raw_power_devices.get("battery"), report)
-    _validate_grid_config(config, raw_power_devices.get("grid"), report)
+    _validate_house_config(raw_energy_nodes.get("house"), report)
+    _validate_solar_config(config, raw_energy_nodes.get("solar"), report)
+    _validate_battery_config(config, raw_energy_nodes.get("battery"), report)
+    _validate_grid_config(config, raw_energy_nodes.get("grid"), report)
 
 
 def _validate_training_config(
@@ -265,7 +281,7 @@ def _validate_training_config(
     """The history-window settings (relocated here in v14) and, under
     ``training.solar_bias``, the solar bias correction settings (v19).
 
-    A peer of ``power_devices``, not nested under it -- these settings are
+    A peer of ``energy_nodes``, not nested under it -- these settings are
     read by several entities' history rather than owned by one, which is the
     whole reason they moved. See ``_migrate_v13_to_v14`` for the load-side
     counterpart; this is the save-side half of "load migrates, save refuses"
@@ -401,23 +417,23 @@ def _validate_window_covers_minimum(
 
 
 def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
-    section = "power_devices"
+    section = "energy_nodes"
     if raw_house is None:
         return
-    house = _require_mapping(raw_house, "power_devices.house", section, report)
+    house = _require_mapping(raw_house, "energy_nodes.house", section, report)
     if house is None:
         return
 
     entities = house.get("entities")
     if entities is not None:
         entity_map = _require_mapping(
-            entities, "power_devices.house.entities", section, report
+            entities, "energy_nodes.house.entities", section, report
         )
         if entity_map is not None:
             _validate_optional_entity_id(
                 report,
                 section,
-                "power_devices.house.entities.power",
+                "energy_nodes.house.entities.power",
                 entity_map.get("power"),
             )
             _validate_power_polarity(report, section, "house", entity_map)
@@ -425,7 +441,7 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
     if "unmeasured_power_title" in house:
         report.add_error(
             section=section,
-            path="power_devices.house.unmeasured_power_title",
+            path="energy_nodes.house.unmeasured_power_title",
             code="retired_config_key",
             message="the Unmeasured rows use a fixed label; remove this key",
         )
@@ -435,7 +451,7 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
         return
     forecast_map = _require_mapping(
         forecast,
-        "power_devices.house.forecast",
+        "energy_nodes.house.forecast",
         section,
         report,
     )
@@ -445,7 +461,7 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
     _validate_optional_entity_id(
         report,
         section,
-        "power_devices.house.forecast.total_energy_entity_id",
+        "energy_nodes.house.forecast.total_energy_entity_id",
         forecast_map.get("total_energy_entity_id"),
     )
     for retired_key, new_path in (
@@ -455,17 +471,17 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
         if retired_key in forecast_map:
             report.add_error(
                 section=section,
-                path=f"power_devices.house.forecast.{retired_key}",
+                path=f"energy_nodes.house.forecast.{retired_key}",
                 code="retired_config_key",
                 message=(
-                    f"'power_devices.house.forecast.{retired_key}' moved to "
+                    f"'energy_nodes.house.forecast.{retired_key}' moved to "
                     f"'{new_path}'"
                 ),
             )
     if "deferrable_consumers" in forecast_map:
         report.add_error(
             section=section,
-            path="power_devices.house.forecast.deferrable_consumers",
+            path="energy_nodes.house.forecast.deferrable_consumers",
             code="retired_config_key",
             message=(
                 "'deferrable_consumers' is no longer a config key; a device's "
@@ -480,30 +496,30 @@ def _validate_solar_config(
     raw_solar: object,
     report: ValidationReport,
 ) -> None:
-    section = "power_devices"
+    section = "energy_nodes"
     if raw_solar is None:
         return
-    solar = _require_mapping(raw_solar, "power_devices.solar", section, report)
+    solar = _require_mapping(raw_solar, "energy_nodes.solar", section, report)
     if solar is None:
         return
 
     entities = solar.get("entities")
     if entities is not None:
         entity_map = _require_mapping(
-            entities, "power_devices.solar.entities", section, report
+            entities, "energy_nodes.solar.entities", section, report
         )
         if entity_map is not None:
             _validate_optional_entity_id(
                 report,
                 section,
-                "power_devices.solar.entities.power",
+                "energy_nodes.solar.entities.power",
                 entity_map.get("power"),
             )
             _validate_power_polarity(report, section, "solar", entity_map)
             _validate_optional_entity_id(
                 report,
                 section,
-                "power_devices.solar.entities.today_energy",
+                "energy_nodes.solar.entities.today_energy",
                 entity_map.get("today_energy"),
             )
 
@@ -512,7 +528,7 @@ def _validate_solar_config(
         return
     forecast_map = _require_mapping(
         forecast,
-        "power_devices.solar.forecast",
+        "energy_nodes.solar.forecast",
         section,
         report,
     )
@@ -522,13 +538,13 @@ def _validate_solar_config(
     _validate_optional_entity_id(
         report,
         section,
-        "power_devices.solar.forecast.total_energy_entity_id",
+        "energy_nodes.solar.forecast.total_energy_entity_id",
         forecast_map.get("total_energy_entity_id"),
     )
     _validate_entity_id_list(
         report,
         section,
-        "power_devices.solar.forecast.daily_energy_entity_ids",
+        "energy_nodes.solar.forecast.daily_energy_entity_ids",
         forecast_map.get("daily_energy_entity_ids"),
     )
 
@@ -537,10 +553,10 @@ def _validate_solar_config(
     if "bias_correction" in forecast_map:
         report.add_error(
             section=section,
-            path="power_devices.solar.forecast.bias_correction",
+            path="energy_nodes.solar.forecast.bias_correction",
             code="relocated_config_key",
             message=(
-                "'power_devices.solar.forecast.bias_correction' moved; write its "
+                "'energy_nodes.solar.forecast.bias_correction' moved; write its "
                 "keys directly under training.solar_bias"
             ),
         )
@@ -688,7 +704,7 @@ def _validate_solar_bias_correction(
                     code="missing_prerequisite",
                     message=(
                         f"{slot_invalidation_path}.max_battery_soc_percent requires "
-                        "power_devices.grid.entities.power"
+                        "energy_nodes.grid.entities.power"
                     ),
                 )
 
@@ -699,7 +715,7 @@ def _validate_solar_bias_correction(
                     code="missing_prerequisite",
                     message=(
                         f"{slot_invalidation_path} requires "
-                        "power_devices.battery.entities.capacity"
+                        "energy_nodes.battery.entities.capacity"
                     ),
                 )
 
@@ -815,23 +831,23 @@ def _validate_battery_config(
     raw_battery: object,
     report: ValidationReport,
 ) -> None:
-    section = "power_devices"
+    section = "energy_nodes"
     if raw_battery is None:
         return
-    battery = _require_mapping(raw_battery, "power_devices.battery", section, report)
+    battery = _require_mapping(raw_battery, "energy_nodes.battery", section, report)
     if battery is None:
         return
 
     entities = battery.get("entities")
     if entities is not None:
         entity_map = _require_mapping(
-            entities, "power_devices.battery.entities", section, report
+            entities, "energy_nodes.battery.entities", section, report
         )
         if entity_map is not None:
             _validate_optional_entity_id(
                 report,
                 section,
-                "power_devices.battery.entities.power",
+                "energy_nodes.battery.entities.power",
                 entity_map.get("power"),
             )
             _validate_power_polarity(report, section, "battery", entity_map)
@@ -846,7 +862,7 @@ def _validate_battery_config(
                 if issue is not None:
                     report.add_error(
                         section=section,
-                        path="power_devices.battery.entities",
+                        path="energy_nodes.battery.entities",
                         code="incomplete_battery_entities",
                         message=issue,
                     )
@@ -854,7 +870,7 @@ def _validate_battery_config(
                     _validate_optional_entity_id(
                         report,
                         section,
-                        f"power_devices.battery.entities.{field_name}",
+                        f"energy_nodes.battery.entities.{field_name}",
                         entity_map.get(field_name),
                     )
             # Either charge/discharge meter is useful on its own, so unlike the
@@ -863,7 +879,7 @@ def _validate_battery_config(
                 _validate_optional_entity_id(
                     report,
                     section,
-                    f"power_devices.battery.entities.{field_name}",
+                    f"energy_nodes.battery.entities.{field_name}",
                     entity_map.get(field_name),
                 )
 
@@ -872,7 +888,7 @@ def _validate_battery_config(
         return
     forecast_map = _require_mapping(
         forecast,
-        "power_devices.battery.forecast",
+        "energy_nodes.battery.forecast",
         section,
         report,
     )
@@ -882,13 +898,13 @@ def _validate_battery_config(
     _validate_optional_probability(
         report,
         section,
-        "power_devices.battery.forecast.charge_efficiency",
+        "energy_nodes.battery.forecast.charge_efficiency",
         forecast_map.get("charge_efficiency"),
     )
     _validate_optional_probability(
         report,
         section,
-        "power_devices.battery.forecast.discharge_efficiency",
+        "energy_nodes.battery.forecast.discharge_efficiency",
         forecast_map.get("discharge_efficiency"),
     )
     max_charge_present = _has_value(forecast_map.get("max_charge_power_w"))
@@ -896,24 +912,24 @@ def _validate_battery_config(
     if max_charge_present != max_discharge_present:
         report.add_error(
             section=section,
-            path="power_devices.battery.forecast",
+            path="energy_nodes.battery.forecast",
             code="incomplete_battery_forecast",
             message=(
-                "power_devices.battery.forecast.max_charge_power_w and "
-                "power_devices.battery.forecast.max_discharge_power_w must be "
+                "energy_nodes.battery.forecast.max_charge_power_w and "
+                "energy_nodes.battery.forecast.max_discharge_power_w must be "
                 "configured together"
             ),
         )
     _validate_optional_positive_number(
         report,
         section,
-        "power_devices.battery.forecast.max_charge_power_w",
+        "energy_nodes.battery.forecast.max_charge_power_w",
         forecast_map.get("max_charge_power_w"),
     )
     _validate_optional_positive_number(
         report,
         section,
-        "power_devices.battery.forecast.max_discharge_power_w",
+        "energy_nodes.battery.forecast.max_discharge_power_w",
         forecast_map.get("max_discharge_power_w"),
     )
 
@@ -923,24 +939,24 @@ def _validate_grid_config(
     raw_grid: object,
     report: ValidationReport,
 ) -> None:
-    section = "power_devices"
+    section = "energy_nodes"
     if raw_grid is None:
         return
-    grid = _require_mapping(raw_grid, "power_devices.grid", section, report)
+    grid = _require_mapping(raw_grid, "energy_nodes.grid", section, report)
     if grid is None:
         return
 
     entities = grid.get("entities")
     if entities is not None:
         entity_map = _require_mapping(
-            entities, "power_devices.grid.entities", section, report
+            entities, "energy_nodes.grid.entities", section, report
         )
         if entity_map is not None:
             for key in ("power", "today_import", "today_export"):
                 _validate_optional_entity_id(
                     report,
                     section,
-                    f"power_devices.grid.entities.{key}",
+                    f"energy_nodes.grid.entities.{key}",
                     entity_map.get(key),
                 )
             _validate_power_polarity(report, section, "grid", entity_map)
@@ -950,7 +966,7 @@ def _validate_grid_config(
         return
     forecast_map = _require_mapping(
         forecast,
-        "power_devices.grid.forecast",
+        "energy_nodes.grid.forecast",
         section,
         report,
     )
@@ -960,7 +976,7 @@ def _validate_grid_config(
     _validate_optional_entity_id(
         report,
         section,
-        "power_devices.grid.forecast.sell_price_entity_id",
+        "energy_nodes.grid.forecast.sell_price_entity_id",
         forecast_map.get("sell_price_entity_id"),
     )
 
@@ -968,11 +984,11 @@ def _validate_grid_config(
         key in forecast_map for key in ("import_price_unit", "import_price_windows")
     ):
         try:
-            read_grid_import_price_config({"power_devices": {"grid": {"forecast": forecast_map}}})
+            read_grid_import_price_config({"energy_nodes": {"grid": {"forecast": forecast_map}}})
         except GridImportPriceConfigError as err:
             report.add_error(
                 section=section,
-                path="power_devices.grid.forecast",
+                path="energy_nodes.grid.forecast",
                 code="invalid_import_price_config",
                 message=str(err),
             )
@@ -2225,7 +2241,7 @@ def _validate_power_polarity(
     silently ignoring it would leave the user with a config that reads as
     configured and behaves as if it were not.
     """
-    path = f"power_devices.{device}.entities.{POWER_POLARITY_KEY}"
+    path = f"energy_nodes.{device}.entities.{POWER_POLARITY_KEY}"
     value = entity_map.get(POWER_POLARITY_KEY)
     if value is None:
         return
@@ -2305,11 +2321,11 @@ def _has_device_entity(
     device: str,
     entity_key: str,
 ) -> bool:
-    power_devices = config.get("power_devices")
-    if not isinstance(power_devices, Mapping):
+    energy_nodes = config.get("energy_nodes")
+    if not isinstance(energy_nodes, Mapping):
         return False
 
-    device_config = power_devices.get(device)
+    device_config = energy_nodes.get(device)
     if not isinstance(device_config, Mapping):
         return False
 

@@ -232,7 +232,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_solar_forecast_uses_canonical_actual_history_interval(self) -> None:
         _, builder = self._make_builder()
         builder._config = {
-            "power_devices": {
+            "energy_nodes": {
                 "solar": {
                     "forecast": {
                         "daily_energy_entity_ids": ["sensor.solar_forecast_day_0"],

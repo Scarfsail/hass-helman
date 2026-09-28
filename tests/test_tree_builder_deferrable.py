@@ -72,7 +72,7 @@ def _house_children(devices):
 def _built_house_children(devices):
     """The house's children as ``build`` serialises them, remainders included."""
     config = {
-        "power_devices": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {"items": devices},
     }
     with mock.patch.object(tree_builder.er, "async_get", lambda _hass: _Registry()), \
@@ -141,7 +141,7 @@ class TestHouseChildDeferrability(unittest.TestCase):
         nodes = _house_children([kitchen])
         kitchen = nodes["sensor.kitchen_energy"]
         # The remainder is synthesised without consulting the roster at all.
-        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_nodes(kitchen, "Unmeasured")
+        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_items(kitchen, "Unmeasured")
 
         payload = kitchen.to_dict()
         self.assertFalse(payload["deferrable"])

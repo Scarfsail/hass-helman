@@ -1,4 +1,4 @@
-interface PowerDeviceConfigBase {
+interface EnergyNodeConfigBase {
     entities: {
         power: string;
     }
@@ -11,7 +11,7 @@ export interface SolarForecastConfig {
     total_energy_entity_id?: string;
 }
 
-export interface SolarDeviceConfig extends PowerDeviceConfigBase {
+export interface SolarNodeConfig extends EnergyNodeConfigBase {
     entities:{
         power: string;
         today_energy?: string;
@@ -19,7 +19,7 @@ export interface SolarDeviceConfig extends PowerDeviceConfigBase {
     forecast?: SolarForecastConfig;
 }
 
-export interface GridDeviceConfig extends PowerDeviceConfigBase {
+export interface GridNodeConfig extends EnergyNodeConfigBase {
     entities:{
         power: string;
         today_export?: string;
@@ -31,7 +31,7 @@ export interface HouseForecastConfig {
     total_energy_entity_id: string;
 }
 
-export interface HouseDeviceConfig extends PowerDeviceConfigBase {
+export interface HouseNodeConfig extends EnergyNodeConfigBase {
     entities: {
         power: string;
         today_energy?: string;
@@ -39,7 +39,7 @@ export interface HouseDeviceConfig extends PowerDeviceConfigBase {
     forecast?: HouseForecastConfig;
 }
 
-export interface BatteryDeviceConfig extends PowerDeviceConfigBase {
+export interface BatteryNodeConfig extends EnergyNodeConfigBase {
     forecast?: BatteryForecastConfig;
     entities: {
         power: string;
@@ -59,4 +59,4 @@ export interface BatteryForecastConfig {
     max_discharge_power_w?: number;
 }
 
-export type DeviceConfig = SolarDeviceConfig | GridDeviceConfig | HouseDeviceConfig | BatteryDeviceConfig;
+export type EnergyNodeConfig = SolarNodeConfig | GridNodeConfig | HouseNodeConfig | BatteryNodeConfig;

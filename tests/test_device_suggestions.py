@@ -99,7 +99,7 @@ def test_without_registry_device_there_is_no_inference():
 
 
 @pytest.mark.parametrize(
-    "config", [{"power_devices": None}, {"power_devices": {"house": None}}]
+    "config", [{"energy_nodes": None}, {"energy_nodes": {"house": None}}]
 )
 def test_nullable_optional_sections_do_not_block_same_device_suggestions(config):
     energy = entry("sensor.energy", "energy")

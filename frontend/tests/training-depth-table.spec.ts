@@ -18,13 +18,13 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
 
-const HOUSE_PATH = ["power_devices", "house", "forecast", "total_energy_entity_id"];
+const HOUSE_PATH = ["energy_nodes", "house", "forecast", "total_energy_entity_id"];
 const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
-const GRID_PATH = ["power_devices", "grid", "entities", "power"];
-const BATTERY_PATH = ["power_devices", "battery", "entities", "capacity"];
+const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
+const BATTERY_PATH = ["energy_nodes", "battery", "entities", "capacity"];
 const CONTROLLABLE_PATH = ["devices", "items", 0, "consumption", "energy_entity_id"];
 const FORECAST_SOURCE_PATH = [
-    "power_devices",
+    "energy_nodes",
     "solar",
     "forecast",
     "daily_energy_entity_ids",
@@ -54,7 +54,7 @@ const REQUIRED_BY_KEY: Record<string, number> = {
 
 const CONFIG = {
     config_version: 14,
-    power_devices: {
+    energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
         solar: {
             forecast: {
@@ -214,7 +214,7 @@ async function mountEditor(
         )
         .toBe(true);
 
-    // The editor opens on Power devices, whose groups poll as they mount, so
+    // The editor opens on Energy nodes, whose groups poll as they mount, so
     // the tab switch lands inside that poll's debounce and its targets arrive
     // on the trailing call. Wait for the poll that actually carries the
     // table's own targets -- `helman.solar_forecast_current` is published by
@@ -401,7 +401,7 @@ test("clicking an entity asks Home Assistant for its more-info dialog", async ({
 
 test("a row with no entity configured is not clickable", async ({ page }) => {
     const config = JSON.parse(JSON.stringify(CONFIG));
-    delete config.power_devices.battery.entities.capacity;
+    delete config.energy_nodes.battery.entities.capacity;
 
     await mountEditor(page, config);
     await waitForRows(page, 7);

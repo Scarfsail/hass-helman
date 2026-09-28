@@ -678,7 +678,7 @@ class StoredV21LoadTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            self.config["power_devices"]["house"],
+            self.config["energy_nodes"]["house"],
             {"entities": {"power": "sensor.house_power"}},
         )
         self.assertNotIn("power_sensor_name_cleaner_regex", self.config["visualization"])

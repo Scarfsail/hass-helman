@@ -75,10 +75,10 @@ CONFIG_FIELD_DEFAULTS: dict[str, object] = {
         HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS
     ),
     # battery_state.py: read_battery_forecast_settings
-    "power_devices.battery.forecast.charge_efficiency": (
+    "energy_nodes.battery.forecast.charge_efficiency": (
         BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY
     ),
-    "power_devices.battery.forecast.discharge_efficiency": (
+    "energy_nodes.battery.forecast.discharge_efficiency": (
         BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY
     ),
     # automation/config.py: _read_day_context

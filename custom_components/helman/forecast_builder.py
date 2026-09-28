@@ -51,8 +51,8 @@ class HelmanForecastBuilder:
         }
 
     async def _build_solar_forecast(self, reference_time: datetime) -> dict[str, Any]:
-        power_devices = self._read_dict(self._config.get("power_devices"))
-        solar_config = self._read_dict(power_devices.get("solar"))
+        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
+        solar_config = self._read_dict(energy_nodes.get("solar"))
         solar_forecast = self._read_dict(solar_config.get("forecast"))
 
         daily_entity_ids = self._read_entity_id_list(
@@ -330,8 +330,8 @@ class HelmanForecastBuilder:
         return None
 
     def _read_solar_actual_energy_entity_id(self) -> str | None:
-        power_devices = self._read_dict(self._config.get("power_devices"))
-        solar_config = self._read_dict(power_devices.get("solar"))
+        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
+        solar_config = self._read_dict(energy_nodes.get("solar"))
         forecast_config = self._read_dict(solar_config.get("forecast"))
         entities = self._read_dict(solar_config.get("entities"))
 

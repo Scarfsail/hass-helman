@@ -61,7 +61,7 @@ house_load = pv_power_total − battery_charge_power − grid_power
 Verified on a live sample: `8994 − 6 − 6380 = 2608 W`, matching the real sensor exactly. The result
 never goes negative in practice (a day's range: 265 … 18 263 W), as expected for a load.
 
-**Used in helman at** `power_devices.house.entities.power` — the House node on `custom:helman-card`,
+**Used in helman at** `energy_nodes.house.entities.power` — the House node on `custom:helman-card`,
 its live figure and history bars, and the real-time surplus arithmetic behind "surplus" vs "tight".
 
 ```yaml
@@ -96,7 +96,7 @@ counter, not a power trace, because it reads per-slot deltas from Recorder's hou
 
 **How it works.** A Riemann-sum integration over `sensor.house_load`.
 
-**Used in helman at** `power_devices.house.forecast.total_energy_entity_id` →
+**Used in helman at** `energy_nodes.house.forecast.total_energy_entity_id` →
 `consumption_forecast_builder.py:91`. Per slot, the builder computes
 
 ```
@@ -135,7 +135,7 @@ resets the forecast's memory, and there is no way to backfill.
 **How it works.** A daily-cycle utility meter over the integration sensor, resetting at local
 midnight.
 
-**Used in helman at** `power_devices.house.entities.today_energy`.
+**Used in helman at** `energy_nodes.house.entities.today_energy`.
 
 ```yaml
 utility_meter:
@@ -155,7 +155,7 @@ utility_meter:
 The inverter exposes current SOC, but the reserve floor and charge ceiling live in *mode-specific*
 registers. Without them helman would plan into capacity the firmware will never release.
 
-**Used in helman at** `power_devices.battery.entities.min_soc` / `max_soc` → `battery_state.py:115`.
+**Used in helman at** `energy_nodes.battery.entities.min_soc` / `max_soc` → `battery_state.py:115`.
 They become an energy window against nominal capacity
 (`min_energy_kwh = capacity × min_soc/100`, `battery_state.py:243`), bounding battery forecasting,
 charge/empty ETAs, and the `min_soc_pct` headroom checks optimizers apply before committing a load.
@@ -206,7 +206,7 @@ default that is *lower* than reality would let helman plan a discharge the inver
 **How it works.** `solax_modbus` reports import and export as two separate unsigned sensors; helman
 wants a single signed value. Verified against the live sensor: `5518 − 0 = 5518 W`, exact match.
 
-**Used in helman at** `power_devices.grid.entities.power` — grid flow direction and magnitude on the
+**Used in helman at** `energy_nodes.grid.entities.power` — grid flow direction and magnitude on the
 card, and the import/export term of the live balance. Solar bias correction reads it as well: a slot
 with the battery full and no export leaving the house is one where the inverter was throttling PV,
 which is how curtailed slots are kept out of the training set. The daily counters beside it
@@ -248,7 +248,7 @@ Every power device therefore carries a `power_polarity` setting that names what 
 means, so a sensor on the other convention can be adopted as-is:
 
 ```yaml
-power_devices:
+energy_nodes:
   grid:
     entities:
       power: sensor.my_signed_grid_power

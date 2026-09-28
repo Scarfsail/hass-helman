@@ -82,8 +82,8 @@ import {
   type MoneyPoint,
   type MoneyTotals,
 } from "./money-model";
-import "../helman/power-devices-container";
-import { DeviceNode } from "../helman/DeviceNode";
+import "../helman/tree-item-list";
+import { TreeItem } from "../helman/tree-item";
 import {
   findTrainingSlot,
   resolveSelectedTrainingDate,
@@ -689,7 +689,7 @@ export class HelmanSolarInspector extends LitElement {
    * mutated in place and re-handed to the same containers, and the render that
    * rebuilds their children is always driven by something else changing.
    */
-  private readonly _breakdownGroups = new Map<string, DeviceNode>();
+  private readonly _breakdownGroups = new Map<string, TreeItem>();
   /**
    * How far navigation may travel, as each view's own payload last stated it.
    *
@@ -1761,7 +1761,7 @@ export class HelmanSolarInspector extends LitElement {
       background: color-mix(in srgb, var(--helman-house) 8%, transparent);
       /* Every box here is a breakdown of the house, so it carries the house
          tint — the same declaration the power card's house section makes. The
-         boxes set no --device-tint of their own, so power-device's fallback
+         boxes set no --device-tint of their own, so helman-tree-item's fallback
          inherits this one across the shadow boundary. */
       --device-tint: ${unsafeCSS(nodeAccentColor("house"))};
     }
@@ -5399,7 +5399,7 @@ export class HelmanSolarInspector extends LitElement {
     const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
     if (total <= 0) return "";
 
-    const consumerNodes: DeviceNode[] = consumers.map((appliance) =>
+    const consumerNodes: TreeItem[] = consumers.map((appliance) =>
       this._breakdownNode(
         appliance.entityId,
         appliance.label,
@@ -5470,7 +5470,7 @@ export class HelmanSolarInspector extends LitElement {
     const houseBars = barsFor(undefined);
 
     return html`
-      <!-- No more-info handler here: power-device already turns its children's
+      <!-- No more-info handler here: helman-tree-item already turns its children's
            \`show-more-info\` into the \`hass-more-info\` request HA listens for, and
            that bubbles composed straight out of this card. Re-handling it would
            open every dialog twice. -->
@@ -5482,7 +5482,7 @@ export class HelmanSolarInspector extends LitElement {
               : "bias_correction.inspector.house_composition",
           )}
         </div>
-        <power-devices-container
+        <helman-tree-item-list
           .hass=${this.hass}
           .devices=${nodes}
           .currentParentPower=${total}
@@ -5490,7 +5490,7 @@ export class HelmanSolarInspector extends LitElement {
           .historyBuckets=${barSlots.length}
           .historyBucketDuration=${barSeconds}
           .devices_full_width=${true}
-        ></power-devices-container>
+        ></helman-tree-item-list>
       </div>
     `;
   }
@@ -5500,7 +5500,7 @@ export class HelmanSolarInspector extends LitElement {
    * node whose children are the boxes, collapsed until asked.
    *
    * The node object is cached and refilled rather than rebuilt, because that is
-   * where the expanded state lives — `power-device` toggles `childrenCollapsed`
+   * where the expanded state lives — `helman-tree-item` toggles `childrenCollapsed`
    * on the node it was handed, so a group rebuilt per selection would snap shut
    * every time the user picked another slot. Cached per panel and per group, the
    * state outlives the selection exactly as the user left it.
@@ -5512,13 +5512,13 @@ export class HelmanSolarInspector extends LitElement {
   private _breakdownGroup(
     variant: "actual" | "forecast",
     kind: "base" | "deferrable",
-    children: DeviceNode[],
+    children: TreeItem[],
     bars: ReturnType<typeof partBarsOverSlots>,
-  ): DeviceNode {
+  ): TreeItem {
     const id = `house-breakdown:${variant}:${kind}`;
     let node = this._breakdownGroups.get(id);
     if (!node) {
-      node = new DeviceNode(id, "", null, null, bars.values.length);
+      node = new TreeItem(id, "", null, null, bars.values.length);
       node.children_full_width = true;
       // Collapsed until the user says otherwise, like every group the power card
       // draws: the panel's job at a glance is the two totals, not the roster.
@@ -5565,13 +5565,13 @@ export class HelmanSolarInspector extends LitElement {
     deferrable: boolean = false,
     controllableIds: string[] = [],
     nodeId: string | null = null,
-  ): DeviceNode {
+  ): TreeItem {
     // A scheduled appliance with no meter has no entity to key on and none to
     // open: it is named by its controllable, so the label is the only identity
     // there is, and the box gets no sensor rather than a dialog for an entity
     // that does not exist. A consumer passes the key its rows were merged by as
     // `nodeId`, which already folds all of that in.
-    const node = new DeviceNode(
+    const node = new TreeItem(
       nodeId ?? entityId ?? (isUnmeasured ? "house-unmeasured" : label),
       label,
       powerEntityId ?? entityId,
@@ -5582,8 +5582,8 @@ export class HelmanSolarInspector extends LitElement {
     node.isUnmeasured = isUnmeasured;
     // Shiftable load is marked twice over: the box takes the shared lighter house
     // shade and the card's badge channel names the shade, so the colour is not the
-    // only thing carrying the meaning. Both follow from this one flag — power-device
-    // paints it, power-device-info tags it — for every card that draws these boxes.
+    // only thing carrying the meaning. Both follow from this one flag — helman-tree-item
+    // paints it, helman-tree-item-info tags it — for every card that draws these boxes.
     node.deferrable = deferrable;
     // What the badge on the box asks the schedule about. The energy stat above
     // cannot stand in for it: it is a meter, not the key assignments are stored

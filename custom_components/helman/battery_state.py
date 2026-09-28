@@ -53,8 +53,8 @@ class BatteryLiveState:
 
 
 def read_battery_entity_config(config: dict[str, Any]) -> BatteryEntityConfig | None:
-    power_devices = _read_dict(config.get("power_devices"))
-    battery_config = _read_dict(power_devices.get("battery"))
+    energy_nodes = _read_dict(config.get("energy_nodes"))
+    battery_config = _read_dict(energy_nodes.get("battery"))
     entities = _read_dict(battery_config.get("entities"))
 
     remaining_energy_entity_id = _read_entity_id(entities.get("remaining_energy"))
@@ -77,19 +77,19 @@ def read_battery_entity_config(config: dict[str, Any]) -> BatteryEntityConfig | 
 
 
 def describe_battery_entity_config_issue(config: dict[str, Any]) -> str | None:
-    power_devices = _read_dict(config.get("power_devices"))
-    battery_config = _read_dict(power_devices.get("battery"))
+    energy_nodes = _read_dict(config.get("energy_nodes"))
+    battery_config = _read_dict(energy_nodes.get("battery"))
     entities = _read_dict(battery_config.get("entities"))
 
     missing_fields: list[str] = []
     if _read_entity_id(entities.get("remaining_energy")) is None:
-        missing_fields.append("power_devices.battery.entities.remaining_energy")
+        missing_fields.append("energy_nodes.battery.entities.remaining_energy")
     if _read_entity_id(entities.get("capacity")) is None:
-        missing_fields.append("power_devices.battery.entities.capacity")
+        missing_fields.append("energy_nodes.battery.entities.capacity")
     if _read_entity_id(entities.get("min_soc")) is None:
-        missing_fields.append("power_devices.battery.entities.min_soc")
+        missing_fields.append("energy_nodes.battery.entities.min_soc")
     if _read_entity_id(entities.get("max_soc")) is None:
-        missing_fields.append("power_devices.battery.entities.max_soc")
+        missing_fields.append("energy_nodes.battery.entities.max_soc")
 
     if not missing_fields:
         return None
@@ -108,8 +108,8 @@ class BatterySocBounds:
 def read_battery_soc_bounds_config(
     config: dict[str, Any],
 ) -> BatterySocBoundsConfig | None:
-    power_devices = _read_dict(config.get("power_devices"))
-    battery_config = _read_dict(power_devices.get("battery"))
+    energy_nodes = _read_dict(config.get("energy_nodes"))
+    battery_config = _read_dict(energy_nodes.get("battery"))
     entities = _read_dict(battery_config.get("entities"))
 
     min_soc_entity_id = _read_entity_id(entities.get("min_soc"))
@@ -125,8 +125,8 @@ def read_battery_soc_bounds_config(
 
 
 def read_battery_forecast_settings(config: dict[str, Any]) -> BatteryForecastSettings:
-    power_devices = _read_dict(config.get("power_devices"))
-    battery_config = _read_dict(power_devices.get("battery"))
+    energy_nodes = _read_dict(config.get("energy_nodes"))
+    battery_config = _read_dict(energy_nodes.get("battery"))
     forecast_config = _read_dict(battery_config.get("forecast"))
 
     return BatteryForecastSettings(

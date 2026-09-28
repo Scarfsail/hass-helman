@@ -64,7 +64,7 @@ const SCHEMA = {
  */
 const CONFIG = {
     config_version: 15,
-    power_devices: { house: { base_load_w: 350 } },
+    energy_nodes: { house: { base_load_w: 350 } },
     appliances: [],
     automation: {
         enabled: true,

@@ -1236,7 +1236,7 @@ class SolarRemainingTodayForecastRetirementTests(unittest.TestCase):
             },
         }
         migrated, _ids = migrate_config_document(document)
-        return migrated["power_devices"]["solar"]
+        return migrated["energy_nodes"]["solar"]
 
     def test_the_retired_key_is_dropped(self) -> None:
         solar = self._migrate_from_v12(
@@ -1304,12 +1304,12 @@ class TrainingSectionRelocationTests(unittest.TestCase):
             {"min_history_days": 21, "training_window_days": 70},
         )
         self.assertEqual(
-            migrated["power_devices"]["house"]["forecast"],
+            migrated["energy_nodes"]["house"]["forecast"],
             {"total_energy_entity_id": "sensor.house_energy_total"},
         )
-        self.assertNotIn("min_history_days", migrated["power_devices"]["house"]["forecast"])
+        self.assertNotIn("min_history_days", migrated["energy_nodes"]["house"]["forecast"])
         self.assertNotIn(
-            "training_window_days", migrated["power_devices"]["house"]["forecast"]
+            "training_window_days", migrated["energy_nodes"]["house"]["forecast"]
         )
 
     def test_solar_bias_settings_relocate(self) -> None:
@@ -1343,7 +1343,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
             },
         )
         self.assertNotIn(
-            "bias_correction", migrated["power_devices"]["solar"]["forecast"]
+            "bias_correction", migrated["energy_nodes"]["solar"]["forecast"]
         )
 
     def test_the_legacy_training_window_days_alias_collapses(self) -> None:
@@ -1397,7 +1397,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["power_devices"]["house"]["forecast"],
+            migrated["energy_nodes"]["house"]["forecast"],
             {"total_energy_entity_id": "sensor.house_energy_total"},
         )
         self.assertNotIn("training", migrated)
@@ -1749,7 +1749,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
             {**self._FULL_BLOCK, "min_history_days": 12},
         )
         self.assertEqual(
-            migrated["power_devices"]["solar"]["forecast"],
+            migrated["energy_nodes"]["solar"]["forecast"],
             {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
         )
 
@@ -1777,7 +1777,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
             migrated,
             {
                 "config_version": CONFIG_DOCUMENT_VERSION,
-                "power_devices": {"solar": {"forecast": forecast}},
+                "energy_nodes": {"solar": {"forecast": forecast}},
                 "training": training,
             },
         )
@@ -1788,7 +1788,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["power_devices"]["solar"]["forecast"],
+            migrated["energy_nodes"]["solar"]["forecast"],
             {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
         )
         self.assertNotIn("training", migrated)
@@ -1821,7 +1821,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
                 "clamp_min": 0.3,
             },
         )
-        self.assertEqual(migrated["power_devices"]["solar"]["forecast"], {})
+        self.assertEqual(migrated["energy_nodes"]["solar"]["forecast"], {})
 
 
 class DevicesTreeMigrationTests(unittest.TestCase):
@@ -2079,7 +2079,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    migrated["power_devices"]["house"],
+                    migrated["energy_nodes"]["house"],
                     {"entities": {"power": "sensor.house_power"}},
                 )
                 self.assertEqual(migrated["devices"], {key: "Label"})
@@ -2089,7 +2089,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
             {"power_devices": {"house": {"unmeasured_power_title": "Unmeasured"}}}
         )
 
-        self.assertEqual(migrated["power_devices"], {"house": {}})
+        self.assertEqual(migrated["energy_nodes"], {"house": {}})
         self.assertNotIn("devices", migrated)
 
     def test_no_devices_object_is_created_when_nothing_goes_in_it(self) -> None:
@@ -2356,6 +2356,48 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class EnergyNodesRenameMigrationTests(unittest.TestCase):
+    """v23 -> v24: ``power_devices`` -> ``energy_nodes``."""
+
+    HOUSE = {"house": {"entities": {"power": "sensor.house_power"}}}
+
+    @staticmethod
+    def _migrate_from_v23(document):
+        migrated, _ids = migrate_config_document({"config_version": 23, **document})
+        return migrated
+
+    def test_the_key_is_renamed(self) -> None:
+        migrated = self._migrate_from_v23({"power_devices": deepcopy(self.HOUSE)})
+
+        self.assertEqual(migrated["energy_nodes"], self.HOUSE)
+        self.assertNotIn("power_devices", migrated)
+
+    def test_the_moved_value_beats_a_default_merged_energy_nodes(self) -> None:
+        # ``DEFAULT_CONFIG`` is merged in before migration runs, so an
+        # ``energy_nodes`` beside ``power_devices`` is the default, not authored.
+        migrated = self._migrate_from_v23(
+            {"energy_nodes": {}, "power_devices": deepcopy(self.HOUSE)}
+        )
+
+        self.assertEqual(migrated["energy_nodes"], self.HOUSE)
+        self.assertNotIn("power_devices", migrated)
+
+    def test_a_document_without_power_devices_is_unchanged(self) -> None:
+        document = {"config_version": 23, "energy_nodes": deepcopy(self.HOUSE)}
+
+        migrated, _ids = migrate_config_document(deepcopy(document))
+
+        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
+
+    def test_a_v1_document_ends_up_under_energy_nodes(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {"power_devices": deepcopy(self.HOUSE)}
+        )
+
+        self.assertEqual(migrated["energy_nodes"], self.HOUSE)
+        self.assertNotIn("power_devices", migrated)
 
 
 if __name__ == "__main__":

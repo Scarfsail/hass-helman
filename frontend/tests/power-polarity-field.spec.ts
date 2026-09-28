@@ -9,7 +9,7 @@ import { resolve } from "node:path";
  * four devices, that each offers its own vocabulary rather than a shared
  * "inverted" toggle, and that picking an option writes it to the path the
  * backend validates. A field rendered under the wrong device, or writing to
- * `power_devices.<device>.power_polarity` instead of `...entities....`, would
+ * `energy_nodes.<device>.power_polarity` instead of `...entities....`, would
  * look right on screen and be silently ignored by every consumer of it.
  *
  * The selects carry no path attribute, so they are identified here by the
@@ -26,7 +26,7 @@ const BUNDLE = resolve(
 
 const STORED_CONFIG = {
     config_version: 6,
-    power_devices: {
+    energy_nodes: {
         house: { entities: { power: "sensor.house_power" } },
         solar: { entities: { power: "sensor.solar_power" } },
         battery: { entities: { power: "sensor.battery_power" } },
@@ -42,10 +42,10 @@ const EXPECTED_OPTIONS: Record<string, string[]> = {
     grid: ["positive_is_export", "positive_is_import"],
 };
 
-/** The power-devices tab's label per locale -- the tab strip is localized too. */
-const POWER_DEVICES_TAB: Record<string, string> = {
-    en: "Power devices",
-    cs: "Výkonová zařízení",
+/** The energy-nodes tab's label per locale -- the tab strip is localized too. */
+const ENERGY_NODES_TAB: Record<string, string> = {
+    en: "Energy nodes",
+    cs: "Energetické uzly",
 };
 
 async function mountEditor(page: Page, language = "en"): Promise<void> {
@@ -84,7 +84,7 @@ async function mountEditorWith(
         document.body.appendChild(element);
     }, { config, language });
 
-    // The power-device sections live behind their own tab, and each ships
+    // The helman-tree-item sections live behind their own tab, and each ships
     // collapsed; a collapsed <details> renders nothing to query.
     await expect
         .poll(async () =>
@@ -96,7 +96,7 @@ async function mountEditorWith(
                 if (!tab) return false;
                 tab.click();
                 return true;
-            }, POWER_DEVICES_TAB[language]),
+            }, ENERGY_NODES_TAB[language]),
         )
         .toBe(true);
 
@@ -183,7 +183,7 @@ test("an unset field shows the default rather than blank", async ({ page }) => {
         const editor = document.querySelector("helman-config-editor-panel") as
             | (HTMLElement & { getValue?: (path: unknown[]) => unknown })
             | null;
-        return editor?.getValue?.(["power_devices", "grid", "entities"]) ?? null;
+        return editor?.getValue?.(["energy_nodes", "grid", "entities"]) ?? null;
     });
     expect(stored).toEqual({ power: "sensor.grid_power" });
 });
@@ -206,7 +206,7 @@ test("there is no blank option to select", async ({ page }) => {
 test("a configured value still wins over the default", async ({ page }) => {
     await mountEditorWith(page, {
         config_version: 6,
-        power_devices: {
+        energy_nodes: {
             grid: {
                 entities: {
                     power: "sensor.grid_power",
@@ -235,7 +235,7 @@ test("picking an option writes it under the device's entities map", async ({ pag
         const editor = document.querySelector("helman-config-editor-panel") as
             | (HTMLElement & { getValue?: (path: unknown[]) => unknown })
             | null;
-        return editor?.getValue?.(["power_devices", "grid", "entities"]) ?? null;
+        return editor?.getValue?.(["energy_nodes", "grid", "entities"]) ?? null;
     });
 
     expect(entities).toEqual({
@@ -296,7 +296,7 @@ test("a value from another device's vocabulary shows the default", async ({ page
     // Validation still reports the bad value on save.
     await mountEditorWith(page, {
         config_version: 6,
-        power_devices: {
+        energy_nodes: {
             grid: {
                 entities: {
                     power: "sensor.grid_power",
@@ -315,7 +315,7 @@ test("a value from another device's vocabulary shows the default", async ({ page
             | (HTMLElement & { getValue?: (path: unknown[]) => unknown })
             | null;
         return editor?.getValue?.([
-            "power_devices", "grid", "entities", "power_polarity",
+            "energy_nodes", "grid", "entities", "power_polarity",
         ]);
     });
     expect(stored).toBe("positive_is_charging");

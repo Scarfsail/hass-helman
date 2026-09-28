@@ -56,7 +56,7 @@ from custom_components.helman.consumption_forecast_profiles import (  # noqa: E4
 from custom_components.helman.entity_inspection import history  # noqa: E402
 from custom_components.helman.websockets import ws_inspect_entities  # noqa: E402
 
-POWER_PATH = ("power_devices", "grid", "entities", "power")
+POWER_PATH = ("energy_nodes", "grid", "entities", "power")
 
 
 class _State:
@@ -78,7 +78,7 @@ def _config(entity: str | None = "sensor.grid_power", polarity: str | None = Non
         entities["power"] = entity
     if polarity is not None:
         entities["power_polarity"] = polarity
-    return {"power_devices": {"grid": {"entities": entities}}}
+    return {"energy_nodes": {"grid": {"entities": entities}}}
 
 
 def _fact(inspection: dict, fact_id: str) -> dict | None:
@@ -92,17 +92,17 @@ class TestRegistryMatching(unittest.TestCase):
     """A key's ``*`` matches one segment and tells the evaluator what it was."""
 
     def test_wildcard_reports_the_segment_it_matched(self):
-        self.assertEqual(match_key("power_devices.*.entities.power", POWER_PATH), ("grid",))
+        self.assertEqual(match_key("energy_nodes.*.entities.power", POWER_PATH), ("grid",))
 
     def test_a_literal_segment_must_match(self):
         self.assertIsNone(
-            match_key("power_devices.*.entities.power", ("power_devices", "grid", "forecast", "power"))
+            match_key("energy_nodes.*.entities.power", ("energy_nodes", "grid", "forecast", "power"))
         )
 
     def test_a_shorter_or_longer_path_does_not_match(self):
-        self.assertIsNone(match_key("power_devices.*.entities.power", ("power_devices", "grid")))
+        self.assertIsNone(match_key("energy_nodes.*.entities.power", ("energy_nodes", "grid")))
         self.assertIsNone(
-            match_key("power_devices.*.entities.power", (*POWER_PATH, "extra"))
+            match_key("energy_nodes.*.entities.power", (*POWER_PATH, "extra"))
         )
 
     def test_a_list_index_matches_a_wildcard_as_its_decimal_form(self):
@@ -116,22 +116,22 @@ class TestRegistryMatching(unittest.TestCase):
         # see ``registry.EVALUATORS``), so it alone reports no wildcard.
         for device in ("house", "solar", "battery", "grid"):
             with self.subTest(device=device):
-                found = evaluator_for(("power_devices", device, "entities", "power"))
+                found = evaluator_for(("energy_nodes", device, "entities", "power"))
                 self.assertEqual(found[1], () if device == "grid" else (device,))
                 self.assertIsNot(found[0], FALLBACK_EVALUATOR)
 
     def test_an_unclaimed_path_resolves_to_the_fallback(self):
-        evaluator, wildcards = evaluator_for(("power_devices", "grid", "entities", "soc"))
+        evaluator, wildcards = evaluator_for(("energy_nodes", "grid", "entities", "soc"))
         self.assertIs(evaluator, FALLBACK_EVALUATOR)
         self.assertEqual(wildcards, ())
 
 
-SOC_PATH = ("power_devices", "grid", "entities", "soc")
+SOC_PATH = ("energy_nodes", "grid", "entities", "soc")
 
 
 def _soc_config(value: Any) -> dict:
     """A document with something at a path no registry key claims."""
-    return {"power_devices": {"grid": {"entities": {"soc": value}}}}
+    return {"energy_nodes": {"grid": {"entities": {"soc": value}}}}
 
 
 class TestFallbackReadings(unittest.TestCase):
@@ -221,8 +221,8 @@ class TestUnsupportedPaths(unittest.TestCase):
         # The key matches, but ``power_polarity`` has no vocabulary for this
         # device, so no sign can be truthfully named.
         inspection = inspect_target(
-            _Hass(), {"power_devices": {"heat_pump": {"entities": {"power": "sensor.x"}}}},
-            ("power_devices", "heat_pump", "entities", "power"),
+            _Hass(), {"energy_nodes": {"heat_pump": {"entities": {"power": "sensor.x"}}}},
+            ("energy_nodes", "heat_pump", "entities", "power"),
         )
         self.assertEqual(inspection.status, "unsupported")
 
@@ -385,30 +385,30 @@ class TestDraftVersusSaved(unittest.TestCase):
 
 
 HOUSE_HISTORY_PATH = (
-    "power_devices",
+    "energy_nodes",
     "house",
     "forecast",
     "total_energy_entity_id",
 )
 SOLAR_HISTORY_PATH = (
-    "power_devices",
+    "energy_nodes",
     "solar",
     "forecast",
     "total_energy_entity_id",
 )
 BIAS_HISTORY_PATH = ("training", "solar_bias", "total_energy_entity_id")
 DAILY_HISTORY_PATH = (
-    "power_devices",
+    "energy_nodes",
     "solar",
     "forecast",
     "daily_energy_entity_ids",
     0,
 )
-GRID_POWER_HISTORY_PATH = ("power_devices", "grid", "entities", "power")
-BATTERY_CAPACITY_HISTORY_PATH = ("power_devices", "battery", "entities", "capacity")
+GRID_POWER_HISTORY_PATH = ("energy_nodes", "grid", "entities", "power")
+BATTERY_CAPACITY_HISTORY_PATH = ("energy_nodes", "battery", "entities", "capacity")
 CONTROLLABLE_ENERGY_HISTORY_PATH = ("devices", "items", 0, "consumption", "energy_entity_id")
 FORECAST_SOURCE_HISTORY_PATH = (
-    "power_devices",
+    "energy_nodes",
     "solar",
     "forecast",
     "daily_energy_entity_ids",
@@ -476,7 +476,7 @@ def _history_config(
     if solar_entity is not None:
         solar_forecast["total_energy_entity_id"] = solar_entity
     config: dict = {
-        "power_devices": {
+        "energy_nodes": {
             "house": {"forecast": forecast},
             "solar": {"forecast": solar_forecast},
         }
@@ -594,7 +594,7 @@ class TestHistoryDepth(_HistoryTestCase):
 
     def test_every_registered_history_path_answers(self):
         config = {
-            "power_devices": {
+            "energy_nodes": {
                 "house": {"forecast": {"total_energy_entity_id": HOUSE_METER}},
                 "solar": {
                     "forecast": {
@@ -774,7 +774,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         hass = _ProbingHass({"sensor.batt_capacity": _State("10", unit="kWh")})
         _, inspection = self.inspect_twice(
             hass,
-            {"power_devices": {"battery": {"entities": {"capacity": "sensor.batt_capacity"}}}},
+            {"energy_nodes": {"battery": {"entities": {"capacity": "sensor.batt_capacity"}}}},
             BATTERY_CAPACITY_HISTORY_PATH,
         )
         fact = _fact(inspection, "history")
@@ -858,7 +858,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         # would name a dependency that no longer exists.
         hass = _ProbingHass({"sensor.solcast_today": _State("18.2", unit="kWh")})
         config = {
-            "power_devices": {
+            "energy_nodes": {
                 "solar": {
                     "forecast": {"daily_energy_entity_ids": ["sensor.solcast_today"]}
                 }
@@ -875,7 +875,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         # badge the wildcard gives it.
         hass = _ProbingHass({"sensor.solcast_tomorrow": _State("14.0", unit="kWh")})
         config = {
-            "power_devices": {
+            "energy_nodes": {
                 "solar": {
                     "forecast": {
                         "daily_energy_entity_ids": [
@@ -1053,7 +1053,7 @@ class TestListTargetsHaveNoSavedReading(_HistoryTestCase):
 
     def _daily_config(self, *entity_ids: str) -> dict:
         return {
-            "power_devices": {
+            "energy_nodes": {
                 "solar": {"forecast": {"daily_energy_entity_ids": list(entity_ids)}}
             }
         }
@@ -1071,7 +1071,7 @@ class TestListTargetsHaveNoSavedReading(_HistoryTestCase):
             [
                 {
                     "key": f"daily.{index}",
-                    "path": ["power_devices", "solar", "forecast", "daily_energy_entity_ids", index],
+                    "path": ["energy_nodes", "solar", "forecast", "daily_energy_entity_ids", index],
                 }
             ],
             saved_config=saved,
@@ -1134,7 +1134,7 @@ class TestWhatARevertRestores(_HistoryTestCase):
         self.assertEqual(
             inspection["dependsOn"],
             [
-                ["power_devices", "house", "forecast", "total_energy_entity_id"],
+                ["energy_nodes", "house", "forecast", "total_energy_entity_id"],
                 ["training", "house_consumption", "min_history_days"],
             ],
         )
@@ -1148,7 +1148,7 @@ class TestWhatARevertRestores(_HistoryTestCase):
         )
         self.assertEqual(
             inspection["dependsOn"],
-            [["power_devices", "solar", "forecast", "total_energy_entity_id"]],
+            [["energy_nodes", "solar", "forecast", "total_energy_entity_id"]],
         )
 
     def test_a_power_reading_depends_on_its_entity_and_its_polarity(self):
@@ -1161,8 +1161,8 @@ class TestWhatARevertRestores(_HistoryTestCase):
         self.assertEqual(
             inspection["dependsOn"],
             [
-                ["power_devices", "grid", "entities", "power"],
-                ["power_devices", "grid", "entities", "power_polarity"],
+                ["energy_nodes", "grid", "entities", "power"],
+                ["energy_nodes", "grid", "entities", "power_polarity"],
                 ["training", "solar_bias", "min_history_days"],
             ],
         )
@@ -1520,7 +1520,7 @@ class TestDeviceFieldPlaceholders(unittest.TestCase):
             ("devices", "items", "0", "name"),
             ("devices", "items", 0, "controls", 1, "name"),
             ("devices", 0, "name"),
-            ("power_devices", 0, "name"),
+            ("energy_nodes", 0, "name"),
         ]:
             with self.subTest(path=path):
                 self.assertIsNot(evaluator_for(path)[0], evaluate_device_field)

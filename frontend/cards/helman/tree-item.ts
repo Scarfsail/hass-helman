@@ -1,9 +1,9 @@
-import { DeviceConfig } from "./DeviceConfig";
+import { EnergyNodeConfig } from "./energy-node-config";
 import { ValueType } from "../helman-api";
 import type { ValueKind } from "../power-format";
 
-export class DeviceNode {
-    constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number, deviceConfig?: DeviceConfig) {
+export class TreeItem {
+    constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number, nodeConfig?: EnergyNodeConfig) {
         this.id = id;
         this.name = name;
         this.powerSensorId = powerSensorId;
@@ -15,21 +15,21 @@ export class DeviceNode {
         this.valueType = 'default';
         this.isSource = false;
         this.icon = undefined;
-        this.deviceConfig = deviceConfig;
+        this.nodeConfig = nodeConfig;
     }
 
     public id: string;
     public name: string;
     public powerSensorId: string | null;
     public switchEntityId: string | null;
-    public children: DeviceNode[];
+    public children: TreeItem[];
     public powerValue?: number;
     public childrenCollapsed?: boolean;
     public hideChildren?: boolean; // Indicates if children should be hidden in the UI
     public hideChildrenIndicator?: boolean; // Indicates if a button to show/hide children should be displayed
     public powerHistory: number[] = [];
     public historyBuckets: number;
-    public isUnmeasured: boolean = false; // Indicates if this node represents unmeasured power
+    public isUnmeasured: boolean = false; // Indicates if this item represents unmeasured power
     public isEstimated?: boolean; // A meterless child's share of its parent's power, not a reading
     // A shiftable house consumer — a configured deferrable controllable. Paints the
     // box in the shared lighter house shade; a property of the device, not of when
@@ -48,9 +48,9 @@ export class DeviceNode {
     public ratioSensorId?: string;
     public icon?: string;
     public sortChildrenByPower?: boolean;
-    public deviceConfig?: DeviceConfig;
+    public nodeConfig?: EnergyNodeConfig;
     // What powerValue/powerHistory carry. The power card reads live sensors and
-    // leaves this at watts; the solar inspector builds nodes from a past slot's
+    // leaves this at watts; the solar inspector builds items from a past slot's
     // energy and sets "energy" so the box is labelled in Wh.
     public valueKind?: ValueKind;
     public compact?: boolean; // Indicates if the device should be displayed in a compact mode
@@ -71,14 +71,14 @@ export class DeviceNode {
     public _cachedBlendedColor?: string;
 }
 
-/** Whether a node earns a row at all.
+/** Whether a item earns a row at all.
  *
- * An unmeasured node is a remainder, so below 1 W there is nothing left to
+ * An unmeasured item is a remainder, so below 1 W there is nothing left to
  * report and it is dropped. Callers that limit how many rows they show must ask
- * this BEFORE they take their top N — a hidden node that keeps its slot renders
+ * this BEFORE they take their top N — a hidden item that keeps its slot renders
  * as a hole where a real device could have gone.
  */
-export function isNodeVisible(node: DeviceNode): boolean {
-    if (!node.isUnmeasured) return true;
-    return node.powerValue !== undefined && node.powerValue >= 1;
+export function isItemVisible(item: TreeItem): boolean {
+    if (!item.isUnmeasured) return true;
+    return item.powerValue !== undefined && item.powerValue >= 1;
 }

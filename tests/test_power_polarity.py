@@ -50,7 +50,7 @@ def _entities(device: str, polarity: str | None) -> dict:
 
 def _config(**polarities: str | None) -> dict:
     return {
-        "power_devices": {
+        "energy_nodes": {
             device: {"entities": _entities(device, polarities.get(device))}
             for device in ("solar", "house", "battery", "grid")
         }
@@ -172,7 +172,7 @@ class TestPolarityValidation(unittest.TestCase):
         errors = self._errors(_config(grid="positive_is_charging"))
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "invalid_choice")
-        self.assertEqual(errors[0].path, "power_devices.grid.entities.power_polarity")
+        self.assertEqual(errors[0].path, "energy_nodes.grid.entities.power_polarity")
         self.assertIn("positive_is_export", errors[0].message)
 
     def test_unknown_value_is_rejected(self):

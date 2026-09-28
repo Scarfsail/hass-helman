@@ -22,14 +22,14 @@ const BUNDLE = resolve(
 );
 
 /** The group whose reading is clicked, and the id the editor derives for it. */
-const GRID_PATH = ["power_devices", "grid", "entities", "power"];
+const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 /** A configured picker the stub answers about with no entity behind it. */
-const HOUSE_KEY = ["power_devices", "house", "entities", "power"].join(".");
+const HOUSE_KEY = ["energy_nodes", "house", "entities", "power"].join(".");
 
 const CONFIG = {
     config_version: 7,
-    power_devices: {
+    energy_nodes: {
         grid: { entities: { power: "sensor.grid_power" } },
         house: { entities: { power: "sensor.house_power" } },
     },
@@ -170,7 +170,7 @@ async function mountEditor(page: Page): Promise<void> {
             page.evaluate(() => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Power devices",
+                    (button) => button.textContent?.trim() === "Energy nodes",
                 );
                 if (!tab) return false;
                 tab.click();

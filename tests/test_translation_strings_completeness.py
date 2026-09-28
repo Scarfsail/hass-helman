@@ -138,7 +138,7 @@ def _load_entity_translation_keys() -> set[str]:
         collect_qualifying_nodes=Mock(
             return_value={"house": "sensor.house_power"}
         ),
-        collect_share_nodes=Mock(
+        collect_share_devices=Mock(
             return_value={"klima-obyvak": ("sensor.helman_share_power_klima_obyvak", "Klima")}
         ),
         config={},

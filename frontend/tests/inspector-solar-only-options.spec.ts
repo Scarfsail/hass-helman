@@ -476,7 +476,7 @@ async function seedHouseBreakdown(page: Page): Promise<void> {
 }
 
 test("a hidden schedule strip keeps the editor the house badges open", async ({ page }) => {
-    // The breakdown draws device boxes through the power-devices container, and
+    // The breakdown draws device boxes through the tree-item list, and
     // those carry schedule badges that open the day editor. They follow the
     // house series, not the strip -- so hiding the strip alone must not leave a
     // visible badge with nothing behind it.
