@@ -430,9 +430,12 @@ export class HelmanConfigEditorPanel
       font-size: 0.93rem;
     }
 
+    /* The whole chip is the drag surface; like the sortable handle, it takes
+       touch-action: none so on touch a drag wins over page scrolling. */
     .member-chip.draggable {
       cursor: grab;
       padding-left: 4px;
+      touch-action: none;
     }
 
     .member-chip.inheriting {
