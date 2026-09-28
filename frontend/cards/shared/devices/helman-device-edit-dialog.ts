@@ -116,6 +116,9 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The device to edit: `TreeItem.deviceKey`, its id or its own meter. */
     @property({ attribute: false }) public deviceKey = "";
 
+    /** Whether `deviceKey` is the device's own meter rather than its id. */
+    @property({ attribute: false }) public keyIsMeter = false;
+
     @state() private _view: EditViewState = { kind: "loading" };
 
     @state() private _dirty = false;
@@ -256,7 +259,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                     </div>
                 `;
             case "ready": {
-                const entry = findDeviceByKey(view.config, view.deviceId);
+                const entry = findDeviceByKey(view.config, view.deviceId, "id");
                 if (!entry) return nothing;
                 return html`
                     <helman-device-editor
@@ -277,7 +280,7 @@ export class HelmanDeviceEditDialog extends LitElement {
 
     private _devicePath() {
         const view = this._view;
-        return view.kind === "ready" ? findDeviceByKey(view.config, view.deviceId)?.path ?? null : null;
+        return view.kind === "ready" ? findDeviceByKey(view.config, view.deviceId, "id")?.path ?? null : null;
     }
 
     private async _load(): Promise<void> {
@@ -299,7 +302,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             }
             this._baseline = canonicalJson(document);
             this._saved = cloneJson(document);
-            const entry = findDeviceByKey(document, this.deviceKey);
+            const entry = findDeviceByKey(document, this.deviceKey, this.keyIsMeter ? "meter" : "id");
             const deviceId = stringValue(entry?.device.id);
             this._view = entry && deviceId
                 ? { kind: "ready", config: cloneJson(document), deviceId }

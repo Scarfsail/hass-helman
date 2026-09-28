@@ -106,7 +106,8 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
             };
             content.params = {
                 nodeType: "device",
-                item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key, children: [] },
+                item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key,
+                    energyEntityId: key.startsWith("sensor.") ? key : undefined, children: [] },
             };
             document.body.appendChild(content);
         },
