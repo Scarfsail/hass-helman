@@ -290,6 +290,25 @@ class ApplianceConfigTests(unittest.TestCase):
         )
         self.assertEqual(appliance.history_lookback_days, 21)
 
+    def test_generic_switch_control_accepts_a_light(self) -> None:
+        light = copy.deepcopy(_generic_appliance())
+        light["controls"]["switch"]["entity_id"] = "light.hall"
+
+        registry = build_appliances_runtime_registry({"devices": {"items": [light]}})
+
+        (appliance,) = registry.appliances
+        self.assertEqual(appliance.switch_entity_id, "light.hall")
+
+    def test_generic_switch_control_rejects_other_domains(self) -> None:
+        sensor = copy.deepcopy(_generic_appliance())
+        sensor["controls"]["switch"]["entity_id"] = "sensor.x"
+
+        with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
+            registry = build_appliances_runtime_registry({"devices": {"items": [sensor]}})
+
+        self.assertEqual(registry.appliances, ())
+        self.assertIn("controls.switch.entity_id", captured.output[0])
+
     def test_valid_climate_config_builds_registry(self) -> None:
         registry = build_appliances_runtime_registry(
             {"devices": {"items": [_climate_appliance(strategy="history_average")]}}

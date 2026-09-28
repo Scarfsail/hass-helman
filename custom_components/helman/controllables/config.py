@@ -222,6 +222,9 @@ def running_signal(device: Device) -> tuple[str, str] | None:
 #: entity is heating or cooling. Named once so a shared meter's members are
 #: judged exactly as a lone appliance of the same kind would be.
 SWITCH_ACTIVE_STATES: tuple[str, ...] = ("on",)
+#: The domains a ``controls.switch`` entity may use: a light's on/off state
+#: means exactly what a switch's does.
+SWITCH_CONTROL_DOMAINS: tuple[str, ...] = ("switch", "light")
 CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
 
 

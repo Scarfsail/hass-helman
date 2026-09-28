@@ -77,6 +77,7 @@ import {
   iterDevices,
   meterlessChildren,
   ownMeter,
+  SWITCH_CONTROL_DOMAINS,
 } from "../cards/shared/config/devices";
 import {
   configDefaultHint,
@@ -3892,7 +3893,7 @@ export class HelmanConfigEditorPanel
         </label>
         <ha-entity-picker
           .hass=${this.hass}
-          .includeDomains=${child ? ["sensor", "switch", "climate"] : ["sensor"]}
+          .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"] : ["sensor"]}
           @value-changed=${(event: CustomEvent<{ value?: string }>) =>
             this._addDevice(listPath, parent, event.detail?.value ?? "")}
         ></ha-entity-picker>
@@ -4776,7 +4777,7 @@ export class HelmanConfigEditorPanel
     return this._renderEntityGroup(
       [...controlsPath, "switch", "entity_id"],
       "editor.fields.switch_entity",
-      { includeDomains: ["switch"], helpKey: "editor.help.appliance_switch_entity", required },
+      { includeDomains: [...SWITCH_CONTROL_DOMAINS], helpKey: "editor.help.appliance_switch_entity", required },
     );
   }
 

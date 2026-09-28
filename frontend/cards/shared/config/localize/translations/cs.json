@@ -246,7 +246,7 @@
       "max_consecutive_skips": "Max. po sobě jdoucích vynechání",
       "kind": "Druh",
       "climate_entity": "Entita topení/klimatizace",
-      "switch_entity": "Entita přepínače",
+      "switch_entity": "Entita přepínače nebo světla",
       "projection_strategy": "Strategie projekce",
       "fallback_hourly_energy_kwh": "Záložní hodinová energie kWh",
       "hourly_energy_kwh": "Průměrná hodinová energie kWh",
@@ -301,7 +301,7 @@
       "parent": "Nadřazené zařízení",
       "consumption_power_entity": "Entita výkonu",
       "add_device_entity": "Elektroměr nového zařízení",
-      "add_child_device_entity": "Elektroměr, spínač nebo klimatizace nového podřízeného zařízení"
+      "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -375,7 +375,7 @@
       "consumption_power_entity": "Senzor okamžitého výkonu (W). Zařízení, jehož podřízená zařízení odebírají z jeho elektroměru, ho potřebuje k rozdělení živého výkonu mezi ně.",
       "consumption_energy_entity_child": "U podřízeného zařízení volitelné: když pole necháte prázdné, odebírá z elektroměru nadřazeného zařízení.",
       "add_device": "Jeho id se jednou vygeneruje z entity a už se nemění.",
-      "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění."
+      "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač, světlo či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění."
     },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -537,7 +537,7 @@
       "ev_use_mode_entity": "Entita select nebo input_select, která ovládá provozní režim EV nabíječky (např. pevný maximální výkon, řízení přebytkem). Helman zapisuje aktivní režim do této entity pro realizaci naplánovaného chování nabíjení.",
       "ev_eco_gear_entity": "Entita select nebo input_select, která ovládá úroveň eco gear (krok výkonu nabíjení) EV nabíječky. Helman ji řídí v režimu řízení přebytkem pro škrcení nabíjení na dostupný solární přebytek.",
       "appliance_climate_entity": "Entita klimatizace pro tento spotřebič. Helman sleduje její aktivní/neaktivní stav (režim topení nebo chlazení) pro tvorbu energetických predikcí na základě historie. Vyžadováno pro strategii history_average.",
-      "appliance_switch_entity": "Entita přepínače, která ovládá tento obecný spotřebič. Helman sleduje historii stavů zapnuto/vypnuto pro energetické predikce při použití strategie history_average.",
+      "appliance_switch_entity": "Entita přepínače nebo světla, která ovládá tento obecný spotřebič. Helman sleduje historii stavů zapnuto/vypnuto pro energetické predikce při použití strategie history_average.",
       "appliance_projection_strategy": "Jak Helman odhaduje budoucí spotřebu energie tohoto spotřebiče. Pevná: vždy používá nakonfigurovanou průměrnou hodinovou energii. Historický průměr: učí se ze zaznamenané historie entity a při nedostatku dat se vrátí na pevnou hodnotu.",
       "appliance_hourly_energy_kwh": "Průměrná spotřeba energie za hodinu v kWh, když je spotřebič aktivní. Používá se přímo pro pevnou strategii a jako záložní hodnota pro historický průměr, pokud zaznamenaná historie nestačí.",
       "appliance_history_lookback_days": "Kolik dní zpětně Helman zohledňuje při výpočtu historického průměru spotřeby energie tohoto spotřebiče. Delší lookback dává stabilnější odhady, ale reaguje pomaleji na změny ve vzorcích používání.",

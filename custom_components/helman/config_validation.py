@@ -1213,7 +1213,7 @@ def _validate_controllables_config(
                     code="running_signal_required",
                     message=(
                         f"{path} draws from its parent's meter, so it needs a "
-                        "switch, climate or EV charge control to tell when it runs"
+                        "switch/light, climate or EV charge control to tell when it runs"
                     ),
                 )
 

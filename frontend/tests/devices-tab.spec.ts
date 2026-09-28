@@ -388,6 +388,15 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
         schedulable: true,
         consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
+
+    // A light is switched like a switch: it becomes the child's switch control.
+    await addDevice(page, ".add-device", "light.hall");
+    await expect.poll(async () => (await config(page))[1].children.at(-1)).toEqual({
+        id: "hall",
+        controls: { switch: { entity_id: "light.hall" } },
+        schedulable: true,
+        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
+    });
 });
 
 test("new scheduling uses the displayed fixed projection without changing the selector", async ({ page }) => {

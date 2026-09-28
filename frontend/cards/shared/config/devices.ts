@@ -80,6 +80,12 @@ export function canHaveChildren(device: JsonObject): boolean {
   return deviceKind(device) !== "inverter" && !!ownMeter(device) && !isSchedulable(device);
 }
 
+/**
+ * The domains a `controls.switch` entity may use. Mirrors
+ * `SWITCH_CONTROL_DOMAINS` in `custom_components/helman/controllables/config.py`.
+ */
+export const SWITCH_CONTROL_DOMAINS = ["switch", "light"];
+
 /** Whether `controls` names an entity the device is switched by. */
 export function hasSwitch(device: JsonObject): boolean {
   const controls = asJsonObject(device.controls) ?? {};
