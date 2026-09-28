@@ -15,6 +15,7 @@ import {
 } from "./localize/localize";
 import type { PathSegment } from "./types";
 import { SENSOR_KIND_FILTERS, type SensorKind } from "./sensor-kind";
+import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
 
 /**
  * One entity, its settings, and what it currently reads -- as one control.
@@ -136,6 +137,32 @@ const BADGE_CLASSES: Record<string, string> = {
     warn: "badge-warning",
 };
 
+/** Sensor-kind filters ANDed with a caller's filter, per caller filter then kind. */
+const composedFilters = new WeakMap<
+    HaEntityPickerEntityFilterFunc,
+    Partial<Record<SensorKind, HaEntityPickerEntityFilterFunc>>
+>();
+
+/**
+ * The picker's filter: the sensor kind's, the caller's, or both ANDed.
+ *
+ * Cached so a picker sees the same function while neither input changes --
+ * it rebuilds its list whenever the identity does.
+ */
+function pickerFilter(
+    kind: SensorKind | undefined,
+    filter: HaEntityPickerEntityFilterFunc | undefined,
+): HaEntityPickerEntityFilterFunc | undefined {
+    if (!kind || !filter) return kind ? SENSOR_KIND_FILTERS[kind] : filter;
+    let byKind = composedFilters.get(filter);
+    if (!byKind) {
+        byKind = {};
+        composedFilters.set(filter, byKind);
+    }
+    const kindFilter = SENSOR_KIND_FILTERS[kind];
+    return (byKind[kind] ??= (stateObj) => kindFilter(stateObj) && filter(stateObj));
+}
+
 export class HelmanEntityGroup extends LitElement {
     @property({ attribute: false }) hass: any;
     /** The editor, for translation, reads and writes. */
@@ -148,6 +175,8 @@ export class HelmanEntityGroup extends LitElement {
     @property({ attribute: false }) includeDomains?: string[];
     /** Narrows a sensor picker to the sensors its field means. */
     @property({ attribute: false }) sensorKind?: SensorKind;
+    /** Narrows the picker further, ANDed with the sensor kind's filter. */
+    @property({ attribute: false }) entityFilter?: HaEntityPickerEntityFilterFunc;
     /** A blank is written through rather than removing the key. */
     @property({ type: Boolean }) required = false;
     /** Pushed down by the editor's collector; null until the first poll lands. */
@@ -378,7 +407,7 @@ export class HelmanEntityGroup extends LitElement {
                     .hass=${this.hass}
                     .value=${stringValue(this.fieldHost?.getValue(this.path))}
                     .includeDomains=${this.includeDomains}
-                    .entityFilter=${this.sensorKind ? SENSOR_KIND_FILTERS[this.sensorKind] : undefined}
+                    .entityFilter=${pickerFilter(this.sensorKind, this.entityFilter)}
                     @value-changed=${this._handleEntityChanged}
                 ></ha-entity-picker>
                 ${this.helperKey
@@ -619,6 +648,7 @@ if (!customElements.get("helman-entity-group")) {
 export interface EntityGroupOptions {
     includeDomains?: string[];
     sensorKind?: SensorKind;
+    entityFilter?: HaEntityPickerEntityFilterFunc;
     helperKey?: string;
     helpKey?: string;
     required?: boolean;
@@ -649,6 +679,7 @@ export function renderEntityGroup(
             .helperKey=${options.helperKey}
             .includeDomains=${options.includeDomains}
             .sensorKind=${options.sensorKind}
+            .entityFilter=${options.entityFilter}
             ?required=${options.required ?? false}
             .inspection=${inspections[entityGroupKey(path)] ?? null}
         >${slotted}</helman-entity-group>

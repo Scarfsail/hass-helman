@@ -300,6 +300,8 @@
       "device_icon": "Ikona",
       "device_id": "Id",
       "parent": "Nadřazené zařízení",
+      "ha_device": "Zařízení Home Assistantu",
+      "ha_device_show_all": "Zobrazit entity ze všech zařízení",
       "consumption_power_entity": "Entita výkonu",
       "add_device_entity": "Elektroměr nového zařízení",
       "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení"
@@ -370,6 +372,7 @@
       "device_name": "Volitelné. Když pole necháte prázdné, použije se název odvozený z entit zařízení.",
       "device_icon": "Volitelné. Když pole necháte prázdné, použije se ikona entity výkonu zařízení.",
       "parent": "Podřízená zařízení mohou mít jen zařízení s vlastním elektroměrem, která nejsou plánovatelná. Zařízení se přesune se vším, co je pod ním.",
+      "ha_device": "Zařízení Home Assistantu, ke kterému patří elektroměry a ovládání tohoto zařízení. Výběr elektroměru, výkonu a ovládání nabízí jen entity tohoto zařízení.",
       "schedulable": "Helman ho smí plánovat a spouštět; může být cílem optimalizátoru; jeho spotřeba pak odchází ze základní předpovědi.",
       "schedulable_has_children": "Zařízení s podřízenými zařízeními nemůže být plánovatelné; nastavte jako plánovatelná jeho podřízená zařízení.",
       "schedulable_siblings": "Platí pro všech {count} zařízení odebírajících z elektroměru nadřazeného zařízení: jsou buď všechna plánovatelná, nebo všechna pasivní.",

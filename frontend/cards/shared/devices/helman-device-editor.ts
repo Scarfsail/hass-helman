@@ -62,6 +62,8 @@ import type {
     ValidationReport,
 } from "../config/types";
 import { defineOnce } from "../define-once";
+import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
+import { haDeviceEntityFilter, sharedHaDevice } from "./device-scope";
 import "../config/entity-group";
 
 /** The kinds the device form edits; anything else is shown read-only. */
@@ -414,6 +416,15 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
 
     private _suggestionRequest = 0;
 
+    /**
+     * The helman device whose pickers show entities from every HA device.
+     *
+     * Held as the device's id rather than a flag: the panel's device lists are
+     * unkeyed, so after a remove or a reorder this element may be handed a
+     * different device, which must not inherit the switch. UI only, never saved.
+     */
+    @state() private _showAllDevicesFor: string | null = null;
+
     protected createRenderRoot(): HTMLElement {
         return this;
     }
@@ -436,6 +447,12 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         const icon = stringValue(device.icon) || devicePlaceholder(this.inspections, path, "icon");
         const issues = deviceIssues(this.validation, path);
         const yaml = this.renderYaml?.(path) ?? null;
+        // The HA device the device's own meters and controls sit under; unless
+        // the reader lifted it, its anchor pickers are narrowed to it.
+        const anchors = suggestionAnchors(device);
+        const haDevice = sharedHaDevice(this.hass, anchors);
+        const showAll = this._showAllDevicesFor === id;
+        const scope = haDevice && !showAll ? anchors : null;
 
         return html`
             <details
@@ -492,6 +509,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 </div>
                                 ${this._renderDeviceKindField(kind)}
                                 ${this._renderDeviceParentField()}
+                                ${haDevice || showAll ? this._renderHaDeviceField(haDevice, id) : nothing}
                             </div>`,
                         )}
                         ${renderSimpleSection(
@@ -503,6 +521,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     {
                                         includeDomains: ["sensor"],
                                         sensorKind: "energy",
+                                        entityFilter: this._scopeFilter(scope, [...path, "consumption", "energy_entity_id"]),
                                         helperKey: meterless
                                             ? "editor.helpers.consumption_energy_entity_child"
                                             : "editor.helpers.consumption_energy_entity",
@@ -517,6 +536,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     {
                                         includeDomains: ["sensor"],
                                         sensorKind: "power",
+                                        entityFilter: this._scopeFilter(scope, [...path, "consumption", "power_entity_id"]),
                                         helperKey: "editor.helpers.consumption_power_entity",
                                     },
                                 )}
@@ -526,7 +546,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                             this.t("editor.sections.controls"),
                             html`<div class="field-grid">
                                 ${this._renderSchedulableField(device)}
-                                ${this._renderDeviceControls(kind, schedulable || meterless)}
+                                ${this._renderDeviceControls(kind, schedulable || meterless, scope)}
                             </div>`,
                         )}
                         ${schedulable && kind !== "ev_charger"
@@ -567,6 +587,49 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         options: EntityGroupOptions = {},
     ): TemplateResult {
         return renderEntityGroup(this, this.inspections, path, labelKey, options);
+    }
+
+    /**
+     * The filter narrowing an anchor picker, or none while unscoped. The HA
+     * device comes from the *other* anchors, so a picker's own value never
+     * locks it to the device of the entity it is there to replace.
+     */
+    private _scopeFilter(
+        scope: string[] | null,
+        path: PathSegment[],
+    ): HaEntityPickerEntityFilterFunc | undefined {
+        if (!scope) return undefined;
+        const own = stringValue(this.getValue(path)).trim();
+        const haDevice = sharedHaDevice(this.hass, scope.filter((anchor) => anchor !== own));
+        return haDevice ? haDeviceEntityFilter(this.hass, haDevice, own) : undefined;
+    }
+
+    /**
+     * Which HA device the device's entities belong to, read-only, and the
+     * switch that lifts the narrowing. Shown whenever one resolved, and while
+     * the switch is on -- an entity picked from another device unresolves it,
+     * and the switch must stay reachable to turn narrowing back on.
+     */
+    private _renderHaDeviceField(haDevice: string | null, id: string): TemplateResult {
+        const entry = haDevice ? this.hass?.devices?.[haDevice] : undefined;
+        const name = entry?.name_by_user || entry?.name || haDevice || "";
+        return html`
+            <div class="field toggle-field ha-device-field">
+                <label>${this.t("editor.fields.ha_device")}</label>
+                <input class="ha-device-name" .value=${name} readonly />
+                <ha-formfield .label=${this.t("editor.fields.ha_device_show_all")}>
+                    <ha-switch
+                        class="ha-device-show-all"
+                        .checked=${this._showAllDevicesFor === id}
+                        @change=${(event: Event) => {
+                            const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
+                            this._showAllDevicesFor = checked ? id : null;
+                        }}
+                    ></ha-switch>
+                </ha-formfield>
+                <div class="helper">${this.t("editor.helpers.ha_device")}</div>
+            </div>
+        `;
     }
 
     private _renderIconField(
@@ -854,22 +917,25 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      * switch, and a meterless child needs its switch or climate entity as the
      * running signal its share of the parent's meter follows.
      */
-    private _renderDeviceControls(kind: string, required: boolean): TemplateResult {
+    private _renderDeviceControls(kind: string, required: boolean, scope: string[] | null): TemplateResult {
         const path = this.path;
         const controlsPath: PathSegment[] = [...path, "controls"];
+        // Only the control the device switches by is narrowed: a mode or gear
+        // select may belong to another integration's device.
+        const anchor = (key: string): PathSegment[] => [...controlsPath, key, "entity_id"];
         if (kind === "climate") {
             return this._renderEntityGroup(
-                [...controlsPath, "climate", "entity_id"],
+                anchor("climate"),
                 "editor.fields.climate_entity",
-                { includeDomains: ["climate"], helpKey: "editor.help.appliance_climate_entity", required },
+                { includeDomains: ["climate"], entityFilter: this._scopeFilter(scope, anchor("climate")), helpKey: "editor.help.appliance_climate_entity", required },
             );
         }
         if (kind === "ev_charger") {
             return html`
                 ${this._renderEntityGroup(
-                    [...controlsPath, "charge", "entity_id"],
+                    anchor("charge"),
                     "editor.fields.charge_switch_entity",
-                    { includeDomains: ["switch"], helpKey: "editor.help.ev_charge_switch_entity", required },
+                    { includeDomains: ["switch"], entityFilter: this._scopeFilter(scope, anchor("charge")), helpKey: "editor.help.ev_charge_switch_entity", required },
                 )}
                 ${this._renderEntityGroup(
                     [...controlsPath, "use_mode", "entity_id"],
@@ -885,9 +951,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
             `;
         }
         return this._renderEntityGroup(
-            [...controlsPath, "switch", "entity_id"],
+            anchor("switch"),
             "editor.fields.switch_entity",
-            { includeDomains: [...SWITCH_CONTROL_DOMAINS], helpKey: "editor.help.appliance_switch_entity", required },
+            { includeDomains: [...SWITCH_CONTROL_DOMAINS], entityFilter: this._scopeFilter(scope, anchor("switch")), helpKey: "editor.help.appliance_switch_entity", required },
         );
     }
 
