@@ -170,18 +170,22 @@ test("the plain view keeps the raw readings and the whole tree", async ({ page }
     expect(plain).toEqual(DEVICES.map(raw));
 });
 
-test("a lifted child with a shorter history is taken from the parent's newest buckets", async ({ page }) => {
+test("a lifted child with a shorter history lines up with the newest buckets", async ({ page }) => {
     // The child's series started later: its one sample is the parent's newest.
     const child = node("Pump", [50], [{ grid: 50 }], { breakers: "grid" });
     await mountSection(page, [
         node("Boiler", [100, 200, 300], [{ solar: 100 }, { solar: 200 }, { solar: 200, grid: 100 }], { breakers: "fv" }, [child]),
+        node("Lamp", [10, 10, 10], [{ grid: 10 }, { grid: 10 }, { grid: 10 }], { breakers: "grid" }),
     ]);
 
-    const [fv] = await toggleGrouping(page);
+    const [fv, grid] = await toggleGrouping(page);
 
     expect(fv.children[0]).toEqual(
         leaf("Boiler", 250, [100, 200, 250], [{ solar: 100 }, { solar: 200 }, { solar: 200, grid: 50 }]),
     );
+    // The group total lines the pump's one sample up with the lamp's newest.
+    expect(grid.history).toEqual([10, 10, 60]);
+    expect(grid.sources).toEqual([{ grid: 10 }, { grid: 10 }, { grid: 60 }]);
 });
 
 test("expanding a parent copy sticks to the shared item", async ({ page }) => {

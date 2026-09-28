@@ -158,31 +158,28 @@ export class HelmanHouseDevicesSection extends LitElement {
         const aggregateGroup = (group: TreeItem) => {
             const children = group.children || [];
             group.powerValue = children.reduce((sum, c) => sum + (c.powerValue || 0), 0);
-            // History aggregation
-            const childWithHist = children.find(c => c.powerHistory && c.powerHistory.length > 0);
-            if (childWithHist) {
-                const len = childWithHist.powerHistory.length;
+            // History aggregation, over the longest member series. Every series
+            // ends at the newest bucket, so a shorter one is aligned from the end.
+            const len = Math.max(0, ...children.map((c) => c.powerHistory?.length ?? 0));
+            if (len > 0) {
                 group.powerHistory = Array(len).fill(0);
-                for (let i = 0; i < len; i++) {
-                    for (const c of children) {
-                        group.powerHistory[i] += (c.powerHistory?.[i] || 0);
-                    }
-                }
-                // Aggregate sourcePowerHistory
-                group.sourcePowerHistory = [];
-                for (let i = 0; i < len; i++) {
-                    const bucket: { [sourceName: string]: { power: number; color: string } } = {};
-                    for (const c of children) {
-                        const src = c.sourcePowerHistory?.[i];
-                        if (!src) continue;
+                group.sourcePowerHistory = Array.from({ length: len }, () => ({}));
+                for (const c of children) {
+                    const offset = len - (c.powerHistory?.length ?? 0);
+                    c.powerHistory?.forEach((power, i) => {
+                        group.powerHistory[i + offset] += power || 0;
+                    });
+                    const sourceOffset = len - (c.sourcePowerHistory?.length ?? 0);
+                    c.sourcePowerHistory?.forEach((src, i) => {
+                        const bucket = group.sourcePowerHistory![i + sourceOffset];
+                        if (!src || !bucket) return;
                         for (const sName in src) {
                             if (!bucket[sName]) {
                                 bucket[sName] = { power: 0, color: src[sName].color };
                             }
                             bucket[sName].power += src[sName].power;
                         }
-                    }
-                    group.sourcePowerHistory.push(bucket);
+                    });
                 }
             } else {
                 group.powerHistory = [];
