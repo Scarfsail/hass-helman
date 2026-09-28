@@ -7,9 +7,9 @@ import { resolve } from "node:path";
  * The chips are the groupings, by name and in order. Picking one files every
  * top-level house device under its own group of that grouping -- `name (short
  * name)`, in group order -- or under "Others", and each group totals its
- * members. Children stay nested under their parent whatever their own group,
- * and the unmeasured remainder is never filed. This is the card's behaviour
- * before groups moved into the config, on the new model.
+ * members. A child in its parent's group stays nested; one in another group is
+ * lifted into it (#365, see house-grouping-lift.spec.ts), and the unmeasured
+ * remainder is never filed.
  */
 
 const BUNDLE = resolve(
@@ -46,7 +46,7 @@ function node(id: string, powerValue: number, groups: Record<string, string> = {
 }
 
 const DEVICES = [
-    // The pump is assigned elsewhere, but stays nested under the boiler.
+    // The pump is lifted into its own breaker group, but follows the boiler's mode.
     node("Boiler", 1000, { breakers: "fv", modes: "night" }, [node("Pump", 200, { breakers: "grid" })]),
     node("Washer", 300, { breakers: "fv" }),
     node("Fridge", 50),
@@ -105,18 +105,19 @@ test("the chips are the groupings, by name and in order", async ({ page }) => {
     expect(await chips(page)).toEqual(["Jističe", "Režimy"]);
 });
 
-test("a grouping files top-level devices under their group, the rest under Others", async ({ page }) => {
+test("a grouping files devices under their group, the rest under Others", async ({ page }) => {
     await mountSection(page, { device_groupings: GROUPINGS, others_group_label: "Others" });
 
     expect(await groupedBy(page, "Jističe")).toEqual([
         {
             name: "Technická FV (🔋T)",
-            power: 1300,
+            power: 1100,
             members: [
-                ["Boiler", ["Pump"]],
+                ["Boiler", []],
                 ["Washer", []],
             ],
         },
+        { name: "Technická síť (⚡T)", power: 200, members: [["Pump", []]] },
         { name: "Others", power: 50, members: [["Fridge", []]] },
     ]);
     expect(await groupedBy(page, "Režimy")).toEqual([
@@ -129,8 +130,8 @@ test("empty groups and Others follow their settings", async ({ page }) => {
     await mountSection(page, { device_groupings: GROUPINGS, show_empty_groups: true, show_others_group: false });
 
     expect((await groupedBy(page, "Jističe")).map(({ name, power }) => [name, power])).toEqual([
-        ["Technická FV (🔋T)", 1300],
-        ["Technická síť (⚡T)", 0],
+        ["Technická FV (🔋T)", 1100],
+        ["Technická síť (⚡T)", 200],
     ]);
 });
 
