@@ -4848,8 +4848,9 @@ export class HelmanConfigEditorPanel
   /**
    * Commits a typed id for the entry at `listPath[index]`: slugged, unique
    * among its siblings, and every device reference moved over by `rewrite` in
-   * the same mutation. Device YAML editors go back to visual mode, as their
-   * text still names the old id. An empty or unchanged id leaves the draft
+   * the same mutation. Device YAML editors and the consumers section's go back
+   * to visual mode, as their snapshot still names the old id and its next edit
+   * would put it back. An empty or unchanged id leaves the draft
    * alone and the field shows the stored id again; that returns `null`.
    */
   private _commitId(
@@ -4870,6 +4871,10 @@ export class HelmanConfigEditorPanel
       return null;
     }
     this._resetDeviceModes();
+    const consumersScope = [SECTION_SCOPE_IDS.devices.consumers];
+    this._scopeModes = this._omitScopeIds(this._scopeModes, consumersScope);
+    this._scopeYamlValues = this._omitScopeIds(this._scopeYamlValues, consumersScope);
+    this._scopeYamlErrors = this._omitScopeIds(this._scopeYamlErrors, consumersScope);
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...listPath, index, "id"], newId);
       rewrite(draft, oldId, newId);
