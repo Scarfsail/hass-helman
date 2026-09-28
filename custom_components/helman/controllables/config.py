@@ -1,10 +1,11 @@
 """Reading the ``devices:`` tree — one entry point for every device reader.
 
 Config version 20 replaced the flat ``controllables:`` list with a tree of
-devices: the inverter plus every energy-consuming device, schedulable or
-passive, with ``children`` for what sits behind a device's meter. Every reader
-of that tree walks it through :func:`iter_devices`, so "which devices are
-there" is one question asked once.
+devices; since version 25 it is two lists: ``devices.system`` (the inverter)
+and ``devices.consumers`` (every energy-consuming device, schedulable or
+passive, with ``children`` for what sits behind a device's meter). Every reader
+walks both through :func:`iter_devices`, so "which devices are there" is one
+question asked once.
 
 What lives here is what would otherwise be derived twice: a device's kind and
 id, whether Helman may schedule it, which meter it draws from (its *effective
@@ -43,9 +44,9 @@ Device = Mapping[str, Any]
 def read_devices_section(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """The ``devices:`` section object — ``{}`` when absent or not a mapping.
 
-    Since config version 22 it holds the device list under ``items`` next to
-    the device-level settings (``name_cleaner_regex``, ``power_sensor_label``,
-    ``power_switch_label``).
+    Since config version 25 it holds the device lists under ``consumers`` and
+    ``system`` next to the device-level settings (``name_cleaner_regex``,
+    ``power_sensor_label``, ``power_switch_label``).
     """
     if not isinstance(config, Mapping):
         return {}
@@ -53,14 +54,23 @@ def read_devices_section(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return section if isinstance(section, Mapping) else {}
 
 
-def read_devices(config: Mapping[str, Any] | None) -> Any:
-    """The raw ``devices.items`` value — ``None`` when absent.
+def read_consumers(config: Mapping[str, Any] | None) -> Any:
+    """The raw ``devices.consumers`` value — ``None`` when absent.
 
     Returned unvalidated on purpose: the runtime reader logs a bad type and
     carries on, while the config validator reports it, and both need to tell
     "absent" apart from "present but wrong".
     """
-    return read_devices_section(config).get("items")
+    return read_devices_section(config).get("consumers")
+
+
+def read_system_devices(config: Mapping[str, Any] | None) -> Any:
+    """The raw ``devices.system`` value — ``None`` when absent.
+
+    Unvalidated, with the same "absent vs wrong" contract as
+    :func:`read_consumers`.
+    """
+    return read_devices_section(config).get("system")
 
 
 def read_name_cleaner_regex(config: Mapping[str, Any] | None) -> str | None:
@@ -90,11 +100,12 @@ def entity_friendly_name(hass: HomeAssistant, entity_id: str) -> str | None:
 def iter_devices(
     config: Mapping[str, Any] | None,
 ) -> Iterator[tuple[Device, Device | None]]:
-    """Every device in the tree as ``(device, parent)``, in document order.
+    """Every device as ``(device, parent)``, in document order.
 
-    Depth first, a parent before its children, which is the order the document
-    reads in. Anything that is not a mapping is skipped, and so is a
-    ``children`` value that is not a list — the validator reports both.
+    The system devices first, then the consumer tree depth first, a parent
+    before its children, which is the order the document reads in. Anything
+    that is not a mapping is skipped, and so is a ``children`` value that is
+    not a list — the validator reports both.
     """
     for _path, device, parent in iter_device_paths(config):
         if isinstance(device, Mapping):
@@ -107,11 +118,16 @@ def iter_device_paths(
     """:func:`iter_devices` with each entry's document path, non-mappings included.
 
     For the readers that must say *where* something is — validation and the
-    runtime registry's log lines: ``devices.items[1].children[0]``.
+    runtime registry's log lines: ``devices.consumers[1].children[0]``.
     """
-    devices = read_devices(config)
-    if isinstance(devices, list):
-        yield from _iter_children(devices, None, "devices.items")
+    system = read_system_devices(config)
+    if isinstance(system, list):
+        # Flat: a system device never nests, and validation refuses children.
+        for index, device in enumerate(system):
+            yield f"devices.system[{index}]", device, None
+    consumers = read_consumers(config)
+    if isinstance(consumers, list):
+        yield from _iter_children(consumers, None, "devices.consumers")
 
 
 def _iter_children(
@@ -433,12 +449,12 @@ def _metered_children(children: list[Device]) -> list[str]:
 def find_inverter_device(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """The single ``kind: inverter`` device, or an empty mapping.
 
-    Top level only: validation refuses an inverter anywhere else. First wins if
-    a hand-edited config declares two; validation rejects that case, and
-    picking the first keeps the runtime deterministic in the window between a
-    bad save and the user fixing it.
+    Read from ``devices.system``: validation refuses an inverter anywhere else.
+    First wins if a hand-edited config declares two; validation rejects that
+    case, and picking the first keeps the runtime deterministic in the window
+    between a bad save and the user fixing it.
     """
-    devices = read_devices(config)
+    devices = read_system_devices(config)
     if not isinstance(devices, list):
         return {}
     for device in devices:

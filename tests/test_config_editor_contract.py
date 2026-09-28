@@ -237,7 +237,7 @@ from custom_components.helman.websockets import (
 
 def _invalid_config() -> dict:
     return {
-        "devices": {"items": [
+        "devices": {"system": [
             {
                 "kind": "inverter",
                 "id": "inverter",
@@ -653,7 +653,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
         config = {
-            "devices": {"items": [
+            "devices": {"consumers": [
                 {
                     "kind": "generic",
                     "schedulable": True,

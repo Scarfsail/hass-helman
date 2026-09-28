@@ -65,7 +65,7 @@ const controllable = (id: string, name: string) => ({
 
 const CONFIG = {
     config_version: 7,
-    devices: { items: [controllable("boiler", "Boiler"), controllable("pump", "Pump")] },
+    devices: { consumers: [controllable("boiler", "Boiler"), controllable("pump", "Pump")] },
     automation: {
         enabled: true,
         appliance_optimizers: [
@@ -91,7 +91,7 @@ const CONFIG = {
 };
 
 interface DraftDocument {
-    devices: { items: { id: string }[] };
+    devices: { consumers: { id: string }[] };
     automation: {
         appliance_optimizers: {
             id: string;
@@ -146,10 +146,15 @@ async function mountEditor(page: Page): Promise<void> {
 }
 
 async function openTab(page: Page, label: string): Promise<void> {
-    await page
-        .locator("helman-config-editor-panel")
-        .getByRole("button", { name: label, exact: true })
-        .click();
+    const panel = page.locator("helman-config-editor-panel");
+    await panel.getByRole("button", { name: label, exact: true }).click();
+    // Every section of a tab starts collapsed.
+    await panel.locator("details.section-card").first().waitFor({ state: "attached" });
+    await panel
+        .locator("details.section-card")
+        .evaluateAll((sections) =>
+            sections.forEach((section) => ((section as HTMLDetailsElement).open = true)),
+        );
 }
 
 /**
@@ -207,7 +212,7 @@ async function openFirstOptimizer(page: Page): Promise<void> {
 }
 
 const controllableIds = (page: Page) =>
-    page.evaluate(() => window.__editorConfig().devices.items.map((entry) => entry.id));
+    page.evaluate(() => window.__editorConfig().devices.consumers.map((entry) => entry.id));
 
 const optimizerIds = (page: Page) =>
     page.evaluate(() =>
@@ -227,7 +232,8 @@ test("an optimizer bucket reorders from its own ha-sortable", async ({ page }) =
     await mountEditor(page);
     await openTab(page, "Automation");
 
-    await moveItem(page, "list-stack", 1, 0);
+    // The system bucket's (empty) list comes first.
+    await moveItem(page, "list-stack", 1, 0, 1);
 
     await expect.poll(() => optimizerIds(page)).toEqual(["pump-runtime", "boiler-runtime"]);
 });

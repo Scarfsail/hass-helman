@@ -24,7 +24,7 @@ const CONFIG = {
     energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
-    devices: { items: [
+    devices: { consumers: [
         {
             id: "dishwasher",
             name: "Dishwasher",

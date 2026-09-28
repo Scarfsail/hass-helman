@@ -107,7 +107,7 @@ import {
 } from "./config-editor-scopes";
 import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
-import { mdiAlertOutline, mdiSineWave } from "@mdi/js";
+import { mdiAlertOutline } from "@mdi/js";
 import {
   fetchOptimizerSchema,
   type OptimizerConfigBucket,
@@ -211,7 +211,7 @@ const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as const;
 const DEVICE_FILTERS = ["all", "schedulable", "passive"] as const;
 type DeviceFilter = (typeof DEVICE_FILTERS)[number];
 
-/** A device's document path as validation reports it: `devices.items[1].children[0]`. */
+/** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
 function validationPath(path: readonly PathSegment[]): string {
   return path
     .map((segment, index) =>
@@ -2350,8 +2350,6 @@ export class HelmanConfigEditorPanel
         `,
         { initialOpen: false },
       )}
-
-      ${this._renderInverterSection()}
     `;
   }
 
@@ -2768,7 +2766,7 @@ export class HelmanConfigEditorPanel
   /**
    * The house meter, plus one row per carved meter.
    *
-   * `devices.items.*.consumption.energy_entity_id` is the same path a device's
+   * `devices.consumers.*.consumption.energy_entity_id` is the same path a device's
    * picker already reads elsewhere in the editor — this is a second, read-only
    * view of it, not a second control. Children are walked too: the AC breaker
    * is carved for the air conditioners behind it.
@@ -3278,10 +3276,11 @@ export class HelmanConfigEditorPanel
             )}
           </div>
         `,
+        { initialOpen: false },
       )}
 
-      ${this._renderOptimizerBucketSection("appliance_optimizers")}
       ${this._renderOptimizerBucketSection("system_optimizers")}
+      ${this._renderOptimizerBucketSection("appliance_optimizers")}
     `;
   }
 
@@ -3348,6 +3347,7 @@ export class HelmanConfigEditorPanel
             )}
           </div>
         `,
+        { initialOpen: false },
       )}
     `;
   }
@@ -3496,19 +3496,17 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The Devices tab: the settings every device shares, above the `devices.items`
-   * tree as nested cards.
+   * The Devices tab: the settings every device shares, then the
+   * `devices.system` list (the inverter) and the `devices.consumers` tree as
+   * nested cards. Every section starts collapsed, so the tab reads as an
+   * overview first.
    *
-   * A card renders its `children` with the same card, recursively. The inverter
-   * keeps its entry in the list but is edited under Energy nodes, so here it
-   * is a hidden placeholder that keeps the sortable list's indices equal to the
-   * document's -- which is also why the filter hides cards rather than dropping
-   * them.
+   * A consumer card renders its `children` with the same card, recursively.
+   * The filter hides cards rather than dropping them, which keeps the sortable
+   * list's indices equal to the document's.
    */
   private _renderDevicesTab(): TemplateResult {
-    const hasDevices = iterDevices(this._config).some(
-      ({ device }) => deviceKind(device) !== INVERTER_CONTROLLABLE_KIND,
-    );
+    const consumers = asJsonArray(this._getValue(["devices", "consumers"])) ?? [];
     return html`
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.devices.settings,
@@ -3534,14 +3532,23 @@ export class HelmanConfigEditorPanel
       )}
 
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.devices.configured_devices,
+        SECTION_SCOPE_IDS.devices.system,
+        html`
+          <p class="inline-note">${this._t("editor.notes.system_devices")}</p>
+          ${this._renderSystemDevices()}
+        `,
+        { initialOpen: false },
+      )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.devices.consumers,
         html`
           <p class="inline-note">${this._t("editor.notes.devices")}</p>
-          ${hasDevices
-            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices", "items"], null)}`
+          ${consumers.length > 0
+            ? html`${this._renderDeviceFilter()}${this._renderDeviceList(["devices", "consumers"], null)}`
             : html`<div class="message info devices-empty">${this._t("editor.empty.no_devices")}</div>`}
           ${this._renderAddDevice(
-            ["devices", "items"],
+            ["devices", "consumers"],
             null,
             html`<button
               class="add-button import-energy"
@@ -3555,6 +3562,7 @@ export class HelmanConfigEditorPanel
           ${this._deviceActionMessage ? html`<div class="message error">${this._deviceActionMessage}</div>` : nothing}
           ${this._renderEnergyImport()}
         `,
+        { initialOpen: false },
       )}
     `;
   }
@@ -3622,7 +3630,7 @@ export class HelmanConfigEditorPanel
           // Moves shift device paths, which key the YAML mode state.
           this._resetDeviceModes();
           this._applyMutation((draft) => {
-            draft.devices = { ...(asJsonObject(draft.devices) ?? {}), items: cloneJson(preview.devices) };
+            draft.devices = { ...(asJsonObject(draft.devices) ?? {}), consumers: cloneJson(preview.devices) };
           });
           this._energyImport = null;
         }}
@@ -3845,9 +3853,6 @@ export class HelmanConfigEditorPanel
     parent: JsonObject | null,
   ): TemplateResult {
     const kind = deviceKind(device);
-    if (kind === INVERTER_CONTROLLABLE_KIND && parent === null) {
-      return html`<div class="device-placeholder" hidden></div>`;
-    }
     if (!(EDITABLE_DEVICE_KINDS as readonly string[]).includes(kind)) {
       return this._renderUnsupportedDevice(device, path);
     }
@@ -4202,32 +4207,25 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The inverter, under Energy nodes.
-   *
-   * It keeps its entry in `devices` -- optimizers target it by id there -- but
-   * it is not a house consumer, so it is edited beside the other energy nodes
-   * rather than in the Devices tree. No projection section: the inverter has
-   * no demand of its own.
+   * The `devices.system` list: the inverter's card, or "Add inverter" when
+   * there is none. No projection section: the inverter has no demand of its
+   * own. Validation allows only the inverter here, at most once.
    */
-  private _renderInverterSection(): TemplateResult {
-    const devices = asJsonArray(this._getValue(["devices", "items"])) ?? [];
+  private _renderSystemDevices(): TemplateResult {
+    const devices = asJsonArray(this._getValue(["devices", "system"])) ?? [];
     const index = devices.findIndex(
       (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
     );
-    return this._renderSimpleSection(
-      this._t("editor.sections.inverter"),
-      index >= 0
-        ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", "items", index])
-        : html`
-            <div class="message info">${this._t("editor.empty.no_inverter")}</div>
-            <div class="section-footer">
-              <button type="button" class="add-button" @click=${this._handleAddInverter}>
-                ${this._t("editor.actions.add_inverter")}
-              </button>
-            </div>
-          `,
-      { open: false, icon: mdiSineWave },
-    );
+    return index >= 0
+      ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", "system", index])
+      : html`
+          <div class="message info">${this._t("editor.empty.no_inverter")}</div>
+          <div class="section-footer">
+            <button type="button" class="add-button" @click=${this._handleAddInverter}>
+              ${this._t("editor.actions.add_inverter")}
+            </button>
+          </div>
+        `;
   }
 
   private _renderInverterCard(inverter: JsonObject, path: PathSegment[]): TemplateResult {
@@ -4594,7 +4592,7 @@ export class HelmanConfigEditorPanel
   /**
    * Where the device sits: at the top level or under a device.
    *
-   * Offers only devices that can hold children (they own a meter and are not
+   * Offers only consumers that can hold children (they own a meter and are not
    * schedulable), never the device itself or anything under it, plus the
    * current parent whatever it is, so the select never misstates it.
    */
@@ -4605,6 +4603,8 @@ export class HelmanConfigEditorPanel
     const key = entityGroupKey(path);
     const parentKey = parent ? entityGroupKey(path.slice(0, -2)) : "";
     const candidates = iterDevices(this._config).filter((entry) => {
+      // A system device never nests or holds children.
+      if (entry.path[1] !== "consumers") return false;
       const candidateKey = entityGroupKey(entry.path);
       if (candidateKey === key || candidateKey.startsWith(`${key}.`)) return false;
       return candidateKey === parentKey || canHaveChildren(entry.device);
@@ -4649,7 +4649,7 @@ export class HelmanConfigEditorPanel
       // still names the device when it is removed.
       appendListItem(
         draft,
-        target ? [...target.path, "children"] : ["devices", "items"],
+        target ? [...target.path, "children"] : ["devices", "consumers"],
         cloneJson(device as JsonValue),
       );
       removeListItem(draft, path.slice(0, -1), path[path.length - 1] as number);
@@ -5620,15 +5620,8 @@ export class HelmanConfigEditorPanel
     return counts;
   }
 
-  /** The tab an issue is shown on: the inverter's are on Energy nodes, where it is edited. */
+  /** The tab an issue is shown on. */
   private _issueTab(issue: ValidationIssue): TabId {
-    const devices = asJsonArray(this._getValue(["devices", "items"])) ?? [];
-    const inverter = devices.findIndex(
-      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
-    );
-    if (inverter >= 0 && this._deviceIssues(["devices", "items", inverter]).includes(issue)) {
-      return "energy_nodes";
-    }
     return TAB_SECTIONS[issue.section] ?? "energy_nodes";
   }
 
@@ -5948,7 +5941,8 @@ export class HelmanConfigEditorPanel
       if (
         scopeId === DOCUMENT_SCOPE_ID ||
         scopeId === TAB_SCOPE_IDS.devices ||
-        scopeId === SECTION_SCOPE_IDS.devices.configured_devices
+        scopeId === SECTION_SCOPE_IDS.devices.system ||
+        scopeId === SECTION_SCOPE_IDS.devices.consumers
       ) {
         this._resetDeviceModes();
       }
@@ -6106,7 +6100,7 @@ export class HelmanConfigEditorPanel
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["devices", "items"],
+        ["devices", "system"],
         createInverterControllableDraft(this._t("editor.dynamic.inverter")),
       );
     });

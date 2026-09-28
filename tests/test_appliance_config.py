@@ -30,7 +30,7 @@ from custom_components.helman.appliances.config import build_appliances_runtime_
 
 def _valid_config() -> dict:
     return {
-        "devices": {"items": [
+        "devices": {"consumers": [
             {
                 "kind": "ev_charger",
                 "schedulable": True,
@@ -128,10 +128,10 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
 
 class ApplianceConfigTests(unittest.TestCase):
     def test_device_names_are_optional_for_all_schedulable_kinds(self) -> None:
-        for device in [_generic_appliance(), _climate_appliance(), _valid_config()["devices"]["items"][0]]:
+        for device in [_generic_appliance(), _climate_appliance(), _valid_config()["devices"]["consumers"][0]]:
             with self.subTest(kind=device["kind"]):
                 del device["name"]
-                registry = build_appliances_runtime_registry({"devices": {"items": [device]}})
+                registry = build_appliances_runtime_registry({"devices": {"consumers": [device]}})
                 self.assertEqual(len(registry.appliances), 1)
                 self.assertEqual(registry.appliances[0].name, device["id"])
                 self.assertNotIn("name", device)
@@ -140,7 +140,7 @@ class ApplianceConfigTests(unittest.TestCase):
         device = _generic_appliance()
         del device["name"]
         config = {
-            "devices": {"items": [device], "name_cleaner_regex": " Energy$"},
+            "devices": {"consumers": [device], "name_cleaner_regex": " Energy$"},
         }
         registry = build_appliances_runtime_registry(
             config,
@@ -157,7 +157,7 @@ class ApplianceConfigTests(unittest.TestCase):
     def test_a_passive_device_with_controls_gets_no_runtime(self) -> None:
         passive = {**_generic_appliance(), "schedulable": False}
 
-        registry = build_appliances_runtime_registry({"devices": {"items": [passive]}})
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [passive]}})
 
         self.assertEqual(registry.appliances, ())
 
@@ -170,7 +170,7 @@ class ApplianceConfigTests(unittest.TestCase):
             "children": [child],
         }
 
-        registry = build_appliances_runtime_registry({"devices": {"items": [breaker]}})
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [breaker]}})
 
         (appliance,) = registry.appliances
         self.assertEqual(appliance.id, "living-room-hvac")
@@ -194,10 +194,10 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_invalid_appliance_is_ignored_with_error_log(self) -> None:
         config = _valid_config()
-        invalid = copy.deepcopy(config["devices"]["items"][0])
+        invalid = copy.deepcopy(config["devices"]["consumers"][0])
         invalid["id"] = "broken-ev"
         invalid["controls"]["charge"]["entity_id"] = "select.not_a_switch"
-        config["devices"]["items"].append(invalid)
+        config["devices"]["consumers"].append(invalid)
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
             registry = build_appliances_runtime_registry(config)
@@ -209,9 +209,9 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_duplicate_appliance_id_is_ignored(self) -> None:
         config = _valid_config()
-        duplicate = copy.deepcopy(config["devices"]["items"][0])
+        duplicate = copy.deepcopy(config["devices"]["consumers"][0])
         duplicate["name"] = "Duplicate EV"
-        config["devices"]["items"].append(duplicate)
+        config["devices"]["consumers"].append(duplicate)
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
             registry = build_appliances_runtime_registry(config)
@@ -221,8 +221,8 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_duplicate_vehicle_id_invalidates_only_that_appliance(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["vehicles"].append(
-            copy.deepcopy(config["devices"]["items"][0]["vehicles"][0])
+        config["devices"]["consumers"][0]["vehicles"].append(
+            copy.deepcopy(config["devices"]["consumers"][0]["vehicles"][0])
         )
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR"):
@@ -232,8 +232,8 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_unknown_extra_keys_are_ignored(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["unsupported"] = True
-        config["devices"]["items"][0]["vehicles"][0]["limits"]["future_field"] = "ok"
+        config["devices"]["consumers"][0]["unsupported"] = True
+        config["devices"]["consumers"][0]["vehicles"][0]["limits"]["future_field"] = "ok"
 
         registry = build_appliances_runtime_registry(config)
 
@@ -241,7 +241,7 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_wrong_entity_domain_is_rejected(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["vehicles"][0]["telemetry"]["soc_entity_id"] = "number.not_sensor"
+        config["devices"]["consumers"][0]["vehicles"][0]["telemetry"]["soc_entity_id"] = "number.not_sensor"
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
             registry = build_appliances_runtime_registry(config)
@@ -251,8 +251,8 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_input_select_domains_are_accepted_for_ev_select_controls(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["controls"]["use_mode"]["entity_id"] = "input_select.ev_use_mode"
-        config["devices"]["items"][0]["controls"]["eco_gear"]["entity_id"] = "input_select.ev_eco_gear"
+        config["devices"]["consumers"][0]["controls"]["use_mode"]["entity_id"] = "input_select.ev_use_mode"
+        config["devices"]["consumers"][0]["controls"]["eco_gear"]["entity_id"] = "input_select.ev_eco_gear"
 
         registry = build_appliances_runtime_registry(config)
 
@@ -260,12 +260,12 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_preserves_appliance_order(self) -> None:
         config = _valid_config()
-        second = copy.deepcopy(config["devices"]["items"][0])
+        second = copy.deepcopy(config["devices"]["consumers"][0])
         second["id"] = "driveway-ev"
         second["name"] = "Driveway EV"
         second["vehicles"][0]["id"] = "tesla"
         second["vehicles"][0]["name"] = "Tesla"
-        config["devices"]["items"].append(second)
+        config["devices"]["consumers"].append(second)
 
         registry = build_appliances_runtime_registry(config)
 
@@ -275,7 +275,7 @@ class ApplianceConfigTests(unittest.TestCase):
         )
 
     def test_valid_generic_config_builds_registry(self) -> None:
-        registry = build_appliances_runtime_registry({"devices": {"items": [_generic_appliance()]}})
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [_generic_appliance()]}})
 
         self.assertEqual(len(registry.appliances), 1)
         appliance = registry.appliances[0]
@@ -294,7 +294,7 @@ class ApplianceConfigTests(unittest.TestCase):
         light = copy.deepcopy(_generic_appliance())
         light["controls"]["switch"]["entity_id"] = "light.hall"
 
-        registry = build_appliances_runtime_registry({"devices": {"items": [light]}})
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [light]}})
 
         (appliance,) = registry.appliances
         self.assertEqual(appliance.switch_entity_id, "light.hall")
@@ -304,14 +304,14 @@ class ApplianceConfigTests(unittest.TestCase):
         sensor["controls"]["switch"]["entity_id"] = "sensor.x"
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
-            registry = build_appliances_runtime_registry({"devices": {"items": [sensor]}})
+            registry = build_appliances_runtime_registry({"devices": {"consumers": [sensor]}})
 
         self.assertEqual(registry.appliances, ())
         self.assertIn("controls.switch.entity_id", captured.output[0])
 
     def test_valid_climate_config_builds_registry(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"devices": {"items": [_climate_appliance(strategy="history_average")]}}
+            {"devices": {"consumers": [_climate_appliance(strategy="history_average")]}}
         )
 
         self.assertEqual(len(registry.appliances), 1)
@@ -328,7 +328,7 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_ev_icon_is_preserved(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["icon"] = "hass:car-electric"
+        config["devices"]["consumers"][0]["icon"] = "hass:car-electric"
 
         registry = build_appliances_runtime_registry(config)
 
@@ -336,14 +336,14 @@ class ApplianceConfigTests(unittest.TestCase):
 
     def test_generic_icon_is_preserved(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"devices": {"items": [{**_generic_appliance(), "icon": "phu:socket-eu"}]}}
+            {"devices": {"consumers": [{**_generic_appliance(), "icon": "phu:socket-eu"}]}}
         )
 
         self.assertEqual(registry.appliances[0].icon, "phu:socket-eu")
 
     def test_blank_ev_icon_is_rejected(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["icon"] = "   "
+        config["devices"]["consumers"][0]["icon"] = "   "
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
             registry = build_appliances_runtime_registry(config)
@@ -356,7 +356,7 @@ class ApplianceConfigTests(unittest.TestCase):
         del invalid["consumption"]["energy_entity_id"]
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
-            registry = build_appliances_runtime_registry({"devices": {"items": [invalid]}})
+            registry = build_appliances_runtime_registry({"devices": {"consumers": [invalid]}})
 
         self.assertEqual(registry.appliances, ())
         self.assertIn("consumption.energy_entity_id", captured.output[0])
@@ -366,7 +366,7 @@ class ApplianceConfigTests(unittest.TestCase):
         invalid["controls"]["climate"]["entity_id"] = "switch.not_a_climate"
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
-            registry = build_appliances_runtime_registry({"devices": {"items": [invalid]}})
+            registry = build_appliances_runtime_registry({"devices": {"consumers": [invalid]}})
 
         self.assertEqual(registry.appliances, ())
         self.assertIn("controls.climate.entity_id", captured.output[0])

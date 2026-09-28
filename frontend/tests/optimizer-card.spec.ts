@@ -159,6 +159,13 @@ async function mountEditor(
     );
     const panel = page.locator("helman-config-editor-panel");
     await panel.getByRole("button", { name: "Automation" }).click();
+    // Every section of the tab starts collapsed.
+    await panel.locator("details.section-card").first().waitFor({ state: "attached" });
+    await panel
+        .locator("details.section-card")
+        .evaluateAll((sections) =>
+            sections.forEach((section) => ((section as HTMLDetailsElement).open = true)),
+        );
     return panel;
 }
 

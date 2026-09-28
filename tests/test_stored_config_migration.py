@@ -318,6 +318,13 @@ def _v19_runtimes(document: dict) -> list:
     ]
 
 
+def _all_devices(document: dict) -> list:
+    """Both device lists of a migrated document, system first, in the order
+    the single pre-v25 ``items`` list held them."""
+    devices = document["devices"]
+    return list(devices.get("system", [])) + list(devices.get("consumers", []))
+
+
 def _house_fingerprint(consumers: list[dict]) -> str:
     return ConsumptionForecastBuilder._build_config_fingerprint(
         total_energy_entity_id="sensor.house_total",
@@ -335,7 +342,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
         self.migrated, _ids = migrate_config_document(self.before)
 
     def test_it_migrates_to_the_expected_tree(self) -> None:
-        devices = self.migrated["devices"]["items"]
+        devices = _all_devices(self.migrated)
         old = self.before["controllables"]
 
         self.assertNotIn("controllables", self.migrated)
@@ -369,7 +376,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
         )
 
     def test_ids_projections_and_the_flag_are_preserved(self) -> None:
-        for old, new in zip(self.before["controllables"][1:5], self.migrated["devices"]["items"][1:5]):
+        for old, new in zip(self.before["controllables"][1:5], _all_devices(self.migrated)[1:5]):
             with self.subTest(device=old["id"]):
                 self.assertEqual(new["id"], old["id"])
                 self.assertIs(new["schedulable"], True)
@@ -479,12 +486,12 @@ class LiveEnergyImportTests(unittest.TestCase):
         return meter.removesuffix("_energy") + "_power"
 
     def test_it_migrates_to_the_expected_tree(self) -> None:
-        devices = self.migrated["devices"]["items"]
+        devices = _all_devices(self.migrated)
 
         # The P1 devices keep their place, ids and everything but a power sensor.
         self.assertEqual(
             [d["id"] for d in devices[:6]],
-            [d["id"] for d in self.without_energy["devices"]["items"]],
+            [d["id"] for d in _all_devices(self.without_energy)],
         )
         # Every Energy row P1 did not own follows, top-level or nested as Energy nests it.
         self.assertEqual(
@@ -501,7 +508,7 @@ class LiveEnergyImportTests(unittest.TestCase):
                 ("jistic_zasuvky_spiz_a_jidelna_energy", ["zasuvka_lednicka_energy"]),
             ],
         )
-        for device, _parent in iter_devices({"devices": {"items": devices[6:]}}):
+        for device, _parent in iter_devices({"devices": {"consumers": devices[6:]}}):
             meter = device["consumption"]["energy_entity_id"]
             with self.subTest(device=device["id"]):
                 self.assertEqual(
@@ -512,8 +519,8 @@ class LiveEnergyImportTests(unittest.TestCase):
                 self.assertNotIn("controls", device)
 
     def test_the_ac_breaker_gains_its_power_sensor_and_nothing_else(self) -> None:
-        before = self.without_energy["devices"]["items"][5]
-        after = self.migrated["devices"]["items"][5]
+        before = _all_devices(self.without_energy)[5]
+        after = _all_devices(self.migrated)[5]
 
         self.assertEqual(
             after,
@@ -527,8 +534,8 @@ class LiveEnergyImportTests(unittest.TestCase):
         )
 
     def test_a_schedulable_owner_keeps_identity_flags_and_controls(self) -> None:
-        before = self.without_energy["devices"]["items"][2]
-        after = self.migrated["devices"]["items"][2]
+        before = _all_devices(self.without_energy)[2]
+        after = _all_devices(self.migrated)[2]
 
         self.assertEqual(after["id"], "pool-filtration")
         self.assertEqual(
@@ -600,7 +607,7 @@ class LiveEnergyImportTests(unittest.TestCase):
         # the import fixes the one error v20 left, the parent's missing power
         # sensor, and adds none.
         self.assertIn(
-            ("devices.items[5].consumption.power_entity_id", "power_entity_required"),
+            ("devices.consumers[4].consumption.power_entity_id", "power_entity_required"),
             errors(self.without_energy),
         )
         self.assertEqual(
@@ -674,7 +681,7 @@ class StoredV21LoadTests(unittest.TestCase):
                 "name_cleaner_regex": " Výkon$",
                 "power_sensor_label": "Měření spotřeby elektřiny",
                 "power_switch_label": "Ovládání spotřeby elektřiny",
-                "items": [self.WASHER],
+                "consumers": [self.WASHER],
             },
         )
         self.assertEqual(

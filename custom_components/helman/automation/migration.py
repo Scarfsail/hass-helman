@@ -13,7 +13,7 @@ silently rewriting a user's YAML under them is worse than refusing it.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import Any
@@ -1326,7 +1326,7 @@ def _migrate_v22_to_v23(
     if entity_suggestions is None:
         return (document, [])
     picks: list[tuple[dict[str, Any], str | None, str | None]] = []
-    for device, _parent in iter_devices(document):
+    for device, _parent in _iter_items_devices(document):
         kind = peek_controllable_kind(device)
         meter = own_meter(device)
         if kind == CONTROLLABLE_KIND_INVERTER or meter is None:
@@ -1361,7 +1361,7 @@ def _migrate_v22_to_v23(
     claimed = [entity for _device, *entities in picks for entity in entities if entity]
     claimed += [
         entity.strip()
-        for device, _parent in iter_devices(document)
+        for device, _parent in _iter_items_devices(document)
         for entity in _named_power_and_switch(device)
     ]
     for device, power, switch in picks:
@@ -1381,6 +1381,19 @@ def _migrate_v22_to_v23(
             }
             _LOGGER.info("Device %s switch backfilled: %s", device_id, switch)
     return (document, [])
+
+
+def _iter_items_devices(
+    document: Mapping[str, Any],
+) -> Iterator[tuple[Mapping[str, Any], Mapping[str, Any] | None]]:
+    """:func:`iter_devices` over the v22-v24 ``devices.items`` list.
+
+    The reader walks the v25 lists, so a step that runs before v25 hands it
+    ``items`` as the one list it walks as a tree.
+    """
+    section = document.get("devices")
+    items = section.get("items") if isinstance(section, Mapping) else None
+    return iter_devices({"devices": {"consumers": items}})
 
 
 def _named_power_and_switch(device: Mapping[str, Any]) -> list[str]:
@@ -1434,6 +1447,40 @@ def _migrate_v23_to_v24(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v24_to_v25(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``devices.items`` splits into ``devices.system`` and ``devices.consumers``.
+
+    Top-level entries of kind ``inverter`` go to ``system``, all others to
+    ``consumers``, each in document order; a key is written only if it gets
+    entries. An ``items`` value that is not a list moves to ``consumers`` as is,
+    and an inverter nested as a child stays where it is, so the validator
+    reports either at its new path. A document without ``devices.items`` is
+    unchanged.
+    """
+    section = document.get("devices")
+    if not isinstance(section, dict) or "items" not in section:
+        return (document, [])
+    items = section.pop("items")
+    if not isinstance(items, list):
+        section["consumers"] = items
+        return (document, [])
+    system = [
+        item
+        for item in items
+        if peek_controllable_kind(item) == CONTROLLABLE_KIND_INVERTER
+    ]
+    consumers = [
+        item
+        for item in items
+        if peek_controllable_kind(item) != CONTROLLABLE_KIND_INVERTER
+    ]
+    if system:
+        section["system"] = system
+    if consumers:
+        section["consumers"] = consumers
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -1458,6 +1505,7 @@ _MIGRATIONS = {
     21: _migrate_v21_to_v22,
     # 22 -> 23 needs the entity suggestions: bound in migrate_config_document.
     23: _migrate_v23_to_v24,
+    24: _migrate_v24_to_v25,
 }
 
 

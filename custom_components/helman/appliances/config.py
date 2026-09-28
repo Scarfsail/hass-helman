@@ -9,7 +9,7 @@ from ..controllables.config import (
     is_schedulable,
     iter_device_paths,
     peek_controllable_kind,
-    read_devices,
+    read_consumers,
     read_name_cleaner_regex,
     resolve_device_name,
 )
@@ -99,12 +99,12 @@ def _has_devices_list(
     *,
     logger: logging.Logger,
 ) -> bool:
-    devices = read_devices(config)
+    devices = read_consumers(config)
     if devices is None:
         return False
 
     if not isinstance(devices, list):
-        logger.error("Ignoring devices config: 'devices.items' must be a list")
+        logger.error("Ignoring devices config: 'devices.consumers' must be a list")
         return False
 
     return True

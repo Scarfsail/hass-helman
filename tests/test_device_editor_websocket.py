@@ -42,7 +42,7 @@ def test_non_admin_preview_never_reads_energy():
 def test_preview_uses_editor_draft_and_current_energy_without_saving():
     conn = connection(True)
     config = {
-        "devices": {"items": [
+        "devices": {"consumers": [
             {"id": "draft", "consumption": {"energy_entity_id": "sensor.draft"}}
         ]}
     }
@@ -63,5 +63,5 @@ def test_preview_uses_editor_draft_and_current_energy_without_saving():
     result = conn.send_result.call_args.args[1]
     assert [device["id"] for device in result["devices"]] == ["draft", "new"]
     assert result["validation"]["valid"]
-    assert len(config["devices"]["items"]) == 1
+    assert len(config["devices"]["consumers"]) == 1
     storage.async_save.assert_not_awaited()

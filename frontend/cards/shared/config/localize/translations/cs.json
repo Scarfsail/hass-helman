@@ -81,8 +81,8 @@
       "config": "Konfigurace",
       "diagnostics": "Diagnostika",
       "device_settings": "Nastavení zařízení",
-      "configured_devices": "Nakonfigurovaná zařízení",
-      "inverter": "Střídač",
+      "consumers": "Spotřebiče",
+      "system_devices": "Systémová zařízení",
       "measurements": "Měření",
       "projection": "Odhad spotřeby",
       "children": "Podřízená zařízení"
@@ -105,7 +105,8 @@
       "training_settings_what": "Helman trénuje tři modely na vaší vlastní zaznamenané historii: co solární pole doopravdy vyrobí oproti prognóze, kolik domácnost spotřebuje v kterou denní dobu a kolik každý řízený spotřebič spotřebuje za hodinu provozu. Trénování běží jednou denně v čase nastaveném níže a každý model lze natrénovat i ručně. Všechno, co plánovač předpovídá, na nich stojí -- model, který se nenatrénoval nebo má příliš málo historie, se tak projeví zde, a ne až jako tiše chybný plán.",
       "training_solar_bias_slot_invalidation": "Ne každý zaznamenaný slot je poctivým důkazem o prognóze. Při plné baterii a nulovém exportu měnič výrobu přiškrtí, takže výroba vyjde nízko, přestože prognóza byla správná; stejně tak může chyba měřidla jediný slot vyhnat do špičky nebo srazit na nulu. Tyto prahy určují, které sloty se před sestavením modelu vyřadí, aby se korekce učila z počasí, a ne z přiškrcení a vadných dat.",
       "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy.",
-      "devices": "Všechna zařízení domu, která spotřebovávají energii, jako strom: zařízení může mít podřízená zařízení, která mají vlastní elektroměr, nebo odebírají z jeho elektroměru. Plánovatelná zařízení Helman plánuje a spouští, ostatní jen měří. Střídač se nastavuje v Energetických uzlech."
+      "devices": "Všechna zařízení domu, která spotřebovávají energii, jako strom: zařízení může mít podřízená zařízení, která mají vlastní elektroměr, nebo odebírají z jeho elektroměru. Plánovatelná zařízení Helman plánuje a spouští, ostatní jen měří.",
+      "system_devices": "Zařízení, která řídí celou instalaci, místo aby spotřebovávala energii; dnes bateriový střídač."
     },
     "empty": {
       "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
@@ -384,7 +385,7 @@
       "validation_failed": "Validace vrátila chyby backendu. Zkontrolujte seznam problémů níže.",
       "validate_config_failed": "Nepodařilo se validovat konfiguraci v backendu.",
       "import_energy_failed": "Nepodařilo se načíst náhled importu z panelu Energie.",
-      "import_energy_invalid_devices": "Nejdřív opravte hodnotu devices: musí to být objekt se seznamem pod devices.items.",
+      "import_energy_invalid_devices": "Nejdřív opravte hodnotu devices: musí to být objekt se zařízeními pod devices.consumers.",
       "suggestions_failed": "Nepodařilo se načíst návrhy entit.",
       "config_saved_reload_started": "Konfigurace byla uložena. Restart Helman byl spuštěn.",
       "config_saved": "Konfigurace byla uložena.",

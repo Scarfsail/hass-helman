@@ -318,7 +318,7 @@ The matching helman config:
 
 ```yaml
 devices:
-  items:
+  system:
     - kind: inverter
       id: inverter
       name: Inverter
@@ -378,12 +378,12 @@ active.
 only needs something switchable — Solax exposes charging as a *mode select*, not a switch, so the
 switch has to be built.
 
-**Used in helman at** `devices[garage-ev].controls.charge.entity_id`. The mode selects beside
+**Used in helman at** `devices.consumers[garage-ev].controls.charge.entity_id`. The mode selects beside
 it are inverter-native and used directly:
 
 ```yaml
 devices:
-  items:
+  consumers:
     - kind: ev_charger
       id: garage-ev
       schedulable: true

@@ -356,7 +356,7 @@ class SharedMeterRowsTests(unittest.TestCase):
 
     def setUp(self) -> None:
         config = _upgrade()
-        breaker = next(d for d in config["devices"]["items"] if d.get("id") == "jistic_klimatizace_energy")
+        breaker = next(d for d in config["devices"]["consumers"] if d.get("id") == "jistic_klimatizace_energy")
         breaker["controls"] = {"switch": {"entity_id": "switch.jistic_klimatizace"}}
         self.breaker = next(
             node for node in _house(_build(config))["children"] if node["id"] == AC_BREAKER
@@ -404,7 +404,7 @@ class PowerlessParentTests(unittest.TestCase):
         # An energy-only Energy parent: nothing to subtract its children from.
         config = {
             **_upgrade(),
-            "devices": {"items": [
+            "devices": {"consumers": [
                 {
                     "id": "garage",
                     "consumption": {"energy_entity_id": "sensor.garage_energy"},
@@ -452,7 +452,7 @@ class NameResolutionTests(unittest.TestCase):
         "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {
             "name_cleaner_regex": " Výkon$",
-            "items": [
+            "consumers": [
                 {
                     "kind": "generic",
                     "id": "washer",
@@ -480,7 +480,7 @@ class NameResolutionTests(unittest.TestCase):
             self.CONFIG, friendly_name=lambda entity_id: entity_friendly_name(hass, entity_id)
         )
         placeholder = inspect_target(
-            hass, self.CONFIG, ("devices", "items", 0, "name")
+            hass, self.CONFIG, ("devices", "consumers", 0, "name")
         ).placeholder
 
         self.assertEqual(
@@ -509,13 +509,13 @@ class MissingEntityTests(unittest.TestCase):
 
         index = next(
             i
-            for i, device in enumerate(config["devices"]["items"])
+            for i, device in enumerate(config["devices"]["consumers"])
             if device.get("id") == "jistic_klimatizace_energy"
         )
         inspection = inspect_target(
             SimpleNamespace(states=_States(missing=frozenset({missing}))),
             config,
-            ("devices", "items", index, "consumption", "power_entity_id"),
+            ("devices", "consumers", index, "consumption", "power_entity_id"),
         )
         self.assertEqual(inspection.entity_id, missing)
         self.assertEqual(inspection.status, "unavailable")

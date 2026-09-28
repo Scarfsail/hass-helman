@@ -78,9 +78,10 @@ _RELOCATED_DEVICE_KEYS = {
     "energy_nodes.house.power_switch_label": "devices.power_switch_label",
 }
 
-#: The keys the ``devices`` section object holds since config version 22.
+#: The keys the ``devices`` section object holds since config version 25.
 _DEVICES_SECTION_KEYS = (
-    "items",
+    "consumers",
+    "system",
     "name_cleaner_regex",
     "power_sensor_label",
     "power_switch_label",
@@ -998,22 +999,24 @@ def _validate_controllables_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """One walk over the ``devices:`` tree, covering every kind and every level.
+    """One walk over the ``devices:`` lists, covering every kind and every level.
 
     Walks through :func:`~.controllables.config.iter_device_paths`, the same
     generator every runtime reader flattens the tree with, so the validator and
     the readers cannot disagree about what is in it. Reported under the
     ``devices`` section, which is the editor tab the devices live on.
 
-    Per device: its kind, its id (unique across the whole tree; ``inverter`` is
-    reserved), its ``consumption`` block, and — only when it is schedulable —
-    the per-kind runtime reader. Per parent: the rules that relate a device to
-    its children (see :func:`_validate_device_children`). Across the tree: a
-    meter belongs to exactly one device.
+    Per device: its kind, its id (unique across both lists, because optimizers
+    target by id through one namespace; ``inverter`` is reserved), its
+    ``consumption`` block, and — only when it is schedulable — the per-kind
+    runtime reader. Per parent: the rules that relate a device to its children
+    (see :func:`_validate_device_children`). Across the tree: a meter belongs to
+    exactly one device.
 
-    Since config version 22 ``devices`` is a section object: the tree under
-    ``items`` beside the device-level settings. Their old spellings, and a bare
-    ``devices`` list, are refused by name.
+    Since config version 25 ``devices`` is a section object: the flat
+    ``system`` list (the inverter, and only it) and the ``consumers`` tree
+    beside the device-level settings. Their old spellings, the pre-v25
+    ``items`` list, and a bare ``devices`` list, are refused by name.
     """
     section = "devices"
     for retired_key in _RETIRED_CONFIG_KEYS:
@@ -1049,7 +1052,10 @@ def _validate_controllables_config(
             section=section,
             path="devices",
             code="relocated_config_key",
-            message="devices is now an object; put the list under devices.items",
+            message=(
+                "devices is now an object; put the devices under "
+                "devices.consumers and devices.system"
+            ),
         )
         return
     if not isinstance(raw_section, Mapping):
@@ -1061,7 +1067,14 @@ def _validate_controllables_config(
         )
         return
     for key in raw_section:
-        if key not in _DEVICES_SECTION_KEYS:
+        if key == "items":
+            report.add_error(
+                section=section,
+                path="devices.items",
+                code="relocated_config_key",
+                message="devices.items split into devices.consumers and devices.system",
+            )
+        elif key not in _DEVICES_SECTION_KEYS:
             report.add_error(
                 section=section,
                 path=f"devices.{key}",
@@ -1074,17 +1087,15 @@ def _validate_controllables_config(
             report, section, f"devices.{key}", raw_section.get(key)
         )
 
-    raw_devices = raw_section.get("items")
-    if raw_devices is None:
-        return
-    if not isinstance(raw_devices, list):
-        report.add_error(
-            section=section,
-            path="devices.items",
-            code="invalid_type",
-            message="devices.items must be a list",
-        )
-        return
+    for key in ("system", "consumers"):
+        raw_list = raw_section.get(key)
+        if raw_list is not None and not isinstance(raw_list, list):
+            report.add_error(
+                section=section,
+                path=f"devices.{key}",
+                code="invalid_type",
+                message=f"devices.{key} must be a list",
+            )
 
     seen_ids: set[str] = set()
     meter_owners: dict[str, list[str]] = {}
@@ -1107,6 +1118,27 @@ def _validate_controllables_config(
                 path=f"{path}.kind",
                 code="required",
                 message=f"{path}.kind must be a non-empty string",
+            )
+            continue
+
+        in_system = path.startswith("devices.system")
+        if in_system and kind != CONTROLLABLE_KIND_INVERTER:
+            report.add_error(
+                section=section,
+                path=f"{path}.kind",
+                code="system_kind_not_supported",
+                message=(
+                    f"{path}.kind must be {CONTROLLABLE_KIND_INVERTER!r}; the "
+                    "inverter is the only system device"
+                ),
+            )
+            continue
+        if not in_system and kind == CONTROLLABLE_KIND_INVERTER:
+            report.add_error(
+                section=section,
+                path=path,
+                code="inverter_not_in_system",
+                message="the inverter belongs under devices.system",
             )
             continue
 
@@ -1142,15 +1174,6 @@ def _validate_controllables_config(
             )
             continue
 
-        if kind == CONTROLLABLE_KIND_INVERTER and parent is not None:
-            report.add_error(
-                section=section,
-                path=path,
-                code="inverter_not_top_level",
-                message="the inverter is a top-level device; it cannot be a child",
-            )
-            continue
-
         # Before the id check, deliberately: a second inverter almost always
         # also reuses the reserved id, and "you have two inverters" is the
         # finding, not "this id is taken".
@@ -1183,15 +1206,15 @@ def _validate_controllables_config(
         if kind == CONTROLLABLE_KIND_INVERTER:
             seen_inverter = True
             _validate_inverter_controllable(config, raw_device, path, report)
-            # The inverter is always schedulable, and schedulable devices are
-            # leaves.
-            if raw_device.get("children") is not None:
-                report.add_error(
-                    section=section,
-                    path=f"{path}.children",
-                    code="inverter_with_children",
-                    message=f"{path} is the inverter and cannot have children",
-                )
+            # A system device never nests and is always schedulable.
+            for key in ("children", "schedulable"):
+                if raw_device.get(key) is not None:
+                    report.add_error(
+                        section=section,
+                        path=f"{path}.{key}",
+                        code=f"{key}_not_allowed",
+                        message=f"{path} is a system device and takes no {key}",
+                    )
             continue
 
         schedulable = raw_device.get("schedulable")

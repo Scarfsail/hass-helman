@@ -68,13 +68,14 @@ const CONFIG = {
             slot_invalidation: { max_battery_soc_percent: 95 },
         },
     },
-    devices: { items: [
+    devices: { system: [
         {
             kind: "inverter",
             id: "inverter",
             name: "Inverter",
             controls: { mode: { entity_id: "select.inverter_mode", options: {} } },
         },
+    ], consumers: [
         {
             kind: "generic",
             schedulable: true,
@@ -90,14 +91,14 @@ const CONFIG = {
 };
 
 /**
- * The same, for the tab whose entity groups live inside device cards. The
- * inverter's mode entity is not here: the inverter is edited under Power
- * devices.
+ * The same, for the tab whose entity groups live inside device cards,
+ * the inverter's included.
  */
 const DEVICE_ENTITY_PATHS = [
-    "devices.items.1.controls.switch.entity_id",
-    "devices.items.1.consumption.energy_entity_id",
-    "devices.items.1.consumption.power_entity_id",
+    "devices.system.0.controls.mode.entity_id",
+    "devices.consumers.0.controls.switch.entity_id",
+    "devices.consumers.0.consumption.energy_entity_id",
+    "devices.consumers.0.consumption.power_entity_id",
 ].sort();
 
 const DAILY_ENERGY_ENTITIES =
@@ -126,8 +127,6 @@ const POWER_DEVICE_ENTITY_PATHS = [
     "energy_nodes.battery.entities.max_soc",
     "energy_nodes.grid.entities.power",
     "energy_nodes.grid.forecast.sell_price_entity_id",
-    // The inverter keeps its `devices` entry but is edited here.
-    "devices.items.0.controls.mode.entity_id",
 ].sort();
 
 async function mountEditor(page: Page): Promise<void> {

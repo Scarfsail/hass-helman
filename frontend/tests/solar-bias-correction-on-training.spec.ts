@@ -25,7 +25,7 @@ const CONFIG = {
             },
         },
     },
-    devices: { items: [] },
+    devices: { consumers: [] },
     training: {
         solar_bias: {
             min_history_days: 10,

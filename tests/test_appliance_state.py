@@ -34,7 +34,7 @@ from custom_components.helman.appliances import (
 
 def _valid_config() -> dict:
     return {
-        "devices": {"items": [
+        "devices": {"consumers": [
             {
                 "kind": "ev_charger",
                 "schedulable": True,
@@ -174,7 +174,7 @@ class ApplianceStateTests(unittest.TestCase):
 
     def test_vehicle_and_eco_gear_order_is_preserved(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["vehicles"].append(
+        config["devices"]["consumers"][0]["vehicles"].append(
             {
                 "id": "enyaq",
                 "name": "Enyaq",
@@ -187,7 +187,7 @@ class ApplianceStateTests(unittest.TestCase):
                 },
             }
         )
-        config["devices"]["items"][0]["controls"]["eco_gear"]["values"] = {
+        config["devices"]["consumers"][0]["controls"]["eco_gear"]["values"] = {
             "16A": {"min_power_kw": 3.7},
             "6A": {"min_power_kw": 1.4},
             "10A": {"min_power_kw": 2.3},
@@ -207,7 +207,7 @@ class ApplianceStateTests(unittest.TestCase):
 
     def test_optional_charge_limit_telemetry_is_omitted(self) -> None:
         config = _valid_config()
-        del config["devices"]["items"][0]["vehicles"][0]["telemetry"]["charge_limit_entity_id"]
+        del config["devices"]["consumers"][0]["vehicles"][0]["telemetry"]["charge_limit_entity_id"]
 
         registry = build_appliances_runtime_registry(config)
         response = build_appliances_response(registry)
@@ -218,7 +218,7 @@ class ApplianceStateTests(unittest.TestCase):
     def test_saved_config_does_not_change_active_registry_until_rebuild(self) -> None:
         original_registry = build_appliances_runtime_registry(_valid_config())
         updated = _valid_config()
-        updated["devices"]["items"][0]["name"] = "Updated EV"
+        updated["devices"]["consumers"][0]["name"] = "Updated EV"
 
         active_response = build_appliances_response(original_registry)
         rebuilt_response = build_appliances_response(
@@ -230,7 +230,7 @@ class ApplianceStateTests(unittest.TestCase):
 
     def test_generic_appliance_response_matches_metadata_only_shape(self) -> None:
         config = _valid_config()
-        config["devices"]["items"].append(_generic_appliance())
+        config["devices"]["consumers"].append(_generic_appliance())
 
         registry = build_appliances_runtime_registry(config)
 
@@ -254,7 +254,7 @@ class ApplianceStateTests(unittest.TestCase):
 
     def test_climate_appliance_response_matches_metadata_only_shape(self) -> None:
         config = _valid_config()
-        config["devices"]["items"].append(_climate_appliance())
+        config["devices"]["consumers"].append(_climate_appliance())
 
         registry = build_appliances_runtime_registry(config)
 
@@ -301,10 +301,10 @@ class ApplianceStateTests(unittest.TestCase):
 
     def test_configured_icons_are_preserved_in_metadata(self) -> None:
         config = _valid_config()
-        config["devices"]["items"][0]["icon"] = "hass:car-electric"
+        config["devices"]["consumers"][0]["icon"] = "hass:car-electric"
         generic = _generic_appliance()
         generic["icon"] = "phu:socket-eu"
-        config["devices"]["items"].append(generic)
+        config["devices"]["consumers"].append(generic)
 
         registry = build_appliances_runtime_registry(config)
         response = build_appliances_response(registry)

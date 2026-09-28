@@ -54,7 +54,7 @@ def _at(hour: int, minute: int = 0) -> datetime:
 def _study(*, lamp_schedulable: bool) -> dict:
     """The study breaker: a schedulable sub-metered plug and a meterless lamp."""
     return {
-        "devices": {"items": [
+        "devices": {"consumers": [
             {
                 "id": "study",
                 "consumption": {"energy_entity_id": STUDY},
@@ -298,7 +298,7 @@ class TopologyFingerprintTests(unittest.TestCase):
 
     def test_adding_a_sub_meter_changes_both_fingerprints(self) -> None:
         flat = _study(lamp_schedulable=True)
-        del flat["devices"]["items"][0]["children"][0]
+        del flat["devices"]["consumers"][0]["children"][0]
         nested = _study(lamp_schedulable=True)
 
         self.assertNotEqual(self._house_fingerprint(flat), self._house_fingerprint(nested))

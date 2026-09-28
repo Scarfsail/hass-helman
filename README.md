@@ -48,7 +48,7 @@ and surface custom label badges per device.
 
 - Live power and per-bucket history bars (configurable buckets and duration)
 - Sources vs Consumers layout with animated flow arrows scaled by max power
-- House device tree built from `devices.items` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that; on upgrade to config version 23 each metered device missing a power sensor or switch gains them from the HA device owning its meter (the top-ranked power sensor; a switch only when it carries the power-switch label or is named like the HA device)
+- House device tree built from `devices.consumers` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that; on upgrade to config version 23 each metered device missing a power sensor or switch gains them from the HA device owning its meter (the top-ranked power sensor; a switch only when it carries the power-switch label or is named like the HA device)
 - Optional house consumption forecast in the node detail dialogs
 - Entity disambiguation via HA Labels for power sensor and power switch suggestions
 - Group devices by label categories (e.g., Location, Type) with emojis/text
@@ -115,10 +115,11 @@ Common optional fields:
   `sensor.helman_solar_forecast_today_remaining` and is not configurable.
 
 **`devices`**
-The device tree and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. A stored config is migrated on load.
-- `items`: list — The devices, as described under "House consumption forecast" below.
+The devices and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. Since config version 25 the single `items` list is split in two. A stored config is migrated on load.
+- `consumers`: list — The devices that draw power, as a tree, as described under "House consumption forecast" below.
+- `system`: list — The devices that control the site rather than draw power; today only the battery inverter (`kind: inverter`, `id: inverter`, at most one). A system device never nests and takes no `consumption` or `schedulable`.
 - `name_cleaner_regex`: string — Python regular expression (`re.sub`) removed from an entity's friendly name wherever a device without a `name` is named from it: the card, the inspector, the schedulable runtimes and the Devices editor. E.g. `" - [Pp]ower$"`.
-- `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.items` configures. Label names must match HA Labels exactly.
+- `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.consumers` configures. Label names must match HA Labels exactly.
 
 All energy sensors auto-detect units from `unit_of_measurement` (Wh, kWh, MWh, GWh supported).
 
@@ -171,7 +172,7 @@ training:
 
 ```yaml
 devices:
-  items:
+  consumers:
     - id: ev
       kind: ev_charger
       name: EV Charging

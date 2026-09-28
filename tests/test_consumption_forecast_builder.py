@@ -194,7 +194,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             # The deferrable split is read off the controllables now: the
             # washer is one because it is a controllable that names its meter,
             # not because a second list said so.
-            "devices": {"items": [
+            "devices": {"consumers": [
                 {
                     "kind": "generic",
                     "schedulable": True,
