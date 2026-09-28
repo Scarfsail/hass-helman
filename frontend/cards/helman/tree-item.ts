@@ -44,9 +44,11 @@ export class TreeItem {
     public energyEntityId?: string;
     // What locates this box's device in the config: its meter, or its
     // controllable id when it has none. Set only on config devices; its
-    // presence is what makes a name click open the device detail. It is a
-    // meter exactly when it equals energyEntityId, and an id otherwise.
+    // presence is what makes a name click open the device detail.
     public deviceKey?: string;
+    // Which of the two deviceKey is: ids and meters are each unique on their
+    // own but not across each other, so the key alone cannot say.
+    public deviceKeyIsMeter?: boolean;
     public valueType: ValueType;
 
     public sourcePowerHistory?: { [sourceName: string]: { power: number; color: string } }[];

@@ -146,7 +146,7 @@ export class NodeDetailDeviceContent extends LitElement {
                 .localize=${this.localize}
                 .open=${true}
                 .deviceKey=${item.deviceKey}
-                .keyIsMeter=${item.deviceKey === item.energyEntityId}
+                .keyIsMeter=${item.deviceKeyIsMeter === true}
                 @closed=${() => { this._editing = false; }}
             ></helman-device-edit-dialog>
         `;
