@@ -1164,6 +1164,11 @@ def _validate_controllables_config(
             else:
                 share_slugs[slug] = path
 
+        # Membership is kind-independent, so a preserved unknown kind is
+        # checked too; a system device refuses ``groups`` below.
+        if kind != CONTROLLABLE_KIND_INVERTER:
+            _validate_device_groups(raw_device.get("groups"), path, known_groups, report)
+
         if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(
                 section=section,
@@ -1218,8 +1223,6 @@ def _validate_controllables_config(
                         message=f"{path} is a system device and takes no {key}",
                     )
             continue
-
-        _validate_device_groups(raw_device.get("groups"), path, known_groups, report)
 
         schedulable = raw_device.get("schedulable")
         if schedulable is not None and not isinstance(schedulable, bool):

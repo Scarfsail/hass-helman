@@ -1299,6 +1299,19 @@ class ConfigValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_an_unsupported_kind_still_names_only_known_groups(self) -> None:
+        config = _valid_config()
+        config["devices"]["consumers"].append(
+            {"kind": "heat_pump", "groups": {"floors": "garage"}}
+        )
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [("devices.consumers[1].groups.floors", "unknown_grouping")],
+        )
+
     def test_a_system_device_takes_no_groups(self) -> None:
         config = _valid_config()
         config["devices"]["system"][0]["groups"] = {"rooms": "garage"}
