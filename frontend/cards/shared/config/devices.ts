@@ -2,12 +2,13 @@ import { asJsonArray, asJsonObject } from "./config-document";
 import type { JsonObject, JsonValue, PathSegment } from "./types";
 
 /**
- * The draft's `devices.items` tree, read the way the backend reads it.
+ * The draft's devices, read the way the backend reads them.
  *
- * Mirrors `custom_components/helman/controllables/config.py`: the tree is
- * flattened depth first in document order, `kind` defaults to `generic`, and
- * only a device that says `schedulable: true` (or the inverter) may be planned
- * or targeted. Kept to what the editor needs.
+ * Mirrors `custom_components/helman/controllables/config.py`: the flat
+ * `devices.system` list first, then the `devices.consumers` tree flattened
+ * depth first in document order, `kind` defaults to `generic`, and only a
+ * device that says `schedulable: true` (or the inverter) may be planned or
+ * targeted. Kept to what the editor needs.
  */
 
 /** One device, with its parent and where it sits in the document. */
@@ -28,7 +29,13 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
       walk(device.children, device, [...devicePath, "children"]);
     });
   };
-  walk(asJsonObject(config?.devices)?.items, null, ["devices", "items"]);
+  const devices = asJsonObject(config?.devices);
+  // Flat: a system device never nests.
+  (asJsonArray(devices?.system) ?? []).forEach((value, index) => {
+    const device = asJsonObject(value);
+    if (device) entries.push({ device, parent: null, path: ["devices", "system", index] });
+  });
+  walk(devices?.consumers, null, ["devices", "consumers"]);
   return entries;
 }
 
@@ -66,7 +73,7 @@ export function meterlessChildren(device: JsonObject): JsonObject[] {
  * and every one of them is schedulable.
  */
 export function isCarvedMeterOwner(device: JsonObject): boolean {
-  if (deviceKind(device) === "inverter" || !ownMeter(device)) return false;
+  if (!ownMeter(device)) return false;
   if (isSchedulable(device)) return true;
   const meterless = meterlessChildren(device);
   return meterless.length > 0 && meterless.every(isSchedulable);
@@ -77,7 +84,7 @@ export function isCarvedMeterOwner(device: JsonObject): boolean {
  * (a schedulable device is a leaf). What the parent picker offers.
  */
 export function canHaveChildren(device: JsonObject): boolean {
-  return deviceKind(device) !== "inverter" && !!ownMeter(device) && !isSchedulable(device);
+  return !!ownMeter(device) && !isSchedulable(device);
 }
 
 /**

@@ -105,13 +105,14 @@ const CONFIG = {
         house_consumption: { min_history_days: 30 },
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
-    devices: { items: [
+    devices: { system: [
         {
             kind: "inverter",
             id: "inverter",
             name: "Inverter",
             controls: { mode: { entity_id: "select.inverter_mode", options: {} } },
         },
+    ], consumers: [
         {
             kind: "ev_charger",
             schedulable: true,

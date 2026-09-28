@@ -12,7 +12,7 @@ import { resolve } from "node:path";
  * The fixture is the live setup in miniature: an AC breaker whose climate
  * children draw from its meter, a study breaker with a sub-metered PC and a
  * passive lamp on its meter, and a schedulable boiler of its own. The inverter
- * keeps its `devices` entry but is edited under Energy nodes.
+ * sits in `devices.system`, edited in the tab's System section.
  */
 
 const BUNDLE = resolve(
@@ -81,21 +81,21 @@ const BOILER = {
     },
 };
 
-const DEVICES = [INVERTER, BREAKER, STUDY, BOILER];
+const DEVICES = [BREAKER, STUDY, BOILER];
 
 /** What the backend's name resolution answers, by name/icon path key. */
 const PLACEHOLDERS: Record<string, string> = {
-    "devices.items.1.name": "AC breaker",
-    "devices.items.1.icon": "mdi:air-conditioner",
-    "devices.items.1.children.0.name": "Obývák",
-    "devices.items.1.children.1.name": "Ložnice",
+    "devices.consumers.0.name": "AC breaker",
+    "devices.consumers.0.icon": "mdi:air-conditioner",
+    "devices.consumers.0.children.0.name": "Obývák",
+    "devices.consumers.0.children.1.name": "Ložnice",
 };
 
 type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { items: Device[] } };
+        __editorConfig: () => { devices: { consumers: Device[]; system?: Device[] } };
         __inspectKeys: string[];
         __validation: unknown;
         __card: (id: string) => HTMLDetailsElement | null;
@@ -107,6 +107,7 @@ async function mountEditor(
     page: Page,
     devices: unknown[] = DEVICES,
     validation: unknown = { valid: true, errors: [], warnings: [] },
+    system: unknown[] = [INVERTER],
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -123,7 +124,7 @@ async function mountEditor(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
             window.__editorConfig = () =>
-                (element as unknown as { _config: { devices: { items: Device[] } } })._config;
+                (element as unknown as { _config: { devices: { consumers: Device[] } } })._config;
             window.__inspectKeys = [];
             window.__validation = report;
             window.__card = (id) =>
@@ -181,7 +182,11 @@ async function mountEditor(
             };
             document.body.appendChild(element);
         },
-        { config: { config_version: 22, devices: { items: devices } }, placeholders: PLACEHOLDERS, report: validation },
+        {
+            config: { config_version: 25, devices: { ...(system.length ? { system } : {}), consumers: devices } },
+            placeholders: PLACEHOLDERS,
+            report: validation,
+        },
     );
 }
 
@@ -189,12 +194,14 @@ test("the device settings sit above the list and the regex renames the cards", a
     page,
 }) => {
     await mountEditor(page);
-    await openTab(page, "Devices");
+    await openTab(page, "Devices", false);
 
     const sections = page.locator("helman-config-editor-panel").locator("details.section-card");
-    // The tab's own sections, in order; device cards nest sections of their own.
-    const labels = await sections.locator(":scope > summary .section-summary-label").allTextContents();
-    expect(labels.slice(0, 2)).toEqual(["Device settings", "Configured devices"]);
+    expect(await tabSections(page)).toEqual([
+        { label: "Device settings", open: false },
+        { label: "System", open: false },
+        { label: "Consumers", open: false },
+    ]);
     await expect
         .poll(() =>
             page.evaluate(() => window.__own("jistic_klimatizace_energy", ".card-title strong")[0]?.textContent?.trim()),
@@ -218,15 +225,53 @@ test("the device settings sit above the list and the regex renames the cards", a
         .toBe("AC");
 });
 
-async function openTab(page: Page, label: string): Promise<void> {
-    await page
-        .locator("helman-config-editor-panel")
-        .locator(".tabs")
-        .getByRole("button", { name: label, exact: true })
-        .click();
+/** The active tab's own sections, in order, and whether each is open. */
+const tabSections = (page: Page) =>
+    page.evaluate(() =>
+        Array.from(
+            document
+                .querySelector("helman-config-editor-panel")
+                ?.shadowRoot?.querySelectorAll<HTMLDetailsElement>("details.section-card") ?? [],
+        )
+            // Device cards nest sections of their own.
+            .filter((details) => !details.parentElement?.closest("details"))
+            .map((details) => ({
+                label: details.querySelector(":scope > summary .section-summary-label")?.textContent?.trim(),
+                open: details.open,
+            })),
+    );
+
+test("the Automation tab lists system optimizers first, every section collapsed", async ({ page }) => {
+    await mountEditor(page);
+    await openTab(page, "Automation");
+
+    await expect
+        .poll(() => tabSections(page))
+        .toEqual([
+            { label: "Automation settings", open: false },
+            { label: "System optimizers", open: false },
+            { label: "Appliance optimizers", open: false },
+        ]);
+});
+
+/**
+ * Switch tabs. The Devices tab starts with every section collapsed, so its
+ * System and Consumers sections are opened too unless `expand` is false.
+ */
+async function openTab(page: Page, label: string, expand = label === "Devices"): Promise<void> {
+    const panel = page.locator("helman-config-editor-panel");
+    await panel.locator(".tabs").getByRole("button", { name: label, exact: true }).click();
+    if (!expand) return;
+    for (const section of ["System", "Consumers"]) {
+        await panel
+            .locator("details.section-card", {
+                has: page.locator(":scope > summary .section-summary-label", { hasText: section }),
+            })
+            .evaluate((details) => ((details as HTMLDetailsElement).open = true));
+    }
 }
 
-const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.items);
+const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.consumers);
 
 /** The ids of the cards the tab shows, in document order, hidden ones left out. */
 const visibleCardIds = (page: Page) =>
@@ -314,7 +359,7 @@ test("the overview row shows the resolved name, icon and derived badges", async 
         )
         .toBe("AC breaker");
     expect(await page.evaluate(() => window.__inspectKeys)).toEqual(
-        expect.arrayContaining(["devices.items.1.name", "devices.items.1.icon", "devices.items.1.children.0.name"]),
+        expect.arrayContaining(["devices.consumers.0.name", "devices.consumers.0.icon", "devices.consumers.0.children.0.name"]),
     );
     const breaker = await page.evaluate(() => ({
         icon: (window.__own("jistic_klimatizace_energy", "summary ha-icon")[0] as any)?.icon,
@@ -381,7 +426,7 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
     // Under a parent, a climate entity makes a child on the parent's meter,
     // as schedulable as the siblings already there.
     await addDevice(page, ".add-device", "climate.kuchyn");
-    await expect.poll(async () => (await config(page))[1].children.at(-1)).toEqual({
+    await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
         id: "kuchyn",
         kind: "climate",
         controls: { climate: { entity_id: "climate.kuchyn" } },
@@ -391,7 +436,7 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
 
     // A light is switched like a switch: it becomes the child's switch control.
     await addDevice(page, ".add-device", "light.hall");
-    await expect.poll(async () => (await config(page))[1].children.at(-1)).toEqual({
+    await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
         id: "hall",
         controls: { switch: { entity_id: "light.hall" } },
         schedulable: true,
@@ -435,10 +480,10 @@ test("scheduling keeps a configured projection's figures and seeds the required 
 test("generated child ids avoid share sensor slug collisions", async ({ page }) => {
     const breaker = structuredClone(BREAKER);
     breaker.children[0].id = "ac-room";
-    await mountEditor(page, [INVERTER, breaker]);
+    await mountEditor(page, [breaker]);
     await openTab(page, "Devices");
     await addDevice(page, ".add-device", "climate.ac_room");
-    await expect.poll(async () => (await config(page))[1].children.at(-1)?.id).toBe("ac_room_2");
+    await expect.poll(async () => (await config(page))[0].children.at(-1)?.id).toBe("ac_room_2");
 });
 
 test("reordering devices closes an add picker tied to the old parent path", async ({ page }) => {
@@ -449,10 +494,10 @@ test("reordering devices closes an add picker tied to the old parent path", asyn
     await expect(panel.locator(".add-device-picker")).toHaveCount(1);
     await panel.locator("ha-sortable").first().evaluate((sortable) => {
         sortable.dispatchEvent(new CustomEvent("item-moved", {
-            detail: { oldIndex: 1, newIndex: 2 }, bubbles: true, composed: true,
+            detail: { oldIndex: 0, newIndex: 1 }, bubbles: true, composed: true,
         }));
     });
-    await expect.poll(async () => (await config(page))[2].id).toBe(BREAKER.id);
+    await expect.poll(async () => (await config(page))[1].id).toBe(BREAKER.id);
     await expect(panel.locator(".add-device-picker")).toHaveCount(0);
 });
 
@@ -470,22 +515,22 @@ test("nested children render and edit in place", async ({ page }) => {
     });
 
     const devices = await config(page);
-    expect(devices[1].children[1]).toEqual({ ...klima("klima_loznice"), name: "Bedroom AC" });
-    expect(devices[1].children[0]).toEqual(klima("klima_obyvak"));
+    expect(devices[0].children[1]).toEqual({ ...klima("klima_loznice"), name: "Bedroom AC" });
+    expect(devices[0].children[0]).toEqual(klima("klima_obyvak"));
 });
 
 test("changing a child kind clears controls that could hide its new running signal", async ({ page }) => {
     const study = structuredClone(STUDY);
     (study.children[1] as Device).controls.switch.entity_id = "switch.lamp";
-    await mountEditor(page, [INVERTER, BREAKER, study, BOILER]);
+    await mountEditor(page, [BREAKER, study, BOILER]);
     await openTab(page, "Devices");
     await page.evaluate(() => {
         const picker = window.__own("lamp", "select.device-kind")[0] as HTMLSelectElement;
         picker.value = "climate";
         picker.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     });
-    await expect.poll(async () => (await config(page))[2].children[1].kind).toBe("climate");
-    expect((await config(page))[2].children[1]).not.toHaveProperty("controls");
+    await expect.poll(async () => (await config(page))[1].children[1].kind).toBe("climate");
+    expect((await config(page))[1].children[1]).not.toHaveProperty("controls");
     await page.evaluate(() => {
         const group = window.__own("lamp", "helman-entity-group").find(
             (element) => (element as HTMLElement & { path: string[] }).path.includes("climate"),
@@ -494,7 +539,7 @@ test("changing a child kind clears controls that could hide its new running sign
             detail: { value: "climate.lamp" }, bubbles: true, composed: true,
         }));
     });
-    await expect.poll(async () => (await config(page))[2].children[1].controls).toEqual({
+    await expect.poll(async () => (await config(page))[1].children[1].controls).toEqual({
         climate: { entity_id: "climate.lamp" },
     });
 });
@@ -524,9 +569,8 @@ test("the parent picker moves a device with its subtree", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");
 
-    await choose(page, "study", "select.device-parent", "devices.items.1");
+    await choose(page, "study", "select.device-parent", "devices.consumers.0");
     await expect.poll(() => config(page)).toEqual([
-        INVERTER,
         { ...BREAKER, children: [...BREAKER.children, STUDY] },
         BOILER,
     ]);
@@ -535,7 +579,7 @@ test("the parent picker moves a device with its subtree", async ({ page }) => {
     await choose(page, "pc", "select.device-parent", "");
     const devices = await config(page);
     expect(devices.at(-1)).toEqual(STUDY.children[0]);
-    expect(devices[1].children[2]).toEqual({ ...STUDY, children: [STUDY.children[1]] });
+    expect(devices[0].children[2]).toEqual({ ...STUDY, children: [STUDY.children[1]] });
 });
 
 test("schedulable toggles one metered device at a time", async ({ page }) => {
@@ -546,10 +590,10 @@ test("schedulable toggles one metered device at a time", async ({ page }) => {
     await setSchedulable(page, "pc", true);
 
     const devices = await config(page);
-    expect(devices[3]).not.toHaveProperty("schedulable");
-    expect(devices[2].children[0].schedulable).toBe(true);
     expect(devices[2]).not.toHaveProperty("schedulable");
-    expect(devices[2].children[1]).not.toHaveProperty("schedulable");
+    expect(devices[1].children[0].schedulable).toBe(true);
+    expect(devices[1]).not.toHaveProperty("schedulable");
+    expect(devices[1].children[1]).not.toHaveProperty("schedulable");
 });
 
 test("schedulable flips the whole meterless sibling set together", async ({ page }) => {
@@ -562,12 +606,12 @@ test("schedulable flips the whole meterless sibling set together", async ({ page
 
     await setSchedulable(page, "klima_obyvak", false);
     await expect
-        .poll(async () => (await config(page))[1].children.map((child: Device) => child.schedulable))
+        .poll(async () => (await config(page))[0].children.map((child: Device) => child.schedulable))
         .toEqual([undefined, undefined]);
 
     await setSchedulable(page, "klima_loznice", true);
     await expect
-        .poll(async () => (await config(page))[1].children.map((child: Device) => child.schedulable))
+        .poll(async () => (await config(page))[0].children.map((child: Device) => child.schedulable))
         .toEqual([true, true]);
 });
 
@@ -608,7 +652,7 @@ test("a passive meterless child's control is editable and required", async ({ pa
         }));
     });
     expect(group).toContainEqual({
-        path: "devices.items.2.children.1.controls.switch.entity_id",
+        path: "devices.consumers.1.children.1.controls.switch.entity_id",
         required: true,
     });
     // No projection on a passive device.
@@ -629,7 +673,7 @@ test("a passive meterless child's control is editable and required", async ({ pa
         );
     });
     await expect
-        .poll(async () => (await config(page))[2].children[1].controls.switch.entity_id)
+        .poll(async () => (await config(page))[1].children[1].controls.switch.entity_id)
         .toBe("switch.lamp");
 });
 
@@ -653,7 +697,7 @@ test("the tree round-trips through YAML, whole and per card", async ({ page }) =
     const tabYaml = await panel
         .locator("ha-yaml-editor")
         .evaluate((editor) => (editor as any).defaultValue);
-    expect(tabYaml).toEqual({ items: DEVICES });
+    expect(tabYaml).toEqual({ system: [INVERTER], consumers: DEVICES });
     await fire(tabYaml);
     await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "Visual" }).click();
     expect(await config(page)).toEqual(DEVICES);
@@ -672,11 +716,11 @@ test("the tree round-trips through YAML, whole and per card", async ({ page }) =
     expect(pcYaml).toEqual(STUDY.children[0]);
     await fire({ ...pcYaml, name: "Workstation" });
     const devices = await config(page);
-    expect(devices[2]).toEqual({
+    expect(devices[1]).toEqual({
         ...STUDY,
         children: [{ ...STUDY.children[0], name: "Workstation" }, STUDY.children[1]],
     });
-    expect(devices[1]).toEqual(BREAKER);
+    expect(devices[0]).toEqual(BREAKER);
 });
 
 for (const ancestor of ["card", "tab"] as const) {
@@ -709,7 +753,7 @@ for (const ancestor of ["card", "tab"] as const) {
         const nextStudy = { ...STUDY, children: [STUDY.children[1]] };
         const replacement = ancestor === "card"
             ? nextStudy
-            : { items: [INVERTER, BREAKER, nextStudy, BOILER] };
+            : { system: [INVERTER], consumers: [BREAKER, nextStudy, BOILER] };
         await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
             editor.dispatchEvent(new CustomEvent("value-changed", {
                 detail: { value, isValid: true }, bubbles: true, composed: true,
@@ -726,7 +770,7 @@ for (const ancestor of ["card", "tab"] as const) {
         await expect(panel.locator("ha-yaml-editor")).toHaveCount(1);
         expect(await panel.locator("ha-yaml-editor").evaluate((editor) => (editor as any).defaultValue))
             .toEqual(STUDY.children[1]);
-        expect((await config(page))[2]).toEqual(nextStudy);
+        expect((await config(page))[1]).toEqual(nextStudy);
     });
 }
 
@@ -740,9 +784,9 @@ test("validation errors surface on the nested card they name", async ({ page }) 
     await mountEditor(page, DEVICES, {
         valid: false,
         errors: [
-            issue("devices.items[2].children[1].controls", "lamp needs a switch"),
-            issue("devices.items[2].children", "study children rule"),
-            issue("devices.items[1].children[0].consumption.projection", "obyvak projection"),
+            issue("devices.consumers[1].children[1].controls", "lamp needs a switch"),
+            issue("devices.consumers[1].children", "study children rule"),
+            issue("devices.consumers[0].children[0].consumption.projection", "obyvak projection"),
         ],
         warnings: [],
     });
@@ -772,7 +816,7 @@ test("validation errors surface on the nested card they name", async ({ page }) 
 });
 
 test("the empty state says nothing is imported and offers Add device", async ({ page }) => {
-    await mountEditor(page, [INVERTER]);
+    await mountEditor(page, []);
     await openTab(page, "Devices");
     const panel = page.locator("helman-config-editor-panel");
 
@@ -783,10 +827,12 @@ test("the empty state says nothing is imported and offers Add device", async ({ 
     await expect(panel.locator("details.device-card")).toHaveCount(0);
 });
 
-test("the inverter is edited under Energy nodes", async ({ page }) => {
+const system = (page: Page) => page.evaluate(() => window.__editorConfig().devices.system);
+
+test("the inverter is edited in the System section of the Devices tab", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
-    await openTab(page, "Energy nodes");
+    await openTab(page, "Devices");
 
     const inverter = panel.locator("details.inverter-card");
     await expect(inverter.locator(".card-title strong")).toHaveText("Inverter");
@@ -799,28 +845,40 @@ test("the inverter is edited under Energy nodes", async ({ page }) => {
         input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     });
     await expect
-        .poll(async () => (await config(page))[0].controls.mode.options.stop_export)
+        .poll(async () => (await system(page))?.[0].controls.mode.options.stop_export)
         .toBe("Feed-in Priority");
     await expect(
         inverter.locator("helman-entity-group").evaluate((group: any) => group.path.join(".")),
-    ).resolves.toBe("devices.items.0.controls.mode.entity_id");
+    ).resolves.toBe("devices.system.0.controls.mode.entity_id");
+    // The consumer list never holds it.
+    expect((await config(page)).map((device) => device.id)).toEqual([BREAKER.id, STUDY.id, BOILER.id]);
 });
 
-test("Add inverter is offered under Energy nodes only while there is none", async ({
+test("Add inverter is offered in the System section only while there is none", async ({
     page,
 }) => {
-    await mountEditor(page, [BOILER]);
+    await mountEditor(page, [BOILER], undefined, []);
+    const panel = page.locator("helman-config-editor-panel");
+    await openTab(page, "Devices");
+
+    const add = panel.locator(".section-footer .add-button", { hasText: "Add inverter" });
+    await expect(add).toHaveCount(1);
+    await add.dispatchEvent("click");
+    await expect.poll(async () => (await system(page))?.map((device) => device.kind)).toEqual([
+        "inverter",
+    ]);
+    expect((await config(page)).map((device) => device.kind)).toEqual(["generic"]);
+    await expect(add).toHaveCount(0);
+    await expect(panel.locator("details.inverter-card")).toHaveCount(1);
+});
+
+test("Energy nodes has no inverter section", async ({ page }) => {
+    await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
     await openTab(page, "Energy nodes");
 
-    const add = panel.locator(".section-footer .add-button", { hasText: "Add inverter" });
-    await add.dispatchEvent("click");
-    await expect.poll(async () => (await config(page)).map((device) => device.kind)).toEqual([
-        "generic",
-        "inverter",
-    ]);
-    await expect(add).toHaveCount(0);
-    await expect(panel.locator("details.inverter-card")).toHaveCount(1);
+    await expect(panel.locator("details.inverter-card")).toHaveCount(0);
+    await expect(panel.locator(".section-summary-label", { hasText: /^Inverter$/ })).toHaveCount(0);
 });
 
 test("the EV charger gets a meter and its lists but no projection", async ({ page }) => {
@@ -1057,7 +1115,7 @@ test("import preview cancel is inert and apply changes only the draft with moves
   );
   await page.locator(".cancel-energy-import").click();
   expect(await config(page)).toEqual([parent, child]);
-  // The move shifts "child" off devices.items[1]; its YAML state must not follow the path.
+  // The move shifts "child" off devices.consumers[1]; its YAML state must not follow the path.
   await page.evaluate(() => {
     window
       .__own("child", "summary .mode-toggle button")
@@ -1107,7 +1165,7 @@ test("late suggestions and previews are discarded after the draft changes", asyn
   await page.evaluate(() => {
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._applyMutation((draft: any) => {
-      draft.devices.items[0].name = "New draft name";
+      draft.devices.consumers[0].name = "New draft name";
     });
     (window as any).__resolveDeviceRequest();
   });
@@ -1123,7 +1181,7 @@ test("late suggestions and previews are discarded after the draft changes", asyn
   await page.evaluate(() => {
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._applyMutation((draft: any) => {
-      draft.devices.items[0].name = "Still newer";
+      draft.devices.consumers[0].name = "Still newer";
     });
     (window as any).__resolveDeviceRequest();
   });
@@ -1158,7 +1216,7 @@ test("visible candidates disappear when the draft is replaced outside a field ed
     const panel = document.querySelector("helman-config-editor-panel") as any;
     panel._config = {
       ...panel._config,
-      devices: { items: [{ id: "breaker", consumption: { energy_entity_id: "sensor.new" } }] },
+      devices: { consumers: [{ id: "breaker", consumption: { energy_entity_id: "sensor.new" } }] },
     };
   });
   await expect(
@@ -1182,7 +1240,7 @@ test("invalid import cannot be applied and empty state offers import", async ({
     importResponse([], {
       validation: {
         valid: false,
-        errors: [{ path: "devices.items[0]", message: "Invalid draft" }],
+        errors: [{ path: "devices.consumers[0]", message: "Invalid draft" }],
       },
     }),
   );

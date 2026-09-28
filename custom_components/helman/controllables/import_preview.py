@@ -9,7 +9,7 @@ from dataclasses import asdict
 from .config import (
     iter_devices,
     peek_controllable_id,
-    read_devices,
+    read_consumers,
     read_devices_section,
 )
 from .energy_import import import_energy_preferences
@@ -20,11 +20,11 @@ def preview_energy_import(
     config: dict[str, Any], preferences: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     result = import_energy_preferences(
-        read_devices(config) or [], preferences, manual=True
+        read_consumers(config) or [], preferences, manual=True
     )
     proposed = {
         **config,
-        "devices": {**read_devices_section(config), "items": result.devices},
+        "devices": {**read_devices_section(config), "consumers": result.devices},
     }
     # Imported devices always get an id, so an id-less one is an existing
     # half-edited device: it cannot be matched across the import, and the

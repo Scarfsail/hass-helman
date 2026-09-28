@@ -1,4 +1,4 @@
-import { mdiFilterRemoveOutline, mdiStethoscope } from "@mdi/js";
+import { mdiFilterRemoveOutline, mdiSineWave, mdiStethoscope } from "@mdi/js";
 import {
   createDocumentScopeAdapter,
   createPathScopeAdapter,
@@ -41,7 +41,8 @@ export type ScopeId =
   | "section:automation.appliance_optimizer_pipeline"
   | "section:automation.system_optimizer_pipeline"
   | "section:devices.settings"
-  | "section:devices.configured_devices";
+  | "section:devices.system"
+  | "section:devices.consumers";
 
 export interface EditorScope {
   id: ScopeId;
@@ -98,7 +99,8 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:automation.appliance_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:devices.settings": CONFIGURATION_ICON,
-  "section:devices.configured_devices": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
+  "section:devices.system": mdiSineWave,
+  "section:devices.consumers": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
 };
 
 export const TABS: Array<{ id: TabId; labelKey: string }> = [
@@ -156,7 +158,8 @@ export const SECTION_SCOPE_IDS = {
   },
   devices: {
     settings: "section:devices.settings",
-    configured_devices: "section:devices.configured_devices",
+    system: "section:devices.system",
+    consumers: "section:devices.consumers",
   },
 } as const;
 
@@ -443,13 +446,24 @@ export const EDITOR_SCOPES = {
     labelKey: "editor.sections.device_settings",
     adapter: createProjectionScopeAdapter(DEVICES_SETTINGS_MEMBERS),
   },
-  [SECTION_SCOPE_IDS.devices.configured_devices]: {
-    id: SECTION_SCOPE_IDS.devices.configured_devices,
+  [SECTION_SCOPE_IDS.devices.system]: {
+    id: SECTION_SCOPE_IDS.devices.system,
     kind: "section",
     parentId: TAB_SCOPE_IDS.devices,
     tabId: "devices",
-    labelKey: "editor.sections.configured_devices",
-    adapter: createPathScopeAdapter(["devices", "items"], {
+    labelKey: "editor.sections.system_devices",
+    adapter: createPathScopeAdapter(["devices", "system"], {
+      emptyValue: EMPTY_ARRAY,
+      rootKind: "array",
+    }),
+  },
+  [SECTION_SCOPE_IDS.devices.consumers]: {
+    id: SECTION_SCOPE_IDS.devices.consumers,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.devices,
+    tabId: "devices",
+    labelKey: "editor.sections.consumers",
+    adapter: createPathScopeAdapter(["devices", "consumers"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),

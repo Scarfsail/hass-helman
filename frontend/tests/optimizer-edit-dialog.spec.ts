@@ -407,7 +407,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // served to the editor as `controllableKinds` — so the picker cannot
         // offer a target config validation would then reject. A `charge_hold`
         // drives the inverter and nothing else, so the boiler sitting right
-        // beside it in the same `devices` list must not be on offer.
+        // configured beside it under `devices` must not be on offer.
         await mountPanel(page, {
             payload: {
                 ...PAYLOAD,
@@ -434,10 +434,10 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: { items: [
-                    { kind: "inverter", id: "inverter", name: "Inverter" },
-                    { kind: "generic", schedulable: true, id: "boiler", name: "Boiler" },
-                ] },
+                devices: {
+                    system: [{ kind: "inverter", id: "inverter", name: "Inverter" }],
+                    consumers: [{ kind: "generic", schedulable: true, id: "boiler", name: "Boiler" }],
+                },
             },
         });
         await openDialog(page);
@@ -492,7 +492,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: { items: devices },
+                devices: { consumers: devices },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -598,11 +598,13 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: { items: [
-                    { kind: "inverter", id: "inverter", name: "Inverter" },
-                    { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
-                    { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
-                ] },
+                devices: {
+                    system: [{ kind: "inverter", id: "inverter", name: "Inverter" }],
+                    consumers: [
+                        { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+                        { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
+                    ],
+                },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{
@@ -664,7 +666,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
-                devices: { items: devices },
+                devices: { consumers: devices },
                 automation: {
                     enabled: true,
                     appliance_optimizers: [{

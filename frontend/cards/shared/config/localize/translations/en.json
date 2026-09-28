@@ -80,8 +80,8 @@
       "config": "Configuration",
       "diagnostics": "Diagnostics",
       "device_settings": "Device settings",
-      "configured_devices": "Configured devices",
-      "inverter": "Inverter",
+      "consumers": "Consumers",
+      "system_devices": "System",
       "measurements": "Measurements",
       "projection": "Projection",
       "children": "Children"
@@ -104,7 +104,8 @@
       "training_settings_what": "Helman trains three models on your own recorded history: what the solar array really produces against the forecast, what the household consumes at each time of day, and how much each controllable appliance uses per hour it runs. Training runs once a day at the time set below, and every model can also be trained on demand. Everything the planner predicts rests on these, so a model that has not trained, or one with too little history, surfaces here rather than as a quietly wrong plan.",
       "training_solar_bias_slot_invalidation": "Not every recorded slot is honest evidence about the forecast. With a full battery and nothing being exported the inverter throttles the array, so production reads low although the forecast was right, and a meter glitch can spike or zero a single slot the same way. These thresholds decide which slots are thrown out before the fit, so the correction learns from the weather rather than from clipping and bad data.",
       "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction.",
-      "devices": "Every energy-consuming device in the house, as a tree: a device can hold children that either have their own meter or draw from its meter. Schedulable devices are planned and run by Helman; the rest are only measured. The inverter is configured under Energy nodes."
+      "devices": "Every energy-consuming device in the house, as a tree: a device can hold children that either have their own meter or draw from its meter. Schedulable devices are planned and run by Helman; the rest are only measured.",
+      "system_devices": "Devices that control the site rather than draw power; today the battery inverter."
     },
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
@@ -383,7 +384,7 @@
       "validation_failed": "Validation returned backend errors. Review the issue list below.",
       "validate_config_failed": "Failed to validate the config in the backend.",
       "import_energy_failed": "Failed to preview the Energy dashboard import.",
-      "import_energy_invalid_devices": "Fix the devices value first: it must be an object with the list under devices.items.",
+      "import_energy_invalid_devices": "Fix the devices value first: it must be an object with the devices under devices.consumers.",
       "suggestions_failed": "Failed to load entity suggestions.",
       "config_saved_reload_started": "Config saved. Helman reload started.",
       "config_saved": "Config saved.",

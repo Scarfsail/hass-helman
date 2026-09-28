@@ -406,7 +406,7 @@ DAILY_HISTORY_PATH = (
 )
 GRID_POWER_HISTORY_PATH = ("energy_nodes", "grid", "entities", "power")
 BATTERY_CAPACITY_HISTORY_PATH = ("energy_nodes", "battery", "entities", "capacity")
-CONTROLLABLE_ENERGY_HISTORY_PATH = ("devices", "items", 0, "consumption", "energy_entity_id")
+CONTROLLABLE_ENERGY_HISTORY_PATH = ("devices", "consumers", 0, "consumption", "energy_entity_id")
 FORECAST_SOURCE_HISTORY_PATH = (
     "energy_nodes",
     "solar",
@@ -746,7 +746,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
 
     def _controllable_config(self, entity: str) -> dict:
         return {
-            "devices": {"items": [
+            "devices": {"consumers": [
                 {"schedulable": True, "consumption": {"energy_entity_id": entity}}
             ]}
         }
@@ -810,8 +810,8 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
                 hass = _ProbingHass({entity: _State(state)})
                 first, second = self.inspect_twice(
                     hass,
-                    {"devices": {"items": [{"controls": {kind: {"entity_id": entity}}}]}},
-                    ["devices", "items", 0, "controls", kind, "entity_id"],
+                    {"devices": {"consumers": [{"controls": {kind: {"entity_id": entity}}}]}},
+                    ["devices", "consumers", 0, "controls", kind, "entity_id"],
                 )
                 self.assertEqual(
                     [fact["token"] for fact in first["facts"]], ["value"]
@@ -899,7 +899,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         # would be a lie.
         hass = _ProbingHass({"sensor.fridge_energy": _State("3.4", unit="kWh")})
         config = {
-            "devices": {"items": [{"consumption": {"energy_entity_id": "sensor.fridge_energy"}}]}
+            "devices": {"consumers": [{"consumption": {"energy_entity_id": "sensor.fridge_energy"}}]}
         }
         _, inspection = self.inspect_twice(
             hass, config, CONTROLLABLE_ENERGY_HISTORY_PATH
@@ -916,7 +916,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         # The trainer reads it to subtract from its parent's own energy.
         hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
         config = {
-            "devices": {"items": [
+            "devices": {"consumers": [
                 {
                     "consumption": {"energy_entity_id": "sensor.study_energy"},
                     "children": [
@@ -927,7 +927,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             ]}
         }
         _, inspection = self.inspect_twice(
-            hass, config, ("devices", "items", 0, "children", 0, "consumption", "energy_entity_id")
+            hass, config, ("devices", "consumers", 0, "children", 0, "consumption", "energy_entity_id")
         )
         fact = _fact(inspection, "history")
         self.assertEqual(
@@ -937,9 +937,9 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
 
     def test_a_deep_device_meter_keeps_history_and_its_house_requirement(self):
         leaf = {"id": "plug", "schedulable": True, "consumption": {"energy_entity_id": "sensor.plug_energy"}}
-        config = {"devices": {"items": [{"children": [{"children": [leaf]}]}]}}
+        config = {"devices": {"consumers": [{"children": [{"children": [leaf]}]}]}}
         hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
-        path = ("devices", "items", 0, "children", 0, "children", 0, "consumption", "energy_entity_id")
+        path = ("devices", "consumers", 0, "children", 0, "children", 0, "consumption", "energy_entity_id")
         _, inspection = self.inspect_twice(hass, config, path)
         fact = _fact(inspection, "history")
         self.assertIsNotNone(fact)
@@ -954,9 +954,9 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         ]:
             with self.subTest(control=control):
                 leaf = {"controls": {control: {"entity_id": entity_id}}}
-                config = {"devices": {"items": [{"children": [{"children": [leaf]}]}]}}
+                config = {"devices": {"consumers": [{"children": [{"children": [leaf]}]}]}}
                 hass = _ProbingHass({entity_id: _State("on")})
-                path = ("devices", "items", 0, "children", 0, "children", 0, "controls", control, "entity_id")
+                path = ("devices", "consumers", 0, "children", 0, "children", 0, "controls", control, "entity_id")
                 _, inspection = self.inspect_twice(hass, config, path)
                 self.assertIsNotNone(_fact(inspection, "history"))
                 self.assertIn(list(path), inspection["dependsOn"])
@@ -1477,30 +1477,30 @@ class TestDeviceFieldPlaceholders(unittest.TestCase):
 
     def test_an_unset_name_resolves_like_every_other_surface(self):
         config = {
-            "devices": {"items": [BREAKER], "name_cleaner_regex": " Power$"},
+            "devices": {"consumers": [BREAKER], "name_cleaner_regex": " Power$"},
         }
         self.assertEqual(
-            self._placeholder(config, ("devices", "items", 0, "name")), "Jistič klimatizace"
+            self._placeholder(config, ("devices", "consumers", 0, "name")), "Jistič klimatizace"
         )
 
     def test_a_child_resolves_from_its_control_entity(self):
         self.assertEqual(
-            self._placeholder({"devices": {"items": [BREAKER]}}, ("devices", "items", 0, "children", 0, "name")),
+            self._placeholder({"devices": {"consumers": [BREAKER]}}, ("devices", "consumers", 0, "children", 0, "name")),
             "Obývák klimatizace",
         )
 
     def test_the_override_is_not_its_own_placeholder(self):
-        config = {"devices": {"items": [{**BREAKER, "name": "AC breaker", "icon": "mdi:fan"}]}}
+        config = {"devices": {"consumers": [{**BREAKER, "name": "AC breaker", "icon": "mdi:fan"}]}}
         self.assertEqual(
-            self._placeholder(config, ("devices", "items", 0, "name")), "Jistič klimatizace Power"
+            self._placeholder(config, ("devices", "consumers", 0, "name")), "Jistič klimatizace Power"
         )
         self.assertEqual(
-            self._placeholder(config, ("devices", "items", 0, "icon")), "mdi:air-conditioner"
+            self._placeholder(config, ("devices", "consumers", 0, "icon")), "mdi:air-conditioner"
         )
 
     def test_no_derivable_icon_is_no_placeholder(self):
         self.assertIsNone(
-            self._placeholder({"devices": {"items": [BREAKER]}}, ("devices", "items", 0, "children", 0, "icon"))
+            self._placeholder({"devices": {"consumers": [BREAKER]}}, ("devices", "consumers", 0, "children", 0, "icon"))
         )
 
     def test_a_device_path_matches_at_any_depth_and_nothing_else_does(self):
@@ -1509,17 +1509,19 @@ class TestDeviceFieldPlaceholders(unittest.TestCase):
         )
 
         for path in [
-            ("devices", "items", 0, "name"),
-            ("devices", "items", 0, "children", 1, "icon"),
-            ("devices", "items", 0, "children", 1, "children", 2, "name"),
+            ("devices", "consumers", 0, "name"),
+            ("devices", "consumers", 0, "children", 1, "icon"),
+            ("devices", "consumers", 0, "children", 1, "children", 2, "name"),
+            ("devices", "system", 0, "name"),
         ]:
             with self.subTest(path=path):
                 self.assertIs(evaluator_for(path)[0], evaluate_device_field)
         for path in [
-            ("devices", "items", 0, "id"),
-            ("devices", "items", "0", "name"),
-            ("devices", "items", 0, "controls", 1, "name"),
+            ("devices", "consumers", 0, "id"),
+            ("devices", "consumers", "0", "name"),
+            ("devices", "consumers", 0, "controls", 1, "name"),
             ("devices", 0, "name"),
+            ("devices", "items", 0, "name"),
             ("energy_nodes", 0, "name"),
         ]:
             with self.subTest(path=path):

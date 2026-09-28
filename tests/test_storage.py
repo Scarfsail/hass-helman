@@ -170,7 +170,7 @@ def test_an_upgrade_imports_the_energy_devices() -> None:
 
     assert len(energy_requests) == 1
     # Imported by v21, then backfilled from the (stubbed) registry by v23.
-    assert storage.config["devices"]["items"] == [
+    assert storage.config["devices"]["consumers"] == [
         {
             "id": "oven_energy",
             "consumption": {
@@ -220,5 +220,5 @@ def test_an_upgrade_backfills_power_and_switch_from_the_registry() -> None:
         },
         "controls": {"switch": {"entity_id": "switch.oven"}},
     }
-    assert storage.config["devices"]["items"] == [expected]
-    assert storage._store.saved[-1]["devices"]["items"] == [expected]
+    assert storage.config["devices"]["consumers"] == [expected]
+    assert storage._store.saved[-1]["devices"]["consumers"] == [expected]

@@ -32,7 +32,7 @@ function learner(id: string, name: string, meter: string): Record<string, unknow
 
 const CONFIG = {
     config_version: 19,
-    devices: { items: [
+    devices: { consumers: [
         learner("dishwasher", "Dishwasher", "sensor.dishwasher_energy"),
         learner("washer", "Laundry", "sensor.washer_energy"),
         learner("dryer", "Dryer", "sensor.dryer_energy"),

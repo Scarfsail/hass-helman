@@ -547,7 +547,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"devices": {"items": []}}
+            {"devices": {"consumers": []}}
         )
         coordinator._automation_input_bundle = None
         house_forecast = _make_house_forecast()
@@ -622,7 +622,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "devices": {"items": [
+                "devices": {"consumers": [
                     {
                         "kind": "generic",
                         "schedulable": True,
@@ -714,7 +714,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "devices": {"items": [
+                "devices": {"consumers": [
                     {
                         "kind": "generic",
                         "schedulable": True,
@@ -1025,7 +1025,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     """What the coordinator hands the batched reader, and what it does with the answer."""
 
     APPLIANCES = {
-        "devices": {"items": [
+        "devices": {"consumers": [
             {
                 "kind": "generic",
                 "schedulable": True,
@@ -1235,7 +1235,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         # The request reads shared meters from the config and the appliances
         # from the registry built off it, so both see the same document.
         coordinator._active_config = {
-            "devices": {"items": appliances if appliances is not None else [
+            "devices": {"consumers": appliances if appliances is not None else [
                 {
                     "kind": "generic",
                     "schedulable": True,

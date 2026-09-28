@@ -28,7 +28,7 @@ _DEVICE_FIELDS = ("name", "icon")
 
 
 def device_field(path: Sequence[PathSegment]) -> str | None:
-    """``name`` or ``icon`` when ``path`` is ``devices.items.<i>(.children.<j>)*.<field>``."""
+    """``name`` or ``icon`` when ``path`` is ``devices.<list>.<i>(.children.<j>)*.<field>``."""
     prefix_length = device_prefix_length(path)
     if prefix_length is None or len(path) != prefix_length + 1:
         return None
@@ -38,11 +38,13 @@ def device_field(path: Sequence[PathSegment]) -> str | None:
 
 
 def device_prefix_length(path: Sequence[PathSegment]) -> int | None:
-    """Length of the ``devices.items.<i>(.children.<j>)*`` prefix, at any depth."""
+    """Length of the ``devices.<list>.<i>(.children.<j>)*`` prefix, at any depth.
+
+    ``<list>`` is ``consumers`` or ``system``."""
     if (
         len(path) < 3
         or path[0] != "devices"
-        or path[1] != "items"
+        or path[1] not in ("consumers", "system")
         or not _is_index(path[2])
     ):
         return None

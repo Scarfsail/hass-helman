@@ -60,6 +60,14 @@ def _all_optimizers(migrated):
     )
 
 
+def _all_devices(migrated):
+    """Both device lists concatenated, system first, for tests that migrate all
+    the way to the current version and no longer have a single ``items`` list
+    to read back."""
+    devices = migrated["devices"]
+    return list(devices.get("system", [])) + list(devices.get("consumers", []))
+
+
 def _migrate_one(optimizer):
     migrated, _ids = migrate_config_document(_document(optimizer))
     return _all_optimizers(migrated)[0]
@@ -455,7 +463,7 @@ class ControllablesUnificationTests(unittest.TestCase):
         self.assertNotIn("scheduler", migrated)
         self.assertNotIn("appliances", migrated)
         self.assertEqual(
-            migrated["devices"]["items"],
+            _all_devices(migrated),
             [
                 {
                     "kind": "inverter",
@@ -485,12 +493,12 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"appliances": [self._APPLIANCE, second]}
         )
 
-        self.assertEqual(migrated["devices"]["items"], [self._APPLIANCE_V9, second_v9])
+        self.assertEqual(_all_devices(migrated), [self._APPLIANCE_V9, second_v9])
 
     def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
         migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
 
-        self.assertEqual(migrated["devices"]["items"], [])
+        self.assertEqual(migrated["devices"], {})
 
     def test_a_document_with_neither_key_grows_no_controllables(self) -> None:
         migrated, _ids = self._migrate_from_v6({"history_buckets": 60})
@@ -502,7 +510,7 @@ class ControllablesUnificationTests(unittest.TestCase):
             {"scheduler": {"control": {**self._CONTROL, "future_key": "keep-me"}}}
         )
 
-        self.assertEqual(migrated["devices"]["items"][0]["future_key"], "keep-me")
+        self.assertEqual(_all_devices(migrated)[0]["future_key"], "keep-me")
 
     def test_an_appliances_value_that_is_not_a_list_is_moved_not_dropped(self) -> None:
         migrated, _ids = self._migrate_from_v6({"appliances": {"oops": True}})
@@ -521,10 +529,10 @@ class ControllablesUnificationTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(
-            [entry["kind"] for entry in migrated["devices"]["items"]],
+            [entry["kind"] for entry in _all_devices(migrated)],
             ["inverter", "generic"],
         )
-        self.assertEqual(list(migrated["devices"]), ["items"])
+        self.assertEqual(list(migrated["devices"]), ["system", "consumers"])
         self.assertEqual(ids, ["e"])
 
     def test_a_current_version_document_is_left_exactly_as_it_is(self) -> None:
@@ -706,7 +714,7 @@ class ConsumptionBlockTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(
             {"controllables": list(controllables), "config_version": 8}
         )
-        return migrated["devices"]["items"]
+        return _all_devices(migrated)
 
     def test_the_meter_comes_up_and_lookback_flattens(self) -> None:
         (entry,) = self._migrate_from_v8(
@@ -1860,7 +1868,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
 
         self.assertNotIn("controllables", migrated)
         self.assertEqual(
-            migrated["devices"]["items"],
+            _all_devices(migrated),
             [
                 inverter,
                 {
@@ -1892,7 +1900,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
             return {**entry, "schedulable": True}
 
         self.assertEqual(
-            migrated["devices"]["items"],
+            _all_devices(migrated),
             [
                 {**pool, "schedulable": True},
                 {
@@ -1916,7 +1924,7 @@ class DevicesTreeMigrationTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(migrated["devices"]["items"][2]["id"], "breaker_3")
+        self.assertEqual(_all_devices(migrated)[2]["id"], "breaker_3")
 
     def test_a_value_that_is_not_a_list_moves_across_unchanged(self) -> None:
         migrated = self._migrate_from_v19({"oops": True})
@@ -1951,7 +1959,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
 
         migrated = self._migrate_from_v20({"devices": devices})
 
-        self.assertEqual(migrated["devices"]["items"], devices)
+        self.assertEqual(_all_devices(migrated), devices)
 
     def test_a_document_without_devices_gets_the_imported_rows(self) -> None:
         migrated = self._migrate_from_v20(
@@ -1959,7 +1967,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["devices"]["items"],
+            _all_devices(migrated),
             [{"id": "oven_energy", "consumption": {"energy_entity_id": "sensor.oven_energy"}}],
         )
 
@@ -2003,7 +2011,7 @@ class EnergyImportMigrationTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(migrated["devices"]["items"], [pump])
+        self.assertEqual(_all_devices(migrated), [pump])
         output = "\n".join(logs.output)
         self.assertIn("WARNING", output)
         self.assertIn("sensor.plug_energy", output)
@@ -2026,10 +2034,10 @@ class EnergyImportMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["devices"]["items"][0]["consumption"],
+            _all_devices(migrated)[0]["consumption"],
             {"energy_entity_id": meter, "power_entity_id": "sensor.breaker_power"},
         )
-        self.assertEqual(len(migrated["devices"]["items"]), 1)
+        self.assertEqual(len(_all_devices(migrated)), 1)
 
 
 class DevicesSectionMigrationTests(unittest.TestCase):
@@ -2045,7 +2053,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
     def test_the_list_is_wrapped(self) -> None:
         migrated = self._migrate_from_v21({"devices": [self.WASHER]})
 
-        self.assertEqual(migrated["devices"], {"items": [self.WASHER]})
+        self.assertEqual(migrated["devices"], {"consumers": [self.WASHER]})
 
     def test_the_regex_moves_out_of_visualization(self) -> None:
         migrated = self._migrate_from_v21(
@@ -2061,7 +2069,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["visualization"], {"sources_title": "Zdroje"})
         self.assertEqual(
             migrated["devices"],
-            {"name_cleaner_regex": " Power$", "items": [self.WASHER]},
+            {"name_cleaner_regex": " Power$", "consumers": [self.WASHER]},
         )
 
     def test_each_label_moves_out_of_the_house(self) -> None:
@@ -2176,7 +2184,7 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
             None,
             self._resolve if resolver == "default" else resolver,
         )
-        return migrated["devices"]["items"]
+        return _all_devices(migrated)
 
     @staticmethod
     def _metered(device_id, meter, **extra):
@@ -2320,7 +2328,13 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
 
         migrated, _ids = migrate_config_document(deepcopy(document))
 
-        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
+        self.assertEqual(
+            migrated,
+            {
+                "config_version": CONFIG_DOCUMENT_VERSION,
+                "devices": {"consumers": document["devices"]["items"]},
+            },
+        )
 
     def test_the_resolver_reads_the_labels_where_v22_moved_them(self) -> None:
         migrated, _ids = migrate_config_document(
@@ -2334,7 +2348,7 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(self.requests[0][1]["devices"]["power_switch_label"], "Switch")
-        self.assertIn("controls", migrated["devices"]["items"][0])
+        self.assertIn("controls", _all_devices(migrated)[0])
 
     def test_a_v20_row_without_stat_rate_gains_power_through_the_chain(self) -> None:
         migrated, _ids = migrate_config_document(
@@ -2344,7 +2358,7 @@ class RegistryBackfillMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["devices"]["items"],
+            _all_devices(migrated),
             [
                 {
                     "id": "boiler_energy",
@@ -2398,6 +2412,74 @@ class EnergyNodesRenameMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["energy_nodes"], self.HOUSE)
         self.assertNotIn("power_devices", migrated)
+
+
+class DevicesSplitMigrationTests(unittest.TestCase):
+    """v24 -> v25: ``devices.items`` splits into ``system`` and ``consumers``."""
+
+    INVERTER = {"kind": "inverter", "id": "inverter", "controls": {"mode": {}}}
+    WASHER = {"id": "washer", "consumption": {"energy_entity_id": "sensor.washer_energy"}}
+    BOILER = {"id": "boiler", "consumption": {"energy_entity_id": "sensor.boiler_energy"}}
+
+    @staticmethod
+    def _migrate_from_v24(devices):
+        migrated, _ids = migrate_config_document(
+            {"config_version": 24, "devices": deepcopy(devices)}
+        )
+        return migrated["devices"]
+
+    def test_a_mixed_list_splits_in_document_order(self) -> None:
+        devices = self._migrate_from_v24(
+            {
+                "name_cleaner_regex": " Power$",
+                "items": [self.WASHER, self.INVERTER, self.BOILER],
+            }
+        )
+
+        self.assertEqual(
+            devices,
+            {
+                "name_cleaner_regex": " Power$",
+                "system": [self.INVERTER],
+                "consumers": [self.WASHER, self.BOILER],
+            },
+        )
+
+    def test_a_section_without_items_is_unchanged(self) -> None:
+        self.assertEqual(
+            self._migrate_from_v24({"name_cleaner_regex": " Power$"}),
+            {"name_cleaner_regex": " Power$"},
+        )
+
+    def test_a_document_without_devices_is_unchanged(self) -> None:
+        migrated, _ids = migrate_config_document({"config_version": 24})
+
+        self.assertEqual(migrated, {"config_version": CONFIG_DOCUMENT_VERSION})
+
+    def test_items_that_are_not_a_list_move_to_consumers_as_they_are(self) -> None:
+        self.assertEqual(
+            self._migrate_from_v24({"items": {"oops": True}}),
+            {"consumers": {"oops": True}},
+        )
+
+    def test_without_an_inverter_only_consumers_are_written(self) -> None:
+        self.assertEqual(
+            self._migrate_from_v24({"items": [self.WASHER]}),
+            {"consumers": [self.WASHER]},
+        )
+
+    def test_only_an_inverter_writes_only_system(self) -> None:
+        self.assertEqual(
+            self._migrate_from_v24({"items": [self.INVERTER]}),
+            {"system": [self.INVERTER]},
+        )
+
+    def test_a_nested_inverter_stays_for_the_validator(self) -> None:
+        parent = {**self.WASHER, "children": [self.INVERTER]}
+
+        self.assertEqual(
+            self._migrate_from_v24({"items": [parent]}), {"consumers": [parent]}
+        )
 
 
 if __name__ == "__main__":

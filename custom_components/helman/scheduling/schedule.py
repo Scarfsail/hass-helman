@@ -61,7 +61,7 @@ LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: Not an index: the inverter is a singleton found by kind, so its position in
 #: the list is not stable and would only mislead.
 _INVERTER_CONTROL_PATH = (
-    f"devices.items[{CONTROLLABLE_ID_INVERTER}].controls.mode"
+    f"devices.system[{CONTROLLABLE_ID_INVERTER}].controls.mode"
 )
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 

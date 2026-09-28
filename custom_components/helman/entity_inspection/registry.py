@@ -116,7 +116,7 @@ EVALUATORS: dict[str, Evaluator] = {
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
-    "devices.items.*.consumption.energy_entity_id": history_evaluator(
+    "devices.consumers.*.consumption.energy_entity_id": history_evaluator(
         ("training", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
@@ -129,9 +129,9 @@ EVALUATORS: dict[str, Evaluator] = {
     # tab keeps showing the switch or climate state it always has. Nested
     # device prefixes are normalized before matching, at any tree depth. An EV
     # charger's charge switch is its running signal on a shared meter.
-    "devices.items.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
-    "devices.items.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
-    "devices.items.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
+    "devices.consumers.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
+    "devices.consumers.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
+    "devices.consumers.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
     "energy_nodes.solar.forecast.total_energy_entity_id": history_evaluator(),
     "training.solar_bias.total_energy_entity_id": (
         history_evaluator(
