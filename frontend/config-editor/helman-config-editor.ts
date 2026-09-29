@@ -3,7 +3,6 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import { keyed } from "lit/directives/keyed.js";
-import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 
 /**
@@ -3641,11 +3640,11 @@ export class HelmanConfigEditorPanel
           />
           <input
             class="grouping-id-input"
-            .value=${live(groupingId)}
+            .value=${groupingId}
             title=${idLabel}
             aria-label=${idLabel}
             @change=${(event: Event) =>
-              this._handleRenameGrouping(index, (event.currentTarget as HTMLInputElement).value)}
+              this._handleRenameGrouping(index, event.currentTarget as HTMLInputElement)}
           />
         </div>
         ${groups.length > 0
@@ -3714,10 +3713,10 @@ export class HelmanConfigEditorPanel
         <div class="field field-compact group-id-cell">
           <input
             class="group-id-input"
-            .value=${live(groupId)}
+            .value=${groupId}
             aria-label=${idLabel}
             @change=${(event: Event) =>
-              this._handleRenameGroup(groupingIndex, groupIndex, (event.currentTarget as HTMLInputElement).value)}
+              this._handleRenameGroup(groupingIndex, groupIndex, event.currentTarget as HTMLInputElement)}
           />
         </div>
         <div class="field field-compact group-short-name-cell">
@@ -4820,8 +4819,8 @@ export class HelmanConfigEditorPanel
    * Commits a typed grouping id -- see {@link _commitId} -- and reopens its
    * card: the card is keyed by id, so it comes back as a new, collapsed one.
    */
-  private async _handleRenameGrouping(index: number, raw: string): Promise<void> {
-    const newId = this._commitId(["devices", "groupings"], index, raw, "grouping", (draft, oldId, id) =>
+  private async _handleRenameGrouping(index: number, input: HTMLInputElement): Promise<void> {
+    const newId = this._commitId(["devices", "groupings"], index, input, "grouping", (draft, oldId, id) =>
       renameGroupReferences(draft, oldId, id),
     );
     if (newId === null) return;
@@ -4833,10 +4832,10 @@ export class HelmanConfigEditorPanel
   }
 
   /** Commits a typed group id among its sibling groups -- see {@link _commitId}. */
-  private _handleRenameGroup(groupingIndex: number, groupIndex: number, raw: string): void {
+  private _handleRenameGroup(groupingIndex: number, groupIndex: number, input: HTMLInputElement): void {
     const groupingPath: PathSegment[] = ["devices", "groupings", groupingIndex];
     const groupingId = this._stringValue(this._getValue([...groupingPath, "id"]));
-    this._commitId([...groupingPath, "groups"], groupIndex, raw, "group", (draft, oldId, id) =>
+    this._commitId([...groupingPath, "groups"], groupIndex, input, "group", (draft, oldId, id) =>
       renameGroupReferences(draft, groupingId, id, oldId),
     );
   }
@@ -4847,12 +4846,14 @@ export class HelmanConfigEditorPanel
    * the same mutation. Device YAML editors and the consumers section's go back
    * to visual mode, as their snapshot still names the old id and its next edit
    * would put it back. An empty or unchanged id leaves the draft
-   * alone and the field shows the stored id again; that returns `null`.
+   * alone and `input` shows the stored id again; that returns `null`. The
+   * input is written here rather than bound with `live()`, which would reset
+   * it on every render while the user is still typing.
    */
   private _commitId(
     listPath: PathSegment[],
     index: number,
-    raw: string,
+    input: HTMLInputElement,
     fallback: string,
     rewrite: (draft: JsonObject, oldId: string, newId: string) => void,
   ): string | null {
@@ -4861,9 +4862,10 @@ export class HelmanConfigEditorPanel
     const siblings = entries
       .filter((_, otherIndex) => otherIndex !== index)
       .map((entry) => this._stringValue(asJsonObject(entry)?.id));
+    const raw = input.value;
     const newId = raw.trim() ? slugId(raw, siblings, fallback) : oldId;
     if (newId === oldId) {
-      this.requestUpdate();
+      input.value = oldId;
       return null;
     }
     this._resetDeviceModes();

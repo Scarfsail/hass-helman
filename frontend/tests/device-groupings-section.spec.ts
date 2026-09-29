@@ -307,3 +307,28 @@ test("clearing an id reverts it and leaves the config unchanged", async ({ page 
 
     expect(await page.evaluate(() => JSON.stringify(window.__editorConfig()))).toBe(before);
 });
+
+test("an id being typed survives a re-render, and a slug equal to the stored id reverts the text", async ({ page }) => {
+    await mountEditor(page);
+    // A hass update re-renders the panel while the user is still typing.
+    const rerender = () =>
+        page.locator("helman-config-editor-panel").evaluate(async (element) => {
+            const panel = element as HTMLElement & { hass: object; updateComplete: Promise<unknown> };
+            panel.hass = { ...panel.hass };
+            await panel.updateComplete;
+        });
+
+    const groupInput = groupingCard(page, 0).locator("input.group-id-input").first();
+    await groupInput.fill("technicka_fvx");
+    await rerender();
+    await expect(groupInput).toHaveValue("technicka_fvx");
+    await commit(groupInput, "Technicka FV");
+    await expect(groupInput).toHaveValue("technicka_fv");
+
+    const groupingInput = groupingCard(page, 0).locator("input.grouping-id-input");
+    await groupingInput.fill("breakersx");
+    await rerender();
+    await expect(groupingInput).toHaveValue("breakersx");
+    await commit(groupingInput, "Breakers");
+    await expect(groupingInput).toHaveValue("breakers");
+});
