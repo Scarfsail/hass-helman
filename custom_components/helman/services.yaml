@@ -33,7 +33,7 @@ group_action:
             - turn_off
             - toggle
     delay_ms:
-      default: 0
+      default: 500
       selector:
         number:
           min: 0
@@ -41,3 +41,7 @@ group_action:
           step: 100
           unit_of_measurement: ms
           mode: box
+    continue_on_error:
+      default: true
+      selector:
+        boolean:

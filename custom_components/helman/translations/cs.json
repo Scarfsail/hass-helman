@@ -126,6 +126,10 @@
         "delay_ms": {
           "name": "Prodleva",
           "description": "Pauza mezi dvěma po sobě jdoucími entitami v milisekundách."
+        },
+        "continue_on_error": {
+          "name": "Pokračovat při chybě",
+          "description": "Je-li zapnuto, entita, která selže, se zapíše do logu a akce přesto uspěje. Je-li vypnuto, akce na konci selže a vyjmenuje entity, které nereagovaly."
         }
       }
     }

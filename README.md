@@ -149,7 +149,7 @@ Before config version 26 groups came from Home Assistant labels through `visuali
 Two HA actions let automations and scripts use helman groups in place of HA labels. Both take the `grouping` id and the `group` id (ids, not names), which are shown and editable next to the names in the groupings section of the config editor; devices follow an id change there, automations using the old id do not. Both read the config on every call, so an edit in the config editor applies at once. An unknown grouping or group is an error.
 
 - `helman.get_group_entities` returns `{"entity_ids": [...], "skipped": [...]}` and must be called with a response variable.
-- `helman.group_action` runs `turn_on`, `turn_off` or `toggle` (`action`) on each of the group's entities in device tree order, waiting `delay_ms` milliseconds (default `0`) between two entities. It works whether or not schedule execution is enabled. An entity that fails is logged and the rest still run; the action then fails naming the entities that did not respond.
+- `helman.group_action` runs `turn_on`, `turn_off` or `toggle` (`action`) on each of the group's entities in device tree order, waiting `delay_ms` milliseconds (default `500`) between two entities. It works whether or not schedule execution is enabled. An entity that fails is logged and the rest still run; with `continue_on_error: false` (default `true`) the action then fails naming the entities that did not respond.
 
 A group's entities are those of its **direct members**: consumers whose own `groups` entry names the group. The entity of each member is its on/off control: `controls.switch` (a switch or a light), else an EV charger's `charge` switch, else `controls.climate`. A member with none of these is listed in `skipped` and logged as a warning; it is never silently left out. The inverter is never included.
 
@@ -162,7 +162,6 @@ actions:
       grouping: rezimy
       group: elektrina_vypnout_na_noc
       action: turn_off
-      delay_ms: 500
 ```
 
 When each entity needs its own handling, list them and loop:

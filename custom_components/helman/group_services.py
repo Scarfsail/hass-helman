@@ -40,9 +40,10 @@ GROUP_ACTION_SCHEMA = vol.Schema(
     {
         **_GROUP_FIELDS,
         vol.Required("action"): vol.In(GROUP_ACTIONS),
-        vol.Optional("delay_ms", default=0): vol.All(
+        vol.Optional("delay_ms", default=500): vol.All(
             vol.Coerce(int), vol.Range(min=0)
         ),
+        vol.Optional("continue_on_error", default=True): cv.boolean,
     }
 )
 
@@ -100,7 +101,7 @@ def async_register_group_services(hass: HomeAssistant) -> None:
                     entity_id,
                 )
                 failed.append(entity_id)
-        if failed:
+        if failed and not call.data["continue_on_error"]:
             raise HomeAssistantError(
                 f"helman.group_action {action} failed for: {', '.join(failed)}"
             )

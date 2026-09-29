@@ -14,7 +14,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -233,21 +233,55 @@ class GroupServicesTests(unittest.TestCase):
         # Member calls keep the caller's context, so logbook attribution holds.
         self.assertEqual(self.services.contexts, [CALLER_CONTEXT] * 3)
 
-    def test_group_action_without_delay_does_not_sleep(self) -> None:
+    def test_group_action_defaults_to_500_ms_between_entities(self) -> None:
+        sleeps: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        with patch.object(group_services.asyncio, "sleep", fake_sleep):
+            self._call("group_action", grouping="power", group="night", action="turn_off")
+        self.assertEqual(sleeps, [0.5, 0.5])
+
+    def test_group_action_with_zero_delay_does_not_sleep(self) -> None:
         async def fail_sleep(seconds: float) -> None:
             raise AssertionError("slept")
 
         with patch.object(group_services.asyncio, "sleep", fail_sleep):
-            self._call("group_action", grouping="power", group="night", action="turn_off")
+            self._call(
+                "group_action",
+                grouping="power",
+                group="night",
+                action="turn_off",
+                delay_ms=0,
+            )
         self.assertEqual(
             [call[1] for call in self.services.calls], ["turn_off"] * 3
+        )
+
+    def test_failing_entity_is_logged_and_the_action_succeeds_by_default(self) -> None:
+        self.services = FakeServices(failing={"light.boiler"})
+        self._register()
+        with patch.object(group_services.asyncio, "sleep", AsyncMock()):
+            self._call("group_action", grouping="power", group="night", action="turn_on")
+        self.assertEqual(
+            [call[2]["entity_id"] for call in self.services.calls], NIGHT
         )
 
     def test_failing_entity_does_not_stop_the_rest(self) -> None:
         self.services = FakeServices(failing={"light.boiler"})
         self._register()
-        with self.assertRaises(HomeAssistantError) as raised:
-            self._call("group_action", grouping="power", group="night", action="turn_on")
+        with (
+            patch.object(group_services.asyncio, "sleep", AsyncMock()),
+            self.assertRaises(HomeAssistantError) as raised,
+        ):
+            self._call(
+                "group_action",
+                grouping="power",
+                group="night",
+                action="turn_on",
+                continue_on_error=False,
+            )
         self.assertNotIsInstance(raised.exception, ServiceValidationError)
         self.assertIn("light.boiler", str(raised.exception))
         self.assertEqual(

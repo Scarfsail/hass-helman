@@ -126,6 +126,10 @@
         "delay_ms": {
           "name": "Delay",
           "description": "Pause between two consecutive entities, in milliseconds."
+        },
+        "continue_on_error": {
+          "name": "Continue on error",
+          "description": "When on, an entity that fails is logged and the action still succeeds. When off, the action fails at the end naming the entities that did not respond."
         }
       }
     }
