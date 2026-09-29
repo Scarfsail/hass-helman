@@ -241,7 +241,8 @@ class TrainingArtifactsStore:
                                "fingerprint": str, "trained_at": str,
                                "last_attempt_at": str, "last_outcome": str,
                                "error_reason": str | None,
-                               "failed_appliances": {appliance_id: reason}}}
+                               "failed_appliances": {appliance_id: reason},
+                               "shared_meter_weights": {member_id: kw | None}}}
 
     Every section is the same shape, so they share the read/write helpers below.
     No store version bump for ``appliance_energy``: a document written before it
@@ -254,6 +255,12 @@ class TrainingArtifactsStore:
     ran at all, and moves on a failure while ``trained_at`` stays pinned.
     ``failed_appliances`` is written by a successful appliance run only and is
     dropped by a wholesale failure, which produced no per-appliance results.
+
+    Nor for ``shared_meter_weights``, each shared meter member's learned power,
+    which the live split shares a parent's own power by: a section without it
+    splits evenly, as before it existed. Unlike ``failed_appliances`` it
+    outlives a wholesale failure, like ``data``: a fit that could not run does
+    not make the last weights wrong.
 
     Solar bias keeps its own store: the bias service already owns its
     fingerprint, ``trained_at`` and ``last_outcome`` there, and a second copy
@@ -329,11 +336,13 @@ class TrainingArtifactsStore:
         trained_at: str,
         last_outcome: str,
         failed_appliances: dict[str, str],
+        shared_meter_weights: dict[str, float | None],
     ) -> None:
         """Store freshly resolved per-appliance when-active hourly energy.
 
         ``failed_appliances`` maps each appliance whose estimate could not be
         resolved to why; those fall back to their configured hourly energy.
+        ``shared_meter_weights`` is every shared meter member's learned kW.
         """
         await self._async_record(
             self.APPLIANCE_ENERGY,
@@ -342,6 +351,7 @@ class TrainingArtifactsStore:
             trained_at=trained_at,
             last_outcome=last_outcome,
             failed_appliances=failed_appliances,
+            shared_meter_weights=shared_meter_weights,
         )
 
     async def async_record_appliance_energy_failure(
@@ -351,12 +361,13 @@ class TrainingArtifactsStore:
         error_reason: str | None,
         attempted_at: str,
     ) -> None:
-        """Record a failed resolve without dropping the previous estimates."""
+        """Record a failed resolve without dropping the previous estimates or weights."""
         await self._async_record_failure(
             self.APPLIANCE_ENERGY,
             attempted_at=attempted_at,
             last_outcome=last_outcome,
             error_reason=error_reason,
+            kept=("shared_meter_weights",),
         )
 
     def _read_section(self, name: str) -> dict[str, Any] | None:
@@ -390,6 +401,7 @@ class TrainingArtifactsStore:
         last_outcome: str,
         error_reason: str | None,
         attempted_at: str,
+        kept: tuple[str, ...] = (),
     ) -> None:
         """Record a failure while preserving whatever was last trained.
 
@@ -399,13 +411,14 @@ class TrainingArtifactsStore:
         of blanking the card.
 
         The failing run's own time goes into ``last_attempt_at``; ``trained_at``
-        stays with the preserved ``data`` it describes.
+        stays with the preserved ``data`` it describes. ``kept`` names a
+        section's other trained results, preserved the same way.
         """
         previous = self._read_section(name) or {}
         await self._async_write_section(name, {
             **{
                 key: previous.get(key)
-                for key in ("data", "fingerprint", "trained_at")
+                for key in ("data", "fingerprint", "trained_at", *kept)
             },
             "last_attempt_at": attempted_at,
             "last_outcome": last_outcome,

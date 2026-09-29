@@ -485,7 +485,7 @@ def read_carved_meters(
 def read_shared_meters(
     config: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
-    """``meter -> {members, metered_children}`` for every meter with meterless children.
+    """``meter -> {members, metered_children, tolerance}`` for every meter with meterless children.
 
     The one source of truth for "which devices split this meter": a meter
     owner's meterless children, schedulable or passive — a passive child still
@@ -495,6 +495,12 @@ def read_shared_meters(
 
     ``metered_children`` are the owner's children with their own meter, whose
     readings own energy subtracts before the split.
+
+    ``tolerance`` is the owner's ``consumption.children_tolerance_percent`` as
+    a fraction, or ``None`` without one: all own power then goes to the
+    running members in the ratio of their learned power. With one, each member
+    is capped at its learned power plus that much, and the excess stays on the
+    owner's unmeasured row.
     """
     shared: dict[str, dict[str, Any]] = {}
     for device, _parent in iter_devices(config):
@@ -513,8 +519,22 @@ def read_shared_meters(
             shared[meter] = {
                 "members": members,
                 "metered_children": _metered_children(children),
+                "tolerance": _children_tolerance(device),
             }
     return shared
+
+
+def _children_tolerance(device: Device) -> float | None:
+    consumption = device.get("consumption")
+    if not isinstance(consumption, Mapping) or not consumption.get("power_entity_id"):
+        # Without a power sensor there is no unmeasured row to show a capped
+        # excess on, and the editor hides the setting, so a leftover key must
+        # not keep capping what nobody can see.
+        return None
+    percent = consumption.get("children_tolerance_percent")
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)) or percent < 0:
+        return None
+    return percent / 100
 
 
 def _metered_children(children: list[Device]) -> list[str]:

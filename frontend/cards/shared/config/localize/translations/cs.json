@@ -301,6 +301,8 @@
       "ha_device": "Zařízení Home Assistantu",
       "ha_device_show_all": "Zobrazit entity ze všech zařízení",
       "consumption_power_entity": "Entita výkonu",
+      "children_distribute_all": "Rozdělit veškerou energii podřízeným",
+      "children_tolerance_percent": "Tolerance podřízených %",
       "add_device_entity": "Elektroměr nového zařízení",
       "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení"
     },
@@ -375,6 +377,7 @@
       "schedulable_has_children": "Zařízení s podřízenými zařízeními nemůže být plánovatelné; nastavte jako plánovatelná jeho podřízená zařízení.",
       "schedulable_siblings": "Platí pro všech {count} zařízení odebírajících z elektroměru nadřazeného zařízení: jsou buď všechna plánovatelná, nebo všechna pasivní.",
       "consumption_power_entity": "Senzor okamžitého výkonu (W). Zařízení, jehož podřízená zařízení odebírají z jeho elektroměru, ho potřebuje k rozdělení živého výkonu mezi ně.",
+      "children_distribute_all": "Zapnuto: běžící podřízená zařízení si rozdělí veškerý vlastní výkon tohoto zařízení v poměru svého naučeného výkonu. Vypnuto: každé je omezeno svým naučeným výkonem plus tolerancí níže a zbytek se zobrazí jako neměřený.",
       "consumption_energy_entity_child": "U podřízeného zařízení volitelné: když pole necháte prázdné, odebírá z elektroměru nadřazeného zařízení.",
       "add_device": "Jeho id se jednou vygeneruje z entity a už se nemění.",
       "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač, světlo či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění."
@@ -574,6 +577,8 @@
       "climate_mode": "Který režim tento optimalizátor na klimatizačním spotřebiči nastavuje.",
       "min_hours_per_day": "Kolik hodin musí spotřebič v okně každý den nasbírat.",
       "consumption_energy_entity": "Kumulativní senzor energie (kWh) sledující celkovou spotřebu elektřiny tohoto zařízení. Patří k zařízení, ne k jednomu jeho použití: predikce domu ho odečítá od celkové spotřeby domu, aby našla základní zátěž, a čte ho i projekce poptávky z historie.",
+      "children_distribute_all": "Podřízená zařízení tohoto zařízení bez vlastního elektroměru dostávají podíl z jeho vlastního výkonu (jeho měření minus měření podřízených s elektroměrem), dokud běží. Helman se z historie elektroměru učí výkon každého z nich a dělí v tomto poměru; dokud se nenaučí, dělí rovným dílem. Když je tato volba zapnutá, veškerý vlastní výkon připadne právě běžícím podřízeným. Vypněte ji, chcete-li každé podřízené omezit jeho naučeným výkonem plus tolerancí: co limity přesáhne, zůstane na řádku neměřené spotřeby tohoto zařízení a nezapočítá se ani do predikcí podřízených.",
+      "children_tolerance_percent": "O kolik procent nad svůj naučený výkon smí podíl podřízeného zařízení jít. Při 0 nedostane nikdy víc, než se naučilo odebírat; zbytek jde na řádek neměřené spotřeby. Zařízení, které se ještě nenaučilo, omezeno není.",
       "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži.",
       "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím."
     },

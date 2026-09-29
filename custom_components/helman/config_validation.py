@@ -1601,6 +1601,22 @@ def _validate_device_consumption(
         allowed_domains=("sensor",),
     )
 
+    # How far a parent caps its meterless children above their learned power;
+    # absent hands them all its own power. See ``read_shared_meters``. A null
+    # is the editor's cleared field: configured wrong, not absent.
+    tolerance = consumption.get("children_tolerance_percent")
+    if "children_tolerance_percent" in consumption and (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float))
+        or tolerance < 0
+    ):
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption.children_tolerance_percent",
+            code="invalid_non_negative_number",
+            message=f"{path}.consumption.children_tolerance_percent must be a number >= 0",
+        )
+
     energy_entity_id = consumption.get("energy_entity_id")
     if energy_entity_id is None:
         if not is_child:

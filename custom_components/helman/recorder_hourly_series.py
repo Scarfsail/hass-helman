@@ -21,6 +21,7 @@ from .controllables.config import (
     is_active_state,
 )
 from .energy_units import normalize_energy_to_kwh
+from .shared_meter_split import fit_member_weights, split_own_power
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1173,17 +1174,19 @@ async def estimate_average_hourly_energy_for_shared_meter(
     reference_time: datetime,
     lookback_days: int,
     metered_children: Sequence[str] = (),
-) -> dict[str, float | None]:
+    tolerance: float | None = None,
+    previous_weights: Mapping[str, float | None] | None = None,
+) -> SharedMeterFit:
     """Each device's when-running estimate from one meter several devices share.
 
     ``members`` is ``(key, activity entity id, active states)`` per device, and
     the answer comes back under ``key``. Every member must be listed — including
-    one whose own estimate nobody wants — because each counts toward the divisor
+    one whose own estimate nobody wants — because each takes its share of the split
     whenever it runs; leaving one out would hand its draw to the others.
 
     ``metered_children`` are the meters of the devices behind this one that
     have their own; the members split the meter's *own* energy, what is left
-    once those are subtracted.
+    once those are subtracted, in the parent's ``tolerance`` mode.
 
     One read of each meter and one read per distinct activity entity, all over
     the same ``lookback_days`` window, which the caller picks for the whole
@@ -1229,6 +1232,8 @@ async def estimate_average_hourly_energy_for_shared_meter(
         utc_end,
         default_unit,
         metered_children=children_states,
+        tolerance=tolerance,
+        previous_weights=previous_weights,
     )
 
 
@@ -2060,6 +2065,20 @@ def _recorder_was_live_between(
     return index < len(liveness_instants) and liveness_instants[index] <= through
 
 
+@dataclass(frozen=True)
+class SharedMeterFit:
+    """What one meter's history taught about the devices splitting it.
+
+    ``estimates`` is each member's kWh per running hour, ``None`` where history
+    did not answer. ``weights`` is each member's learned power in kW, ``None``
+    for one that did not run long enough -- the ratio the live split shares
+    own power in. Both are keyed by member, every member present.
+    """
+
+    estimates: Mapping[str, float | None]
+    weights: Mapping[str, float | None]
+
+
 def _estimate_average_hourly_energy_kwh_for_active_intervals(
     *,
     entity_states: list[Any],
@@ -2073,8 +2092,9 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
 
     Kept as its own door because most appliances own their meter, but the
     arithmetic is the shared estimator's. With one member every segment it
-    splits the window into is exactly one of the device's active intervals, so
-    ``delta / 1`` over its own running hours is the plain when-active average.
+    splits the window into is exactly one of the device's active intervals,
+    and the split hands that one member all of its own energy, so the answer
+    is the plain when-active average.
     """
     return _estimate_shared_meter_hourly_energy_kwh(
         {"": (entity_states, active_states)},
@@ -2082,7 +2102,7 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
         window_start,
         window_end,
         default_unit,
-    )[""]
+    ).estimates[""]
 
 
 def _estimate_shared_meter_hourly_energy_kwh(
@@ -2093,30 +2113,41 @@ def _estimate_shared_meter_hourly_energy_kwh(
     default_unit: Any,
     *,
     metered_children: Sequence[tuple[list[Any], Any]] = (),
-) -> dict[str, float | None]:
-    """Split one meter evenly among whichever members were running, per segment.
+    tolerance: float | None = None,
+    previous_weights: Mapping[str, float | None] | None = None,
+) -> SharedMeterFit:
+    """Split one meter among whichever members were running, by learned power.
 
-    Several devices behind one meter — four air conditioners on one breaker —
-    each need their own when-running figure, but the meter only knows their
-    total. Each member is ``(activity entity states, active states)``.
+    Several devices behind one meter -- four air conditioners on one breaker,
+    a pump next to a heater -- each need their own when-running figure, but
+    the meter only knows their total. Each member is ``(activity entity
+    states, active states)``.
 
-    Every member's active-interval boundaries together cut the window into
-    segments, and within one segment the set of running members is constant.
-    A segment where ``k >= 1`` members run hands each of them ``delta / k`` of
-    the meter's energy and the segment's full duration as running hours; each
-    member's estimate is its accumulated energy over its own hours. The split
-    is even on purpose: weighting by nominal power would need a per-device
-    rating nobody configures, and identical devices do not need one.
+    Every member's active-interval boundaries, and the window's two edges,
+    together cut the window into segments, and within one segment the set of
+    running members is constant. With more than one member, the segments first
+    teach each member's power -- see
+    :func:`.shared_meter_split.fit_member_weights`, which also takes the
+    standby out of the time nobody runs. Then every segment where members run
+    hands each of them its :func:`.shared_meter_split.split_own_power` share
+    of the segment's energy, in the parent's ``tolerance`` mode, and the
+    segment's full duration as running hours; each member's estimate is its
+    accumulated energy over its own hours. That is the very split the live
+    share sensors make with the same weights, so a figure means what its live
+    share means: in the capped mode, the excess stays out of both. A member
+    without a learned weight takes the mean of the others, and one member
+    takes all of it -- the lone device's plain when-active average. A member
+    this window teaches nothing (idle all winter) keeps its
+    ``previous_weights`` entry instead, in the split and in the answer, since
+    its power has not changed and the live split reads the stored weight.
 
-    Segments where nobody runs are ignored — the meter's draw then is standby
-    or another load, not any member's running energy — as are segments with a
-    missing sample or a negative delta, the same way the single-device average
-    always skipped them. A member's answer is ``None`` when it never ran or
-    what it accumulated rounds to nothing, the same two "history did not
-    answer" cases a lone device has.
+    Segments with a missing sample or a negative delta are skipped, the same
+    way the single-device average always skipped them. A member's estimate is
+    ``None`` when it never ran or what it accumulated rounds to nothing, the
+    same two "history did not answer" cases a lone device has.
 
-    What is split is the meter's *own* energy — see
-    :func:`own_energy_observations` — sampled at the segment boundaries, so a
+    What is split is the meter's *own* energy -- see
+    :func:`own_energy_observations` -- sampled at the segment boundaries, so a
     meter with ``metered_children`` (each ``(states, default unit)``) hands its
     members only what those children did not measure, and the exact
     per-segment allocation is kept.
@@ -2130,19 +2161,24 @@ def _estimate_shared_meter_hourly_energy_kwh(
         )
         for key, (states, active_states) in members.items()
     }
-    result: dict[str, float | None] = {key: None for key in members}
+    previous_weights = previous_weights or {}
+    nothing = SharedMeterFit(
+        estimates={key: None for key in members},
+        weights={key: previous_weights.get(key) for key in members},
+    )
     if not any(intervals_by_member.values()):
-        return result
+        return nothing
 
     observations = _parse_energy_observations(
         energy_states,
         default_unit=default_unit,
     )
     if not observations:
-        return result
+        return nothing
 
     boundaries = sorted(
-        {
+        {window_start, window_end}
+        | {
             boundary
             for intervals in intervals_by_member.values()
             for interval in intervals
@@ -2164,8 +2200,8 @@ def _estimate_shared_meter_hourly_energy_kwh(
         boundaries,
     )
 
-    energy_kwh = {key: 0.0 for key in members}
-    active_hours = {key: 0.0 for key in members}
+    #: ``(running members, duration h, own kWh)``, nobody-running ones included.
+    segments: list[tuple[tuple[str, ...], float, float]] = []
     # Each member's intervals are sorted and disjoint, and every one of their
     # ends is a boundary, so walking the segments in order only ever advances a
     # per-member cursor: a segment is running for a member exactly when it lies
@@ -2180,8 +2216,6 @@ def _estimate_shared_meter_hourly_energy_kwh(
             cursors[key] = index
             if index < len(intervals) and intervals[index][0] <= segment_start:
                 running.append(key)
-        if not running:
-            continue
 
         delta = own_deltas.get(segment_start)
         if delta is None:
@@ -2190,17 +2224,39 @@ def _estimate_shared_meter_hourly_energy_kwh(
         duration_hours = (segment_end - segment_start).total_seconds() / 3600
         if duration_hours <= 0:
             continue
+        segments.append((tuple(running), duration_hours, delta))
 
-        share = delta / len(running)
-        for key in running:
-            energy_kwh[key] += share
+    # Rounded before the split, so the estimates below use exactly the weights
+    # the live split will read back from the store.
+    # Fitted for a lone member too: its ratio split hands it all own power
+    # either way, but a capped split needs its weight.
+    fitted = fit_member_weights(segments)
+    weights: dict[str, float | None] = {
+        key: (
+            previous_weights.get(key)
+            if (weight := fitted.get(key)) is None
+            else round(weight, 4)
+        )
+        for key in members
+    }
+
+    energy_kwh = {key: 0.0 for key in members}
+    active_hours = {key: 0.0 for key in members}
+    for running, duration_hours, delta in segments:
+        # Power in and out, in W as the live split takes it.
+        shares_w = split_own_power(
+            delta / duration_hours * 1000, running, weights, tolerance=tolerance
+        )
+        for key, share_w in shares_w.items():
+            energy_kwh[key] += share_w * duration_hours / 1000
             active_hours[key] += duration_hours
 
+    estimates: dict[str, float | None] = {key: None for key in members}
     for key in members:
         if active_hours[key] <= 0 or energy_kwh[key] <= _ENERGY_TOLERANCE_KWH:
             continue
-        result[key] = round(energy_kwh[key] / active_hours[key], 4)
-    return result
+        estimates[key] = round(energy_kwh[key] / active_hours[key], 4)
+    return SharedMeterFit(estimates=estimates, weights=weights)
 
 
 def own_energy_observations(

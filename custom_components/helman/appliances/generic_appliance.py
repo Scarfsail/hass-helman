@@ -4,11 +4,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import SWITCH_CONTROL_DOMAINS
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
 
 _GENERIC_APPLIANCE_KIND = "generic"
-_DEFAULT_HISTORY_LOOKBACK_DAYS = 30
 _GENERIC_PROJECTION_STRATEGIES = {"fixed", "history_average"}
 
 GenericProjectionStrategy = Literal["fixed", "history_average"]
@@ -26,7 +26,7 @@ class GenericApplianceRuntime:
     projection_strategy: GenericProjectionStrategy
     hourly_energy_kwh: float
     history_energy_entity_id: str | None
-    history_lookback_days: int = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    history_lookback_days: int = DEFAULT_HISTORY_LOOKBACK_DAYS
     icon: str | None = None
 
     @property
@@ -124,7 +124,7 @@ def read_generic_appliance(
     )
 
     history_energy_entity_id = None
-    history_lookback_days = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    history_lookback_days = DEFAULT_HISTORY_LOOKBACK_DAYS
     if projection_strategy == "history_average":
         history_energy_entity_id = _read_entity_id(
             consumption.get("energy_entity_id"),
@@ -132,7 +132,7 @@ def read_generic_appliance(
             allowed_domains=("sensor",),
         )
         history_lookback_days = _read_positive_int(
-            projection.get("lookback_days", _DEFAULT_HISTORY_LOOKBACK_DAYS),
+            projection.get("lookback_days", DEFAULT_HISTORY_LOOKBACK_DAYS),
             path=f"{path}.consumption.projection.lookback_days",
         )
 

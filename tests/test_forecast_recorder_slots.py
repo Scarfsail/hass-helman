@@ -329,42 +329,157 @@ class ForecastRecorderSlotTests(unittest.TestCase):
 
         self.assertEqual(estimate, 1.3333)
 
-    def test_shared_meter_splits_energy_evenly_among_running_members(self) -> None:
-        # One meter behind two devices: 1 kWh while both run from 10:00 to
-        # 11:00, then another 1 kWh while only A runs until 12:00. The shared
-        # hour is halved; the solo hour is all A's.
+    @staticmethod
+    def _shared_meter(
+        switches: dict[str, tuple[tuple[str, int], ...]],
+        readings: tuple[tuple[float, int], ...],
+        *,
+        tolerance: float | None = None,
+    ):
+        """The shared estimator over hourly switch changes and meter readings."""
+
         def _at(hour: int) -> datetime:
             return datetime(2026, 3, 20, hour, 0, tzinfo=UTC)
 
-        def _switch(*changes: tuple[str, int]) -> list[SimpleNamespace]:
-            return [
-                SimpleNamespace(state=state, last_updated=_at(hour))
-                for state, hour in changes
-            ]
-
         energy_states = [
             SimpleNamespace(
-                state=value,
+                state=str(value),
                 attributes={"unit_of_measurement": "kWh"},
                 last_updated=_at(hour),
             )
-            for value, hour in (("0.0", 10), ("1.0", 11), ("2.0", 12))
+            for value, hour in readings
         ]
-
-        estimates = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+        return recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
             {
-                "a": (_switch(("on", 10), ("off", 12)), ("on",)),
-                "b": (_switch(("on", 10), ("off", 11)), ("on",)),
-                # Never ran: nothing to learn, and it takes no share.
-                "c": (_switch(("off", 10)), ("on",)),
+                key: (
+                    [
+                        SimpleNamespace(state=state, last_updated=_at(hour))
+                        for state, hour in changes
+                    ],
+                    ("on",),
+                )
+                for key, changes in switches.items()
             },
             energy_states,
-            _at(10),
-            _at(12),
+            _at(readings[0][1]),
+            _at(readings[-1][1]),
             "kWh",
+            tolerance=tolerance,
         )
 
-        self.assertEqual(estimates, {"a": 0.75, "b": 0.5, "c": None})
+    def test_shared_meter_gives_identical_members_equal_figures(self) -> None:
+        # Two members only ever seen together at 2 kW: nothing tells them
+        # apart, so each takes half, as the even split gave.
+        fit = self._shared_meter(
+            {
+                "a": (("on", 10), ("off", 12)),
+                "b": (("on", 10), ("off", 12)),
+                # Never ran: nothing to learn, and it takes no share.
+                "c": (("off", 10),),
+            },
+            ((0.0, 10), (2.0, 11), (4.0, 12)),
+        )
+
+        self.assertEqual(fit.estimates, {"a": 1.0, "b": 1.0, "c": None})
+        self.assertAlmostEqual(fit.weights["a"], fit.weights["b"])
+        self.assertIsNone(fit.weights["c"])
+
+    def test_shared_meter_splits_unequal_members_by_their_learned_power(self) -> None:
+        # A alone draws 2 kW, B alone 1 kW, and together 3 kW. The shared hour
+        # is split 2:1, not halved as the even split did (1.75 and 1.25).
+        fit = self._shared_meter(
+            {
+                "a": (("on", 10), ("off", 11), ("on", 12), ("off", 13)),
+                "b": (("off", 10), ("on", 11), ("off", 13)),
+            },
+            ((0.0, 10), (2.0, 11), (3.0, 12), (6.0, 13)),
+        )
+
+        self.assertEqual(fit.estimates, {"a": 2.0, "b": 1.0})
+        self.assertEqual(fit.weights, {"a": 2.0, "b": 1.0})
+
+    def test_shared_meter_capped_mode_leaves_the_excess_out(self) -> None:
+        # A alone 2 kW for 2 h, B alone 1 kW for 2 h, and together 3.6 kW for
+        # an hour: the fit learns 2.15 and 1.15 kW. With a 0 % tolerance each
+        # is capped at exactly that in the shared hour, so the 0.3 kWh above
+        # 3.3 kW reaches neither, where the ratio mode hands all of it out.
+        switches = {
+            "a": (("on", 10), ("off", 12), ("on", 14), ("off", 15)),
+            "b": (("off", 10), ("on", 12), ("off", 15)),
+        }
+        readings = ((0.0, 10), (4.0, 12), (6.0, 14), (9.6, 15))
+
+        ratio = self._shared_meter(switches, readings)
+        capped = self._shared_meter(switches, readings, tolerance=0.0)
+
+        self.assertEqual(capped.weights, {"a": 2.15, "b": 1.15})
+        self.assertEqual(capped.estimates, {"a": 2.05, "b": 1.05})
+        # Each ran 3 h: together the members lost exactly the excess.
+        self.assertAlmostEqual(
+            sum(ratio.estimates[key] - capped.estimates[key] for key in switches) * 3,
+            0.3,
+            places=3,
+        )
+
+    def test_shared_meter_caps_a_lone_member_too(self) -> None:
+        # One heater on a breaker that idles at 0.5 kW: the heater learns
+        # 1.5 kW, so a 0 % tolerance leaves the standby off its figure, where
+        # the ratio mode hands it everything the meter saw while it ran.
+        switches = {"a": (("on", 10), ("off", 12))}
+        readings = ((0.0, 10), (4.0, 12), (4.5, 13))
+
+        ratio = self._shared_meter(switches, readings)
+        capped = self._shared_meter(switches, readings, tolerance=0.0)
+
+        self.assertEqual(capped.weights, {"a": 1.5})
+        self.assertEqual(ratio.estimates, {"a": 2.0})
+        self.assertEqual(capped.estimates, {"a": 1.5})
+
+    def test_shared_meter_splits_by_a_carried_over_weight(self) -> None:
+        # A runs 2 kW alone for 1.5 h, then B joins for half an hour at 3 kW
+        # together: too short for B to learn, so without an earlier weight it
+        # takes the mean (an even half). With 0.5 kW carried over from an
+        # earlier window, the shared half hour is split 2:0.5 instead, just as
+        # the live split will with that stored weight.
+        def _at(hour: int, minute: int = 0) -> datetime:
+            return datetime(2026, 3, 20, hour, minute, tzinfo=UTC)
+
+        members = {
+            "a": ([SimpleNamespace(state="on", last_updated=_at(10))], ("on",)),
+            "b": (
+                [
+                    SimpleNamespace(state="off", last_updated=_at(10)),
+                    SimpleNamespace(state="on", last_updated=_at(11, 30)),
+                ],
+                ("on",),
+            ),
+        }
+        energy_states = [
+            SimpleNamespace(
+                state=str(value),
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=instant,
+            )
+            for value, instant in ((0.0, _at(10)), (3.0, _at(11, 30)), (4.5, _at(12)))
+        ]
+
+        def _fit(previous_weights=None):
+            return recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+                members,
+                energy_states,
+                _at(10),
+                _at(12),
+                "kWh",
+                previous_weights=previous_weights,
+            )
+
+        fresh = _fit()
+        carried = _fit({"b": 0.5})
+
+        self.assertEqual(fresh.weights, {"a": 2.0, "b": None})
+        self.assertEqual(fresh.estimates["a"], 1.875)
+        self.assertEqual(carried.weights, {"a": 2.0, "b": 0.5})
+        self.assertEqual(carried.estimates, {"a": 2.1, "b": 0.6})
 
     def test_shared_meter_with_one_member_is_the_single_device_average(self) -> None:
         # The lone-device estimator is this split with one member; the fixture
@@ -408,7 +523,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             active_states=("heat", "cool"),
         )
 
-        self.assertEqual(shared, {"only": 1.3333})
+        self.assertEqual(shared.estimates, {"only": 1.3333})
         self.assertEqual(single, 1.3333)
 
 

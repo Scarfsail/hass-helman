@@ -1837,6 +1837,19 @@ class DeviceTreeValidationTests(unittest.TestCase):
             ("devices.consumers[0].consumption.power_entity_id", "power_entity_required"), errors
         )
 
+    def test_the_childrens_tolerance_is_a_non_negative_number(self) -> None:
+        path = "devices.consumers[0].consumption.children_tolerance_percent"
+        for value, valid in ((0, True), (12.5, True), (-1, False), ("10", False), (True, False), (None, False)):
+            with self.subTest(value=value):
+                breaker = _ac_breaker()
+                breaker["consumption"]["children_tolerance_percent"] = value
+
+                errors, _ = self._codes(breaker)
+
+                self.assertEqual(
+                    (path, "invalid_non_negative_number") in errors, not valid
+                )
+
     def test_an_energy_only_metered_sibling_of_a_meterless_child_is_rejected(
         self,
     ) -> None:

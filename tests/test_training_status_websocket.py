@@ -168,6 +168,7 @@ def _make_coordinator(
     coordinator._training_artifacts_store = store or _make_store()
     coordinator._house_profile = house_profile
     coordinator._appliance_energy_estimates = appliance_estimates or {}
+    coordinator._shared_meter_weights = {}
     coordinator._read_house_training_request = lambda: SimpleNamespace(
         config_fingerprint=HOUSE_FP
     )
@@ -282,6 +283,22 @@ class TrainingStatusTests(unittest.TestCase):
         )
         self.assertTrue(appliance["artifactInUse"])
         self.assertFalse(appliance["usingOlderArtifact"])
+
+    def test_learned_weights_alone_are_an_artifact_in_use(self) -> None:
+        # Every child of the shared meter is passive, so no estimate is
+        # learned, yet the weights drive the live split.
+        coordinator = _make_coordinator(
+            store=_make_store(
+                appliance_energy=_section(
+                    "estimates_trained", data={}, fingerprint=APPLIANCE_FP
+                )
+            )
+        )
+        coordinator._shared_meter_weights = {"pump": 2.0}
+
+        appliance = _job(self._payload(coordinator), "appliance_energy")
+
+        self.assertTrue(appliance["artifactInUse"])
 
     def test_only_the_appliance_job_carries_the_adopted_estimates(self) -> None:
         estimates = {"dishwasher": 1.12, "living_ac": 0.6}
@@ -415,6 +432,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
             trained_at=TRAINED_AT,
             last_outcome="estimates_trained",
             failed_appliances={"boiler": "sensor.boiler_energy is gone"},
+            shared_meter_weights={},
         )
         await store.async_record_appliance_energy_failure(
             last_outcome="training_failed",
@@ -664,6 +682,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
                     trained_at=TRAINED_AT,
                     last_outcome="estimates_trained",
                     failed_appliances={},
+                    shared_meter_weights={},
                 )
                 return "estimates_trained"
 

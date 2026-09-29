@@ -2,8 +2,9 @@
 
 The AC breaker meters four air conditioners together. Each one's live power is
 the breaker's *own* power — its reading minus its metered children's — split
-evenly among whichever of them are running, and the breaker's remainder is own
-power minus those shares. The tree is built by the real tree builder and the
+among whichever of them are running in the ratio of their learned power (evenly
+before any is learned), and the breaker's remainder is own power minus those
+shares. The tree is built by the real tree builder and the
 split computed by the real coordinator, so the wiring between the two is what
 is tested, not a hand-written tree.
 """
@@ -45,7 +46,9 @@ def _share(room: str) -> str:
     return f"sensor.helman_share_power_klima_{room}"
 
 
-def _devices(*, metered_child: bool = False) -> list[dict]:
+def _devices(
+    *, metered_child: bool = False, tolerance_percent: float | None = None
+) -> list[dict]:
     children: list[dict] = [
         {
             "id": f"klima-{room}",
@@ -66,16 +69,10 @@ def _devices(*, metered_child: bool = False) -> list[dict]:
                 },
             },
         )
-    return [
-        {
-            "id": "breaker",
-            "consumption": {
-                "energy_entity_id": BREAKER,
-                "power_entity_id": BREAKER_POWER,
-            },
-            "children": children,
-        }
-    ]
+    consumption: dict = {"energy_entity_id": BREAKER, "power_entity_id": BREAKER_POWER}
+    if tolerance_percent is not None:
+        consumption["children_tolerance_percent"] = tolerance_percent
+    return [{"id": "breaker", "consumption": consumption, "children": children}]
 
 
 class _States:
@@ -97,11 +94,21 @@ class _Sensor:
         self.values.append(watts)
 
 
-def _make_coordinator(states: dict[str, str], *, metered_child: bool = False):
+def _make_coordinator(
+    states: dict[str, str],
+    *,
+    metered_child: bool = False,
+    tolerance_percent: float | None = None,
+    weights: dict[str, float | None] | None = None,
+):
     config = {
         "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
         "energy_nodes": {"house": {"entities": {"power": HOUSE}}},
-        "devices": {"consumers": _devices(metered_child=metered_child)},
+        "devices": {
+            "consumers": _devices(
+                metered_child=metered_child, tolerance_percent=tolerance_percent
+            )
+        },
     }
     hass = SimpleNamespace(states=_States(states))
     tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
@@ -113,6 +120,7 @@ def _make_coordinator(states: dict[str, str], *, metered_child: bool = False):
     c._unmeasured_raw_history = {}
     c._power_sensor_ids = c._collect_power_sensor_ids(tree)
     c._source_ratio_entity_ids = {}
+    c._shared_meter_weights = dict(weights or {})
     c._init_buffers(tree)
     return c
 
@@ -127,14 +135,22 @@ def _tick(c) -> tuple[dict, dict]:
 
 @unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class SharePowerTests(unittest.TestCase):
-    def _run(self, running: tuple[str, ...], *, extra: dict[str, str] | None = None):
+    def _run(
+        self,
+        running: tuple[str, ...],
+        *,
+        extra: dict[str, str] | None = None,
+        **coordinator_options,
+    ):
         states = {
             HOUSE: "3000",
             BREAKER_POWER: "1000",
             **{f"climate.{room}": "heat" if room in running else "off" for room in ROOMS},
             **(extra or {}),
         }
-        c = _make_coordinator(states, metered_child=HEATER_POWER in states)
+        c = _make_coordinator(
+            states, metered_child=HEATER_POWER in states, **coordinator_options
+        )
         return c, _tick(c)
 
     def test_no_child_running_leaves_everything_on_the_remainder(self) -> None:
@@ -159,6 +175,31 @@ class SharePowerTests(unittest.TestCase):
             self.assertAlmostEqual(shares[_share(room)], 1000.0 / 3)
         self.assertAlmostEqual(sum(shares.values()) + remainder, 1000.0)
         self.assertAlmostEqual(remainder, 0.0)
+
+    def test_running_children_share_by_their_learned_power(self) -> None:
+        # Learned 2 kW and 1 kW: 1,000 W of own power goes 2:1, all of it.
+        _c, (remainder, shares) = self._run(
+            ("obyvak", "bartik"),
+            weights={"klima-obyvak": 2.0, "klima-bartik": 1.0, "klima-adelka": 1.5},
+        )
+
+        self.assertAlmostEqual(shares[_share("obyvak")], 2000 / 3)
+        self.assertAlmostEqual(shares[_share("bartik")], 1000 / 3)
+        self.assertEqual(shares[_share("adelka")], 0.0)
+        self.assertAlmostEqual(remainder, 0.0)
+
+    def test_with_a_tolerance_the_excess_reaches_the_parents_remainder(self) -> None:
+        # Learned 300 W and 200 W, 10 % tolerance: capped at 330 W and 220 W,
+        # and the other 450 W of the breaker's 1,000 W is its unmeasured row.
+        _c, (remainder, shares) = self._run(
+            ("obyvak", "bartik"),
+            tolerance_percent=10,
+            weights={"klima-obyvak": 0.3, "klima-bartik": 0.2},
+        )
+
+        self.assertAlmostEqual(shares[_share("obyvak")], 330.0)
+        self.assertAlmostEqual(shares[_share("bartik")], 220.0)
+        self.assertAlmostEqual(remainder, 450.0)
 
     def test_shares_are_not_subtracted_and_repeated_ticks_are_stable(self) -> None:
         # The share sensors exist and read back what was published; subtracting

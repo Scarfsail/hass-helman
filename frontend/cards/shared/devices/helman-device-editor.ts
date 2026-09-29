@@ -78,6 +78,9 @@ export const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as con
  */
 export const SEEDED_PROJECTION = { strategy: "fixed", hourly_energy_kwh: 1 } as const;
 
+/** The tolerance a parent gets when it stops handing its children all its own power. */
+const SEEDED_CHILDREN_TOLERANCE_PERCENT = 20;
+
 const GENERIC_PROJECTION_STRATEGIES = [
     { value: "fixed", labelKey: "editor.values.fixed" },
     { value: "history_average", labelKey: "editor.values.history_average" },
@@ -544,6 +547,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                         helperKey: "editor.helpers.consumption_power_entity",
                                     },
                                 )}
+                                ${this._renderChildrenToleranceField(device)}
                             </div>`,
                         )}
                         ${renderSimpleSection(
@@ -962,6 +966,54 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                 <div class="helper">${this.t("editor.helpers.schedulable")}</div>
                 ${note ? html`<div class="helper schedulable-note">${note}</div>` : nothing}
             </div>
+        `;
+    }
+
+    /**
+     * Whether a parent hands its meterless children all of its own power, in
+     * the ratio of their learned power, or caps each at that plus a tolerance.
+     *
+     * Only on a parent with meterless children and a power sensor: without the
+     * sensor there is no unmeasured row, so a capped excess would have nowhere
+     * to show. Turning the switch off writes the tolerance, which the field
+     * below it then edits; turning it on removes the key.
+     */
+    private _renderChildrenToleranceField(device: JsonObject): TemplateResult | typeof nothing {
+        const consumption = asJsonObject(device.consumption) ?? {};
+        if (!meterlessChildren(device).length || !stringValue(consumption.power_entity_id).trim()) {
+            return nothing;
+        }
+        const path: PathSegment[] = [...this.path, "consumption", "children_tolerance_percent"];
+        const distributeAll = consumption.children_tolerance_percent === undefined;
+        return html`
+            <div class="field toggle-field children-distribute-field">
+                <div class="field-label-row">
+                    <ha-formfield .label=${this.t("editor.fields.children_distribute_all")}>
+                        <ha-switch
+                            .checked=${distributeAll}
+                            @change=${(event: Event) =>
+                                this.setValue(
+                                    path,
+                                    (event.currentTarget as HTMLElement & { checked: boolean }).checked
+                                        ? undefined
+                                        : SEEDED_CHILDREN_TOLERANCE_PERCENT,
+                                )}
+                        ></ha-switch>
+                    </ha-formfield>
+                    ${renderHelpIcon(this, "editor.fields.children_distribute_all", "editor.help.children_distribute_all")}
+                </div>
+                <div class="helper">${this.t("editor.helpers.children_distribute_all")}</div>
+            </div>
+            ${distributeAll
+                ? nothing
+                : renderRequiredNumberField(
+                      this,
+                      path,
+                      "editor.fields.children_tolerance_percent",
+                      undefined,
+                      "any",
+                      "editor.help.children_tolerance_percent",
+                  )}
         `;
     }
 
