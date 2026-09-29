@@ -415,6 +415,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
             trained_at=TRAINED_AT,
             last_outcome="estimates_trained",
             failed_appliances={"boiler": "sensor.boiler_energy is gone"},
+            shared_meter_weights={},
         )
         await store.async_record_appliance_energy_failure(
             last_outcome="training_failed",
@@ -664,6 +665,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
                     trained_at=TRAINED_AT,
                     last_outcome="estimates_trained",
                     failed_appliances={},
+                    shared_meter_weights={},
                 )
                 return "estimates_trained"
 

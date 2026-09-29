@@ -1372,6 +1372,24 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
         self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
 
+    def test_the_shared_meter_weights_are_adopted_for_the_live_split(self) -> None:
+        # An unlearned member stays None (it takes the others' mean); junk is
+        # read as unlearned rather than as a weight.
+        coordinator = self._make_coordinator(
+            section={
+                "data": {},
+                "fingerprint": "stale",
+                "shared_meter_weights": {"ac-1": 1.2, "ac-2": None, "ac-3": "x"},
+            }
+        )
+
+        coordinator._adopt_stored_appliance_energy()
+
+        self.assertEqual(
+            coordinator._shared_meter_weights,
+            {"ac-1": 1.2, "ac-2": None, "ac-3": None},
+        )
+
     def test_only_history_average_appliances_are_trained(self) -> None:
         coordinator = self._make_coordinator(
             section=None,

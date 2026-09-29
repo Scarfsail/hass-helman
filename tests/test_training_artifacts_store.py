@@ -179,6 +179,7 @@ def test_appliance_energy_round_trips_alongside_house_consumption():
             trained_at="2026-08-01T03:01:00+02:00",
             last_outcome="estimates_trained",
             failed_appliances={"boiler": "sensor.boiler_energy is gone"},
+            shared_meter_weights={"ac-1": 1.2, "ac-2": None},
         )
 
         reloaded = storage_mod.TrainingArtifactsStore(object())
@@ -191,6 +192,7 @@ def test_appliance_energy_round_trips_alongside_house_consumption():
             "last_outcome": "estimates_trained",
             "error_reason": None,
             "failed_appliances": {"boiler": "sensor.boiler_energy is gone"},
+            "shared_meter_weights": {"ac-1": 1.2, "ac-2": None},
         }
         assert reloaded.house_consumption["fingerprint"] == "house-fp"
 
@@ -210,6 +212,7 @@ def test_failed_appliance_energy_run_preserves_the_previous_estimates():
             trained_at="2026-08-01T03:01:00+02:00",
             last_outcome="estimates_trained",
             failed_appliances={"boiler": "recorder is down"},
+            shared_meter_weights={"ac-1": 1.2},
         )
 
         await store.async_record_appliance_energy_failure(
@@ -221,6 +224,9 @@ def test_failed_appliance_energy_run_preserves_the_previous_estimates():
         section = store.appliance_energy
         assert section["data"] == {"dishwasher": 0.83}
         assert section["fingerprint"] == "appliance-fp"
+        # The weights are trained results like the estimates: the live split
+        # must not fall back to even because a run failed.
+        assert section["shared_meter_weights"] == {"ac-1": 1.2}
         assert section["last_outcome"] == "training_failed"
         assert section["error_reason"] == "recorder exploded"
         # A wholesale failure produced no per-appliance results, so the last

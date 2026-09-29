@@ -176,7 +176,7 @@ class SharedMeterOwnEnergyTests(unittest.TestCase):
             metered_children=[(sibling, "kWh")],
         )
 
-        self.assertEqual(estimates, {"lamp": 0.4})
+        self.assertEqual(estimates.estimates, {"lamp": 0.4})
 
     def test_two_children_running_half_an_hour_each_get_their_own_half(self) -> None:
         """0.8 kWh while A ran, 0.2 kWh while B ran -- not 0.5 kWh each."""
@@ -193,7 +193,7 @@ class SharedMeterOwnEnergyTests(unittest.TestCase):
             "kWh",
         )
 
-        self.assertEqual(estimates, {"a": 1.6, "b": 0.4})
+        self.assertEqual(estimates.estimates, {"a": 1.6, "b": 0.4})
 
 
 class HouseBaselineOwnEnergyTests(unittest.TestCase):

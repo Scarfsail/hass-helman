@@ -300,6 +300,8 @@
       "ha_device": "Home Assistant device",
       "ha_device_show_all": "Show entities from all devices",
       "consumption_power_entity": "Power entity",
+      "children_distribute_all": "Distribute all energy to children",
+      "children_tolerance_percent": "Children tolerance %",
       "add_device_entity": "Energy meter of the new device",
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child"
     },
@@ -374,6 +376,7 @@
       "schedulable_has_children": "A device with children cannot be schedulable; make its children schedulable instead.",
       "schedulable_siblings": "Applies to all {count} devices drawing from the parent's meter: they are either all schedulable or all passive.",
       "consumption_power_entity": "Instantaneous power sensor (W). A device whose children draw from its meter needs one to split its live power among them.",
+      "children_distribute_all": "On: the running children share all of this device's own power, in the ratio of their learned power. Off: each is capped at its learned power plus the tolerance below, and the rest shows as unmeasured.",
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",
       "add_device": "Its id is generated from the entity once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
@@ -573,6 +576,8 @@
       "climate_mode": "Which mode this optimizer authors on the climate appliance.",
       "min_hours_per_day": "Hours the appliance must accumulate inside the window each day.",
       "consumption_energy_entity": "Cumulative energy sensor (kWh) that tracks this device's total electricity consumption. It belongs to the device, not to any one use of it: the house forecast subtracts it from the house total to find the baseline, and a history-based demand projection reads it too.",
+      "children_distribute_all": "This device's children without a meter of their own get a share of its own power (its reading minus its metered children's) while they run. Helman learns each one's power from the meter's history and shares in that ratio; until it has learned, the share is even. With this on, all own power goes to whichever children are running. Turn it off to cap each child at its learned power plus a tolerance: what exceeds the caps is then left on this device's unmeasured row, and the children's forecast figures leave it out too.",
+      "children_tolerance_percent": "How far above its learned power a child's share may go, in percent. At 0 a child is never given more than it has learned to draw; anything above goes to the unmeasured row. A child not learned yet is never capped.",
       "schedulable": "Helman may plan and run this device, and optimizers can target it. A schedulable device's energy is carved out of the house baseline and added back as planned demand. Leave it off for a device you only want measured — its load then stays inside the baseline.",
       "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it."
     },

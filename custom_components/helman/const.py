@@ -156,6 +156,9 @@ BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_MODEL_ID = "battery_net_load_fractional_hour_v1"
 DEFAULT_APPLIANCE_ICON = "mdi:lightning-bolt"
+#: How far back an appliance's energy history is read when its config names
+#: no ``lookback_days``, and a shared meter's window when no member names one.
+DEFAULT_HISTORY_LOOKBACK_DAYS = 30
 
 # Compiled frontend (card + config editor), served as static files
 FRONTEND_COMPILED_FOLDER = "frontend_compiled"

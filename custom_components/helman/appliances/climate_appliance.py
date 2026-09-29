@@ -4,10 +4,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
 
 _CLIMATE_APPLIANCE_KIND = "climate"
-_DEFAULT_HISTORY_LOOKBACK_DAYS = 30
 _CLIMATE_PROJECTION_STRATEGIES = {"fixed", "history_average"}
 _DEFAULT_CLIMATE_STOP_HVAC_MODE = "off"
 
@@ -28,7 +28,7 @@ class ClimateApplianceRuntime:
     projection_strategy: ClimateProjectionStrategy
     hourly_energy_kwh: float
     history_energy_entity_id: str | None
-    history_lookback_days: int = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    history_lookback_days: int = DEFAULT_HISTORY_LOOKBACK_DAYS
     icon: str | None = None
     supported_modes: tuple[ClimateApplianceMode, ...] = SUPPORTED_CLIMATE_MODES
     stop_hvac_mode: str | None = _DEFAULT_CLIMATE_STOP_HVAC_MODE
@@ -134,7 +134,7 @@ def read_climate_appliance(
     )
 
     history_energy_entity_id = None
-    history_lookback_days = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    history_lookback_days = DEFAULT_HISTORY_LOOKBACK_DAYS
     if projection_strategy == "history_average":
         history_energy_entity_id = _read_entity_id(
             consumption.get("energy_entity_id"),
@@ -142,7 +142,7 @@ def read_climate_appliance(
             allowed_domains=("sensor",),
         )
         history_lookback_days = _read_positive_int(
-            projection.get("lookback_days", _DEFAULT_HISTORY_LOOKBACK_DAYS),
+            projection.get("lookback_days", DEFAULT_HISTORY_LOOKBACK_DAYS),
             path=f"{path}.consumption.projection.lookback_days",
         )
 

@@ -175,6 +175,7 @@ from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
 )
+from .shared_meter_split import split_own_power
 from .solar_bias_correction.models import read_bias_config
 from .visualization import read_visualization
 from .solar_bias_correction.service import SolarBiasCorrectionService
@@ -846,6 +847,11 @@ class HelmanCoordinator:
         # to its configured hourly_energy_kwh, which is what the resolvers did
         # for a failed estimate before this was stored at all.
         self._appliance_energy_estimates: dict[str, float] = {}
+        # Each shared meter member's learned power in kW, adopted from the same
+        # section: the ratio the live split shares a parent's own power in. A
+        # member missing from it takes the others' mean, so before the first
+        # fit lands the split is even.
+        self._shared_meter_weights: dict[str, float | None] = {}
         # Today's completed slots are immutable, so the reader keeps the ones it
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
@@ -870,6 +876,7 @@ class HelmanCoordinator:
         self._share_entity_id_map: dict[str, str] = {}
         # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
         self._share_running_signals: dict[str, tuple[str, str]] = {}
+        self._share_tolerances: dict[str, float | None] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
         self._virtual_sensor_ids: set[str] = set()
 
@@ -1717,6 +1724,7 @@ class HelmanCoordinator:
                     for member in shared["members"]
                 ),
                 metered_children=tuple(shared["metered_children"]),
+                tolerance=shared["tolerance"],
             )
             for energy_entity_id, shared in read_shared_meters(
                 self._active_config
@@ -1744,9 +1752,11 @@ class HelmanCoordinator:
         house profile is blanked. The map is keyed per appliance, so the entries
         for appliances that did not change are still right, and dropping them
         would push those appliances onto their fixed fallback for no reason
-        until the refit lands.
+        until the refit lands. The same holds for the shared-meter weights,
+        keyed per member.
         """
         self._appliance_energy_estimates = {}
+        self._shared_meter_weights = {}
 
         store = self._training_artifacts_store
         section = store.appliance_energy if store is not None else None
@@ -1765,6 +1775,18 @@ class HelmanCoordinator:
                 and isinstance(value, (int, float))
                 and not isinstance(value, bool)
                 and value > 0
+            }
+
+        weights = section.get("shared_meter_weights")
+        if isinstance(weights, dict):
+            self._shared_meter_weights = {
+                member_id: float(value)
+                if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value >= 0
+                else None
+                for member_id, value in weights.items()
+                if isinstance(member_id, str)
             }
 
         request = self._read_appliance_energy_training_request()
@@ -5395,10 +5417,18 @@ class HelmanCoordinator:
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.
+        shared_meters = read_shared_meters(self._active_config).values()
         self._share_running_signals = {
             member_id: (entity_id, activity)
-            for shared in read_shared_meters(self._active_config).values()
+            for shared in shared_meters
             for member_id, entity_id, activity in shared["members"]
+        }
+        # Every member of one meter carries its parent's tolerance, so a share
+        # node's parent is found without walking the config again.
+        self._share_tolerances = {
+            member_id: shared["tolerance"]
+            for shared in shared_meters
+            for member_id, _entity_id, _activity in shared["members"]
         }
         # The smoothing windows belong to the tree they were filled from: a rebuild
         # can drop or re-parent a node, and a stale window would then smooth the
@@ -5754,14 +5784,27 @@ class HelmanCoordinator:
     def _split_own_power(
         self, own: float | None, share_nodes: list
     ) -> dict[str, float | None]:
-        """Own power split evenly among the running meterless children; 0 W for the rest."""
+        """Own power split among the running meterless children; 0 W for the rest.
+
+        In the ratio of their learned power and in the parent's tolerance mode,
+        by the very function the training estimate splits history with -- see
+        :func:`.shared_meter_split.split_own_power`. What a capped split does
+        not hand out stays in the parent's remainder.
+        """
         if own is None:
             return {n["id"]: None for n in share_nodes}
         running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
-        return {
-            n["id"]: own / len(running) if n["id"] in running else 0.0
-            for n in share_nodes
-        }
+        shares = (
+            split_own_power(
+                own,
+                running,
+                self._shared_meter_weights,
+                tolerance=self._share_tolerances.get(running[0]),
+            )
+            if running
+            else {}
+        )
+        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
 
     def _is_share_running(self, device_id: str) -> bool:
         """Whether a meterless child runs now, by the predicate its history split uses."""
