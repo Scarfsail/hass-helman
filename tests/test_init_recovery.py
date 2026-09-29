@@ -77,11 +77,18 @@ def _load_helman_init_with_stubs():
 
     group_services_mod = types.ModuleType("custom_components.helman.group_services")
     group_services_mod.register_calls = 0
+    group_services_mod.schema_updates = 0
 
-    def async_register_group_services(_hass) -> None:
+    async def async_register_group_services(_hass) -> None:
         group_services_mod.register_calls += 1
 
+    def async_update_group_service_schemas(_hass) -> None:
+        group_services_mod.schema_updates += 1
+
     group_services_mod.async_register_group_services = async_register_group_services
+    group_services_mod.async_update_group_service_schemas = (
+        async_update_group_service_schemas
+    )
     sys.modules["custom_components.helman.group_services"] = group_services_mod
 
     storage_mod = types.ModuleType("custom_components.helman.storage")
@@ -197,6 +204,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass()
         await self.helman_init.async_setup(hass, {})
         await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+        self.assertEqual(self.group_services_mod.schema_updates, 1)
 
         result = await self.helman_init.async_unload_entry(hass, FakeConfigEntry())
 

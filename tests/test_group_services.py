@@ -164,11 +164,24 @@ class GroupServicesTests(unittest.TestCase):
 
     def _register(self) -> None:
         # Schedule execution disabled: the services must not care.
-        storage = SimpleNamespace(config=CONFIG, execution_enabled=False)
-        hass = SimpleNamespace(
-            data={DOMAIN: {"storage": storage}}, services=self.services
+        self.storage = SimpleNamespace(config=CONFIG, execution_enabled=False)
+
+        async def run_in_executor(func, *args):
+            return func(*args)
+
+        self.hass = SimpleNamespace(
+            data={DOMAIN: {"storage": self.storage}},
+            services=self.services,
+            async_add_executor_job=run_in_executor,
         )
-        group_services.async_register_group_services(hass)
+        self.schemas: dict[str, dict] = {}
+
+        def set_schema(hass, domain, service, schema) -> None:
+            assert domain == DOMAIN
+            self.schemas[service] = schema
+
+        with patch.object(group_services, "async_set_service_schema", set_schema):
+            asyncio.run(group_services.async_register_group_services(self.hass))
 
     def _call(self, service: str, **data):
         handler, schema, _ = self.services.registered[service]
@@ -180,6 +193,62 @@ class GroupServicesTests(unittest.TestCase):
             self.services.registered["get_group_entities"][2], SupportsResponse.ONLY
         )
         self.assertIsNone(self.services.registered["group_action"][2])
+
+    def test_pickers_list_configured_ids_and_accept_typed_text(self) -> None:
+        for service in ("get_group_entities", "group_action"):
+            fields = self.schemas[service]["fields"]
+            self.assertEqual(
+                fields["grouping"]["selector"]["select"],
+                {
+                    "options": [
+                        {"value": "power", "label": "power"},
+                        {"value": "room", "label": "room"},
+                    ],
+                    "custom_value": True,
+                    "mode": "dropdown",
+                },
+            )
+            self.assertEqual(
+                fields["group"]["selector"]["select"]["options"],
+                [
+                    {"value": "night", "label": "power / Night"},
+                    {"value": "away", "label": "power / Away"},
+                    {"value": "empty", "label": "power / Empty"},
+                ],
+            )
+            # Everything else still comes from services.yaml.
+            self.assertTrue(fields["grouping"]["required"])
+        self.assertEqual(
+            self.schemas["group_action"]["fields"]["delay_ms"]["default"], 500
+        )
+
+    def test_schema_update_follows_the_saved_config(self) -> None:
+        self.storage.config = {
+            "devices": {
+                "groupings": [
+                    {
+                        "id": "rezimy",
+                        "name": "Režimy",
+                        "groups": [{"id": "vypnout_pryc", "name": "Vypnout pryč"}],
+                    }
+                ]
+            }
+        }
+        with patch.object(
+            group_services,
+            "async_set_service_schema",
+            lambda hass, domain, service, schema: self.schemas.update({service: schema}),
+        ):
+            group_services.async_update_group_service_schemas(self.hass)
+        fields = self.schemas["group_action"]["fields"]
+        self.assertEqual(
+            fields["grouping"]["selector"]["select"]["options"],
+            [{"value": "rezimy", "label": "Režimy"}],
+        )
+        self.assertEqual(
+            fields["group"]["selector"]["select"]["options"],
+            [{"value": "vypnout_pryc", "label": "Režimy / Vypnout pryč"}],
+        )
 
     def test_get_group_entities_response(self) -> None:
         self.assertEqual(

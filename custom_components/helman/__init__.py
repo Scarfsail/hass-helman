@@ -7,7 +7,10 @@ from homeassistant.util import slugify
 
 from .const import DOMAIN, SENSOR_UNIQUE_ID_MIGRATIONS, UNMEASURED_POWER_UNIQUE_ID_SUFFIX
 from .frontend import async_register_frontend, async_unregister_frontend
-from .group_services import async_register_group_services
+from .group_services import (
+    async_register_group_services,
+    async_update_group_service_schemas,
+)
 from .panel import async_register_panel
 from .coordinator import HelmanCoordinator
 from .storage import HelmanStorage
@@ -138,7 +141,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await stor.async_load()
         domain_data["storage"] = stor
     async_register_websocket_commands(hass)
-    async_register_group_services(hass)
+    await async_register_group_services(hass)
     # Frontend first: it registers the Lovelace card resource, and the panel
     # hands its URL to the config editor.
     await async_register_frontend(hass)
@@ -155,6 +158,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         stor = HelmanStorage(hass)
         await stor.async_load()
         domain_data["storage"] = stor
+    # Saving in the config editor reloads this entry, so the service pickers
+    # pick up added or renamed groups here.
+    async_update_group_service_schemas(hass)
 
     # Frontend first: it registers the Lovelace card resource, and the panel
     # hands its URL to the config editor.

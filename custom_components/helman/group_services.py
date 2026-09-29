@@ -6,7 +6,9 @@ running signals (:func:`.controllables.config.group_member_entities`); a member
 without one is logged and reported, never silently dropped.
 
 The config is read fresh on every call, so an edit in the config editor applies
-at once.
+at once. The ``grouping`` and ``group`` fields offer the configured ids in a
+dropdown that still takes typed text; :func:`async_update_group_service_schemas`
+refreshes it when the config is saved.
 """
 
 from __future__ import annotations
@@ -14,15 +16,22 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_set_service_schema
+from homeassistant.util.yaml import load_yaml_dict
 
 from .const import DOMAIN
-from .controllables.config import group_exists, group_member_entities
+from .controllables.config import (
+    group_exists,
+    group_member_entities,
+    read_groupings,
+)
 from .scheduling.actuation import ScheduleActuator
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,7 +79,67 @@ def _resolve_group(
     return entity_ids, skipped
 
 
-def async_register_group_services(hass: HomeAssistant) -> None:
+def group_field_selectors(
+    config: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(grouping selector, group selector)`` listing the configured ids.
+
+    A field cannot narrow its options by another field, so the group dropdown
+    lists every grouping's groups, labelled ``Grouping / Group``. A group id
+    used in two groupings is listed once. Typed values stay allowed, so a
+    template or a not-yet-saved id still goes through.
+    """
+    grouping_options: list[dict[str, str]] = []
+    group_options: dict[str, dict[str, str]] = {}
+    groupings = read_groupings(config)
+    for grouping in groupings if isinstance(groupings, list) else []:
+        if not isinstance(grouping, Mapping) or not isinstance(grouping.get("id"), str):
+            continue
+        grouping_label = grouping.get("name") or grouping["id"]
+        grouping_options.append({"value": grouping["id"], "label": grouping_label})
+        groups = grouping.get("groups")
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, Mapping) or not isinstance(group.get("id"), str):
+                continue
+            group_options.setdefault(
+                group["id"],
+                {
+                    "value": group["id"],
+                    "label": f"{grouping_label} / {group.get('name') or group['id']}",
+                },
+            )
+
+    def select(options: list[dict[str, str]]) -> dict[str, Any]:
+        return {"select": {"options": options, "custom_value": True, "mode": "dropdown"}}
+
+    return select(grouping_options), select(list(group_options.values()))
+
+
+@callback
+def async_update_group_service_schemas(hass: HomeAssistant) -> None:
+    """Point both services' ``grouping``/``group`` pickers at the current config."""
+    domain_data = hass.data[DOMAIN]
+    grouping_selector, group_selector = group_field_selectors(
+        domain_data["storage"].config
+    )
+    for service, description in domain_data["group_service_descriptions"].items():
+        fields = description["fields"]
+        async_set_service_schema(
+            hass,
+            DOMAIN,
+            service,
+            {
+                **description,
+                "fields": {
+                    **fields,
+                    "grouping": {**fields["grouping"], "selector": grouping_selector},
+                    "group": {**fields["group"], "selector": group_selector},
+                },
+            },
+        )
+
+
+async def async_register_group_services(hass: HomeAssistant) -> None:
     """Register ``helman.get_group_entities`` and ``helman.group_action``."""
     # The command comes from the user's own automation, so the schedule
     # execution gate must not block it.
@@ -119,3 +188,9 @@ def async_register_group_services(hass: HomeAssistant) -> None:
         group_action,
         schema=GROUP_ACTION_SCHEMA,
     )
+    # services.yaml stays the source of every field; only the two pickers'
+    # options are swapped in from the config.
+    hass.data[DOMAIN]["group_service_descriptions"] = await hass.async_add_executor_job(
+        load_yaml_dict, str(Path(__file__).parent / "services.yaml")
+    )
+    async_update_group_service_schemas(hass)
