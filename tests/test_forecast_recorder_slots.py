@@ -435,6 +435,52 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(ratio.estimates, {"a": 2.0})
         self.assertEqual(capped.estimates, {"a": 1.5})
 
+    def test_shared_meter_splits_by_a_carried_over_weight(self) -> None:
+        # A runs 2 kW alone for 1.5 h, then B joins for half an hour at 3 kW
+        # together: too short for B to learn, so without an earlier weight it
+        # takes the mean (an even half). With 0.5 kW carried over from an
+        # earlier window, the shared half hour is split 2:0.5 instead, just as
+        # the live split will with that stored weight.
+        def _at(hour: int, minute: int = 0) -> datetime:
+            return datetime(2026, 3, 20, hour, minute, tzinfo=UTC)
+
+        members = {
+            "a": ([SimpleNamespace(state="on", last_updated=_at(10))], ("on",)),
+            "b": (
+                [
+                    SimpleNamespace(state="off", last_updated=_at(10)),
+                    SimpleNamespace(state="on", last_updated=_at(11, 30)),
+                ],
+                ("on",),
+            ),
+        }
+        energy_states = [
+            SimpleNamespace(
+                state=str(value),
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=instant,
+            )
+            for value, instant in ((0.0, _at(10)), (3.0, _at(11, 30)), (4.5, _at(12)))
+        ]
+
+        def _fit(previous_weights=None):
+            return recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+                members,
+                energy_states,
+                _at(10),
+                _at(12),
+                "kWh",
+                previous_weights=previous_weights,
+            )
+
+        fresh = _fit()
+        carried = _fit({"b": 0.5})
+
+        self.assertEqual(fresh.weights, {"a": 2.0, "b": None})
+        self.assertEqual(fresh.estimates["a"], 1.875)
+        self.assertEqual(carried.weights, {"a": 2.0, "b": 0.5})
+        self.assertEqual(carried.estimates, {"a": 2.1, "b": 0.6})
+
     def test_shared_meter_with_one_member_is_the_single_device_average(self) -> None:
         # The lone-device estimator is this split with one member; the fixture
         # above must give the same answer through either door.

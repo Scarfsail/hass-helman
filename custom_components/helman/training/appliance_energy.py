@@ -264,6 +264,7 @@ class ApplianceEnergyTrainingJob:
                     shared=shared,
                     appliances=appliances,
                     reference_time=reference_time,
+                    previous_weights=previous_weights,
                 )
             except Exception as err:
                 # One read serves the whole meter, so its failure is every
@@ -285,13 +286,7 @@ class ApplianceEnergyTrainingJob:
                 )
                 continue
 
-            # A member that did not run enough this window (air conditioners
-            # all winter) has not changed its power, so it keeps what it
-            # learned before rather than dropping its split back to even.
-            weights.update(
-                (member_id, previous_weights.get(member_id) if weight is None else weight)
-                for member_id, weight in fit.weights.items()
-            )
+            weights.update(fit.weights)
             # Only the members that learn are stored; a ``fixed`` sharer was in
             # the split for its share of the meter and nothing more.
             for appliance in appliances:
@@ -356,6 +351,7 @@ class ApplianceEnergyTrainingJob:
         shared: SharedMeter,
         appliances: Sequence[HistoryAverageAppliance],
         reference_time: datetime,
+        previous_weights: Mapping[str, float | None],
     ) -> SharedMeterFit:
         """Every member's weight and share of one meter, from one read of it.
 
@@ -375,6 +371,7 @@ class ApplianceEnergyTrainingJob:
             energy_entity_id=energy_entity_id,
             metered_children=shared.metered_children,
             tolerance=shared.tolerance,
+            previous_weights=previous_weights,
             reference_time=reference_time,
             lookback_days=max(
                 (appliance.history_lookback_days for appliance in appliances),

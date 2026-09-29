@@ -193,6 +193,7 @@ class _SharedMeterRecorder:
         lookback_days,
         metered_children=(),
         tolerance=None,
+        previous_weights=None,
     ):
         self.calls.append((energy_entity_id, list(members), lookback_days))
         self.metered_children.append(tuple(metered_children))
@@ -213,6 +214,7 @@ class _SharedMeterRecorder:
                 for child in metered_children
             ],
             tolerance=tolerance,
+            previous_weights=previous_weights,
         )
 
 

@@ -1175,6 +1175,7 @@ async def estimate_average_hourly_energy_for_shared_meter(
     lookback_days: int,
     metered_children: Sequence[str] = (),
     tolerance: float | None = None,
+    previous_weights: Mapping[str, float | None] | None = None,
 ) -> SharedMeterFit:
     """Each device's when-running estimate from one meter several devices share.
 
@@ -1232,6 +1233,7 @@ async def estimate_average_hourly_energy_for_shared_meter(
         default_unit,
         metered_children=children_states,
         tolerance=tolerance,
+        previous_weights=previous_weights,
     )
 
 
@@ -2112,6 +2114,7 @@ def _estimate_shared_meter_hourly_energy_kwh(
     *,
     metered_children: Sequence[tuple[list[Any], Any]] = (),
     tolerance: float | None = None,
+    previous_weights: Mapping[str, float | None] | None = None,
 ) -> SharedMeterFit:
     """Split one meter among whichever members were running, by learned power.
 
@@ -2133,7 +2136,10 @@ def _estimate_shared_meter_hourly_energy_kwh(
     share sensors make with the same weights, so a figure means what its live
     share means: in the capped mode, the excess stays out of both. A member
     without a learned weight takes the mean of the others, and one member
-    takes all of it -- the lone device's plain when-active average.
+    takes all of it -- the lone device's plain when-active average. A member
+    this window teaches nothing (idle all winter) keeps its
+    ``previous_weights`` entry instead, in the split and in the answer, since
+    its power has not changed and the live split reads the stored weight.
 
     Segments with a missing sample or a negative delta are skipped, the same
     way the single-device average always skipped them. A member's estimate is
@@ -2155,9 +2161,10 @@ def _estimate_shared_meter_hourly_energy_kwh(
         )
         for key, (states, active_states) in members.items()
     }
+    previous_weights = previous_weights or {}
     nothing = SharedMeterFit(
         estimates={key: None for key in members},
-        weights={key: None for key in members},
+        weights={key: previous_weights.get(key) for key in members},
     )
     if not any(intervals_by_member.values()):
         return nothing
@@ -2223,11 +2230,15 @@ def _estimate_shared_meter_hourly_energy_kwh(
     # the live split will read back from the store.
     # Fitted for a lone member too: its ratio split hands it all own power
     # either way, but a capped split needs its weight.
-    weights: dict[str, float | None] = {key: None for key in members}
-    weights.update(
-        (key, None if weight is None else round(weight, 4))
-        for key, weight in fit_member_weights(segments).items()
-    )
+    fitted = fit_member_weights(segments)
+    weights: dict[str, float | None] = {
+        key: (
+            previous_weights.get(key)
+            if (weight := fitted.get(key)) is None
+            else round(weight, 4)
+        )
+        for key in members
+    }
 
     energy_kwh = {key: 0.0 for key in members}
     active_hours = {key: 0.0 for key in members}
