@@ -425,6 +425,10 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         await self._make_job(store, [fridge]).async_train()
 
         self.assertEqual(store.section["devices"], {"sensor.fridge_energy": previous})
+        self.assertEqual(
+            store.section["failed_appliances"],
+            {"sensor.fridge_energy": "no usable history"},
+        )
 
     async def test_an_estimate_that_rounds_to_nothing_is_a_failure(self) -> None:
         """Stored, a 0.0 would be dropped on adoption without a word; listed

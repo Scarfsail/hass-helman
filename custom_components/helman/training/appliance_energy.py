@@ -374,8 +374,10 @@ class ApplianceEnergyTrainingJob:
                 learned = True
             else:
                 # History that answered nothing is no evidence the previous
-                # record became wrong.
+                # record became wrong -- but the run is not healthy either.
                 _carry_over(devices, previous_devices, (subject.device_key,))
+                if not subject.history_average:
+                    failed_appliances[subject.device_key] = "no usable history"
             if subject.history_average:
                 estimate = (record or {}).get("on_kwh_per_hour")
                 # ``None`` means the history did not answer -- no active
