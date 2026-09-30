@@ -151,7 +151,6 @@
       "forecast_recorded": "Zaznamenaná prognóza",
       "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo.",
       "column_device": "Zařízení",
-      "column_learned_average": "Naučený průměr",
       "column_lookback": "Období",
       "column_history_depth": "Hloubka historie",
       "days": "{days} d",

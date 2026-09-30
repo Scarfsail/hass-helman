@@ -150,7 +150,6 @@
       "forecast_recorded": "Recorded forecast",
       "role_forecast_recorded": "What the fit is actually built from: Helman republishes each slot's prediction before that slot runs, and reads its own recorded history back. Raw states are the 15-minute detail and stop at the recorder's retention; statistics are hourly and kept for good.",
       "column_device": "Device",
-      "column_learned_average": "Learned average",
       "column_lookback": "Lookback",
       "column_history_depth": "History depth",
       "days": "{days} d",

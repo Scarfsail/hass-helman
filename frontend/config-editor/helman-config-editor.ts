@@ -2996,7 +2996,7 @@ export class HelmanConfigEditorPanel
           <thead>
             <tr>
               <th>${this._t("editor.training_depth.column_device")}</th>
-              <th>${this._t("editor.training_depth.column_learned_average")}</th>
+              <th>${this._t("device_energy.label")}</th>
               <th class="training-depth-number">
                 ${this._t("editor.training_depth.column_lookback")}
               </th>
@@ -3042,7 +3042,7 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  /** The Learned average cell, read from `_deviceEnergyEstimate`. */
+  /** The Energy cell, read from `_deviceEnergyEstimate`. */
   private _renderApplianceEnergyValue(device: ApplianceEnergyDepthDevice): TemplateResult {
     return renderDeviceEnergyValue(
       (key) => this._t(`device_energy.${key}`),

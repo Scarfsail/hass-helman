@@ -178,7 +178,7 @@ async function openTab(page: Page, label: string): Promise<void> {
     await page.locator(".tabs").getByRole("button", { name: label, exact: true }).click();
 }
 
-/** The Learned average cell of the appliance table's row for `name`. */
+/** The Energy cell of the appliance table's row for `name`. */
 function learnedCell(page: Page, name: string) {
     return page
         .locator("details.section-card", {
