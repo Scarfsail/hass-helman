@@ -605,6 +605,7 @@
       "issues": "Problémy: {count}"
     },
     "section_badges": {
+      "mode": "Režim",
       "parent_meter": "Elektroměr nadřazeného",
       "count": "{count}",
       "kwh_per_hour": "{value} kWh/h"

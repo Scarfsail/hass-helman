@@ -86,6 +86,18 @@ const WALLBOX = {
 
 const VALID = { valid: true, errors: [], warnings: [] };
 
+const INVERTER = {
+    kind: "inverter",
+    id: "inverter",
+    name: "Inverter",
+    controls: {
+        mode: {
+            entity_id: "select.solax_charger_use_mode",
+            options: { normal: "Self Use", stop_export: "Feedin Priority" },
+        },
+    },
+};
+
 type Device = Record<string, any>;
 
 declare global {
@@ -95,7 +107,12 @@ declare global {
     }
 }
 
-async function mountEditor(page: Page, consumers: unknown[], validation: unknown = VALID): Promise<void> {
+async function mountEditor(
+    page: Page,
+    consumers: unknown[],
+    validation: unknown = VALID,
+    system: unknown[] = [],
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
@@ -131,7 +148,7 @@ async function mountEditor(page: Page, consumers: unknown[], validation: unknown
             };
             document.body.appendChild(element);
         },
-        { config: { config_version: 26, devices: { consumers } }, report: validation },
+        { config: { config_version: 26, devices: { consumers, system } }, report: validation },
     );
 
     const panel = page.locator("helman-config-editor-panel");
@@ -368,4 +385,52 @@ test("the device edit dialog shows every section collapsed, and no Children", as
         { label: "Measurements", open: false, chips: ["Energy", "Power"] },
         { label: "Controls", open: false, chips: [] },
     ]);
+});
+
+/** The inverter card's sections, in order: label, whether open, and the summary's chips. */
+const inverterSections = (page: Page) =>
+    panel(page)
+        .locator("details.inverter-card > .appliance-body > details.section-card")
+        .evaluateAll((all) =>
+            all.map((details) => ({
+                label: details.querySelector(":scope > summary .section-summary-label")?.textContent?.trim(),
+                open: (details as HTMLDetailsElement).open,
+                chips: Array.from(details.querySelectorAll(":scope > summary .device-badge")).map((chip) =>
+                    chip.textContent?.trim(),
+                ),
+            })),
+        );
+
+test("the inverter's sections start collapsed, with chips summarizing them", async ({ page }) => {
+    await mountEditor(page, [HEATER], VALID, [INVERTER]);
+    expect(await inverterSections(page)).toEqual([
+        { label: "Identity", open: false, chips: ["Inverter"] },
+        { label: "Controls", open: false, chips: ["Mode"] },
+        { label: "Action options", open: false, chips: ["2"] },
+    ]);
+});
+
+test("an inverter issue opens its section, and a closed one reopens only for a new issue", async ({ page }) => {
+    await mountEditor(page, [HEATER], VALID, [{ ...INVERTER, controls: { mode: { options: {} } } }]);
+    const open = async () =>
+        (await inverterSections(page)).filter((section) => section.open).map((section) => section.label);
+    expect((await inverterSections(page)).map((section) => section.chips)).toEqual([["Inverter"], [], []]);
+
+    const mode = {
+        section: "devices",
+        path: "devices.system[0].controls.mode.entity_id",
+        code: "required",
+        message: "mode entity is required",
+    };
+    await validate(page, { valid: false, errors: [mode], warnings: [] });
+    await expect.poll(open).toEqual(["Controls"]);
+
+    await panel(page)
+        .locator("details.inverter-card > .appliance-body > details.section-card[open]")
+        .evaluate((details) => ((details as HTMLDetailsElement).open = false));
+    await expect.poll(open).toEqual([]);
+    await validate(page, { valid: false, errors: [mode], warnings: [] });
+    const option = { ...mode, path: "devices.system[0].controls.mode.options.normal", code: "x" };
+    await validate(page, { valid: false, errors: [mode, option], warnings: [] });
+    await expect.poll(open).toEqual(["Action options"]);
 });

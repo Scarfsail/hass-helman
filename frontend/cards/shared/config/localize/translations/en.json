@@ -604,6 +604,7 @@
       "issues": "Issues: {count}"
     },
     "section_badges": {
+      "mode": "Mode",
       "parent_meter": "Parent meter",
       "count": "{count}",
       "kwh_per_hour": "{value} kWh/h"

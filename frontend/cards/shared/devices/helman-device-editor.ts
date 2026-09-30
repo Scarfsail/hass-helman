@@ -141,7 +141,7 @@ export function trainingDepthCell(value: unknown): string {
 }
 
 /** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
-function validationPath(path: readonly PathSegment[]): string {
+export function validationPath(path: readonly PathSegment[]): string {
     return path
         .map((segment, index) =>
             typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
@@ -193,8 +193,55 @@ function sectionOfIssue(devicePath: readonly PathSegment[], issuePath: string): 
     return "identity";
 }
 
+/**
+ * The issues a report raises on a device, keyed `path code`, and the sections
+ * holding the ones `seen` does not: a section that gains an issue opens, and
+ * one whose issues are all old stays as the reader left it.
+ */
+export function newIssueSections<K extends string>(
+    validation: ValidationReport | null,
+    path: readonly PathSegment[],
+    seen: ReadonlySet<string>,
+    sectionOf: (issuePath: string) => K,
+): { flagged: Set<string>; fresh: K[] } {
+    const own = validationPath(path);
+    const issues = [...(validation?.errors ?? []), ...(validation?.warnings ?? [])].filter(
+        (issue) => issue.path === own || issue.path.startsWith(`${own}.`),
+    );
+    const keyOf = (issue: ValidationIssue) => `${issue.path} ${issue.code}`;
+    return {
+        flagged: new Set(issues.map(keyOf)),
+        fresh: issues.filter((issue) => !seen.has(keyOf(issue))).map((issue) => sectionOf(issue.path)),
+    };
+}
+
+/**
+ * A card's section whose open state the host keeps as a set of keys, so a
+ * reader's toggle survives the host's re-renders.
+ */
+export function renderTrackedSection<K extends string>(
+    label: string,
+    key: K,
+    content: TemplateResult,
+    chips: { key: string; text: string }[],
+    open: ReadonlySet<K>,
+    setOpen: (next: Set<K>) => void,
+): TemplateResult {
+    return renderSimpleSection(label, content, {
+        open: open.has(key),
+        badge: renderBadges(chips),
+        onToggle: (isOpen) => {
+            if (open.has(key) === isOpen) return;
+            const next = new Set(open);
+            if (isOpen) next.add(key);
+            else next.delete(key);
+            setOpen(next);
+        },
+    });
+}
+
 /** A section summary's chips, the way the device card's own badges look. */
-function renderBadges(chips: { key: string; text: string }[]): TemplateResult | undefined {
+export function renderBadges(chips: { key: string; text: string }[]): TemplateResult | undefined {
     if (chips.length === 0) return undefined;
     return html`<div class="device-badges">
         ${chips.map((chip) => html`<span class="device-badge" data-badge=${chip.key}>${chip.text}</span>`)}
@@ -524,13 +571,12 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
             this._flaggedIssues = new Set();
         }
         if (changed.has("validation") || changed.has("config")) {
-            const own = validationPath(this.path);
-            const issues = [...(this.validation?.errors ?? []), ...(this.validation?.warnings ?? [])]
-                .filter((issue) => issue.path === own || issue.path.startsWith(`${own}.`));
-            const flagged = new Set(issues.map((issue) => `${issue.path} ${issue.code}`));
-            const fresh = issues
-                .filter((issue) => !this._flaggedIssues.has(`${issue.path} ${issue.code}`))
-                .map((issue) => sectionOfIssue(this.path, issue.path));
+            const { flagged, fresh } = newIssueSections(
+                this.validation,
+                this.path,
+                this._flaggedIssues,
+                (issuePath) => sectionOfIssue(this.path, issuePath),
+            );
             if (fresh.length) this._openSections = new Set([...this._openSections, ...fresh]);
             this._flaggedIssues = flagged;
         }
@@ -542,17 +588,14 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         content: TemplateResult,
         chips: { key: string; text: string }[] = [],
     ): TemplateResult {
-        return renderSimpleSection(this.t(`editor.sections.${key}`), content, {
-            open: this._openSections.has(key),
-            badge: renderBadges(chips),
-            onToggle: (open) => {
-                if (this._openSections.has(key) === open) return;
-                const next = new Set(this._openSections);
-                if (open) next.add(key);
-                else next.delete(key);
-                this._openSections = next;
-            },
-        });
+        return renderTrackedSection(
+            this.t(`editor.sections.${key}`),
+            key,
+            content,
+            chips,
+            this._openSections,
+            (next) => (this._openSections = next),
+        );
     }
 
     /** A count chip, or none for an empty list. */
