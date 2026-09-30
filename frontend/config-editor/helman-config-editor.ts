@@ -1138,6 +1138,12 @@ export class HelmanConfigEditorPanel
 
   protected willUpdate(changedProperties: PropertyValues<this>): void {
     super.willUpdate(changedProperties);
+    // A removed inverter takes its section state with it, so the next one
+    // added starts collapsed like any freshly opened card.
+    if (changedProperties.has("_config") && !this._inverterPath()) {
+      this._inverterOpenSections = new Set();
+      this._inverterFlaggedIssues = new Set();
+    }
     if (changedProperties.has("_validation")) {
       const path = this._inverterPath() ?? [];
       const { flagged, fresh } = newIssueSections(

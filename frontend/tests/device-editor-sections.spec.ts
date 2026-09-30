@@ -434,3 +434,19 @@ test("an inverter issue opens its section, and a closed one reopens only for a n
     await validate(page, { valid: false, errors: [mode, option], warnings: [] });
     await expect.poll(open).toEqual(["Action options"]);
 });
+
+test("an inverter added after a removed one starts with its sections collapsed", async ({ page }) => {
+    await mountEditor(page, [HEATER], VALID, [INVERTER]);
+    await panel(page)
+        .locator("details.inverter-card > .appliance-body > details.section-card")
+        .first()
+        .evaluate((details) => ((details as HTMLDetailsElement).open = true));
+    await expect.poll(async () => (await inverterSections(page))[0].open).toBe(true);
+
+    page.on("dialog", (dialog) => dialog.accept());
+    await panel(page).locator("details.inverter-card .list-actions button.danger").dispatchEvent("click");
+    await expect(panel(page).locator("details.inverter-card")).toHaveCount(0);
+    await panel(page).locator(".section-footer .add-button", { hasText: "Add inverter" }).dispatchEvent("click");
+    await expect(panel(page).locator("details.inverter-card")).toHaveCount(1);
+    expect((await inverterSections(page)).map((section) => section.open)).toEqual([false, false, false]);
+});
