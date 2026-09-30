@@ -12,9 +12,7 @@ from .appliances.config import (
     build_appliances_runtime_registry,
     read_device_appliance,
 )
-from .appliances.climate_appliance import ClimateApplianceConfigError
-from .appliances.ev_charger import EvChargerConfigError
-from .appliances.generic_appliance import GenericApplianceConfigError
+from .appliances.errors import ApplianceConfigError
 from .battery_state import describe_battery_entity_config_issue
 from .grid_price_forecast_builder import (
     GridImportPriceConfigError,
@@ -1266,14 +1264,10 @@ def _validate_controllables_config(
             continue
         try:
             read_device_appliance(raw_device, parent, path=path)
-        except (
-            ClimateApplianceConfigError,
-            EvChargerConfigError,
-            GenericApplianceConfigError,
-        ) as err:
+        except ApplianceConfigError as err:
             report.add_error(
                 section=section,
-                path=path,
+                path=err.path,
                 code="invalid_appliance",
                 message=str(err),
             )

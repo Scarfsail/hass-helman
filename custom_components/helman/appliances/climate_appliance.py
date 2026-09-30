@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, TypedDict
 
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
+from .errors import ApplianceConfigError
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
 
 _CLIMATE_APPLIANCE_KIND = "climate"
@@ -16,7 +17,7 @@ ClimateProjectionStrategy = Literal["fixed", "history_average"]
 SUPPORTED_CLIMATE_MODES: tuple[ClimateApplianceMode, ...] = ("heat", "cool")
 
 
-class ClimateApplianceConfigError(ValueError):
+class ClimateApplianceConfigError(ApplianceConfigError):
     """Raised when a climate appliance config is invalid."""
 
 
@@ -101,12 +102,13 @@ def read_climate_appliance(
     path: str,
 ) -> ClimateApplianceRuntime:
     if not isinstance(value, Mapping):
-        raise ClimateApplianceConfigError(f"{path} must be an object")
+        raise ClimateApplianceConfigError(path, "must be an object")
 
     kind = _read_required_string(value.get("kind"), path=f"{path}.kind")
     if kind != _CLIMATE_APPLIANCE_KIND:
         raise ClimateApplianceConfigError(
-            f"{path}.kind must be {_CLIMATE_APPLIANCE_KIND!r}"
+            f"{path}.kind",
+            f"must be {_CLIMATE_APPLIANCE_KIND!r}",
         )
 
     appliance_id = _read_required_string(value.get("id"), path=f"{path}.id")
@@ -164,13 +166,13 @@ def read_climate_appliance(
 
 def _read_mapping(value: object, *, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise ClimateApplianceConfigError(f"{path} must be an object")
+        raise ClimateApplianceConfigError(path, "must be an object")
     return {str(key): item for key, item in value.items()}
 
 
 def _read_required_string(value: object, *, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ClimateApplianceConfigError(f"{path} must be a non-empty string")
+        raise ClimateApplianceConfigError(path, "must be a non-empty string")
     return value.strip()
 
 
@@ -185,7 +187,8 @@ def _read_entity_id(
     if not separator or not object_id or domain not in allowed_domains:
         allowed = ", ".join(sorted(allowed_domains))
         raise ClimateApplianceConfigError(
-            f"{path} must use one of the supported domains: {allowed}"
+            path,
+            f"must use one of the supported domains: {allowed}",
         )
     return entity_id
 
@@ -194,24 +197,24 @@ def _read_projection_strategy(value: object, *, path: str) -> ClimateProjectionS
     strategy = _read_required_string(value, path=path)
     if strategy not in _CLIMATE_PROJECTION_STRATEGIES:
         allowed = ", ".join(sorted(_CLIMATE_PROJECTION_STRATEGIES))
-        raise ClimateApplianceConfigError(f"{path} must be one of {allowed}")
+        raise ClimateApplianceConfigError(path, f"must be one of {allowed}")
     return strategy
 
 
 def _read_positive_float(value: object, *, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ClimateApplianceConfigError(f"{path} must be a positive number")
+        raise ClimateApplianceConfigError(path, "must be a positive number")
     parsed = float(value)
     if parsed <= 0:
-        raise ClimateApplianceConfigError(f"{path} must be greater than zero")
+        raise ClimateApplianceConfigError(path, "must be greater than zero")
     return parsed
 
 
 def _read_positive_int(value: object, *, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ClimateApplianceConfigError(f"{path} must be a positive integer")
+        raise ClimateApplianceConfigError(path, "must be a positive integer")
     if value <= 0:
-        raise ClimateApplianceConfigError(f"{path} must be greater than zero")
+        raise ClimateApplianceConfigError(path, "must be greater than zero")
     return value
 
 

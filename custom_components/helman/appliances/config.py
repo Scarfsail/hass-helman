@@ -14,8 +14,9 @@ from ..controllables.config import (
     resolve_device_name,
 )
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
-from .climate_appliance import ClimateApplianceConfigError, read_climate_appliance
-from .ev_charger import EvChargerConfigError, read_ev_charger_appliance
+from .climate_appliance import read_climate_appliance
+from .errors import ApplianceConfigError
+from .ev_charger import read_ev_charger_appliance
 from .generic_appliance import GenericApplianceConfigError, read_generic_appliance
 from .state import AppliancesRuntimeRegistry
 
@@ -66,11 +67,7 @@ def build_appliances_runtime_registry(
                 friendly_name=friendly_name,
                 cleaner_regex=cleaner_regex,
             )
-        except (
-            ClimateApplianceConfigError,
-            EvChargerConfigError,
-            GenericApplianceConfigError,
-        ) as err:
+        except ApplianceConfigError as err:
             _log_invalid_appliance(
                 logger=active_logger,
                 path=path,
@@ -165,7 +162,7 @@ def _read_appliance_runtime(
     path: str,
 ):
     if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(f"{path} must be an object")
+        raise GenericApplianceConfigError(path, "must be an object")
 
     kind = _peek_appliance_kind(value)
     if kind == _CLIMATE_APPLIANCE_KIND:
@@ -176,8 +173,9 @@ def _read_appliance_runtime(
         return read_generic_appliance(value, path=path)
 
     raise GenericApplianceConfigError(
-        f"{path}.kind must be one of {_CLIMATE_APPLIANCE_KIND!r}, "
-        f"{_EV_CHARGER_KIND!r}, {_GENERIC_APPLIANCE_KIND!r}"
+        f"{path}.kind",
+        f"must be one of {_CLIMATE_APPLIANCE_KIND!r}, "
+        f"{_EV_CHARGER_KIND!r}, {_GENERIC_APPLIANCE_KIND!r}",
     )
 
 

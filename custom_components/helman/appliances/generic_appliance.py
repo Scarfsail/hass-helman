@@ -6,6 +6,7 @@ from typing import Literal, TypedDict
 
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import SWITCH_CONTROL_DOMAINS
+from .errors import ApplianceConfigError
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
 
 _GENERIC_APPLIANCE_KIND = "generic"
@@ -14,7 +15,7 @@ _GENERIC_PROJECTION_STRATEGIES = {"fixed", "history_average"}
 GenericProjectionStrategy = Literal["fixed", "history_average"]
 
 
-class GenericApplianceConfigError(ValueError):
+class GenericApplianceConfigError(ApplianceConfigError):
     """Raised when a generic appliance config is invalid."""
 
 
@@ -91,12 +92,13 @@ def read_generic_appliance(
     path: str,
 ) -> GenericApplianceRuntime:
     if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(f"{path} must be an object")
+        raise GenericApplianceConfigError(path, "must be an object")
 
     kind = _read_required_string(value.get("kind"), path=f"{path}.kind")
     if kind != _GENERIC_APPLIANCE_KIND:
         raise GenericApplianceConfigError(
-            f"{path}.kind must be {_GENERIC_APPLIANCE_KIND!r}"
+            f"{path}.kind",
+            f"must be {_GENERIC_APPLIANCE_KIND!r}",
         )
 
     appliance_id = _read_required_string(value.get("id"), path=f"{path}.id")
@@ -154,13 +156,13 @@ def read_generic_appliance(
 
 def _read_mapping(value: object, *, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(f"{path} must be an object")
+        raise GenericApplianceConfigError(path, "must be an object")
     return {str(key): item for key, item in value.items()}
 
 
 def _read_required_string(value: object, *, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise GenericApplianceConfigError(f"{path} must be a non-empty string")
+        raise GenericApplianceConfigError(path, "must be a non-empty string")
     return value.strip()
 
 
@@ -175,7 +177,8 @@ def _read_entity_id(
     if not separator or not object_id or domain not in allowed_domains:
         allowed = ", ".join(sorted(allowed_domains))
         raise GenericApplianceConfigError(
-            f"{path} must use one of the supported domains: {allowed}"
+            path,
+            f"must use one of the supported domains: {allowed}",
         )
     return entity_id
 
@@ -184,22 +187,22 @@ def _read_projection_strategy(value: object, *, path: str) -> GenericProjectionS
     strategy = _read_required_string(value, path=path)
     if strategy not in _GENERIC_PROJECTION_STRATEGIES:
         allowed = ", ".join(sorted(_GENERIC_PROJECTION_STRATEGIES))
-        raise GenericApplianceConfigError(f"{path} must be one of {allowed}")
+        raise GenericApplianceConfigError(path, f"must be one of {allowed}")
     return strategy
 
 
 def _read_positive_float(value: object, *, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise GenericApplianceConfigError(f"{path} must be a positive number")
+        raise GenericApplianceConfigError(path, "must be a positive number")
     parsed = float(value)
     if parsed <= 0:
-        raise GenericApplianceConfigError(f"{path} must be greater than zero")
+        raise GenericApplianceConfigError(path, "must be greater than zero")
     return parsed
 
 
 def _read_positive_int(value: object, *, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise GenericApplianceConfigError(f"{path} must be a positive integer")
+        raise GenericApplianceConfigError(path, "must be a positive integer")
     if value <= 0:
-        raise GenericApplianceConfigError(f"{path} must be greater than zero")
+        raise GenericApplianceConfigError(path, "must be greater than zero")
     return value
