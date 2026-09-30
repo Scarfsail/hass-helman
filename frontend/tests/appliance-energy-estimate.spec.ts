@@ -60,6 +60,8 @@ const CONFIG = {
                 { id: "lamp", name: "Lamp", controls: { switch: { entity_id: "switch.lamp" } } },
             ],
         },
+        // No meter of its own and no parent's: nothing is ever trained for it.
+        { id: "lights", name: "Lights", consumption: { power_entity_id: "sensor.lights_power" } },
     ] },
 };
 
@@ -186,6 +188,33 @@ test("the appliance table shows each device's learned value or why it has none",
         "no running hours",
     );
     await expect(learnedCell(page, "Dryer")).toHaveText("Not trained yet");
+});
+
+test("the appliance table lists every consumer device, each with what it learned", async ({
+    page,
+}) => {
+    await mountEditor(page);
+    await openTab(page, "Training");
+
+    // Metered without a running signal: its mean day.
+    await expect(learnedCell(page, "Fridge")).toHaveText("1.23 kWh a day");
+    // A meterless child, by its id: its figure while on.
+    await expect(learnedCell(page, "Lamp")).toHaveText("0.05 kWh/h while on");
+    // No record yet: a fixed device shows what it projects, any other nothing.
+    await expect(learnedCell(page, "Pool")).toHaveText("Fixed · 1 kWh/h");
+    await expect(learnedCell(page, "Breaker")).toHaveText("Not trained yet");
+    // A device the job never trains has no row to stay untrained in.
+    await expect(learnedCell(page, "Lights")).toHaveCount(0);
+
+    // The lamp reads its parent's meter and its own switch, over 30 days.
+    const lamp = page
+        .locator("details.section-card", {
+            has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
+        })
+        .locator(".training-depth-table tbody tr", { hasText: "Lamp" });
+    await expect(lamp.locator("td").nth(2)).toHaveText("30 d");
+    await expect(lamp.locator("td").nth(0)).toContainText("sensor.breaker_energy");
+    await expect(lamp.locator("td").nth(0)).toContainText("switch.lamp");
 });
 
 test("a device on history_average shows the same value in its settings", async ({ page }) => {

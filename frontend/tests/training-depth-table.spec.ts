@@ -474,12 +474,14 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
 
     await mountEditor(page, config);
     const tables = await waitForRows(page, 7);
-    const allRows = tables.flat();
+    // The appliance table, last, lists every consumer device (the fridge
+    // learns its usage record); the house and solar tables do not.
+    const houseAndSolarRows = tables.slice(0, -1).flat();
 
-    // The eight of the base config, and neither of the two just added.
-    expect(allRows.length).toBe(8);
-    expect(allRows.some((row) => row[0].includes("Fridge"))).toBe(false);
-    expect(allRows.some((row) => row[0].includes("Inverter"))).toBe(false);
+    // The seven of the base config, and neither of the two just added.
+    expect(houseAndSolarRows.length).toBe(7);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Fridge"))).toBe(false);
+    expect(tables.flat().some((row) => row[0].includes("Inverter"))).toBe(false);
 });
 
 test("a carved meter's metered child gets a row, since the trainer reads it", async ({
@@ -509,12 +511,13 @@ test("a carved meter's metered child gets a row, since the trainer reads it", as
 
     await mountEditor(page, config);
     const tables = await waitForRows(page, 7);
-    const allRows = tables.flat();
+    // The appliance table, last, lists every consumer device anyway.
+    const houseAndSolarRows = tables.slice(0, -1).flat();
 
-    expect(allRows.length).toBe(10);
-    expect(allRows.some((row) => row[0].includes("Breaker"))).toBe(true);
-    expect(allRows.some((row) => row[0].includes("Plug"))).toBe(true);
-    expect(allRows.some((row) => row[0].includes("Heater"))).toBe(false);
+    expect(houseAndSolarRows.length).toBe(9);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Breaker"))).toBe(true);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Plug"))).toBe(true);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Heater"))).toBe(false);
 });
 
 test("a row with both tables shallow is marked, on the row rather than a cell", async ({
@@ -597,7 +600,9 @@ test("an appliance's activity entity is judged against the lookback training rea
     // Training reads when the appliance ran as well as its meter, so a deep
     // meter over a shallow switch still yields no estimate. A shared meter is
     // read over the longest learning sharer's lookback, and a fixed sharer's
-    // activity still divides it; a fixed appliance on its own meter reads nothing.
+    // activity still divides it. Every device learns its usage record, so the
+    // meter's owner and a fixed appliance on its own meter are read as well,
+    // over the default 30 days.
     const config = JSON.parse(JSON.stringify(CONFIG));
     config.devices.consumers = [
         {
@@ -659,9 +664,9 @@ test("an appliance's activity entity is judged against the lookback training rea
         "devices.consumers.1.children.1.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
     });
 
-    // One row per device (#321): the pool reads nothing, so it is absent.
+    // One row per device (#321), every consumer device included.
     const rows = applianceRows(page);
-    await expect(rows).toHaveCount(3);
+    await expect(rows).toHaveCount(5);
     await expect
         .poll(async () =>
             rows.evaluateAll((trs) =>
@@ -680,20 +685,27 @@ test("an appliance's activity entity is judged against the lookback training rea
                 entities: ["sensor.dishwasher_energy", "switch.dishwasher"],
                 warning: true,
             },
+            { name: "ac_breaker", entities: ["sensor.ac_breaker"], warning: false },
             {
                 name: "Living AC",
                 entities: ["sensor.ac_breaker", "climate.living"],
                 warning: false,
             },
-            { name: "Bedroom AC", entities: ["climate.bedroom"], warning: true },
+            {
+                name: "Bedroom AC",
+                entities: ["sensor.ac_breaker", "climate.bedroom"],
+                warning: true,
+            },
+            { name: "Pool", entities: ["sensor.pool_energy", "switch.pool"], warning: false },
         ]);
     // The dishwasher's depth is its shallowest entity, then each one's own.
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("5 d");
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("meter 33 d");
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("switch 5 d");
     // The fixed sharer is judged against the shared meter's learning lookback.
-    await expect(rows.nth(2).locator("td").nth(1)).toHaveText("Fixed · 1 kWh/h");
-    await expect(rows.nth(2).locator("td").nth(2)).toHaveText("14 d");
+    await expect(rows.nth(3).locator("td").nth(1)).toHaveText("Fixed · 1 kWh/h");
+    await expect(rows.nth(3).locator("td").nth(2)).toHaveText("14 d");
+    await expect(rows.nth(4).locator("td").nth(2)).toHaveText("30 d");
 
     // Regrouping changed the rows, not what the shared poll asks about.
     const requestedKeys = await page.evaluate(() =>
@@ -708,7 +720,7 @@ test("an appliance's activity entity is judged against the lookback training rea
             "devices.consumers.1.children.1.controls.climate.entity_id",
         ]),
     );
-    expect(requestedKeys).not.toContain("devices.consumers.2.controls.switch.entity_id");
+    expect(requestedKeys).toContain("devices.consumers.2.controls.switch.entity_id");
 });
 
 test("an EV charger sharing a meter is judged by its charge switch", async ({ page }) => {
@@ -749,6 +761,7 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
 
     const ev = applianceRows(page).filter({ hasText: "Garage EV" });
     await expect(ev.locator("td:first-child .training-depth-entity-id")).toHaveText([
+        "sensor.garage_breaker",
         "switch.ev_charge",
     ]);
     await expect(ev).toHaveClass(/training-depth-warn/);

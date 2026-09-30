@@ -279,11 +279,12 @@ interface ApplianceEnergyDepthDevice {
   index: number;
   id: string;
   name: string;
+  device: JsonObject;
   learns: boolean;
   /** The configured `hourly_energy_kwh`: a fixed device's figure, a learner's fallback. */
   fixedKwh: unknown;
   lookbackDays: number;
-  /** A learner's meter then its activity entity; a fixed sharer's activity only. */
+  /** Its (effective) meter, sub-meters, power sensor and activity entity. */
   entities: TrainingDepthRow[];
 }
 
@@ -2629,20 +2630,24 @@ export class HelmanConfigEditorPanel
   /**
    * Every device the appliance energy job reads, with the lookback it reads.
    *
-   * A `history_average` appliance reads its meter and its switch or climate
-   * entity -- the second is how training knows when it ran, so a deep meter
-   * over a shallow switch still yields no estimate. A meterless child reads its
-   * parent's meter, and that meter is read once for all of the parent's
-   * meterless children, over the longest lookback among those that learn;
-   * every one of them divides it, a `fixed` one included. Mirrors
-   * `ApplianceEnergyTrainingRequest` and `read_shared_meters`.
+   * Every consumer device learns its usage record: its meter, its power
+   * sensor and its switch or climate entity -- the last is how training knows
+   * when it ran, so a deep meter over a shallow switch still yields no
+   * `history_average` estimate. A meterless child reads its parent's meter,
+   * and that meter is read once for all of the parent's meterless children,
+   * over the longest lookback among those that learn, else 30 days; every one
+   * of them divides it. Any other device reads 30 days unless it learns on
+   * its own lookback. Mirrors `ApplianceEnergyTrainingRequest` and
+   * `read_shared_meters`.
    *
    * A second, read-only view of settings that live on each device -- the same
    * kind of view `_houseConsumptionDepthRows` gives those meters.
    */
   private _applianceEnergyDepthDevices(): ApplianceEnergyDepthDevice[] {
-    const items = iterDevices(this._config).map(({ device, parent, path }, index) => {
+    const entries = iterDevices(this._config).filter(({ device }) => deviceKind(device) !== "inverter");
+    const items = entries.map(({ device, parent, path }, index) => {
       const consumption = asJsonObject(device.consumption) ?? {};
+      const controls = asJsonObject(device.controls) ?? {};
       const projection = asJsonObject(consumption.projection) ?? {};
       const kind = deviceKind(device);
       const lookback = projection.lookback_days;
@@ -2656,6 +2661,8 @@ export class HelmanConfigEditorPanel
           `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
         path,
         parent: drawsFromParent ? parent : null,
+        // Nothing to learn from without one, as the backend skips it.
+        hasMeter: Boolean(drawsFromParent ? parent && ownMeter(parent) : ownMeter(device)),
         // Its effective meter: a meterless child reads its parent's.
         meterPath: [
           ...(drawsFromParent ? path.slice(0, -2) : path),
@@ -2672,16 +2679,19 @@ export class HelmanConfigEditorPanel
                 : [];
             })
           : [],
+        device,
+        // Its own power sensor: how its runs are found. A meterless child
+        // has none; its runs are its share of the meter.
+        powerPath:
+          !drawsFromParent && this._stringValue(consumption.power_entity_id)
+            ? [...path, "consumption", "power_entity_id"]
+            : null,
         // The control whose history tells when it ran: the same running signal
-        // the backend splits a shared meter by (an EV charger's is its charge switch).
+        // the backend reads (`running_signal`), first configured of these.
         activity:
-          kind === "generic"
-            ? "switch"
-            : kind === "climate"
-              ? "climate"
-              : kind === "ev_charger"
-                ? "charge"
-                : null,
+          (kind === "ev_charger" ? ["switch", "charge", "climate"] : ["switch", "climate"]).find(
+            (key) => this._stringValue(asJsonObject(controls[key])?.entity_id),
+          ) ?? null,
         learns: isSchedulable(device) && projection.strategy === "history_average",
         fixedKwh: projection.hourly_energy_kwh,
         // The backend trains on 30 days when the key is absent.
@@ -2695,10 +2705,14 @@ export class HelmanConfigEditorPanel
       return Math.max(...learners.map((member) => member.lookback));
     };
     return items.flatMap((item): ApplianceEnergyDepthDevice[] => {
-      const shared = sharedLookback(item.parent);
-      // A fixed sharer learns nothing, but when it ran still splits the meter.
-      if (!item.learns && shared === null) return [];
-      const days = shared ?? item.lookback;
+      // The backend trains only a device with a meter, and a meterless child
+      // only as a member of its parent's split: with an id and a running signal.
+      if (!item.hasMeter || (item.parent && (!item.id || !item.activity))) return [];
+      const days = item.parent
+        ? (sharedLookback(item.parent) ?? 30)
+        : item.learns
+          ? item.lookback
+          : 30;
       const entity = (label: string, path: PathSegment[]): TrainingDepthRow => ({
         label: this._t(`editor.training_depth.appliance_entity_${label}`),
         path,
@@ -2712,16 +2726,16 @@ export class HelmanConfigEditorPanel
           index: item.index,
           id: item.id,
           name: item.name,
+          device: item.device,
           learns: item.learns,
           fixedKwh: item.fixedKwh,
           lookbackDays: days,
-          entities: item.learns
-            ? [
-                entity("meter", item.meterPath),
-                ...item.submeterPaths.map((submeterPath) => entity("submeter", submeterPath)),
-                ...activity,
-              ]
-            : activity,
+          entities: [
+            entity("meter", item.meterPath),
+            ...item.submeterPaths.map((submeterPath) => entity("submeter", submeterPath)),
+            ...(item.powerPath ? [entity("power", item.powerPath)] : []),
+            ...activity,
+          ],
         },
       ];
     });
@@ -2978,7 +2992,16 @@ export class HelmanConfigEditorPanel
   ): TemplateResult | string {
     const fallback = this._trainingDepthCell(device.fixedKwh);
     if (!device.learns) {
-      return this._tFormat("editor.training_depth.value_fixed", { kwh: fallback });
+      // Its usage record, as its own settings show it; else what it projects.
+      const recorded = this._deviceEnergyEstimate(device.device);
+      if (recorded?.state === "recorded") {
+        return this._tFormat(`editor.training_depth.value_recorded_${recorded.per}`, {
+          kwh: recorded.kwh.toFixed(2),
+        });
+      }
+      return device.fixedKwh === undefined
+        ? this._t("editor.training_depth.value_not_trained")
+        : this._tFormat("editor.training_depth.value_fixed", { kwh: fallback });
     }
     const estimate = this._applianceEnergyEstimate(device.id);
     if (estimate?.state === "learned") {
