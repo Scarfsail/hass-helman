@@ -139,6 +139,15 @@ function cardIds(page: Page) {
         cards.map((card) => (card as HTMLElement).dataset.deviceId));
 }
 
+/** Open one of the form's sections, which all start collapsed. */
+async function openSection(page: Page, label: string): Promise<void> {
+    await dialog(page)
+        .locator("details.section-card", {
+            has: page.locator(":scope > summary .section-summary-label", { hasText: label }),
+        })
+        .evaluate((details) => ((details as HTMLDetailsElement).open = true));
+}
+
 function nameInput(page: Page) {
     return dialog(page).locator("details.device-card .field-grid .field input").first();
 }
@@ -166,6 +175,7 @@ test.describe("editing a device from its detail", () => {
     test("saving sends the whole document with only the edited field changed", async ({ page }) => {
         await mountDetail(page);
         await openEdit(page);
+        await openSection(page, "Identity");
         await nameInput(page).fill("Hot water");
         await nameInput(page).dispatchEvent("change");
         await dialog(page).getByText("Save and reload").click();
@@ -218,6 +228,7 @@ test.describe("editing a device from its detail", () => {
     test("Cancel and edits are refused while a save is in flight", async ({ page }) => {
         await mountDetail(page, { hangSave: true });
         await openEdit(page);
+        await openSection(page, "Identity");
         await nameInput(page).fill("Hot water");
         await nameInput(page).dispatchEvent("change");
         await dialog(page).getByText("Save and reload").click();
@@ -235,6 +246,7 @@ test.describe("editing a device from its detail", () => {
     test("Back with a dirty draft asks first, and closes only the edit dialog", async ({ page }) => {
         await mountDetail(page);
         await openEdit(page);
+        await openSection(page, "Identity");
         await nameInput(page).fill("Hot water");
         await nameInput(page).dispatchEvent("change");
         const content = page.locator("node-detail-device-content");
@@ -277,6 +289,7 @@ test.describe("editing a device from its detail", () => {
             },
         });
         await openEdit(page);
+        await openSection(page, "Identity");
         await nameInput(page).fill("Hot water");
         await nameInput(page).dispatchEvent("change");
         await dialog(page).getByText("Save and reload").click();

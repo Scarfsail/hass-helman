@@ -298,6 +298,22 @@ async function choose(page: Page, id: string, selector: string, value: string): 
     );
 }
 
+/** Open one of a card's own sections, which all start collapsed. */
+async function openSection(page: Page, id: string, label: string): Promise<void> {
+    await page.evaluate(
+        ({ id, label }) => {
+            const section = window
+                .__own(id, "details.section-card")
+                .find(
+                    (details) =>
+                        details.querySelector(":scope > summary .section-summary-label")?.textContent?.trim() === label,
+                ) as HTMLDetailsElement;
+            section.open = true;
+        },
+        { id, label },
+    );
+}
+
 /** Flip a card's Schedulable switch. */
 async function setSchedulable(page: Page, id: string, checked: boolean): Promise<void> {
     await page.evaluate(
@@ -362,6 +378,7 @@ test("the overview row shows the resolved name, icon and derived badges", async 
     expect(await page.evaluate(() => window.__inspectKeys)).toEqual(
         expect.arrayContaining(["devices.consumers.0.name", "devices.consumers.0.icon", "devices.consumers.0.children.0.name"]),
     );
+    // The overview row's own badges, not its sections' chips.
     const breaker = await page.evaluate(() => ({
         icon: (window.__own("jistic_klimatizace_energy", "summary ha-icon")[0] as any)?.icon,
         namePlaceholder: window
@@ -372,7 +389,7 @@ test("the overview row shows the resolved name, icon and derived badges", async 
         id: (window.__own("jistic_klimatizace_energy", "input.device-id")[0] as HTMLInputElement)
             .readOnly,
         badges: window
-            .__own("jistic_klimatizace_energy", ".device-badge")
+            .__own("jistic_klimatizace_energy", ":scope > summary .device-badge")
             .map((badge) => badge.dataset.badge),
     }));
     expect(breaker).toEqual({
@@ -384,7 +401,7 @@ test("the overview row shows the resolved name, icon and derived badges", async 
 
     const badges = (id: string) =>
         page.evaluate(
-            (id) => window.__own(id, ".device-badge").map((badge) => badge.dataset.badge),
+            (id) => window.__own(id, ":scope > summary .device-badge").map((badge) => badge.dataset.badge),
             id,
         );
     expect(await badges("klima_obyvak")).toEqual(["switch", "schedulable"]);
@@ -1422,6 +1439,7 @@ for (const hasPower of [false, true]) {
             window.__card("parent")!.open = true;
             window.__card("first")!.open = true;
         });
+        await openSection(page, "parent", "Children");
         await deviceResponse(page, "helman/suggest_device_entities", {
             energy: [candidate("sensor.first_energy")],
             power: hasPower ? [candidate("sensor.first_power")] : [],
@@ -1445,6 +1463,7 @@ test("suggestions preserve a climate child's control and shared meter", async ({
         window.__card("jistic_klimatizace_energy")!.open = true;
         window.__card("klima_obyvak")!.open = true;
     });
+    await openSection(page, "jistic_klimatizace_energy", "Children");
     await deviceResponse(page, "helman/suggest_device_entities", {
         energy: [candidate("sensor.jistic_klimatizace_energy")],
         power: [],

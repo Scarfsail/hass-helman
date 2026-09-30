@@ -603,6 +603,11 @@
       "schedulable": "Schedulable",
       "issues": "Issues: {count}"
     },
+    "section_badges": {
+      "parent_meter": "Parent meter",
+      "count": "{count}",
+      "kwh_per_hour": "{value} kWh/h"
+    },
     "import": {
       "preview": "Energy import preview",
       "draft_only": "Apply changes the draft. Save persists it.",

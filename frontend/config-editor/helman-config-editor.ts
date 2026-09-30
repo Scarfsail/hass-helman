@@ -4177,13 +4177,10 @@ export class HelmanConfigEditorPanel
     const hasChildren = (asJsonArray(device.children) ?? []).length > 0;
     const canParent = canHaveChildren(device);
     if (!hasChildren && !canParent) return nothing;
-    return this._renderSimpleSection(
-      this._t("editor.sections.children"),
-      html`
-        ${hasChildren ? this._renderDeviceList([...path, "children"], device) : nothing}
-        ${canParent ? this._renderAddDevice([...path, "children"], device) : nothing}
-      `,
-    );
+    return html`
+      ${hasChildren ? this._renderDeviceList([...path, "children"], device) : nothing}
+      ${canParent ? this._renderAddDevice([...path, "children"], device) : nothing}
+    `;
   }
 
   private _renderOptionalTextField(
