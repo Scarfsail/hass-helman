@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,6 +102,29 @@ class DailyTests(unittest.TestCase):
 
         self.assertEqual(record["daily_kwh"]["days"], 2)
         self.assertEqual(record["daily_kwh"]["max"], 1.0)
+
+    def test_a_dst_day_keeps_exactly_its_own_energy(self) -> None:
+        # Prague springs forward on 29 March: a 23-hour day. A 1 kW segment
+        # from 23:00 the day before to 01:00 the day after is 25 h and 25 kWh,
+        # of which that day holds 23, not the 24 its wall clock suggests.
+        prague = ZoneInfo("Europe/Prague")
+
+        record = device_stats.member_record(
+            window_start=datetime(2026, 3, 28, tzinfo=prague),
+            window_end=datetime(2026, 3, 31, tzinfo=prague),
+            local_tz=prague,
+            member_energy=[
+                (
+                    datetime(2026, 3, 28, 23, tzinfo=prague).astimezone(UTC),
+                    datetime(2026, 3, 30, 1, tzinfo=prague).astimezone(UTC),
+                    25.0,
+                )
+            ],
+            on_kwh_per_hour=None,
+        )
+
+        self.assertAlmostEqual(record["daily_kwh"]["max"], 23.0)
+        self.assertAlmostEqual(record["daily_kwh"]["mean"], 25.0 / 3, places=4)
 
     def test_a_segment_across_midnight_is_shared_by_both_days(self) -> None:
         record = device_stats.member_record(

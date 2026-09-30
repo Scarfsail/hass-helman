@@ -123,15 +123,17 @@ def member_record(
 def local_midnights(
     window_start: datetime, window_end: datetime, local_tz: tzinfo
 ) -> list[datetime]:
-    """Every local midnight inside the window, edges included.
+    """Every local midnight inside the window, edges included, as UTC.
 
-    Consecutive pairs are its complete local days.
+    Consecutive pairs are its complete local days. UTC because two datetimes
+    sharing one ``ZoneInfo`` subtract as wall time, which makes a DST day 24 h
+    instead of its real 23 or 25.
     """
     midnights: list[datetime] = []
     day = window_start.astimezone(local_tz).date()
     while (midnight := datetime.combine(day, time.min, tzinfo=local_tz)) <= window_end:
         if midnight >= window_start:
-            midnights.append(midnight)
+            midnights.append(midnight.astimezone(timezone.utc))
         day += timedelta(days=1)
     return midnights
 
