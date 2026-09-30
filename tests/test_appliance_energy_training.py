@@ -367,6 +367,23 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1},
         )
 
+    async def test_a_meter_without_history_records_no_zero_days(self) -> None:
+        """No meter rows at all is no evidence the pump idled: it learns
+        nothing new, and keeps what it learned before."""
+        store = _FakeStore()
+        previous = {"daily_kwh": {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1}}
+        store.section = {"data": {}, "fingerprint": "old", "devices": {"pump": previous}}
+        self._install(
+            _FakeRecorder({"switch.pump": _switch(("off", 0), ("on", 10), ("off", 11))})
+        )
+        pump = _child("pump")
+        job = self._make_job(store, [pump], shared_meters={_SHARED_METER: _shared(pump)})
+
+        outcome = await job.async_train()
+
+        self.assertEqual(outcome, "no_history")
+        self.assertEqual(store.section["devices"], {"pump": previous})
+
     async def test_an_estimate_that_rounds_to_nothing_is_a_failure(self) -> None:
         """Stored, a 0.0 would be dropped on adoption without a word; listed
         as failed, the appliance's fixed fallback is visible."""

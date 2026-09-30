@@ -333,15 +333,22 @@ class ApplianceEnergyTrainingJob:
                         _carry_over(devices, previous_devices, (subject.device_key,))
                         continue
                     fit = fits[subject.meter]
-                    record = member_record(
-                        window_start=_covered_start(
-                            histories.states(subject.meter, start), start
-                        ),
-                        window_end=window_end,
-                        local_tz=local_tz,
-                        member_energy=fit.member_energy[subject.device_key],
-                        on_kwh_per_hour=fit.estimates[subject.device_key],
+                    meter_states = histories.states(subject.meter, start)
+                    # A meter with no rows is no evidence the child idled:
+                    # without this, every day would be recorded as a zero day.
+                    record = (
+                        member_record(
+                            window_start=_covered_start(meter_states, start),
+                            window_end=window_end,
+                            local_tz=local_tz,
+                            member_energy=fit.member_energy[subject.device_key],
+                            on_kwh_per_hour=fit.estimates[subject.device_key],
+                        )
+                        if meter_states
+                        else None
                     )
+                    if record is None:
+                        _carry_over(devices, previous_devices, (subject.device_key,))
                 else:
                     record = _metered_record(
                         subject, histories, start, window_end, local_tz
