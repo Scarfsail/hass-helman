@@ -456,5 +456,9 @@ test.describe("device detail from the solar inspector", () => {
             hours_to_show: 24,
             entities: ["sensor.washer_power", "switch.washer"],
         }]);
+        // Keyed by its controllable id for editing, but its record lives under
+        // its meter, as on the power card.
+        expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
+            .toEqual(["sensor.washer_energy"]);
     });
 });

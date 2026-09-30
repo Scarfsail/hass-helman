@@ -234,7 +234,9 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     private async _loadStats(item: TreeItem): Promise<void> {
-        const deviceKey = item.deviceKey;
+        // Records are keyed by the meter wherever there is one; the solar
+        // inspector's deviceKey is the edit dialog's, a controllable id.
+        const deviceKey = item.energyEntityId ?? item.deviceKey;
         if (!deviceKey) return;
         let stats: DeviceStats | null;
         try {
