@@ -315,6 +315,24 @@ class TrainingStatusTests(unittest.TestCase):
         self.assertEqual(_job(payload, "appliance_energy")["devices"], records)
         self.assertNotIn("devices", _job(payload, "house_consumption"))
 
+    def test_stored_device_records_alone_are_an_artifact_in_use(self) -> None:
+        # Only passive metered devices: no estimate and no weight, yet the
+        # device detail serves their records.
+        coordinator = _make_coordinator(
+            store=_make_store(
+                appliance_energy=_section(
+                    "estimates_trained",
+                    data={},
+                    fingerprint=APPLIANCE_FP,
+                    devices={"sensor.fridge_energy": {"running_kw": 0.1}},
+                )
+            )
+        )
+
+        appliance = _job(self._payload(coordinator), "appliance_energy")
+
+        self.assertTrue(appliance["artifactInUse"])
+
     def test_only_the_appliance_job_carries_the_adopted_estimates(self) -> None:
         estimates = {"dishwasher": 1.12, "living_ac": 0.6}
         payload = self._payload(_make_coordinator(appliance_estimates=estimates))

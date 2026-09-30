@@ -1597,13 +1597,14 @@ class HelmanCoordinator:
                     "appliance_energy",
                     appliance,
                     health=appliance_energy_health_for(appliance),
-                    # Learned weights drive the live split even when no
-                    # appliance learns an estimate.
+                    # Learned weights drive the live split, and records the
+                    # device detail, even when no appliance learns an estimate.
                     artifact_in_use=bool(self._appliance_energy_estimates)
                     or any(
                         weight is not None
                         for weight in self._shared_meter_weights.values()
-                    ),
+                    )
+                    or bool((appliance or {}).get("devices")),
                     read_live_fingerprint=lambda: (
                         self._read_appliance_energy_training_request().fingerprint
                     ),

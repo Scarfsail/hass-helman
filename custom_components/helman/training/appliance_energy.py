@@ -336,15 +336,21 @@ class ApplianceEnergyTrainingJob:
                     meter_states = histories.states(subject.meter, start)
                     # A meter with no rows is no evidence the child idled:
                     # without this, every day would be recorded as a zero day.
+                    # Nor is a signal with no rows yet: the record starts where
+                    # both its meter's and its signal's history do.
+                    signal_states = histories.states(subject.running_signal[0], start)
                     record = (
                         member_record(
-                            window_start=_covered_start(meter_states, start),
+                            window_start=max(
+                                _covered_start(meter_states, start),
+                                _covered_start(signal_states, start),
+                            ),
                             window_end=window_end,
                             local_tz=local_tz,
                             member_energy=fit.member_energy[subject.device_key],
                             on_kwh_per_hour=fit.estimates[subject.device_key],
                         )
-                        if meter_states
+                        if meter_states and signal_states
                         else None
                     )
                     if record is None:

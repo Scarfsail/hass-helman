@@ -4,7 +4,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -366,6 +366,33 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             store.section["devices"]["pump"]["daily_kwh"],
             {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1},
         )
+
+    async def test_a_childs_days_begin_where_its_signal_history_does(self) -> None:
+        """The meter goes back a day further than the pump's switch: that
+        earlier day says nothing about the pump, so it is no zero day."""
+        store = _FakeStore()
+        earlier = SimpleNamespace(
+            state="0.0",
+            attributes={"unit_of_measurement": "kWh"},
+            last_updated=_at(0) - timedelta(days=1),
+        )
+        self._install(
+            _FakeRecorder(
+                {
+                    "switch.pump": _switch(("off", 0), ("on", 10), ("off", 11)),
+                    _SHARED_METER: [
+                        earlier,
+                        *_meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
+                    ],
+                }
+            )
+        )
+        pump = _child("pump")
+        job = self._make_job(store, [pump], shared_meters={_SHARED_METER: _shared(pump)})
+
+        await job.async_train()
+
+        self.assertEqual(store.section["devices"]["pump"]["daily_kwh"]["days"], 1)
 
     async def test_a_meter_without_history_records_no_zero_days(self) -> None:
         """No meter rows at all is no evidence the pump idled: it learns
