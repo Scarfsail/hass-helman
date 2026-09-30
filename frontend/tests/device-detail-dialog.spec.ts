@@ -94,8 +94,11 @@ function dto(overrides: Record<string, unknown>) {
  * The power card on a house with a metered boiler, whose meter a meterless pump
  * shares, and an unmeasured remainder. The boiler carries a label the card can
  * group by, so a virtual group is one chip away.
+ *
+ * `stats` is what `helman/get_device_stats` answers per device key; a key it
+ * lacks has no record.
  */
-async function mountCard(page: Page): Promise<void> {
+async function mountCard(page: Page, stats: Record<string, unknown> = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card"));
@@ -147,9 +150,10 @@ async function mountCard(page: Page): Promise<void> {
     };
 
     await page.evaluate(
-        async ({ tree, today, lastHour }) => {
+        async ({ tree, today, lastHour, stats }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
+            (window as any).__deviceStatsRequests = [];
             const hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -173,6 +177,10 @@ async function mountCard(page: Page): Promise<void> {
                         return { buckets: 3, bucket_duration: 5, entity_history: {} };
                     }
                     if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
+                    if (msg.type === "helman/get_device_stats") {
+                        (window as any).__deviceStatsRequests.push(msg.device_key);
+                        return (stats as Record<string, unknown>)[msg.device_key] ?? null;
+                    }
                     if (msg.type === "recorder/statistic_during_period") {
                         (window as any).__statRequests.push(msg);
                         return { change: msg.calendar ? today : lastHour };
@@ -185,7 +193,7 @@ async function mountCard(page: Page): Promise<void> {
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today: TODAY_KWH, lastHour: LAST_HOUR_KWH },
+        { tree, today: TODAY_KWH, lastHour: LAST_HOUR_KWH, stats },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -345,6 +353,84 @@ test.describe("device detail from the power card", () => {
         await expect.poll(async () => (await openDialog(page))?.title).toBe("Boiler");
         expect(await page.evaluate(() => (window as any).__deepAll(document, "node-detail-dialog").length)).toBe(1);
         expect(await page.evaluate(() => window.history.length)).toBe(historyBefore);
+    });
+});
+
+/** A metered boiler's record: days, runs, and both power figures. */
+const BOILER_STATS = {
+    daily_kwh: { mean: 2.4, median: 2.25, min: 0, max: 5.5, days: 29 },
+    runs_per_day: 1.5333,
+    run_minutes: { median: 42.4, min: 12, max: 180 },
+    run_kwh: { median: 1.4, min: 0.35, max: 6 },
+    running_kw: 2.1,
+    on_kwh_per_hour: 0.8,
+};
+
+test.describe("device detail usage statistics", () => {
+    test("a metered device shows its learned days under its meter tiles", async ({ page }) => {
+        await mountCard(page, { "sensor.boiler_energy": BOILER_STATS });
+
+        await clickInRow(page, "Boiler", ".deviceName");
+
+        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
+            "Today 1.25 kWh",
+            "Last hour 0.30 kWh",
+            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
+            "Runs per day 1.5",
+            "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
+            "Power while running 2.1 kW",
+        ]);
+        expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
+            .toEqual(["sensor.boiler_energy"]);
+        const title = await page.evaluate(() => {
+            const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
+            return content.shadowRoot.querySelector(".section-title")?.textContent.trim();
+        });
+        expect(title).toBe("Last 29 days");
+    });
+
+    test("a meterless child shows its statistics on their own", async ({ page }) => {
+        await mountCard(page, {
+            pump: {
+                daily_kwh: { mean: 0.3, median: 0.25, min: 0, max: 1.2, days: 29 },
+                runs_per_day: 3,
+                run_minutes: { median: 20, min: 5, max: 60 },
+                run_kwh: { median: 0.1, min: 0.02, max: 0.3 },
+                running_kw: 0.3,
+                on_kwh_per_hour: 0.3,
+            },
+        });
+        await clickInRow(page, "Boiler", ".childrenToggle");
+        await expect.poll(() => rowNames(page)).toContain("Pump");
+
+        await clickInRow(page, "Pump", ".deviceName");
+
+        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
+            "Typical day 0.25 kWh 0.00–1.20 kWh · mean 0.30 kWh",
+            "Runs per day 3.0",
+            "Typical run 20 min · 0.10 kWh 5–60 min · 0.02–0.30 kWh",
+            "Power while running 300 W",
+        ]);
+        // Keyed by the device id, the card's deviceKey for a meterless child.
+        expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual(["pump"]);
+        expect(await page.evaluate(() => (window as any).__statRequests)).toEqual([]);
+    });
+
+    test("a record without runs shows only its typical day", async ({ page }) => {
+        await mountCard(page, {
+            "sensor.boiler_energy": {
+                daily_kwh: { mean: 2.4, median: 2.25, min: 0, max: 5.5, days: 29 },
+                on_kwh_per_hour: 0.8,
+            },
+        });
+
+        await clickInRow(page, "Boiler", ".deviceName");
+
+        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
+            "Today 1.25 kWh",
+            "Last hour 0.30 kWh",
+            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
+        ]);
     });
 });
 

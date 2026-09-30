@@ -242,7 +242,8 @@ class TrainingArtifactsStore:
                                "last_attempt_at": str, "last_outcome": str,
                                "error_reason": str | None,
                                "failed_appliances": {appliance_id: reason},
-                               "shared_meter_weights": {member_id: kw | None}}}
+                               "shared_meter_weights": {member_id: kw | None},
+                               "devices": {device_key: record}}}
 
     Every section is the same shape, so they share the read/write helpers below.
     No store version bump for ``appliance_energy``: a document written before it
@@ -261,6 +262,11 @@ class TrainingArtifactsStore:
     splits evenly, as before it existed. Unlike ``failed_appliances`` it
     outlives a wholesale failure, like ``data``: a fit that could not run does
     not make the last weights wrong.
+
+    Nor for ``devices``, each consumer device's usage record by the card's
+    ``deviceKey`` (see ``training.device_stats``): a section without it has
+    simply learned no records yet. It outlives a wholesale failure the same
+    way.
 
     Solar bias keeps its own store: the bias service already owns its
     fingerprint, ``trained_at`` and ``last_outcome`` there, and a second copy
@@ -337,12 +343,15 @@ class TrainingArtifactsStore:
         last_outcome: str,
         failed_appliances: dict[str, str],
         shared_meter_weights: dict[str, float | None],
+        devices: dict[str, dict[str, Any]],
     ) -> None:
         """Store freshly resolved per-appliance when-active hourly energy.
 
         ``failed_appliances`` maps each appliance whose estimate could not be
         resolved to why; those fall back to their configured hourly energy.
-        ``shared_meter_weights`` is every shared meter member's learned kW.
+        Another device that learned nothing is listed by its ``deviceKey``.
+        ``shared_meter_weights`` is every shared meter member's learned kW,
+        and ``devices`` every device's usage record.
         """
         await self._async_record(
             self.APPLIANCE_ENERGY,
@@ -352,6 +361,7 @@ class TrainingArtifactsStore:
             last_outcome=last_outcome,
             failed_appliances=failed_appliances,
             shared_meter_weights=shared_meter_weights,
+            devices=devices,
         )
 
     async def async_record_appliance_energy_failure(
@@ -361,13 +371,13 @@ class TrainingArtifactsStore:
         error_reason: str | None,
         attempted_at: str,
     ) -> None:
-        """Record a failed resolve without dropping the previous estimates or weights."""
+        """Record a failed resolve, keeping the previous estimates, weights and records."""
         await self._async_record_failure(
             self.APPLIANCE_ENERGY,
             attempted_at=attempted_at,
             last_outcome=last_outcome,
             error_reason=error_reason,
-            kept=("shared_meter_weights",),
+            kept=("shared_meter_weights", "devices"),
         )
 
     def _read_section(self, name: str) -> dict[str, Any] | None:

@@ -9,6 +9,9 @@ import { resolve } from "node:path";
  * tab's appliance table and each device's own Projection settings read both
  * through one resolver, so this file stubs the status once and checks that
  * both places say the same thing for each device.
+ *
+ * Every other device reads its usage record from the job's `devices`, by the
+ * card's deviceKey, through the same resolver (issue #384).
  */
 
 const BUNDLE = resolve(
@@ -47,6 +50,16 @@ const CONFIG = {
                 projection: { strategy: "fixed", hourly_energy_kwh: 1 },
             },
         },
+        // Neither can be scheduled: each has a record, and no projection.
+        { id: "fridge", name: "Fridge", consumption: { energy_entity_id: "sensor.fridge_energy" } },
+        {
+            id: "breaker",
+            name: "Breaker",
+            consumption: { energy_entity_id: "sensor.breaker_energy" },
+            children: [
+                { id: "lamp", name: "Lamp", controls: { switch: { entity_id: "switch.lamp" } } },
+            ],
+        },
     ] },
 };
 
@@ -81,6 +94,19 @@ const TRAINING_STATUS = {
             health: "degraded",
             estimates: { dishwasher: 1.1234 },
             issues: [{ subject: "washer", reason: "no running hours" }],
+            devices: {
+                // A history_average device shows its estimate, never its record.
+                "sensor.dishwasher_energy": { on_kwh_per_hour: 9.99 },
+                // Metered, no running signal: its mean day.
+                "sensor.fridge_energy": {
+                    daily_kwh: { mean: 1.234, median: 1.1, min: 0, max: 2, days: 29 },
+                },
+                // A meterless child, by its id: the figure while it is on.
+                lamp: {
+                    daily_kwh: { mean: 0.2, median: 0.2, min: 0, max: 0.5, days: 29 },
+                    on_kwh_per_hour: 0.05,
+                },
+            },
         }),
     ],
 };
@@ -197,4 +223,14 @@ test("the strategy select opens on the configured strategy and names the kWh fie
 
     await expect(card("Dishwasher").locator("label", { hasText: "Fallback hourly energy kWh" })).toHaveCount(1);
     await expect(card("Pool").locator("label", { hasText: "Average hourly energy kWh" })).toHaveCount(1);
+});
+
+test("any other device shows its recorded average in its settings", async ({ page }) => {
+    await mountEditor(page);
+    await openTab(page, "Devices");
+
+    await expect(estimateLine(page, "Fridge")).toHaveText("Learned from history: 1.23 kWh a day");
+    await expect(estimateLine(page, "Lamp")).toHaveText("Learned from history: 0.05 kWh/h while on");
+    // The estimate, not the record, for a device the forecast learns for.
+    await expect(estimateLine(page, "Dishwasher")).toHaveText("Learned from history: 1.12 kWh/h");
 });

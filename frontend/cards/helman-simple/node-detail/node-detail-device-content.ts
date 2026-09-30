@@ -8,6 +8,7 @@ import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { formatPower } from "../../power-format";
 import "../../appliance-switch-badge";
 import type { HomeAssistantLike } from "../../shared/config/types";
+import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
 import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
 
@@ -26,7 +27,8 @@ function powerEntity(item: TreeItem): string | undefined {
 
 /**
  * One config device at a glance: its live power and switch, the energy its own
- * meter counted today and in the last hour, and HA's history graph of both.
+ * meter counted today and in the last hour, what it typically uses as learned
+ * over its learning window, and HA's history graph of both.
  *
  * Always "now", wherever it is opened from. The energy figures are fetched when
  * the dialog opens on a device, not on every `hass` tick.
@@ -62,6 +64,10 @@ export class NodeDetailDeviceContent extends LitElement {
             border-radius: 8px;
             background: var(--secondary-background-color);
         }
+        .tile .range {
+            color: var(--secondary-text-color);
+            font-size: 0.8rem;
+        }
     `];
 
     @property({ attribute: false }) public hass!: HomeAssistant;
@@ -70,6 +76,8 @@ export class NodeDetailDeviceContent extends LitElement {
 
     @state() private _today: Reading;
     @state() private _lastHour: Reading;
+    /** The learned usage record: `undefined` while it loads, `null` when there is none. */
+    @state() private _stats: DeviceStats | null | undefined;
     @state() private _chart?: HistoryGraphCard;
     /** The device's config form is open over this detail. */
     @state() private _editing = false;
@@ -94,8 +102,10 @@ export class NodeDetailDeviceContent extends LitElement {
             this._loadedItem = item;
             this._today = undefined;
             this._lastHour = undefined;
+            this._stats = undefined;
             this._chart = undefined;
             void this._loadEnergy(item);
+            void this._loadStats(item);
             void this._loadChart(item);
         }
         if (this._chart && changed.has("hass")) this._chart.hass = this.hass;
@@ -127,6 +137,7 @@ export class NodeDetailDeviceContent extends LitElement {
                         ${this._tile("last_hour", this._lastHour, item.energyEntityId)}
                     </div>
                 ` : nothing}
+                ${this._renderStats()}
                 ${this._chart ?? nothing}
             </div>
             ${this._renderEditDialog(item)}
@@ -165,6 +176,75 @@ export class NodeDetailDeviceContent extends LitElement {
                 <span class="value">${typeof value === "number" ? `${value.toFixed(2)} ${unit}`.trim() : "—"}</span>
             </div>
         `;
+    }
+
+    /**
+     * The learned-usage row: a typical day, and -- when the record has runs --
+     * how often and how long the device runs, and what it draws while it does.
+     * A meterless child has no meter tiles above, so this stands on its own.
+     * Titled by the days the record covers: the device's lookback, or less
+     * where the recorder has purged older history.
+     */
+    private _renderStats() {
+        const stats = this._stats;
+        if (!stats) return nothing;
+        const day = stats.daily_kwh;
+        const run = stats.run_minutes && stats.run_kwh
+            ? { minutes: stats.run_minutes, kwh: stats.run_kwh }
+            : undefined;
+        const tiles = [
+            day ? this._statTile(
+                "typical_day",
+                `${day.median.toFixed(2)} kWh`,
+                `${this._range(day, 2)} kWh · ${this.localize("node_detail.device.stats.mean")} ${day.mean.toFixed(2)} kWh`,
+            ) : nothing,
+            typeof stats.runs_per_day === "number"
+                ? this._statTile("runs_per_day", stats.runs_per_day.toFixed(1))
+                : nothing,
+            run ? this._statTile(
+                "typical_run",
+                `${Math.round(run.minutes.median)} min · ${run.kwh.median.toFixed(2)} kWh`,
+                `${this._range(run.minutes, 0)} min · ${this._range(run.kwh, 2)} kWh`,
+            ) : nothing,
+            typeof stats.running_kw === "number"
+                ? this._statTile("running_power", formatPower(stats.running_kw * 1000).display)
+                : nothing,
+        ];
+        if (tiles.every((tile) => tile === nothing)) return nothing;
+        return html`
+            <div class="section-title">${day
+                ? this.localize("node_detail.device.stats.title").replace("{days}", String(day.days))
+                : this.localize("node_detail.device.stats.title_undated")}</div>
+            <div class="tiles stats">${tiles}</div>
+        `;
+    }
+
+    private _range(spread: DeviceStatsSpread, digits: number): string {
+        return `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
+    }
+
+    private _statTile(key: string, value: string, range?: string) {
+        return html`
+            <div class="tile ${key}">
+                <span class="label">${this.localize(`node_detail.device.stats.${key}`)}</span>
+                <span class="value">${value}</span>
+                ${range ? html`<span class="range">${range}</span>` : nothing}
+            </div>
+        `;
+    }
+
+    private async _loadStats(item: TreeItem): Promise<void> {
+        const deviceKey = item.deviceKey;
+        if (!deviceKey) return;
+        let stats: DeviceStats | null;
+        try {
+            stats = await fetchDeviceStats(this.hass as unknown as HomeAssistantLike, deviceKey);
+        } catch {
+            stats = null;
+        }
+        // Swapped to another device while this was in flight.
+        if (this._loadedItem !== item) return;
+        this._stats = stats;
     }
 
     private async _loadEnergy(item: TreeItem): Promise<void> {

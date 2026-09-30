@@ -124,6 +124,15 @@
     "device": {
       "today": "Today",
       "last_hour": "Last hour",
+      "stats": {
+        "title": "Last {days} days",
+        "title_undated": "Learned usage",
+        "typical_day": "Typical day",
+        "runs_per_day": "Runs per day",
+        "typical_run": "Typical run",
+        "running_power": "Power while running",
+        "mean": "mean"
+      },
       "edit": {
         "button": "Edit",
         "title": "Edit device",

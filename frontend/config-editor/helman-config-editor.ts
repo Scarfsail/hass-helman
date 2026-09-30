@@ -2728,15 +2728,32 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * What the appliance energy job learned for one controllable, or why not.
+   * What the appliance energy job learned for one device, or why not.
    *
-   * The one reader of the job's `estimates` and appliance issues, shared by the
-   * Diagnostics table and the device's own Projection settings so the two
-   * cannot disagree. A device with no status yet, added in the draft and never
-   * saved, or simply never trained, is `not_trained`.
+   * The one reader of the job's `estimates`, its appliance issues and its
+   * device records, shared by the Diagnostics table and the device's own
+   * settings so the two cannot disagree.
+   *
+   * Without a `recordKey` it answers for a `history_average` device, by
+   * controllable id: a device with no status yet, added in the draft and
+   * never saved, or simply never trained, is `not_trained`. With one it
+   * answers for any other device, from the record under that deviceKey: its
+   * `on_kwh_per_hour` when it has a running signal, else its mean day, and
+   * nothing before it has a record.
    */
-  private _applianceEnergyEstimate(controllableId: string): ApplianceEnergyEstimate {
+  private _applianceEnergyEstimate(
+    controllableId: string,
+    recordKey?: string,
+  ): ApplianceEnergyEstimate | undefined {
     const job = this._trainingJob("appliance_energy");
+    if (recordKey !== undefined) {
+      const record = job?.devices?.[recordKey];
+      if (typeof record?.on_kwh_per_hour === "number") {
+        return { state: "recorded", kwh: record.on_kwh_per_hour, per: "hour" };
+      }
+      const day = record?.daily_kwh?.mean;
+      return typeof day === "number" ? { state: "recorded", kwh: day, per: "day" } : undefined;
+    }
     const kwh = job?.estimates?.[controllableId];
     if (typeof kwh === "number") return { state: "learned", kwh };
     const issue = job?.issues.find((candidate) => candidate.subject === controllableId);
@@ -2964,12 +2981,12 @@ export class HelmanConfigEditorPanel
       return this._tFormat("editor.training_depth.value_fixed", { kwh: fallback });
     }
     const estimate = this._applianceEnergyEstimate(device.id);
-    if (estimate.state === "learned") {
+    if (estimate?.state === "learned") {
       return this._tFormat("editor.training_depth.value_learned", {
         kwh: estimate.kwh.toFixed(2),
       });
     }
-    if (estimate.state === "failed") {
+    if (estimate?.state === "failed") {
       return html`<span title=${estimate.reason}>
         ${this._tFormat("editor.training_depth.value_failed", { kwh: fallback })}
       </span>`;
@@ -4066,7 +4083,7 @@ export class HelmanConfigEditorPanel
         .localize=${(key: string) => this._t(key)}
         .validation=${this._validation}
         .inspections=${this._inspections.results}
-        .energyEstimate=${this._applianceEnergyEstimate(this._stringValue(device.id))}
+        .energyEstimate=${this._deviceEnergyEstimate(device)}
         .listActions=${(devicePath: PathSegment[]) => this._renderDeviceListActions(devicePath)}
         .renderChildren=${(child: JsonObject, childPath: PathSegment[]) =>
           this._renderDeviceChildren(child, childPath)}
@@ -4075,6 +4092,22 @@ export class HelmanConfigEditorPanel
         @device-config-changed=${this._handleDeviceConfigChanged}
       ></helman-device-editor>
     `;
+  }
+
+  /**
+   * The learned line a device card shows. A device that projects from history
+   * -- schedulable, not a charger, on `history_average` -- shows its forecast
+   * estimate; any other its record, by the card's deviceKey: its own meter,
+   * else its id.
+   */
+  private _deviceEnergyEstimate(device: JsonObject): ApplianceEnergyEstimate | undefined {
+    const id = this._stringValue(device.id);
+    const strategy = asJsonObject(asJsonObject(device.consumption)?.projection)?.strategy;
+    const projectsFromHistory =
+      isSchedulable(device) && deviceKind(device) !== "ev_charger" && strategy === "history_average";
+    return projectsFromHistory
+      ? this._applianceEnergyEstimate(id)
+      : this._applianceEnergyEstimate(id, ownMeter(device) || id);
   }
 
   /** A device card's pipeline row: drag, Visual / YAML, remove. */

@@ -131,7 +131,9 @@
     "appliance_estimate": {
       "learned": "Learned from history: {kwh} kWh/h",
       "not_trained": "Not trained yet: using {kwh} kWh/h until it is",
-      "failed": "No estimate ({reason}): using {kwh} kWh/h"
+      "failed": "No estimate ({reason}): using {kwh} kWh/h",
+      "recorded_hour": "Learned from history: {kwh} kWh/h while on",
+      "recorded_day": "Learned from history: {kwh} kWh a day"
     },
     "training_depth": {
       "column_entity": "Entity",
