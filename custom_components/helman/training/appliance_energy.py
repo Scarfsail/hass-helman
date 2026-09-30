@@ -353,8 +353,6 @@ class ApplianceEnergyTrainingJob:
                         if meter_states and signal_states
                         else None
                     )
-                    if record is None:
-                        _carry_over(devices, previous_devices, (subject.device_key,))
                 else:
                     record = _metered_record(
                         subject, histories, start, window_end, local_tz
@@ -374,6 +372,10 @@ class ApplianceEnergyTrainingJob:
             if record is not None:
                 devices[subject.device_key] = record
                 learned = True
+            else:
+                # History that answered nothing is no evidence the previous
+                # record became wrong.
+                _carry_over(devices, previous_devices, (subject.device_key,))
             if subject.history_average:
                 estimate = (record or {}).get("on_kwh_per_hour")
                 # ``None`` means the history did not answer -- no active

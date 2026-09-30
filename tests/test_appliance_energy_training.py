@@ -411,6 +411,21 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome, "no_history")
         self.assertEqual(store.section["devices"], {"pump": previous})
 
+    async def test_a_metered_device_without_history_keeps_its_record(self) -> None:
+        store = _FakeStore()
+        previous = {"daily_kwh": {"mean": 2.0, "median": 2.0, "min": 2.0, "max": 2.0, "days": 1}}
+        store.section = {
+            "data": {},
+            "fingerprint": "old",
+            "devices": {"sensor.fridge_energy": previous},
+        }
+        self._install(_FakeRecorder({}))
+        fridge = _metered("sensor.fridge_energy", power="sensor.fridge_power")
+
+        await self._make_job(store, [fridge]).async_train()
+
+        self.assertEqual(store.section["devices"], {"sensor.fridge_energy": previous})
+
     async def test_an_estimate_that_rounds_to_nothing_is_a_failure(self) -> None:
         """Stored, a 0.0 would be dropped on adoption without a word; listed
         as failed, the appliance's fixed fallback is visible."""
