@@ -67,7 +67,13 @@ import type {
 import { defineOnce } from "../define-once";
 import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
 import { haDeviceEntityFilter, sharedHaDevice } from "./device-scope";
-import { deviceEnergyFigure, renderDeviceEnergyValue, type DeviceEnergyInput } from "./device-energy";
+import { formatPower } from "../../power-format";
+import {
+    deviceEnergyFigure,
+    deviceEnergyLabel,
+    renderDeviceEnergyValue,
+    type DeviceEnergyInput,
+} from "./device-energy";
 import "../config/entity-group";
 
 /** The kinds the device form edits; anything else is shown read-only. */
@@ -704,7 +710,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 )}
                                 ${this._renderChildrenToleranceField(device)}
                             </div>
-                            ${deviceEnergyFigure(this.energyEstimate?.record) &&
+                            ${this.energyEstimate && deviceEnergyFigure(this.energyEstimate.record, this.energyEstimate.schedulable) &&
                             !(schedulable && kind !== "ev_charger" && this._projectionStrategy() === "history_average")
                                 ? this._renderEnergyEstimateLine()
                                 : nothing}`,
@@ -1359,7 +1365,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
             [
                 { key: "strategy", text: strategyLabel ? this.t(strategyLabel) : strategy },
                 ...(typeof hourly === "number" && Number.isFinite(hourly)
-                    ? [{ key: "hourly_energy_kwh", text: this._tFormat("editor.section_badges.kwh_per_hour", { value: hourly }) }]
+                    ? [{ key: "hourly_energy_kwh", text: this._tFormat("editor.section_badges.hourly_energy", { value: formatPower(hourly * 1000).display }) }]
                     : []),
             ],
         );
@@ -1404,8 +1410,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     private _renderEnergyEstimateLine(): TemplateResult | typeof nothing {
         const estimate = this.energyEstimate;
         if (!estimate) return nothing;
+        const text = (key: string) => this.t(`device_energy.${key}`);
         return html`<p class="inline-note appliance-energy-estimate">
-            ${this.t("device_energy.label")}: ${renderDeviceEnergyValue((key) => this.t(`device_energy.${key}`), estimate)}
+            ${deviceEnergyLabel(text, estimate)}: ${renderDeviceEnergyValue(text, estimate)}
         </p>`;
     }
 

@@ -96,9 +96,14 @@ function dto(overrides: Record<string, unknown>) {
  * group by, so a virtual group is one chip away.
  *
  * `stats` is what `helman/get_device_stats` answers per device key; a key it
- * lacks has no record.
+ * lacks has no record. The tree lists controllable ids only for a schedulable
+ * device, so `schedulableBoiler` gives the boiler one.
  */
-async function mountCard(page: Page, stats: Record<string, unknown> = {}): Promise<void> {
+async function mountCard(
+    page: Page,
+    stats: Record<string, unknown> = {},
+    schedulableBoiler = false,
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card"));
@@ -120,6 +125,7 @@ async function mountCard(page: Page, stats: Record<string, unknown> = {}): Promi
                         energyEntityId: "sensor.boiler_energy",
                         icon: "mdi:water-boiler",
                         groups: { room: "kitchen" },
+                        controllableIds: schedulableBoiler ? ["boiler"] : [],
                         children: [
                             dto({
                                 id: "pump",
@@ -232,14 +238,14 @@ function openDialog(page: Page): Promise<null | { title: string; tiles: string[]
     });
 }
 
-/** The open dialog's Energy tile: its figure's colour class and its hover. */
+/** The open dialog's headline tile: its figure's colour class and its hover. */
 function energyTile(page: Page): Promise<{ source?: string; title: string | null }> {
     return page.evaluate(() => {
         const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
         const value = content.shadowRoot.querySelector(".tile.energy .device-energy");
         const figure = value?.querySelector(".device-energy-value");
         return {
-            source: ["on", "day", "configured"].find((source) => figure?.classList.contains(source)),
+            source: ["on", "running", "day", "configured"].find((source) => figure?.classList.contains(source)),
             title: value?.getAttribute("title") ?? null,
         };
     });
@@ -379,33 +385,60 @@ const BOILER_STATS = {
     on_kwh_per_hour: 0.8,
 };
 
+/** The boiler's hover: every measure, in their fixed order. */
+const BOILER_MEASURES = [
+    "Average while switched on: 800 W",
+    "Average power while active: 2.1 kW",
+    "Daily average: 100 W",
+    "Per day: 2.40 kWh",
+].join("\n");
+
 test.describe("device detail usage statistics", () => {
     test("a metered device shows its learned days under its meter tiles", async ({ page }) => {
         await mountCard(page, { "sensor.boiler_energy": BOILER_STATS });
 
         await clickInRow(page, "Boiler", ".deviceName");
 
+        // Not schedulable: its power while active heads the row, and its average
+        // while switched on takes the second power tile, so neither shows twice.
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
             "Today 1.25 kWh",
             "Last hour 0.30 kWh",
-            "Energy 0.80 kWh/h",
+            "Average power while active 2.1 kW",
             "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
             "Runs per day 1.5",
             "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
-            "Power while running 2.1 kW",
+            "Average while switched on 800 W",
         ]);
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
             .toEqual(["sensor.boiler_energy"]);
-        // Learned while on: green, with every measure in its hover.
-        expect(await energyTile(page)).toEqual({
-            source: "on",
-            title: "While on: 0.80 kWh/h\nAverage: 0.10 kWh/h\nPer day: 2.40 kWh\nRunning power: 2.10 kW",
-        });
+        // Learned: green, with every measure in its hover and no scheduler note.
+        expect(await energyTile(page)).toEqual({ source: "running", title: BOILER_MEASURES });
         const title = await page.evaluate(() => {
             const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
             return content.shadowRoot.querySelector(".section-title")?.textContent.trim();
         });
         expect(title).toBe("Last 29 days");
+    });
+
+    test("a schedulable device heads with its average while switched on", async ({ page }) => {
+        await mountCard(page, { "sensor.boiler_energy": BOILER_STATS }, true);
+
+        await clickInRow(page, "Boiler", ".deviceName");
+
+        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
+            "Today 1.25 kWh",
+            "Last hour 0.30 kWh",
+            "Average while switched on 800 W",
+            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
+            "Runs per day 1.5",
+            "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
+            "Average power while active 2.1 kW",
+        ]);
+        expect(await energyTile(page)).toEqual({
+            source: "on",
+            title: `${BOILER_MEASURES}\nThe device scheduler projects with this figure`,
+        });
     });
 
     test("a meterless child shows its statistics on their own", async ({ page }) => {
@@ -425,11 +458,12 @@ test.describe("device detail usage statistics", () => {
         await clickInRow(page, "Pump", ".deviceName");
 
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
-            "Energy 0.30 kWh/h",
+            // Schedulable: its average while switched on first.
+            "Average while switched on 300 W",
             "Typical day 0.25 kWh 0.00–1.20 kWh · mean 0.30 kWh",
             "Runs per day 3.0",
             "Typical run 20 min · 0.10 kWh 5–60 min · 0.02–0.30 kWh",
-            "Power while running 300 W",
+            "Average power while active 300 W",
         ]);
         // Keyed by the device id, the card's deviceKey for a meterless child.
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual(["pump"]);
@@ -448,13 +482,13 @@ test.describe("device detail usage statistics", () => {
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
             "Today 1.25 kWh",
             "Last hour 0.30 kWh",
-            "Energy 0.10 kWh/h",
+            "Daily average 100 W",
             "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
         ]);
-        // No running signal: the daily mean over 24 hours, in orange.
+        // No power while active: the daily mean over 24 hours, in orange.
         expect(await energyTile(page)).toEqual({
             source: "day",
-            title: "While on: —\nAverage: 0.10 kWh/h\nPer day: 2.40 kWh\nRunning power: —",
+            title: "Average while switched on: —\nAverage power while active: —\nDaily average: 100 W\nPer day: 2.40 kWh",
         });
     });
 });

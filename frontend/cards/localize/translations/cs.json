@@ -70,7 +70,6 @@
         "typical_day": "Typický den",
         "runs_per_day": "Běhů za den",
         "typical_run": "Typický běh",
-        "running_power": "Příkon za běhu",
         "mean": "průměr"
       },
       "edit": {
@@ -716,12 +715,12 @@
     }
   },
   "device_energy": {
-    "label": "Energie",
-    "while_on": "Při zapnutí",
-    "average": "Průměr",
+    "while_on": "Průměr při zapnutí",
+    "average": "Denní průměr",
     "per_day": "Za den",
-    "running_power": "Příkon při chodu",
+    "running_power": "Průměrný příkon za běhu",
     "configured": "Nastaveno",
+    "scheduler_note": "Plánovač zařízení počítá s touto hodnotou",
     "failed": "Bez odhadu: {reason}",
     "not_trained": "Zatím nenaučeno"
   }

@@ -594,7 +594,7 @@
       "mode": "Režim",
       "parent_meter": "Elektroměr nadřazeného",
       "count": "{count}",
-      "kwh_per_hour": "{value} kWh/h při zapnutí"
+      "hourly_energy": "{value} při zapnutí"
     },
     "import": {
       "preview": "Náhled importu Energie",
@@ -732,11 +732,12 @@
   },
   "device_energy": {
     "label": "Energie",
-    "while_on": "Při zapnutí",
-    "average": "Průměr",
+    "while_on": "Průměr při zapnutí",
+    "average": "Denní průměr",
     "per_day": "Za den",
-    "running_power": "Příkon při chodu",
+    "running_power": "Průměrný příkon za běhu",
     "configured": "Nastaveno",
+    "scheduler_note": "Plánovač zařízení počítá s touto hodnotou",
     "failed": "Bez odhadu: {reason}",
     "not_trained": "Zatím nenaučeno"
   }
