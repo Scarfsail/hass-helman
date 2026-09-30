@@ -394,6 +394,29 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(store.section["devices"]["pump"]["daily_kwh"]["days"], 1)
 
+    async def test_a_metered_devices_runs_begin_where_its_signal_does(self) -> None:
+        """Power goes back to midnight, the switch only to 06:00: the 18 h
+        observed hold one run, which is 1.33 a day, not 1."""
+        store = _FakeStore()
+        self._install(
+            _FakeRecorder(
+                {
+                    "sensor.heater_energy": _meter_readings((0.0, 0), (1.0, 11), (1.0, 23)),
+                    "sensor.heater_power": _power((0, 0), (1000, 10), (0, 11)),
+                    "switch.heater": _switch(("off", 6), ("on", 10), ("off", 11)),
+                }
+            )
+        )
+        heater = _metered(
+            "sensor.heater_energy", power="sensor.heater_power", switch="switch.heater"
+        )
+
+        await self._make_job(store, [heater]).async_train()
+
+        self.assertEqual(
+            store.section["devices"]["sensor.heater_energy"]["runs_per_day"], 1.3333
+        )
+
     async def test_a_meter_without_history_records_no_zero_days(self) -> None:
         """No meter rows at all is no evidence the pump idled: it learns
         nothing new, and keeps what it learned before."""

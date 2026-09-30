@@ -530,6 +530,7 @@ def _metered_record(
     )
     on_kwh_per_hour = None
     running = None
+    runs_start = window_start
     if subject.running_signal is not None:
         entity_id, activity = subject.running_signal
         active_states = running_active_states(activity)
@@ -547,12 +548,15 @@ def _metered_record(
             window_end=window_end,
             active_states=active_states,
         )
+        # Runs are gated by the signal, so before its first row nothing says
+        # whether the device ran: the run figures start where it does.
+        runs_start = _covered_start(signal_states, window_start)
     return metered_record(
-        window_start=window_start,
+        window_start=runs_start,
         window_end=window_end,
         daily_kwh=list(daily.values()),
         power_states=(
-            histories.states(subject.power_entity_id, window_start)
+            histories.states(subject.power_entity_id, runs_start)
             if subject.power_entity_id is not None
             else None
         ),
