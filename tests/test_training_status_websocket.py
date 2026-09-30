@@ -170,6 +170,7 @@ def _make_coordinator(
     coordinator._house_profile = house_profile
     coordinator._appliance_energy_estimates = appliance_estimates or {}
     coordinator._shared_meter_weights = {}
+    coordinator._active_config = {}
     coordinator._read_house_training_request = lambda: SimpleNamespace(
         config_fingerprint=HOUSE_FP
     )
@@ -571,6 +572,46 @@ class DeviceStatsWebsocketTests(unittest.TestCase):
         self.assertEqual(known.results, [(1, record)])
         self.assertEqual(unknown.errors, [])
         self.assertEqual(unknown.results, [(1, None)])
+
+
+    def test_a_metered_devices_controllable_id_resolves_to_its_meter(self) -> None:
+        # The solar inspector keys a device by its controllable id: a metered
+        # washer's record is its meter's, a meterless pump's its own, and
+        # never its parent meter's.
+        washer_record = {"running_kw": 2.0}
+        pump_record = {"running_kw": 0.3}
+        store = _make_store(
+            appliance_energy=_section(
+                "estimates_trained",
+                data={},
+                fingerprint=APPLIANCE_FP,
+                devices={
+                    "sensor.washer_energy": washer_record,
+                    "sensor.breaker_energy": {"running_kw": 9.0},
+                    "pump": pump_record,
+                },
+            )
+        )
+        coordinator = _make_coordinator(store=store)
+        coordinator._active_config = {
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "washer",
+                        "consumption": {"energy_entity_id": "sensor.washer_energy"},
+                    },
+                    {
+                        "id": "breaker",
+                        "consumption": {"energy_entity_id": "sensor.breaker_energy"},
+                        "children": [{"id": "pump"}],
+                    },
+                ]
+            }
+        }
+
+        self.assertEqual(self._stats(coordinator, "washer").results, [(1, washer_record)])
+        self.assertEqual(self._stats(coordinator, "pump").results, [(1, pump_record)])
+        self.assertEqual(self._stats(coordinator, "nothing").results, [(1, None)])
 
 
 class TrainingStatusAdminTests(unittest.TestCase):

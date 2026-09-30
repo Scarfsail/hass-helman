@@ -1635,11 +1635,25 @@ class HelmanCoordinator:
         """One device's learned usage record, by the card's ``deviceKey``.
 
         Read from the store as the job left it: nothing else holds records,
-        and a failed run keeps the previous ones there.
+        and a failed run keeps the previous ones there. The solar inspector
+        keys a device by its controllable id, and a metered device's record
+        lives under its meter, so such an id is resolved to that meter here;
+        a meterless child's id is already its key.
         """
         store = self._training_artifacts_store
         section = (store.appliance_energy if store is not None else None) or {}
-        record = (section.get("devices") or {}).get(device_key)
+        devices = section.get("devices") or {}
+        record = devices.get(device_key)
+        if record is None:
+            meter = next(
+                (
+                    own_meter(device)
+                    for device, _parent in iter_devices(self._active_config)
+                    if peek_controllable_id(device) == device_key
+                ),
+                None,
+            )
+            record = devices.get(meter) if meter is not None else None
         return record if isinstance(record, dict) else None
 
     def _read_house_training_request(self) -> HouseTrainingRequest:
