@@ -11,6 +11,7 @@ import type { HomeAssistantLike } from "../../shared/config/types";
 import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
 import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
+import { deviceEnergyFigure, deviceEnergyStyles, renderDeviceEnergyValue } from "../../shared/devices/device-energy";
 
 type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
 
@@ -36,7 +37,7 @@ function powerEntity(item: TreeItem): string | undefined {
 @customElement("node-detail-device-content")
 export class NodeDetailDeviceContent extends LitElement {
 
-    static styles = [nodeDetailSharedStyles, css`
+    static styles = [nodeDetailSharedStyles, deviceEnergyStyles, css`
         .header {
             display: flex;
             align-items: center;
@@ -179,8 +180,9 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     /**
-     * The learned-usage row: a typical day, and -- when the record has runs --
-     * how often and how long the device runs, and what it draws while it does.
+     * The learned-usage row: its energy per hour while on, a typical day, and
+     * -- when the record has runs -- how often and how long the device runs,
+     * and what it draws while it does.
      * A meterless child has no meter tiles above, so this stands on its own.
      * Titled by the days the record covers: the device's lookback, or less
      * where the recorder has purged older history.
@@ -193,6 +195,15 @@ export class NodeDetailDeviceContent extends LitElement {
             ? { minutes: stats.run_minutes, kwh: stats.run_kwh }
             : undefined;
         const tiles = [
+            deviceEnergyFigure(stats) ? html`
+                <div class="tile energy">
+                    <span class="label">${this.localize("device_energy.label")}</span>
+                    <span class="value">${renderDeviceEnergyValue(
+                        (key) => this.localize(`device_energy.${key}`),
+                        { record: stats },
+                    )}</span>
+                </div>
+            ` : nothing,
             day ? this._statTile(
                 "typical_day",
                 `${day.median.toFixed(2)} kWh`,

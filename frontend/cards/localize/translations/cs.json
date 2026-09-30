@@ -714,5 +714,15 @@
       "hours": "h zpět",
       "days": "d zpět"
     }
+  },
+  "device_energy": {
+    "label": "Energie",
+    "while_on": "Při zapnutí",
+    "average": "Průměr",
+    "per_day": "Za den",
+    "running_power": "Příkon při chodu",
+    "configured": "Nastaveno",
+    "failed": "Bez odhadu: {reason}",
+    "not_trained": "Zatím nenaučeno"
   }
 }

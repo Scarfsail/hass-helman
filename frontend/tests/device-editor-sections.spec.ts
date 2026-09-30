@@ -201,7 +201,7 @@ test("every section of a device starts collapsed, with chips summarizing it", as
         { label: "Identity", open: false, chips: ["Generic"] },
         { label: "Measurements", open: false, chips: ["Energy"] },
         { label: "Controls", open: false, chips: ["Switch", "Schedulable"] },
-        { label: "Projection", open: false, chips: ["History average", "2 kWh/h"] },
+        { label: "Projection", open: false, chips: ["History average", "2 kWh/h while on"] },
     ]);
     expect(await sections(panel(page), "breaker")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
@@ -213,7 +213,7 @@ test("every section of a device starts collapsed, with chips summarizing it", as
         { label: "Identity", open: false, chips: ["Climate"] },
         { label: "Measurements", open: false, chips: ["Parent meter"] },
         { label: "Controls", open: false, chips: ["Switch", "Schedulable"] },
-        { label: "Projection", open: false, chips: ["Fixed", "0.5 kWh/h"] },
+        { label: "Projection", open: false, chips: ["Fixed", "0.5 kWh/h while on"] },
     ]);
     expect(await sections(panel(page), "wallbox")).toEqual([
         { label: "Identity", open: false, chips: ["EV charger"] },

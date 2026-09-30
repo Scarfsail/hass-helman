@@ -128,13 +128,6 @@
       "use_mode_mapping": "Use mode mapping",
       "eco_gear_mapping": "Eco gear mapping"
     },
-    "appliance_estimate": {
-      "learned": "Learned from history: {kwh} kWh/h",
-      "not_trained": "Not trained yet: using {kwh} kWh/h until it is",
-      "failed": "No estimate ({reason}): using {kwh} kWh/h",
-      "recorded_hour": "Learned from history: {kwh} kWh/h while on",
-      "recorded_day": "Learned from history: {kwh} kWh a day"
-    },
     "training_depth": {
       "column_entity": "Entity",
       "column_raw_states": "Detailed data (d)",
@@ -161,19 +154,13 @@
       "column_lookback": "Lookback",
       "column_history_depth": "History depth",
       "days": "{days} d",
-      "value_learned": "{kwh} kWh/h",
-      "value_failed": "No estimate · using {kwh} kWh/h",
-      "value_not_trained": "Not trained yet",
-      "value_fixed": "Fixed · {kwh} kWh/h",
-      "value_recorded_hour": "{kwh} kWh/h while on",
-      "value_recorded_day": "{kwh} kWh a day",
       "appliance_entity_meter": "meter",
       "appliance_entity_submeter": "sub-meter",
       "appliance_entity_power": "power",
       "appliance_entity_switch": "switch",
       "appliance_entity_climate": "climate",
       "appliance_entity_charge": "charge switch",
-      "appliance_table_note": "A history average device shows its learned kWh per running hour, taken only over the hours its switch or climate entity shows it running. Any other device shows what it learned: kWh per hour while its switch or climate is on, else its mean day. A device without a meter of its own splits its parent's meter with its siblings. The window is 30 days unless a device, or a history average device sharing its meter, sets another lookback. These settings live on the device in the Devices tab."
+      "appliance_table_note": "Every device shows kWh per hour while it is on. Green is learned from the hours its switch or climate entity shows it on. Orange is its mean day divided by 24, for a device without a running signal: an approximation. Blue is the configured hourly energy its forecast uses, a fixed device's figure or a learner's fallback until it has an estimate, with what it learned in parentheses. Hover a value for every measure. A device without a meter of its own splits its parent's meter with its siblings. The window is 30 days unless a device, or a history average device sharing its meter, sets another lookback. These settings live on the device in the Devices tab."
     },
     "fields": {
       "history_buckets": "History buckets",
@@ -548,7 +535,7 @@
       "appliance_climate_entity": "Climate entity for this appliance. Helman monitors its active/inactive state (heat or cool mode) to build history-based energy projections. Required for the history_average projection strategy.",
       "appliance_switch_entity": "Switch or light entity that controls this generic appliance. Helman monitors the on/off state history to build energy projections when using the history_average strategy.",
       "appliance_projection_strategy": "How Helman estimates this appliance's future energy consumption. Fixed: always uses the configured average hourly energy. History average: learns from the entity's recorded history and falls back to the fixed value if history is insufficient.",
-      "appliance_hourly_energy_kwh": "Average energy consumption per hour in kWh when the appliance is active. Used directly for the fixed strategy and as a fallback value for history_average when recorded history is insufficient.",
+      "appliance_hourly_energy_kwh": "Energy per hour in kWh/h while on: what the appliance uses for each hour its switch or climate is on. Used directly for the fixed strategy and as a fallback value for history_average when recorded history is insufficient.",
       "appliance_history_lookback_days": "How many days back Helman looks when calculating the historical average energy consumption for this appliance. A longer lookback gives more stable estimates but reacts slower to changes in usage patterns.",
       "vehicle_id": "Unique internal identifier for this vehicle. Used for tracking charge targets and schedule assignments. Should not be changed after the vehicle is configured.",
       "vehicle_soc_entity": "Sensor reporting the vehicle's current battery state of charge as a percentage (0–100). Required for vehicle-aware charging scheduling — Helman uses it to determine how much charging is needed.",
@@ -607,7 +594,7 @@
       "mode": "Mode",
       "parent_meter": "Parent meter",
       "count": "{count}",
-      "kwh_per_hour": "{value} kWh/h"
+      "kwh_per_hour": "{value} kWh/h while on"
     },
     "import": {
       "preview": "Energy import preview",
@@ -742,5 +729,15 @@
       "factor_summary_value": "min {min} / median {median} / max {max}",
       "fallback_reason": "Why the raw forecast is served"
     }
+  },
+  "device_energy": {
+    "label": "Energy",
+    "while_on": "While on",
+    "average": "Average",
+    "per_day": "Per day",
+    "running_power": "Running power",
+    "configured": "Configured",
+    "failed": "No estimate: {reason}",
+    "not_trained": "Not trained yet"
   }
 }

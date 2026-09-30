@@ -67,6 +67,7 @@ import type {
 import { defineOnce } from "../define-once";
 import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
 import { haDeviceEntityFilter, sharedHaDevice } from "./device-scope";
+import { deviceEnergyFigure, renderDeviceEnergyValue, type DeviceEnergyInput } from "./device-energy";
 import "../config/entity-group";
 
 /** The kinds the device form edits; anything else is shown read-only. */
@@ -108,17 +109,6 @@ type SectionKey =
     | "eco_gears"
     | "vehicles"
     | "children";
-
-/**
- * A device's learned energy, as the appliance-energy job reports it: the
- * forecast estimate of a `history_average` device, or what any other device's
- * usage record says -- kWh per hour its signal is on, else a mean day.
- */
-export type ApplianceEnergyEstimate =
-    | { state: "learned"; kwh: number }
-    | { state: "failed"; reason: string }
-    | { state: "not_trained" }
-    | { state: "recorded"; kwh: number; per: "hour" | "day" };
 
 /**
  * What the editor emits when the reader changes something: the value now at
@@ -492,7 +482,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      * Only the config panel polls training status, so only it can say; the
      * learned-value line is left out where nobody has asked.
      */
-    @property({ attribute: false }) energyEstimate?: ApplianceEnergyEstimate;
+    @property({ attribute: false }) energyEstimate?: DeviceEnergyInput;
 
     /** The summary row's list controls: drag, YAML toggle, remove. */
     @property({ attribute: false })
@@ -714,8 +704,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 )}
                                 ${this._renderChildrenToleranceField(device)}
                             </div>
-                            ${this.energyEstimate?.state === "recorded"
-                                ? this._renderEnergyEstimateLine(undefined)
+                            ${deviceEnergyFigure(this.energyEstimate?.record) &&
+                            !(schedulable && kind !== "ev_charger" && this._projectionStrategy() === "history_average")
+                                ? this._renderEnergyEstimateLine()
                                 : nothing}`,
                             [
                                 ...(meterless
@@ -1307,7 +1298,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     private _renderProjectionSection(kind: string): TemplateResult {
         const path = this.path;
         const projectionPath: PathSegment[] = [...path, "consumption", "projection"];
-        const strategy = stringValue(this.getValue([...projectionPath, "strategy"])) || "fixed";
+        const strategy = this._projectionStrategy();
         const hourly = this.getValue([...projectionPath, "hourly_energy_kwh"]);
         const strategyLabel = GENERIC_PROJECTION_STRATEGIES.find((option) => option.value === strategy)?.labelKey;
         return this._renderSection(
@@ -1362,7 +1353,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         : nothing}
                 </div>
                 ${strategy === "history_average"
-                    ? this._renderEnergyEstimateLine(hourly)
+                    ? this._renderEnergyEstimateLine()
                     : nothing}
             `,
             [
@@ -1397,30 +1388,25 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         });
     }
 
+    /** The draft's projection strategy, `fixed` when it names none. */
+    private _projectionStrategy(): string {
+        return stringValue(this.getValue([...this.path, "consumption", "projection", "strategy"])) || "fixed";
+    }
+
     /**
-     * The learned figure, read-only: the one a `history_average` device
-     * projects with, under its Projection settings, or any other device's
-     * recorded average, under its Measurements.
+     * The learned figure, read-only: under its Projection settings for a
+     * `history_average` device, under its Measurements for any other device
+     * with a record.
      *
-     * Same source as the Training tab's appliance table, so the two agree. The
-     * fallback is the draft's `hourly_energy_kwh`, the figure the backend uses
-     * until an estimate exists.
+     * Rendered by the same helper, from the same resolver, as the Training
+     * tab's appliance table, so the two agree.
      */
-    private _renderEnergyEstimateLine(fallbackKwh: unknown): TemplateResult | typeof nothing {
+    private _renderEnergyEstimateLine(): TemplateResult | typeof nothing {
         const estimate = this.energyEstimate;
         if (!estimate) return nothing;
-        const kwh = trainingDepthCell(fallbackKwh);
-        const text =
-            estimate.state === "recorded"
-                ? this._tFormat(`editor.appliance_estimate.recorded_${estimate.per}`, {
-                      kwh: estimate.kwh.toFixed(2),
-                  })
-                : estimate.state === "learned"
-                ? this._tFormat("editor.appliance_estimate.learned", { kwh: estimate.kwh.toFixed(2) })
-                : estimate.state === "failed"
-                  ? this._tFormat("editor.appliance_estimate.failed", { reason: estimate.reason, kwh })
-                  : this._tFormat("editor.appliance_estimate.not_trained", { kwh });
-        return html`<p class="inline-note appliance-energy-estimate">${text}</p>`;
+        return html`<p class="inline-note appliance-energy-estimate">
+            ${this.t("device_energy.label")}: ${renderDeviceEnergyValue((key) => this.t(`device_energy.${key}`), estimate)}
+        </p>`;
     }
 
     private _renderUseMode(modeKey: string, modeConfig: unknown): TemplateResult {
