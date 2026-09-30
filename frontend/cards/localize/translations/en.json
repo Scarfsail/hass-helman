@@ -203,5 +203,15 @@
       "measured": "measured",
       "expected": "expected"
     }
+  },
+  "device_energy": {
+    "label": "Energy",
+    "while_on": "While on",
+    "average": "Average",
+    "per_day": "Per day",
+    "running_power": "Running power",
+    "configured": "Configured",
+    "failed": "No estimate: {reason}",
+    "not_trained": "Not trained yet"
   }
 }

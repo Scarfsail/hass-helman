@@ -129,13 +129,6 @@
       "use_mode_mapping": "Mapování režimu použití",
       "eco_gear_mapping": "Mapování eco gear"
     },
-    "appliance_estimate": {
-      "learned": "Naučeno z historie: {kwh} kWh/h",
-      "not_trained": "Zatím nenaučeno: do té doby se používá {kwh} kWh/h",
-      "failed": "Bez odhadu ({reason}): používá se {kwh} kWh/h",
-      "recorded_hour": "Naučeno z historie: {kwh} kWh/h při zapnutí",
-      "recorded_day": "Naučeno z historie: {kwh} kWh denně"
-    },
     "training_depth": {
       "column_entity": "Entita",
       "column_raw_states": "Podrobná data (d)",
@@ -158,23 +151,16 @@
       "forecast_recorded": "Zaznamenaná prognóza",
       "role_forecast_recorded": "Z čeho je fit skutečně postavený: Helman znovu publikuje predikci každého slotu ještě před jeho během a pak si čte vlastní zaznamenanou historii. Podrobné stavy jsou 15minutový detail a končí na retenci recorderu; statistiky jsou hodinové a zůstávají natrvalo.",
       "column_device": "Zařízení",
-      "column_learned_average": "Naučený průměr",
       "column_lookback": "Období",
       "column_history_depth": "Hloubka historie",
       "days": "{days} d",
-      "value_learned": "{kwh} kWh/h",
-      "value_failed": "Bez odhadu · použito {kwh} kWh/h",
-      "value_not_trained": "Zatím nenaučeno",
-      "value_fixed": "Pevně · {kwh} kWh/h",
-      "value_recorded_hour": "{kwh} kWh/h při zapnutí",
-      "value_recorded_day": "{kwh} kWh za den",
       "appliance_entity_meter": "měřič",
       "appliance_entity_submeter": "podružný měřič",
       "appliance_entity_switch": "spínač",
       "appliance_entity_climate": "klimatizace",
       "appliance_entity_charge": "spínač nabíjení",
       "appliance_entity_power": "výkon",
-      "appliance_table_note": "Spotřebič s historickým průměrem ukazuje naučené kWh za hodinu provozu, počítané jen z hodin, kdy jeho spínač nebo klimatizační entita ukazuje chod. Ostatní spotřebiče ukazují, co se naučily: kWh za hodinu, kdy je spínač nebo klimatizace zapnutá, jinak průměrný den. Spotřebič bez vlastního elektroměru dělí elektroměr rodiče se sourozenci. Období je 30 dní, pokud spotřebič nebo spotřebič s historickým průměrem na stejném elektroměru nenastaví jiné. Nastavení je u spotřebiče na kartě Zařízení."
+      "appliance_table_note": "Každý spotřebič ukazuje kWh za hodinu, kdy je zapnutý. Zelená je naučená z hodin, kdy jeho spínač nebo klimatizační entita ukazuje zapnutí. Oranžová je jeho průměrný den vydělený 24, pro spotřebič bez signálu chodu: jen přibližná hodnota. Modrá je nastavená hodinová energie, kterou používá předpověď, u pevné strategie nebo jako záloha, dokud spotřebič nemá odhad, a v závorce je to, co se naučil. Po najetí na hodnotu se zobrazí všechny míry. Spotřebič bez vlastního elektroměru dělí elektroměr rodiče se sourozenci. Období je 30 dní, pokud spotřebič nebo spotřebič s historickým průměrem na stejném elektroměru nenastaví jiné. Nastavení je u spotřebiče na kartě Zařízení."
     },
     "fields": {
       "history_buckets": "Počet historických bucketů",
@@ -549,7 +535,7 @@
       "appliance_climate_entity": "Entita klimatizace pro tento spotřebič. Helman sleduje její aktivní/neaktivní stav (režim topení nebo chlazení) pro tvorbu energetických predikcí na základě historie. Vyžadováno pro strategii history_average.",
       "appliance_switch_entity": "Entita přepínače nebo světla, která ovládá tento obecný spotřebič. Helman sleduje historii stavů zapnuto/vypnuto pro energetické predikce při použití strategie history_average.",
       "appliance_projection_strategy": "Jak Helman odhaduje budoucí spotřebu energie tohoto spotřebiče. Pevná: vždy používá nakonfigurovanou průměrnou hodinovou energii. Historický průměr: učí se ze zaznamenané historie entity a při nedostatku dat se vrátí na pevnou hodnotu.",
-      "appliance_hourly_energy_kwh": "Průměrná spotřeba energie za hodinu v kWh, když je spotřebič aktivní. Používá se přímo pro pevnou strategii a jako záložní hodnota pro historický průměr, pokud zaznamenaná historie nestačí.",
+      "appliance_hourly_energy_kwh": "Energie za hodinu v kWh/h při zapnutí: kolik spotřebič spotřebuje za každou hodinu, kdy je jeho spínač nebo klimatizace zapnutá. Používá se přímo pro pevnou strategii a jako záložní hodnota pro historický průměr, pokud zaznamenaná historie nestačí.",
       "appliance_history_lookback_days": "Kolik dní zpětně Helman zohledňuje při výpočtu historického průměru spotřeby energie tohoto spotřebiče. Delší lookback dává stabilnější odhady, ale reaguje pomaleji na změny ve vzorcích používání.",
       "vehicle_id": "Jedinečný interní identifikátor tohoto vozidla. Používá se pro sledování cílů nabíjení a přiřazení plánování. Neměňte ho po nakonfigurování vozidla.",
       "vehicle_soc_entity": "Senzor hlásící aktuální stav nabití baterie vozidla v procentech (0–100). Vyžadováno pro plánování nabíjení s ohledem na vozidlo — Helman ho používá k určení, kolik nabíjení je potřeba.",
@@ -608,7 +594,7 @@
       "mode": "Režim",
       "parent_meter": "Elektroměr nadřazeného",
       "count": "{count}",
-      "kwh_per_hour": "{value} kWh/h"
+      "kwh_per_hour": "{value} kWh/h při zapnutí"
     },
     "import": {
       "preview": "Náhled importu Energie",
@@ -743,5 +729,15 @@
       "factor_summary_value": "min {min} / medián {median} / max {max}",
       "fallback_reason": "Proč se používá nekorigovaná prognóza"
     }
+  },
+  "device_energy": {
+    "label": "Energie",
+    "while_on": "Při zapnutí",
+    "average": "Průměr",
+    "per_day": "Za den",
+    "running_power": "Příkon při chodu",
+    "configured": "Nastaveno",
+    "failed": "Bez odhadu: {reason}",
+    "not_trained": "Zatím nenaučeno"
   }
 }

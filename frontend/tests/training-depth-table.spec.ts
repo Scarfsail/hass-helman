@@ -703,7 +703,7 @@ test("an appliance's activity entity is judged against the lookback training rea
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("meter 33 d");
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("switch 5 d");
     // The fixed sharer is judged against the shared meter's learning lookback.
-    await expect(rows.nth(3).locator("td").nth(1)).toHaveText("Fixed · 1 kWh/h");
+    await expect(rows.nth(3).locator("td").nth(1)).toHaveText("1.00 kWh/h (—)");
     await expect(rows.nth(3).locator("td").nth(2)).toHaveText("14 d");
     await expect(rows.nth(4).locator("td").nth(2)).toHaveText("30 d");
 

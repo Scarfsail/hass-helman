@@ -185,10 +185,14 @@ import {
   renderTrackedSection,
   trainingDepthCell,
   validationPath,
-  type ApplianceEnergyEstimate,
   type DeviceConfigChangedDetail,
   type HelmanDeviceEditor,
 } from "../cards/shared/devices/helman-device-editor";
+import {
+  deviceEnergyStyles,
+  renderDeviceEnergyValue,
+  type DeviceEnergyInput,
+} from "../cards/shared/devices/device-energy";
 import type {
   HomeAssistantLike,
   JsonObject,
@@ -294,8 +298,6 @@ interface ApplianceEnergyDepthDevice {
   name: string;
   device: JsonObject;
   learns: boolean;
-  /** The configured `hourly_energy_kwh`: a fixed device's figure, a learner's fallback. */
-  fixedKwh: unknown;
   lookbackDays: number;
   /** Its (effective) meter, sub-meters, power sensor and activity entity. */
   entities: TrainingDepthRow[];
@@ -345,6 +347,7 @@ export class HelmanConfigEditorPanel
     configFormStyles,
     optimizerCardStyles,
     deviceEditorStyles,
+    deviceEnergyStyles,
     css`
     :host {
       display: block;
@@ -2738,7 +2741,6 @@ export class HelmanConfigEditorPanel
             (key) => this._stringValue(asJsonObject(controls[key])?.entity_id),
           ) ?? null,
         learns: isSchedulable(device) && projection.strategy === "history_average",
-        fixedKwh: projection.hourly_energy_kwh,
         // The backend trains on 30 days when the key is absent.
         lookback: typeof lookback === "number" ? lookback : 30,
       };
@@ -2773,7 +2775,6 @@ export class HelmanConfigEditorPanel
           name: item.name,
           device: item.device,
           learns: item.learns,
-          fixedKwh: item.fixedKwh,
           lookbackDays: days,
           entities: [
             entity("meter", item.meterPath),
@@ -2793,31 +2794,41 @@ export class HelmanConfigEditorPanel
    * device records, shared by the Diagnostics table and the device's own
    * settings so the two cannot disagree.
    *
-   * Without a `recordKey` it answers for a `history_average` device, by
-   * controllable id: a device with no status yet, added in the draft and
-   * never saved, or simply never trained, is `not_trained`. With one it
-   * answers for any other device, from the record under that deviceKey: its
-   * `on_kwh_per_hour` when it has a running signal, else its mean day, and
-   * nothing before it has a record.
+   * The record is looked up by the card's deviceKey (its own meter, else its
+   * id) for every device, learners included. `configured` is the
+   * `hourly_energy_kwh` the forecast projects with: a schedulable device's on
+   * `fixed`, or on `history_average` until it has an adopted estimate. The
+   * note is the job's failure for it, else "not trained yet" without a record.
    */
-  private _applianceEnergyEstimate(
-    controllableId: string,
-    recordKey?: string,
-  ): ApplianceEnergyEstimate | undefined {
+  private _deviceEnergyEstimate(device: JsonObject): DeviceEnergyInput {
     const job = this._trainingJob("appliance_energy");
-    if (recordKey !== undefined) {
-      const record = job?.devices?.[recordKey];
-      if (typeof record?.on_kwh_per_hour === "number") {
-        return { state: "recorded", kwh: record.on_kwh_per_hour, per: "hour" };
-      }
-      const day = record?.daily_kwh?.mean;
-      return typeof day === "number" ? { state: "recorded", kwh: day, per: "day" } : undefined;
-    }
-    const kwh = job?.estimates?.[controllableId];
-    if (typeof kwh === "number") return { state: "learned", kwh };
-    const issue = job?.issues.find((candidate) => candidate.subject === controllableId);
-    if (issue) return { state: "failed", reason: issue.reason };
-    return { state: "not_trained" };
+    const id = this._stringValue(device.id);
+    const recordKey = ownMeter(device) || id;
+    const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
+    const hourly = projection?.hourly_energy_kwh;
+    const projects = isSchedulable(device) && deviceKind(device) !== "ev_charger";
+    const estimate = job?.estimates?.[id];
+    const adopted = projection?.strategy === "history_average" && typeof estimate === "number";
+    // The adopted estimate is what the forecast projects with. It normally
+    // equals the record's figure, but survives a meter change before the
+    // refit files a record under the new key, so it wins over the record.
+    const stored = job?.devices?.[recordKey];
+    const record = adopted ? { ...stored, on_kwh_per_hour: estimate } : stored;
+    const issue = job?.issues.find(
+      (candidate) => candidate.subject === id || candidate.subject === recordKey,
+    );
+    return {
+      record,
+      configured:
+        projects && !adopted && typeof hourly === "number" && Number.isFinite(hourly)
+          ? hourly
+          : undefined,
+      note: issue
+        ? this._tFormat("device_energy.failed", { reason: issue.reason })
+        : stored || adopted
+          ? undefined
+          : this._t("device_energy.not_trained"),
+    };
   }
 
   /**
@@ -2985,7 +2996,7 @@ export class HelmanConfigEditorPanel
           <thead>
             <tr>
               <th>${this._t("editor.training_depth.column_device")}</th>
-              <th>${this._t("editor.training_depth.column_learned_average")}</th>
+              <th>${this._t("device_energy.label")}</th>
               <th class="training-depth-number">
                 ${this._t("editor.training_depth.column_lookback")}
               </th>
@@ -3031,35 +3042,12 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  /** The Learned average cell, read from `_applianceEnergyEstimate`. */
-  private _renderApplianceEnergyValue(
-    device: ApplianceEnergyDepthDevice,
-  ): TemplateResult | string {
-    const fallback = this._trainingDepthCell(device.fixedKwh);
-    if (!device.learns) {
-      // Its usage record, as its own settings show it; else what it projects.
-      const recorded = this._deviceEnergyEstimate(device.device);
-      if (recorded?.state === "recorded") {
-        return this._tFormat(`editor.training_depth.value_recorded_${recorded.per}`, {
-          kwh: recorded.kwh.toFixed(2),
-        });
-      }
-      return device.fixedKwh === undefined
-        ? this._t("editor.training_depth.value_not_trained")
-        : this._tFormat("editor.training_depth.value_fixed", { kwh: fallback });
-    }
-    const estimate = this._applianceEnergyEstimate(device.id);
-    if (estimate?.state === "learned") {
-      return this._tFormat("editor.training_depth.value_learned", {
-        kwh: estimate.kwh.toFixed(2),
-      });
-    }
-    if (estimate?.state === "failed") {
-      return html`<span title=${estimate.reason}>
-        ${this._tFormat("editor.training_depth.value_failed", { kwh: fallback })}
-      </span>`;
-    }
-    return this._t("editor.training_depth.value_not_trained");
+  /** The Energy cell, read from `_deviceEnergyEstimate`. */
+  private _renderApplianceEnergyValue(device: ApplianceEnergyDepthDevice): TemplateResult {
+    return renderDeviceEnergyValue(
+      (key) => this._t(`device_energy.${key}`),
+      this._deviceEnergyEstimate(device.device),
+    );
   }
 
   /** A depth in days, or a dash while it is unknown. */
@@ -4199,22 +4187,6 @@ export class HelmanConfigEditorPanel
         @device-config-changed=${this._handleDeviceConfigChanged}
       ></helman-device-editor>
     `;
-  }
-
-  /**
-   * The learned line a device card shows. A device that projects from history
-   * -- schedulable, not a charger, on `history_average` -- shows its forecast
-   * estimate; any other its record, by the card's deviceKey: its own meter,
-   * else its id.
-   */
-  private _deviceEnergyEstimate(device: JsonObject): ApplianceEnergyEstimate | undefined {
-    const id = this._stringValue(device.id);
-    const strategy = asJsonObject(asJsonObject(device.consumption)?.projection)?.strategy;
-    const projectsFromHistory =
-      isSchedulable(device) && deviceKind(device) !== "ev_charger" && strategy === "history_average";
-    return projectsFromHistory
-      ? this._applianceEnergyEstimate(id)
-      : this._applianceEnergyEstimate(id, ownMeter(device) || id);
   }
 
   /** A device card's pipeline row: drag, Visual / YAML, remove. */

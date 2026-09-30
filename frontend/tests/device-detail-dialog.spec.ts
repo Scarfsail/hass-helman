@@ -232,6 +232,19 @@ function openDialog(page: Page): Promise<null | { title: string; tiles: string[]
     });
 }
 
+/** The open dialog's Energy tile: its figure's colour class and its hover. */
+function energyTile(page: Page): Promise<{ source?: string; title: string | null }> {
+    return page.evaluate(() => {
+        const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
+        const value = content.shadowRoot.querySelector(".tile.energy .device-energy");
+        const figure = value?.querySelector(".device-energy-value");
+        return {
+            source: ["on", "day", "configured"].find((source) => figure?.classList.contains(source)),
+            title: value?.getAttribute("title") ?? null,
+        };
+    });
+}
+
 test.describe("device detail from the power card", () => {
     test.beforeEach(async ({ page }) => {
         await mountCard(page);
@@ -375,6 +388,7 @@ test.describe("device detail usage statistics", () => {
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
             "Today 1.25 kWh",
             "Last hour 0.30 kWh",
+            "Energy 0.80 kWh/h",
             "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
             "Runs per day 1.5",
             "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
@@ -382,6 +396,11 @@ test.describe("device detail usage statistics", () => {
         ]);
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
             .toEqual(["sensor.boiler_energy"]);
+        // Learned while on: green, with every measure in its hover.
+        expect(await energyTile(page)).toEqual({
+            source: "on",
+            title: "While on: 0.80 kWh/h\nAverage: 0.10 kWh/h\nPer day: 2.40 kWh\nRunning power: 2.10 kW",
+        });
         const title = await page.evaluate(() => {
             const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
             return content.shadowRoot.querySelector(".section-title")?.textContent.trim();
@@ -406,6 +425,7 @@ test.describe("device detail usage statistics", () => {
         await clickInRow(page, "Pump", ".deviceName");
 
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
+            "Energy 0.30 kWh/h",
             "Typical day 0.25 kWh 0.00–1.20 kWh · mean 0.30 kWh",
             "Runs per day 3.0",
             "Typical run 20 min · 0.10 kWh 5–60 min · 0.02–0.30 kWh",
@@ -416,11 +436,10 @@ test.describe("device detail usage statistics", () => {
         expect(await page.evaluate(() => (window as any).__statRequests)).toEqual([]);
     });
 
-    test("a record without runs shows only its typical day", async ({ page }) => {
+    test("a record without runs shows only its typical day, and its mean over the day", async ({ page }) => {
         await mountCard(page, {
             "sensor.boiler_energy": {
                 daily_kwh: { mean: 2.4, median: 2.25, min: 0, max: 5.5, days: 29 },
-                on_kwh_per_hour: 0.8,
             },
         });
 
@@ -429,8 +448,14 @@ test.describe("device detail usage statistics", () => {
         await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
             "Today 1.25 kWh",
             "Last hour 0.30 kWh",
+            "Energy 0.10 kWh/h",
             "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
         ]);
+        // No running signal: the daily mean over 24 hours, in orange.
+        expect(await energyTile(page)).toEqual({
+            source: "day",
+            title: "While on: —\nAverage: 0.10 kWh/h\nPer day: 2.40 kWh\nRunning power: —",
+        });
     });
 });
 
