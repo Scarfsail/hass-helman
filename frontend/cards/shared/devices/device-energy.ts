@@ -1,23 +1,33 @@
 import { css, html, type TemplateResult } from "lit";
 
 import type { DeviceStats } from "../../helman-api";
+import { formatPower } from "../../power-format";
 
 /**
- * One device's energy on one scale, kWh per hour while on, wherever it is
+ * One device's energy on one power scale, auto-scaled W or kW, wherever it is
  * shown: the Training tab's device table, the device editor and the device
  * detail dialog all render through `renderDeviceEnergyValue`.
  *
- * The colour says where the number came from: green learned while on, orange
+ * The headline is chosen by schedulability: a schedulable device headlines its
+ * average while switched on, which the scheduler projects with; any other
+ * device its power while active. Both fall back to the daily average.
+ *
+ * The colour says where the number came from: green learned, orange
  * approximated from the daily mean, blue configured.
  */
 
-/** Where a learned figure came from: while on, or the daily mean over 24 h. */
-export type DeviceEnergySource = "on" | "day";
+/**
+ * Which learned figure: the average while switched on, the power while
+ * active, or the daily mean over 24 h.
+ */
+export type DeviceEnergySource = "on" | "running" | "day";
 
 /** What `renderDeviceEnergyValue` shows for one device. */
 export interface DeviceEnergyInput {
     /** The device's usage record, when it has one. */
     record?: DeviceStats;
+    /** Whether the device scheduler projects the device's energy. */
+    schedulable: boolean;
     /** The `hourly_energy_kwh` the forecast projects with, when it does. */
     configured?: number;
     /** Why there is no estimate: a failure reason, or not trained yet. */
@@ -27,65 +37,104 @@ export interface DeviceEnergyInput {
 /** A catalog lookup over the `device_energy.*` key block. */
 export type DeviceEnergyText = (key: string) => string;
 
-/**
- * The learned figure in kWh/h: while on when the device has a running signal,
- * else its daily mean over 24 hours.
- */
-export function deviceEnergyFigure(
-    record?: DeviceStats,
-): { kwh: number; source: DeviceEnergySource } | undefined {
-    if (typeof record?.on_kwh_per_hour === "number") {
-        return { kwh: record.on_kwh_per_hour, source: "on" };
-    }
-    const mean = record?.daily_kwh?.mean;
-    return typeof mean === "number" ? { kwh: mean / 24, source: "day" } : undefined;
+/** Each learned figure's name in the `device_energy.*` catalog block. */
+const SOURCE_KEYS: Record<DeviceEnergySource, string> = {
+    on: "while_on",
+    running: "running_power",
+    day: "average",
+};
+
+function watts(kwhPerHour: number | undefined): number | undefined {
+    return typeof kwhPerHour === "number" && Number.isFinite(kwhPerHour) ? kwhPerHour * 1000 : undefined;
 }
 
-/** The hover's measures, each `undefined` where the history does not answer it. */
-export function deviceEnergyMeasures(record?: DeviceStats): {
-    whileOn?: number;
-    average?: number;
+/**
+ * The hover's measures, each `undefined` where the history does not answer it:
+ * every per-hour figure in watts, the mean day in kWh.
+ */
+export function deviceEnergyMeasures(record?: DeviceStats): Record<DeviceEnergySource, number | undefined> & {
     perDay?: number;
-    runningKw?: number;
 } {
     const mean = record?.daily_kwh?.mean;
     return {
-        whileOn: record?.on_kwh_per_hour,
-        average: typeof mean === "number" ? mean / 24 : undefined,
+        on: watts(record?.on_kwh_per_hour),
+        running: watts(record?.running_kw),
+        day: watts(typeof mean === "number" ? mean / 24 : undefined),
         perDay: mean,
-        runningKw: record?.running_kw,
     };
 }
 
-function format(value: number | undefined, unit: string): string {
-    return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)} ${unit}` : "—";
+/**
+ * The headline learned figure in watts: a schedulable device's average while
+ * switched on, any other device's power while active, else the daily mean
+ * over 24 hours.
+ */
+export function deviceEnergyFigure(
+    record: DeviceStats | undefined,
+    schedulable: boolean,
+): { watts: number; source: DeviceEnergySource } | undefined {
+    const measures = deviceEnergyMeasures(record);
+    const source = ([schedulable ? "on" : "running", "day"] as const).find(
+        (candidate) => measures[candidate] !== undefined,
+    );
+    return source ? { watts: measures[source]!, source } : undefined;
+}
+
+/** A learned figure's name. */
+export function deviceEnergySourceLabel(t: DeviceEnergyText, source: DeviceEnergySource): string {
+    return t(SOURCE_KEYS[source]);
 }
 
 /**
- * The device's energy as a coloured `kWh/h`, with every measure in its hover.
+ * The name of the headline `renderDeviceEnergyValue` shows. A configured
+ * figure is energy per hour switched on, so it is named as that.
+ */
+export function deviceEnergyLabel(
+    t: DeviceEnergyText,
+    { record, schedulable, configured }: DeviceEnergyInput,
+): string {
+    const source = configured !== undefined
+        ? "on"
+        : deviceEnergyFigure(record, schedulable)?.source ?? (schedulable ? "on" : "running");
+    return deviceEnergySourceLabel(t, source);
+}
+
+/** A power figure auto-scaled to W or kW, or a dash. */
+export function formatDeviceEnergyWatts(value: number | undefined): string {
+    return value === undefined ? "—" : formatPower(value).display;
+}
+
+/**
+ * The device's headline figure as coloured power, with every measure in its
+ * hover.
  *
  * With a `configured` figure, that blue figure comes first and the learned one
- * follows in parentheses, or a dash when there is none.
+ * follows in parentheses, or a dash when there is none. A schedulable device's
+ * hover notes that the scheduler projects with the figure shown first, when
+ * that is one it does project with: the configured figure or the average while
+ * switched on, never the daily-average fallback.
  */
 export function renderDeviceEnergyValue(
     t: DeviceEnergyText,
-    { record, configured, note }: DeviceEnergyInput = {},
+    { record, schedulable, configured, note }: DeviceEnergyInput,
 ): TemplateResult {
     const measures = deviceEnergyMeasures(record);
+    const figure = deviceEnergyFigure(record, schedulable);
+    const configuredWatts = watts(configured);
     const title = [
-        `${t("while_on")}: ${format(measures.whileOn, "kWh/h")}`,
-        `${t("average")}: ${format(measures.average, "kWh/h")}`,
-        `${t("per_day")}: ${format(measures.perDay, "kWh")}`,
-        `${t("running_power")}: ${format(measures.runningKw, "kW")}`,
-        ...(configured !== undefined ? [`${t("configured")}: ${format(configured, "kWh/h")}`] : []),
+        ...(["on", "running", "day"] as const).map(
+            (source) => `${deviceEnergySourceLabel(t, source)}: ${formatDeviceEnergyWatts(measures[source])}`,
+        ),
+        `${t("per_day")}: ${typeof measures.perDay === "number" ? `${measures.perDay.toFixed(2)} kWh` : "—"}`,
+        ...(configured !== undefined ? [`${t("configured")}: ${formatDeviceEnergyWatts(configuredWatts)}`] : []),
+        ...(schedulable && (configured !== undefined || figure?.source === "on") ? [t("scheduler_note")] : []),
         ...(note ? [note] : []),
     ].join("\n");
-    const figure = deviceEnergyFigure(record);
     const learned = figure
-        ? html`<span class="device-energy-value ${figure.source}">${format(figure.kwh, "kWh/h")}</span>`
+        ? html`<span class="device-energy-value ${figure.source}">${formatDeviceEnergyWatts(figure.watts)}</span>`
         : "—";
     return html`<span class="device-energy" title=${title}>${configured !== undefined
-        ? html`<span class="device-energy-value configured">${format(configured, "kWh/h")}</span> (${learned})`
+        ? html`<span class="device-energy-value configured">${formatDeviceEnergyWatts(configuredWatts)}</span> (${learned})`
         : learned}</span>`;
 }
 
@@ -94,7 +143,8 @@ export const deviceEnergyStyles = css`
     .device-energy {
         cursor: help;
     }
-    .device-energy-value.on {
+    .device-energy-value.on,
+    .device-energy-value.running {
         color: var(--success-color);
     }
     .device-energy-value.day {

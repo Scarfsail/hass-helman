@@ -349,7 +349,7 @@ question you are now asking; that resolves as soon as the rebuild finishes.
    runs three jobs one after another (never at the same time — they share Recorder's worker
    thread): solar bias correction, which learns how your forecast provider is systematically wrong
    for your roof; the house consumption profile, which fits an hour-of-week model over
-   `training.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. All of it is stored, so
+   `training.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. See [docs/device-energy.md](docs/device-energy.md) for what each learned figure means and how it is calculated, with worked examples. All of it is stored, so
    a restart reuses it instead of recomputing. Changing a relevant setting recomputes immediately
    rather than waiting for the next night, so you see your change take effect.
 7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast

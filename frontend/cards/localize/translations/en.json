@@ -130,7 +130,6 @@
         "typical_day": "Typical day",
         "runs_per_day": "Runs per day",
         "typical_run": "Typical run",
-        "running_power": "Power while running",
         "mean": "mean"
       },
       "edit": {
@@ -205,12 +204,12 @@
     }
   },
   "device_energy": {
-    "label": "Energy",
-    "while_on": "While on",
-    "average": "Average",
+    "while_on": "Average while switched on",
+    "average": "Daily average",
     "per_day": "Per day",
-    "running_power": "Running power",
+    "running_power": "Average power while active",
     "configured": "Configured",
+    "scheduler_note": "The device scheduler projects with this figure",
     "failed": "No estimate: {reason}",
     "not_trained": "Not trained yet"
   }

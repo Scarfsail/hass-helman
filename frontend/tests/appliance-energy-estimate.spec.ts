@@ -13,9 +13,11 @@ import { resolve } from "node:path";
  * Every other device reads its usage record from the job's `devices`, by the
  * card's deviceKey, through the same resolver (issue #384).
  *
- * Every figure is kWh/h while on, coloured by where it came from: green
- * learned while on, orange the daily mean over 24, blue configured with the
- * learned figure in parentheses (issue #392).
+ * Every figure is auto-scaled power, coloured by where it came from: green
+ * learned, orange the daily mean over 24, blue configured with the learned
+ * figure in parentheses (issue #392). A schedulable device headlines its
+ * average while switched on, with the scheduler note; any other device its
+ * power while active (issue #395).
  */
 
 const BUNDLE = resolve(
@@ -67,8 +69,9 @@ const CONFIG = {
                 projection: { strategy: "fixed", hourly_energy_kwh: 2 },
             },
         },
-        // Neither can be scheduled: each has a record, and no projection.
+        // None can be scheduled: each has a record, and no projection.
         { id: "fridge", name: "Fridge", consumption: { energy_entity_id: "sensor.fridge_energy" } },
+        { id: "sauna", name: "Sauna", consumption: { energy_entity_id: "sensor.sauna_energy" } },
         {
             id: "breaker",
             name: "Breaker",
@@ -122,13 +125,19 @@ const TRAINING_STATUS = {
                     on_kwh_per_hour: 1.1234,
                 },
                 "sensor.heater_energy": { on_kwh_per_hour: 1.5 },
-                // Metered, no running signal: its mean day.
+                // Metered, no power sensor: its mean day.
                 "sensor.fridge_energy": {
                     daily_kwh: { mean: 1.234, median: 1.1, min: 0, max: 2, days: 29 },
                 },
-                // A meterless child, by its id: the figure while it is on.
+                "sensor.sauna_energy": {
+                    daily_kwh: { mean: 36, median: 30, min: 0, max: 80, days: 29 },
+                    on_kwh_per_hour: 4,
+                },
+                // A meterless child, by its id: its runs are its on-intervals,
+                // so its power while active equals its average while on.
                 lamp: {
                     daily_kwh: { mean: 0.2, median: 0.2, min: 0, max: 0.5, days: 29 },
+                    running_kw: 0.05,
                     on_kwh_per_hour: 0.05,
                 },
             },
@@ -201,15 +210,18 @@ function estimateLine(page: Page, name: string) {
 }
 
 
-/** The hover's four measures, in their fixed order, for a record. */
-function measures(whileOn: string, average: string, perDay: string, runningPower: string): string {
+/** The hover's learned measures, in their fixed order, for a record. */
+function measures(whileOn: string, running: string, average: string, perDay: string): string {
     return [
-        `While on: ${whileOn}`,
-        `Average: ${average}`,
+        `Average while switched on: ${whileOn}`,
+        `Average power while active: ${running}`,
+        `Daily average: ${average}`,
         `Per day: ${perDay}`,
-        `Running power: ${runningPower}`,
     ].join("\n");
 }
+
+const NOTE = "The device scheduler projects with this figure";
+const NONE = measures("—", "—", "—", "—");
 
 /** A rendered value: its text, the colour class of each figure, and its hover. */
 async function energyValue(cell: Locator) {
@@ -218,7 +230,7 @@ async function energyValue(cell: Locator) {
     return value.evaluate((element) => ({
         text: element.textContent?.replace(/\s+/g, " ").trim(),
         sources: Array.from(element.querySelectorAll(".device-energy-value")).map((figure) =>
-            ["on", "day", "configured"].find((source) => figure.classList.contains(source)),
+            ["on", "running", "day", "configured"].find((source) => figure.classList.contains(source)),
         ),
         title: element.getAttribute("title"),
     }));
@@ -230,25 +242,26 @@ test("a history_average device shows its estimate, else its configured fallback 
     await mountEditor(page);
     await openTab(page, "Training");
 
+    // Schedulable: its average while switched on, which the scheduler projects with.
     expect(await energyValue(learnedCell(page, "Dishwasher"))).toEqual({
-        text: "1.12 kWh/h",
+        text: "1.1 kW",
         sources: ["on"],
-        title: measures("1.12 kWh/h", "0.10 kWh/h", "2.40 kWh", "1.80 kW"),
+        title: `${measures("1.1 kW", "1.8 kW", "100 W", "2.40 kWh")}\n${NOTE}`,
     });
     expect(await energyValue(learnedCell(page, "Laundry"))).toEqual({
-        text: "0.50 kWh/h (—)",
+        text: "500 W (—)",
         sources: ["configured"],
-        title: `${measures("—", "—", "—", "—")}\nConfigured: 0.50 kWh/h\nNo estimate: no running hours`,
+        title: `${NONE}\nConfigured: 500 W\n${NOTE}\nNo estimate: no running hours`,
     });
     expect(await energyValue(learnedCell(page, "Dryer"))).toEqual({
-        text: "0.50 kWh/h (—)",
+        text: "500 W (—)",
         sources: ["configured"],
-        title: `${measures("—", "—", "—", "—")}\nConfigured: 0.50 kWh/h\nNot trained yet`,
+        title: `${NONE}\nConfigured: 500 W\n${NOTE}\nNot trained yet`,
     });
     expect(await energyValue(learnedCell(page, "Kettle"))).toEqual({
-        text: "2.50 kWh/h",
+        text: "2.5 kW",
         sources: ["on"],
-        title: measures("2.50 kWh/h", "—", "—", "—"),
+        title: `${measures("2.5 kW", "—", "—", "—")}\n${NOTE}`,
     });
 });
 
@@ -256,34 +269,40 @@ test("every other device shows what it learned, on the same scale", async ({ pag
     await mountEditor(page);
     await openTab(page, "Training");
 
-    // Metered without a running signal: its mean day over 24 hours, in orange.
+    // Not schedulable, without a power while active: its mean day over 24 hours, in orange.
     expect(await energyValue(learnedCell(page, "Fridge"))).toEqual({
-        text: "0.05 kWh/h",
+        text: "51 W",
         sources: ["day"],
-        title: measures("—", "0.05 kWh/h", "1.23 kWh", "—"),
+        title: measures("—", "—", "51 W", "1.23 kWh"),
     });
-    // A meterless child, by its id: its figure while on.
+    // 1000 W or more reads in kW; its average while switched on stays in the hover.
+    expect(await energyValue(learnedCell(page, "Sauna"))).toEqual({
+        text: "1.5 kW",
+        sources: ["day"],
+        title: measures("4.0 kW", "—", "1.5 kW", "36.00 kWh"),
+    });
+    // Not schedulable: its power while active, in green, with no scheduler note.
     expect(await energyValue(learnedCell(page, "Lamp"))).toEqual({
-        text: "0.05 kWh/h",
-        sources: ["on"],
-        title: measures("0.05 kWh/h", "0.01 kWh/h", "0.20 kWh", "—"),
+        text: "50 W",
+        sources: ["running"],
+        title: measures("50 W", "50 W", "8 W", "0.20 kWh"),
     });
     // Fixed: its configured figure, then what it learned or a dash.
     expect(await energyValue(learnedCell(page, "Pool"))).toEqual({
-        text: "1.00 kWh/h (—)",
+        text: "1.0 kW (—)",
         sources: ["configured"],
-        title: `${measures("—", "—", "—", "—")}\nConfigured: 1.00 kWh/h\nNot trained yet`,
+        title: `${NONE}\nConfigured: 1.0 kW\n${NOTE}\nNot trained yet`,
     });
     expect(await energyValue(learnedCell(page, "Heater"))).toEqual({
-        text: "2.00 kWh/h (1.50 kWh/h)",
+        text: "2.0 kW (1.5 kW)",
         sources: ["configured", "on"],
-        title: `${measures("1.50 kWh/h", "—", "—", "—")}\nConfigured: 2.00 kWh/h`,
+        title: `${measures("1.5 kW", "—", "—", "—")}\nConfigured: 2.0 kW\n${NOTE}`,
     });
     // No record and nothing configured.
     expect(await energyValue(learnedCell(page, "Breaker"))).toEqual({
         text: "—",
         sources: [],
-        title: `${measures("—", "—", "—", "—")}\nNot trained yet`,
+        title: `${NONE}\nNot trained yet`,
     });
     // A device the job never trains has no row to stay untrained in.
     await expect(learnedCell(page, "Lights")).toHaveCount(0);
@@ -304,44 +323,57 @@ test("every row's hover lists the same measures in the same order", async ({ pag
             has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
         })
         .locator(".training-depth-table tbody .device-energy");
-    await expect(values).toHaveCount(9);
+    await expect(values).toHaveCount(10);
     const labels = await values.evaluateAll((elements) =>
         elements.map((element) =>
             (element.getAttribute("title") ?? "")
                 .split("\n")
-                .slice(0, 4)
-                .map((line) => line.split(":")[0]),
+                .filter((line) => line.includes(": "))
+                .map((line) => line.split(":")[0])
+                .filter((label) => label !== "No estimate"),
         ),
     );
+    const order = ["Average while switched on", "Average power while active", "Daily average", "Per day", "Configured"];
     for (const row of labels) {
-        expect(row).toEqual(["While on", "Average", "Per day", "Running power"]);
+        // Configured is listed only where the forecast projects with it.
+        expect(row).toEqual(order.slice(0, row.length));
+        expect(row.length).toBeGreaterThanOrEqual(4);
     }
 });
 
 test("each device's settings show the same value as its table row", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Training");
-    const names = ["Dishwasher", "Laundry", "Dryer", "Heater", "Fridge", "Lamp"];
+    // Each named by its headline: a configured figure is energy per hour switched on.
+    const labels: Record<string, string> = {
+        Dishwasher: "Average while switched on",
+        Laundry: "Average while switched on",
+        Dryer: "Average while switched on",
+        Heater: "Average while switched on",
+        Fridge: "Daily average",
+        Lamp: "Average power while active",
+    };
+    const names = Object.keys(labels);
     const table = [];
     for (const name of names) table.push(await energyValue(learnedCell(page, name)));
 
     await openTab(page, "Devices");
     for (const [index, name] of names.entries()) {
-        await expect(estimateLine(page, name)).toHaveText(`Energy: ${table[index].text}`);
+        await expect(estimateLine(page, name)).toHaveText(`${labels[name]}: ${table[index].text}`);
         expect(await energyValue(estimateLine(page, name))).toEqual(table[index]);
     }
     // A fixed device without a record has nothing learned to show.
     await expect(estimateLine(page, "Pool")).toHaveCount(0);
 });
 
-test("the Projection badge speaks the same unit", async ({ page }) => {
+test("the Projection badge speaks auto-scaled power", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");
 
     const card = page.locator("details.list-card", {
         has: page.locator(":scope > summary strong", { hasText: /^Heater$/ }),
     });
-    await expect(card.getByText("2 kWh/h while on", { exact: true })).toHaveCount(1);
+    await expect(card.getByText("2.0 kW while switched on", { exact: true })).toHaveCount(1);
 });
 
 test("the strategy select opens on the configured strategy and names the kWh field by it", async ({

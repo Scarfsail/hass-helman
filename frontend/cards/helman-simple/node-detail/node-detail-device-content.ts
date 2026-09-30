@@ -11,7 +11,15 @@ import type { HomeAssistantLike } from "../../shared/config/types";
 import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
 import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
-import { deviceEnergyFigure, deviceEnergyStyles, renderDeviceEnergyValue } from "../../shared/devices/device-energy";
+import {
+    deviceEnergyFigure,
+    deviceEnergyLabel,
+    deviceEnergyMeasures,
+    deviceEnergySourceLabel,
+    deviceEnergyStyles,
+    formatDeviceEnergyWatts,
+    renderDeviceEnergyValue,
+} from "../../shared/devices/device-energy";
 
 type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
 
@@ -180,9 +188,13 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     /**
-     * The learned-usage row: its energy per hour while on, a typical day, and
-     * -- when the record has runs -- how often and how long the device runs,
-     * and what it draws while it does.
+     * The learned-usage row: its headline figure, a typical day, and -- when
+     * the record has them -- how often and how long the device runs, and the
+     * other of its two power figures.
+     * The headline is chosen by schedulability, as everywhere else: a
+     * schedulable device's average while switched on, any other device's
+     * power while active. The tree lists controllable ids only for
+     * schedulable devices.
      * A meterless child has no meter tiles above, so this stands on its own.
      * Titled by the days the record covers: the device's lookback, or less
      * where the recorder has purged older history.
@@ -194,14 +206,15 @@ export class NodeDetailDeviceContent extends LitElement {
         const run = stats.run_minutes && stats.run_kwh
             ? { minutes: stats.run_minutes, kwh: stats.run_kwh }
             : undefined;
+        const energy = { record: stats, schedulable: (this.params.item.controllableIds?.length ?? 0) > 0 };
+        const text = (key: string) => this.localize(`device_energy.${key}`);
+        const other = energy.schedulable ? "running" : "on";
+        const otherWatts = deviceEnergyMeasures(stats)[other];
         const tiles = [
-            deviceEnergyFigure(stats) ? html`
+            deviceEnergyFigure(stats, energy.schedulable) ? html`
                 <div class="tile energy">
-                    <span class="label">${this.localize("device_energy.label")}</span>
-                    <span class="value">${renderDeviceEnergyValue(
-                        (key) => this.localize(`device_energy.${key}`),
-                        { record: stats },
-                    )}</span>
+                    <span class="label">${deviceEnergyLabel(text, energy)}</span>
+                    <span class="value">${renderDeviceEnergyValue(text, energy)}</span>
                 </div>
             ` : nothing,
             day ? this._statTile(
@@ -217,9 +230,12 @@ export class NodeDetailDeviceContent extends LitElement {
                 `${Math.round(run.minutes.median)} min · ${run.kwh.median.toFixed(2)} kWh`,
                 `${this._range(run.minutes, 0)} min · ${this._range(run.kwh, 2)} kWh`,
             ) : nothing,
-            typeof stats.running_kw === "number"
-                ? this._statTile("running_power", formatPower(stats.running_kw * 1000).display)
-                : nothing,
+            otherWatts !== undefined ? html`
+                <div class="tile ${other}">
+                    <span class="label">${deviceEnergySourceLabel(text, other)}</span>
+                    <span class="value">${formatDeviceEnergyWatts(otherWatts)}</span>
+                </div>
+            ` : nothing,
         ];
         if (tiles.every((tile) => tile === nothing)) return nothing;
         return html`

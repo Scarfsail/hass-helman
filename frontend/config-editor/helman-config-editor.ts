@@ -2806,6 +2806,8 @@ export class HelmanConfigEditorPanel
     const recordKey = ownMeter(device) || id;
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
+    // An EV charger is scheduled but never projected, so it headlines its
+    // power while active like any device the scheduler does not project.
     const projects = isSchedulable(device) && deviceKind(device) !== "ev_charger";
     const estimate = job?.estimates?.[id];
     const adopted = projection?.strategy === "history_average" && typeof estimate === "number";
@@ -2819,6 +2821,7 @@ export class HelmanConfigEditorPanel
     );
     return {
       record,
+      schedulable: projects,
       configured:
         projects && !adopted && typeof hourly === "number" && Number.isFinite(hourly)
           ? hourly

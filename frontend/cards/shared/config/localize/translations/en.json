@@ -593,7 +593,7 @@
       "mode": "Mode",
       "parent_meter": "Parent meter",
       "count": "{count}",
-      "kwh_per_hour": "{value} kWh/h while on"
+      "hourly_energy": "{value} while switched on"
     },
     "import": {
       "preview": "Energy import preview",
@@ -731,11 +731,12 @@
   },
   "device_energy": {
     "label": "Energy",
-    "while_on": "While on",
-    "average": "Average",
+    "while_on": "Average while switched on",
+    "average": "Daily average",
     "per_day": "Per day",
-    "running_power": "Running power",
+    "running_power": "Average power while active",
     "configured": "Configured",
+    "scheduler_note": "The device scheduler projects with this figure",
     "failed": "No estimate: {reason}",
     "not_trained": "Not trained yet"
   }
