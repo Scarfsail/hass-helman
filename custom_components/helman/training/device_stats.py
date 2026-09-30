@@ -77,14 +77,19 @@ def metered_record(
     """
     runs: list[Piece] = []
     covered_start = window_start
+    covered = None
     if power_states is not None:
         pieces = power_pieces(power_states, power_value_type, window_start, window_end)
         runs = power_runs(pieces, running)
         if pieces:
             # The recorder may hold less than the window (purged after 10
-            # days by default): runs per day count only the time it covers.
+            # days by default), and an ``unavailable`` stretch is no reading:
+            # runs per day count only the time the readings cover.
             covered_start = pieces[0][0]
-    return _record(covered_start, window_end, daily_kwh, runs, on_kwh_per_hour)
+            covered = sum((end - start for start, end, _ in pieces), timedelta())
+    return _record(
+        covered_start, window_end, daily_kwh, runs, on_kwh_per_hour, covered=covered
+    )
 
 
 def member_record(
@@ -299,7 +304,10 @@ def _record(
     daily_kwh: Sequence[float],
     runs: Sequence[Piece],
     on_kwh_per_hour: float | None,
+    *,
+    covered: timedelta | None = None,
 ) -> dict[str, Any] | None:
+    """``covered`` is the time the history observed, when less than the window."""
     record: dict[str, Any] = {}
     if daily_kwh:
         record["daily_kwh"] = {
@@ -309,7 +317,7 @@ def _record(
         }
     complete = [run for run in runs if window_start < run[0] and run[1] < window_end]
     if complete:
-        window_days = (window_end - window_start) / timedelta(days=1)
+        window_days = (covered or window_end - window_start) / timedelta(days=1)
         record["runs_per_day"] = round(len(complete) / window_days, 4)
         record["run_minutes"] = _spread(
             [(end - start) / timedelta(minutes=1) for start, end, _ in complete],

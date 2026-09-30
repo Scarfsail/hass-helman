@@ -128,6 +128,23 @@ class DailyTests(unittest.TestCase):
 
         self.assertEqual(record["runs_per_day"], 1.0)
 
+    def test_an_unavailable_stretch_is_not_counted_as_idle_time(self) -> None:
+        # Two days of window, one of them unavailable: one run in the day
+        # observed is one run a day.
+        record = device_stats.metered_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=2),
+            daily_kwh=[],
+            power_states=_power(
+                (0, _at(0)),
+                (1000, _at(10)),
+                (0, _at(11)),
+                ("unavailable", _at(0, day=21)),
+            ),
+        )
+
+        self.assertEqual(record["runs_per_day"], 1.0)
+
     def test_without_a_power_sensor_only_the_days_and_the_signal_figure(self) -> None:
         plain = device_stats.metered_record(
             window_start=DAY_START, window_end=DAY_END, daily_kwh=[1.0, 2.0]
@@ -268,8 +285,9 @@ class PowerRunTests(unittest.TestCase):
             )
         )
 
-        # Two half-hour runs, and 1 kWh between them rather than 1.5.
-        self.assertEqual(record["runs_per_day"], 2.0)
+        # Two half-hour runs, and 1 kWh between them rather than 1.5, over
+        # the 23.5 h observed.
+        self.assertEqual(record["runs_per_day"], round(2 / (23.5 / 24), 4))
         self.assertEqual(record["run_kwh"], {"median": 0.5, "min": 0.5, "max": 0.5})
 
     def test_short_off_gaps_merge_and_sub_minute_runs_drop(self) -> None:
