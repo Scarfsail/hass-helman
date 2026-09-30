@@ -2804,12 +2804,16 @@ export class HelmanConfigEditorPanel
     const job = this._trainingJob("appliance_energy");
     const id = this._stringValue(device.id);
     const recordKey = ownMeter(device) || id;
-    const record = job?.devices?.[recordKey];
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
     const projects = isSchedulable(device) && deviceKind(device) !== "ev_charger";
-    const adopted =
-      projection?.strategy === "history_average" && typeof job?.estimates?.[id] === "number";
+    const estimate = job?.estimates?.[id];
+    const adopted = projection?.strategy === "history_average" && typeof estimate === "number";
+    // The adopted estimate is what the forecast projects with. It normally
+    // equals the record's figure, but survives a meter change before the
+    // refit files a record under the new key, so it wins over the record.
+    const stored = job?.devices?.[recordKey];
+    const record = adopted ? { ...stored, on_kwh_per_hour: estimate } : stored;
     const issue = job?.issues.find(
       (candidate) => candidate.subject === id || candidate.subject === recordKey,
     );
@@ -2821,7 +2825,7 @@ export class HelmanConfigEditorPanel
           : undefined,
       note: issue
         ? this._tFormat("device_energy.failed", { reason: issue.reason })
-        : record
+        : stored || adopted
           ? undefined
           : this._t("device_energy.not_trained"),
     };

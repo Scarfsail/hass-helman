@@ -43,6 +43,7 @@ const CONFIG = {
         learner("dishwasher", "Dishwasher", "sensor.dishwasher_energy"),
         learner("washer", "Laundry", "sensor.washer_energy"),
         learner("dryer", "Dryer", "sensor.dryer_energy"),
+        learner("kettle", "Kettle", "sensor.kettle_new_energy"),
         {
             id: "pool",
             name: "Pool",
@@ -110,7 +111,8 @@ const TRAINING_STATUS = {
         job("house_consumption"),
         job("appliance_energy", {
             health: "degraded",
-            estimates: { dishwasher: 1.1234 },
+            // The kettle's meter changed: its estimate outlives a record under the new key.
+            estimates: { dishwasher: 1.1234, kettle: 2.5 },
             issues: [{ subject: "washer", reason: "no running hours" }],
             devices: {
                 // A history_average device's estimate is its record's figure.
@@ -243,6 +245,11 @@ test("a history_average device shows its estimate, else its configured fallback 
         sources: ["configured"],
         title: `${measures("—", "—", "—", "—")}\nConfigured: 0.50 kWh/h\nNot trained yet`,
     });
+    expect(await energyValue(learnedCell(page, "Kettle"))).toEqual({
+        text: "2.50 kWh/h",
+        sources: ["on"],
+        title: measures("2.50 kWh/h", "—", "—", "—"),
+    });
 });
 
 test("every other device shows what it learned, on the same scale", async ({ page }) => {
@@ -297,7 +304,7 @@ test("every row's hover lists the same measures in the same order", async ({ pag
             has: page.locator('helman-training-job-status[data-job="appliance_energy"]'),
         })
         .locator(".training-depth-table tbody .device-energy");
-    await expect(values).toHaveCount(8);
+    await expect(values).toHaveCount(9);
     const labels = await values.evaluateAll((elements) =>
         elements.map((element) =>
             (element.getAttribute("title") ?? "")
