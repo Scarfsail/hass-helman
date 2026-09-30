@@ -97,11 +97,16 @@ const APPLIANCE_ICON_SELECTOR = {
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
-/** A device's learned energy, as the appliance-energy job reports it. */
+/**
+ * A device's learned energy, as the appliance-energy job reports it: the
+ * forecast estimate of a `history_average` device, or what any other device's
+ * usage record says -- kWh per hour its signal is on, else a mean day.
+ */
 export type ApplianceEnergyEstimate =
     | { state: "learned"; kwh: number }
     | { state: "failed"; reason: string }
-    | { state: "not_trained" };
+    | { state: "not_trained" }
+    | { state: "recorded"; kwh: number; per: "hour" | "day" };
 
 /**
  * What the editor emits when the reader changes something: the value now at
@@ -548,7 +553,10 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     },
                                 )}
                                 ${this._renderChildrenToleranceField(device)}
-                            </div>`,
+                            </div>
+                            ${this.energyEstimate?.state === "recorded"
+                                ? this._renderEnergyEstimateLine(undefined)
+                                : nothing}`,
                         )}
                         ${renderSimpleSection(
                             this.t("editor.sections.controls"),
@@ -1216,7 +1224,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     }
 
     /**
-     * The learned figure a `history_average` device projects with, read-only.
+     * The learned figure, read-only: the one a `history_average` device
+     * projects with, under its Projection settings, or any other device's
+     * recorded average, under its Measurements.
      *
      * Same source as the Training tab's appliance table, so the two agree. The
      * fallback is the draft's `hourly_energy_kwh`, the figure the backend uses
@@ -1227,7 +1237,11 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         if (!estimate) return nothing;
         const kwh = trainingDepthCell(fallbackKwh);
         const text =
-            estimate.state === "learned"
+            estimate.state === "recorded"
+                ? this._tFormat(`editor.appliance_estimate.recorded_${estimate.per}`, {
+                      kwh: estimate.kwh.toFixed(2),
+                  })
+                : estimate.state === "learned"
                 ? this._tFormat("editor.appliance_estimate.learned", { kwh: estimate.kwh.toFixed(2) })
                 : estimate.state === "failed"
                   ? this._tFormat("editor.appliance_estimate.failed", { reason: estimate.reason, kwh })

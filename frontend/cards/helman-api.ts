@@ -114,6 +114,38 @@ export interface HistoryPayload {
     entity_history: Record<string, number[]>;
 }
 
+/** A median and its range, as a device's usage record states one. */
+export interface DeviceStatsSpread {
+    median: number;
+    min: number;
+    max: number;
+}
+
+/**
+ * One device's usage record, learned nightly from its history. Every key is
+ * absent when history does not answer it; the run figures need a power
+ * sensor or, for a meterless child, its running signal.
+ */
+export interface DeviceStats {
+    /** kWh over the complete local days in the window, zero days included. */
+    daily_kwh?: DeviceStatsSpread & { mean: number; days: number };
+    runs_per_day?: number;
+    run_minutes?: DeviceStatsSpread;
+    run_kwh?: DeviceStatsSpread;
+    /** Energy over the hours the device actually draws power. */
+    running_kw?: number;
+    /** Energy per hour its running signal is on, idle on-time included. */
+    on_kwh_per_hour?: number;
+}
+
+/** A device's usage record by its `deviceKey`, or `null` when it has none. */
+export function fetchDeviceStats(
+    hass: HomeAssistantLike,
+    deviceKey: string,
+): Promise<DeviceStats | null> {
+    return hass.callWS({ type: "helman/get_device_stats", device_key: deviceKey });
+}
+
 export type ForecastStatus =
     | "not_configured"
     | "insufficient_history"

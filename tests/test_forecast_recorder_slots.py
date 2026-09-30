@@ -318,16 +318,17 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             ),
         ]
 
-        estimate = recorder_hourly_series._estimate_average_hourly_energy_kwh_for_active_intervals(
-            entity_states=entity_states,
-            energy_states=energy_states,
-            window_start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
-            window_end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-            default_unit="kWh",
-            active_states=("heat", "cool"),
+        # A lone device's estimate is the shared split with itself as the only
+        # member, which hands it all of its meter's energy.
+        fit = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+            {"only": (entity_states, ("heat", "cool"))},
+            energy_states,
+            datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+            "kWh",
         )
 
-        self.assertEqual(estimate, 1.3333)
+        self.assertEqual(fit.estimates, {"only": 1.3333})
 
     @staticmethod
     def _shared_meter(
@@ -481,51 +482,6 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(carried.weights, {"a": 2.0, "b": 0.5})
         self.assertEqual(carried.estimates, {"a": 2.1, "b": 0.6})
 
-    def test_shared_meter_with_one_member_is_the_single_device_average(self) -> None:
-        # The lone-device estimator is this split with one member; the fixture
-        # above must give the same answer through either door.
-        entity_states = [
-            SimpleNamespace(state=state, last_updated=datetime(2026, 3, 20, 10, minute, tzinfo=UTC))
-            for state, minute in (("heat", 0), ("off", 30), ("cool", 45))
-        ] + [
-            SimpleNamespace(state="off", last_updated=datetime(2026, 3, 20, 11, 0, tzinfo=UTC))
-        ]
-        energy_states = [
-            SimpleNamespace(
-                state=value,
-                attributes={"unit_of_measurement": "kWh"},
-                last_updated=instant,
-            )
-            for value, instant in (
-                ("0.0", datetime(2026, 3, 20, 10, 0, tzinfo=UTC)),
-                ("0.5", datetime(2026, 3, 20, 10, 30, tzinfo=UTC)),
-                ("0.75", datetime(2026, 3, 20, 10, 45, tzinfo=UTC)),
-                ("1.25", datetime(2026, 3, 20, 11, 0, tzinfo=UTC)),
-            )
-        ]
-        window = (
-            datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
-            datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-        )
-
-        shared = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
-            {"only": (entity_states, ("heat", "cool"))},
-            energy_states,
-            *window,
-            "kWh",
-        )
-        single = recorder_hourly_series._estimate_average_hourly_energy_kwh_for_active_intervals(
-            entity_states=entity_states,
-            energy_states=energy_states,
-            window_start=window[0],
-            window_end=window[1],
-            default_unit="kWh",
-            active_states=("heat", "cool"),
-        )
-
-        self.assertEqual(shared.estimates, {"only": 1.3333})
-        self.assertEqual(single, 1.3333)
-
 
 class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
     """The attributes join on the cumulative-energy query is conditional.
@@ -639,7 +595,7 @@ class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
-    """The lookback estimate's energy query joins attributes conditionally.
+    """A meter's history read joins attributes conditionally.
 
     Same trade as the cumulative-energy query: the unit comes from the live
     state when it is there, and only then is the join redundant. Without it
@@ -691,6 +647,7 @@ class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
             states=SimpleNamespace(get=lambda entity_id: live_energy_state)
         )
         recorder = SimpleNamespace(async_add_executor_job=_run_now)
+        window = recorder_hourly_series._lookback_window(self.REFERENCE_TIME, 1)
         with (
             patch.object(
                 recorder_hourly_series,
@@ -703,16 +660,20 @@ class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
                 lambda hass: recorder,
             ),
         ):
-            estimate = (
-                await recorder_hourly_series._estimate_average_hourly_energy_when_entity_active(
-                    hass,
-                    entity_id=self.ENTITY_ID,
-                    energy_entity_id=self.ENERGY_ENTITY_ID,
-                    reference_time=self.REFERENCE_TIME,
-                    lookback_days=1,
-                    active_states=("heat", "cool"),
-                )
+            entity_states, _unit = await recorder_hourly_series.read_entity_history(
+                hass, self.ENTITY_ID, *window, meter=False
             )
+            meter_states, unit = await recorder_hourly_series.read_entity_history(
+                hass, self.ENERGY_ENTITY_ID, *window, meter=True
+            )
+        estimate = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+            {"only": (entity_states, ("heat", "cool"))},
+            meter_states,
+            *window,
+            unit,
+        ).estimates["only"]
+        # An activity entity is read for its state alone, always.
+        self.assertTrue(recorded_no_attributes[self.ENTITY_ID])
         return estimate, recorded_no_attributes[self.ENERGY_ENTITY_ID]
 
     async def test_live_unit_drops_the_join_and_estimates_the_same(self) -> None:

@@ -1045,6 +1045,22 @@ class ConfigValidationTests(unittest.TestCase):
             ["devices.consumers[1].consumption.energy_entity_id"],
         )
 
+    def test_a_device_id_that_is_a_meter_is_rejected(self) -> None:
+        # Records are keyed by meter, or by id without one: the two must not
+        # collide.
+        config = _valid_config()
+        first = _generic_appliance()
+        second = _climate_appliance()
+        second["id"] = first["consumption"]["energy_entity_id"]
+        config["devices"]["consumers"] = [first, second]
+
+        report = validate_config_document(config)
+
+        self.assertIn(
+            ("devices.consumers[0].consumption.energy_entity_id", "meter_is_device_id"),
+            [(issue.path, issue.code) for issue in report.errors],
+        )
+
     def test_the_meter_must_be_a_sensor(self) -> None:
         config = _valid_config()
         appliance = _generic_appliance()

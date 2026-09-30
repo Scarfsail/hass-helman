@@ -21,6 +21,7 @@ if _ROOT not in sys.path:
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 training_ws = importlib.import_module("custom_components.helman.training.websocket")
+websockets_module = importlib.import_module("custom_components.helman.websockets")
 batch_module = importlib.import_module("custom_components.helman.training.batch")
 house_module = importlib.import_module(
     "custom_components.helman.training.house_consumption"
@@ -169,6 +170,7 @@ def _make_coordinator(
     coordinator._house_profile = house_profile
     coordinator._appliance_energy_estimates = appliance_estimates or {}
     coordinator._shared_meter_weights = {}
+    coordinator._active_config = {}
     coordinator._read_house_training_request = lambda: SimpleNamespace(
         config_fingerprint=HOUSE_FP
     )
@@ -295,6 +297,37 @@ class TrainingStatusTests(unittest.TestCase):
             )
         )
         coordinator._shared_meter_weights = {"pump": 2.0}
+
+        appliance = _job(self._payload(coordinator), "appliance_energy")
+
+        self.assertTrue(appliance["artifactInUse"])
+
+    def test_the_appliance_job_carries_the_stored_device_records(self) -> None:
+        records = {"sensor.boiler_energy": {"running_kw": 2.0}, "pump": {"running_kw": 0.1}}
+        store = _make_store(
+            appliance_energy=_section(
+                "estimates_trained", data={}, fingerprint=APPLIANCE_FP, devices=records
+            )
+        )
+
+        payload = self._payload(_make_coordinator(store=store))
+
+        self.assertEqual(_job(payload, "appliance_energy")["devices"], records)
+        self.assertNotIn("devices", _job(payload, "house_consumption"))
+
+    def test_stored_device_records_alone_are_an_artifact_in_use(self) -> None:
+        # Only passive metered devices: no estimate and no weight, yet the
+        # device detail serves their records.
+        coordinator = _make_coordinator(
+            store=_make_store(
+                appliance_energy=_section(
+                    "estimates_trained",
+                    data={},
+                    fingerprint=APPLIANCE_FP,
+                    devices={"sensor.fridge_energy": {"running_kw": 0.1}},
+                )
+            )
+        )
 
         appliance = _job(self._payload(coordinator), "appliance_energy")
 
@@ -433,6 +466,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
             last_outcome="estimates_trained",
             failed_appliances={"boiler": "sensor.boiler_energy is gone"},
             shared_meter_weights={},
+            devices={},
         )
         await store.async_record_appliance_energy_failure(
             last_outcome="training_failed",
@@ -519,6 +553,83 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(appliance["isStale"])
         self.assertTrue(appliance["usingOlderArtifact"])
         self.assertIsNotNone(_job(payload, "house_consumption")["isStale"])
+
+
+class DeviceStatsWebsocketTests(unittest.TestCase):
+    """``helman/get_device_stats``: the device detail's one fetch."""
+
+    @staticmethod
+    def _stats(coordinator, device_key: str) -> FakeConnection:
+        connection = FakeConnection(is_admin=False)
+        websockets_module.ws_get_device_stats(
+            _hass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/get_device_stats", "device_key": device_key},
+        )
+        return connection
+
+    def test_a_non_admin_gets_the_record_and_null_for_an_unknown_key(self) -> None:
+        record = {
+            "daily_kwh": {"mean": 1.2, "median": 1.1, "min": 0.0, "max": 3.0, "days": 29},
+            "running_kw": 2.0,
+        }
+        store = _make_store(
+            appliance_energy=_section(
+                "estimates_trained",
+                data={},
+                fingerprint=APPLIANCE_FP,
+                devices={"sensor.boiler_energy": record},
+            )
+        )
+        coordinator = _make_coordinator(store=store)
+
+        known = self._stats(coordinator, "sensor.boiler_energy")
+        unknown = self._stats(coordinator, "sensor.nothing_energy")
+
+        self.assertEqual(known.errors, [])
+        self.assertEqual(known.results, [(1, record)])
+        self.assertEqual(unknown.errors, [])
+        self.assertEqual(unknown.results, [(1, None)])
+
+
+    def test_a_metered_devices_controllable_id_resolves_to_its_meter(self) -> None:
+        # The solar inspector keys a device by its controllable id: a metered
+        # washer's record is its meter's, a meterless pump's its own, and
+        # never its parent meter's.
+        washer_record = {"running_kw": 2.0}
+        pump_record = {"running_kw": 0.3}
+        store = _make_store(
+            appliance_energy=_section(
+                "estimates_trained",
+                data={},
+                fingerprint=APPLIANCE_FP,
+                devices={
+                    "sensor.washer_energy": washer_record,
+                    "sensor.breaker_energy": {"running_kw": 9.0},
+                    "pump": pump_record,
+                },
+            )
+        )
+        coordinator = _make_coordinator(store=store)
+        coordinator._active_config = {
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "washer",
+                        "consumption": {"energy_entity_id": "sensor.washer_energy"},
+                    },
+                    {
+                        "id": "breaker",
+                        "consumption": {"energy_entity_id": "sensor.breaker_energy"},
+                        "children": [{"id": "pump"}],
+                    },
+                ]
+            }
+        }
+
+        self.assertEqual(self._stats(coordinator, "washer").results, [(1, washer_record)])
+        self.assertEqual(self._stats(coordinator, "pump").results, [(1, pump_record)])
+        self.assertEqual(self._stats(coordinator, "nothing").results, [(1, None)])
 
 
 class TrainingStatusAdminTests(unittest.TestCase):
@@ -683,6 +794,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
                     last_outcome="estimates_trained",
                     failed_appliances={},
                     shared_meter_weights={},
+                    devices={},
                 )
                 return "estimates_trained"
 

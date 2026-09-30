@@ -132,7 +132,9 @@
     "appliance_estimate": {
       "learned": "Naučeno z historie: {kwh} kWh/h",
       "not_trained": "Zatím nenaučeno: do té doby se používá {kwh} kWh/h",
-      "failed": "Bez odhadu ({reason}): používá se {kwh} kWh/h"
+      "failed": "Bez odhadu ({reason}): používá se {kwh} kWh/h",
+      "recorded_hour": "Naučeno z historie: {kwh} kWh/h při zapnutí",
+      "recorded_day": "Naučeno z historie: {kwh} kWh denně"
     },
     "training_depth": {
       "column_entity": "Entita",

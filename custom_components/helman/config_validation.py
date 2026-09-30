@@ -1290,6 +1290,19 @@ def _validate_controllables_config(
                     "behind it under that device as children without a meter"
                 ),
             )
+    # A device's learned record is keyed by its meter, or by its id when it has
+    # none (the card's deviceKey), so one string must not name both.
+    for entity_id, paths in meter_owners.items():
+        if entity_id in seen_ids:
+            report.add_error(
+                section=section,
+                path=f"{paths[0]}.consumption.energy_entity_id",
+                code="meter_is_device_id",
+                message=(
+                    f"energy meter {entity_id!r} is also a device id; a device "
+                    "id must not be a meter's entity id"
+                ),
+            )
 
 
 def _validate_groupings(

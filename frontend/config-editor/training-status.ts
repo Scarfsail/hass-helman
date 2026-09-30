@@ -5,6 +5,7 @@ import {
   MISSING_TRANSLATION_PREFIX,
   getLocalizeFunction,
 } from "../cards/shared/config/localize/localize";
+import type { DeviceStats } from "../cards/helman-api";
 
 /**
  * The Training tab's status surface, read from `helman/training/status`.
@@ -33,6 +34,8 @@ export interface TrainingJobStatus {
   issues: { subject: string; reason: string }[];
   /** Present on `appliance_energy` only: learned kWh per running hour, by controllable id. */
   estimates?: Record<string, number>;
+  /** Present on `appliance_energy` only: every device's usage record, by deviceKey. */
+  devices?: Record<string, DeviceStats>;
 }
 
 export interface TrainingStatus {
