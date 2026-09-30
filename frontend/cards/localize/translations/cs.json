@@ -64,6 +64,15 @@
     "device": {
       "today": "Dnes",
       "last_hour": "Poslední hodina",
+      "stats": {
+        "title": "Posledních {days} dní",
+        "title_undated": "Naučené využití",
+        "typical_day": "Typický den",
+        "runs_per_day": "Běhů za den",
+        "typical_run": "Typický běh",
+        "running_power": "Příkon za běhu",
+        "mean": "průměr"
+      },
       "edit": {
         "button": "Upravit",
         "title": "Upravit zařízení",

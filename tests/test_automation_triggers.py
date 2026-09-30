@@ -108,22 +108,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
             microsecond=0,
         )
     )
-
-    async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
-        return None
-
-    async def _estimate_average_hourly_energy_when_climate_active(*args, **kwargs):
-        return None
-
-    recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = (
-        _estimate_average_hourly_energy_when_switch_on
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
     recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
     recorder_slots_mod.get_today_completed_local_hours = lambda *args, **kwargs: []

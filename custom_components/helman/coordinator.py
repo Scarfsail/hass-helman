@@ -86,6 +86,7 @@ from .const import (
     DATA_CHANGED_KIND_SCHEDULE,
     DATA_CHANGED_KIND_SOLAR_BIAS,
     DEFAULT_FORECAST_DAYS,
+    DEFAULT_HISTORY_LOOKBACK_DAYS,
     EVENT_DATA_CHANGED,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_CANONICAL_RESOLUTION,
@@ -102,16 +103,22 @@ from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_training_window_config,
 )
+from .controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .controllables.config import (
     entity_friendly_name,
     is_active_state,
     iter_device_paths,
+    iter_devices,
+    own_meter,
+    peek_controllable_id,
+    peek_controllable_kind,
     read_carved_meters,
     read_name_cleaner_regex,
     read_schedulable_consumers,
     read_shared_meters,
     resolve_device_name,
     running_active_states,
+    running_signal,
 )
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
@@ -125,7 +132,7 @@ from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
-from .power_polarity import is_power_inverted
+from .power_polarity import is_power_inverted, watts_for_value_type
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
     ApplianceRuntimeHistoryReader,
@@ -175,6 +182,7 @@ from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
 )
+from .shared_meter_split import split_own_power
 from .solar_bias_correction.models import read_bias_config
 from .visualization import read_visualization
 from .solar_bias_correction.service import SolarBiasCorrectionService
@@ -183,6 +191,7 @@ from .storage import HelmanStorage, TrainingArtifactsStore
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
+    DeviceSubject,
     SharedMeter,
     SharedMeterMember,
 )
@@ -846,6 +855,11 @@ class HelmanCoordinator:
         # to its configured hourly_energy_kwh, which is what the resolvers did
         # for a failed estimate before this was stored at all.
         self._appliance_energy_estimates: dict[str, float] = {}
+        # Each shared meter member's learned power in kW, adopted from the same
+        # section: the ratio the live split shares a parent's own power in. A
+        # member missing from it takes the others' mean, so before the first
+        # fit lands the split is even.
+        self._shared_meter_weights: dict[str, float | None] = {}
         # Today's completed slots are immutable, so the reader keeps the ones it
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
@@ -870,6 +884,7 @@ class HelmanCoordinator:
         self._share_entity_id_map: dict[str, str] = {}
         # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
         self._share_running_signals: dict[str, tuple[str, str]] = {}
+        self._share_tolerances: dict[str, float | None] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
         self._virtual_sensor_ids: set[str] = set()
 
@@ -1582,7 +1597,14 @@ class HelmanCoordinator:
                     "appliance_energy",
                     appliance,
                     health=appliance_energy_health_for(appliance),
-                    artifact_in_use=bool(self._appliance_energy_estimates),
+                    # Learned weights drive the live split, and records the
+                    # device detail, even when no appliance learns an estimate.
+                    artifact_in_use=bool(self._appliance_energy_estimates)
+                    or any(
+                        weight is not None
+                        for weight in self._shared_meter_weights.values()
+                    )
+                    or bool((appliance or {}).get("devices")),
                     read_live_fingerprint=lambda: (
                         self._read_appliance_energy_training_request().fingerprint
                     ),
@@ -1597,6 +1619,8 @@ class HelmanCoordinator:
                 # projection and automation actually read. kWh per running
                 # hour, keyed by controllable id.
                 "estimates": dict(self._appliance_energy_estimates),
+                # Every device's usage record, by deviceKey, as stored.
+                "devices": dict((appliance or {}).get("devices") or {}),
             },
         ]
         return {
@@ -1607,6 +1631,31 @@ class HelmanCoordinator:
             "anyFailed": any(job["health"] == "failed" for job in jobs),
             "jobs": jobs,
         }
+
+    def get_device_stats(self, device_key: str) -> dict[str, Any] | None:
+        """One device's learned usage record, by the card's ``deviceKey``.
+
+        Read from the store as the job left it: nothing else holds records,
+        and a failed run keeps the previous ones there. The solar inspector
+        keys a device by its controllable id, and a metered device's record
+        lives under its meter, so such an id is resolved to that meter here;
+        a meterless child's id is already its key.
+        """
+        store = self._training_artifacts_store
+        section = (store.appliance_energy if store is not None else None) or {}
+        devices = section.get("devices") or {}
+        record = devices.get(device_key)
+        if record is None:
+            meter = next(
+                (
+                    own_meter(device)
+                    for device, _parent in iter_devices(self._active_config)
+                    if peek_controllable_id(device) == device_key
+                ),
+                None,
+            )
+            record = devices.get(meter) if meter is not None else None
+        return record if isinstance(record, dict) else None
 
     def _read_house_training_request(self) -> HouseTrainingRequest:
         """What the house consumption fit should answer, read live per run."""
@@ -1699,36 +1748,83 @@ class HelmanCoordinator:
     def _read_appliance_energy_training_request(
         self,
     ) -> ApplianceEnergyTrainingRequest:
-        """The appliances whose estimates the nightly job resolves.
+        """Every consumer device the nightly job learns a record for.
 
-        Every appliance on ``history_average``, not just the ones an enabled
-        optimizer references: the same estimates feed the demand projection,
-        which runs for anything holding a scheduled action however it got there.
+        One subject per device with its own meter, and per meterless child its
+        parent's meter is split among, schedulable or not; the inverter is no
+        consumer. A subject is keyed by the card's ``deviceKey``: its meter, or
+        a meterless child's id. Whether it is ``history_average`` -- and so its
+        lookback -- comes from its appliance runtime, the reader the forecast
+        uses; a device that is not one learns over the default window.
 
-        Shared meters come from the device tree, not from those appliances: a
-        meter owner's meterless children split its own energy, and each runs by
-        its own switch or climate entity — a ``fixed`` or passive child
-        included, since it still runs and so still divides the meter.
+        Shared meters come from the device tree too: a meter owner's meterless
+        children split its own energy, and each runs by its own switch or
+        climate entity — a ``fixed`` or passive child included, since it still
+        runs and so still divides the meter.
         """
-        shared_meters = {
-            energy_entity_id: SharedMeter(
-                members=tuple(
-                    SharedMeterMember.for_signal(*member)
-                    for member in shared["members"]
-                ),
-                metered_children=tuple(shared["metered_children"]),
-            )
-            for energy_entity_id, shared in read_shared_meters(
-                self._active_config
-            ).items()
+        shared = read_shared_meters(self._active_config)
+        learners = {
+            appliance.id: appliance
+            for appliance in self._iter_automation_candidate_appliances()
+            if appliance.uses_history_average
         }
+        subjects: dict[str, DeviceSubject] = {}
+        for device, parent in iter_devices(self._active_config):
+            if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
+                continue
+            controllable_id = peek_controllable_id(device)
+            meter = own_meter(device)
+            if meter is not None:
+                key, meterless = meter, False
+            else:
+                parent_meter = own_meter(parent) if parent is not None else None
+                members = shared.get(parent_meter, {}).get("members", ())
+                if controllable_id not in {member[0] for member in members}:
+                    continue
+                key, meter, meterless = controllable_id, parent_meter, True
+            if key in subjects:
+                continue
+            learner = learners.get(controllable_id)
+            consumption = device.get("consumption")
+            power = (
+                consumption.get("power_entity_id")
+                if isinstance(consumption, Mapping)
+                else None
+            )
+            subjects[key] = DeviceSubject(
+                device_key=key,
+                meter=meter,
+                meterless=meterless,
+                controllable_id=controllable_id,
+                # A meterless child's usage is its share of the meter.
+                power_entity_id=(
+                    power.strip()
+                    if not meterless and isinstance(power, str) and power.strip()
+                    else None
+                ),
+                # What the tree builder gives every device's node.
+                power_value_type="default",
+                running_signal=running_signal(device),
+                lookback_days=(
+                    learner.history_lookback_days
+                    if learner is not None
+                    else DEFAULT_HISTORY_LOOKBACK_DAYS
+                ),
+                history_average=learner is not None,
+            )
         return ApplianceEnergyTrainingRequest(
-            appliances=tuple(
-                appliance
-                for appliance in self._iter_automation_candidate_appliances()
-                if appliance.uses_history_average
-            ),
-            shared_meters=shared_meters,
+            subjects=tuple(subjects.values()),
+            shared_meters={
+                energy_entity_id: SharedMeter(
+                    members=tuple(
+                        SharedMeterMember.for_signal(*member)
+                        for member in meter_shared["members"]
+                    ),
+                    metered_children=tuple(meter_shared["metered_children"]),
+                    tolerance=meter_shared["tolerance"],
+                )
+                for energy_entity_id, meter_shared in shared.items()
+            },
         )
 
     def _adopt_stored_appliance_energy(self) -> str | None:
@@ -1744,9 +1840,11 @@ class HelmanCoordinator:
         house profile is blanked. The map is keyed per appliance, so the entries
         for appliances that did not change are still right, and dropping them
         would push those appliances onto their fixed fallback for no reason
-        until the refit lands.
+        until the refit lands. The same holds for the shared-meter weights,
+        keyed per member.
         """
         self._appliance_energy_estimates = {}
+        self._shared_meter_weights = {}
 
         store = self._training_artifacts_store
         section = store.appliance_energy if store is not None else None
@@ -1765,6 +1863,18 @@ class HelmanCoordinator:
                 and isinstance(value, (int, float))
                 and not isinstance(value, bool)
                 and value > 0
+            }
+
+        weights = section.get("shared_meter_weights")
+        if isinstance(weights, dict):
+            self._shared_meter_weights = {
+                member_id: float(value)
+                if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value >= 0
+                else None
+                for member_id, value in weights.items()
+                if isinstance(member_id, str)
             }
 
         request = self._read_appliance_energy_training_request()
@@ -5395,10 +5505,18 @@ class HelmanCoordinator:
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.
+        shared_meters = read_shared_meters(self._active_config).values()
         self._share_running_signals = {
             member_id: (entity_id, activity)
-            for shared in read_shared_meters(self._active_config).values()
+            for shared in shared_meters
             for member_id, entity_id, activity in shared["members"]
+        }
+        # Every member of one meter carries its parent's tolerance, so a share
+        # node's parent is found without walking the config again.
+        self._share_tolerances = {
+            member_id: shared["tolerance"]
+            for shared in shared_meters
+            for member_id, _entity_id, _activity in shared["members"]
         }
         # The smoothing windows belong to the tree they were filled from: a rebuild
         # can drop or re-parent a node, and a stale window would then smooth the
@@ -5574,11 +5692,7 @@ class HelmanCoordinator:
             raw = float(state.state)
         except ValueError:
             return None
-        if value_type == "positive":
-            return max(0.0, raw)
-        if value_type == "negative":
-            return abs(min(0.0, raw))
-        return raw
+        return watts_for_value_type(raw, value_type)
 
     def _read_battery_state(self):
         entity_config = read_battery_entity_config(self._active_config)
@@ -5754,14 +5868,27 @@ class HelmanCoordinator:
     def _split_own_power(
         self, own: float | None, share_nodes: list
     ) -> dict[str, float | None]:
-        """Own power split evenly among the running meterless children; 0 W for the rest."""
+        """Own power split among the running meterless children; 0 W for the rest.
+
+        In the ratio of their learned power and in the parent's tolerance mode,
+        by the very function the training estimate splits history with -- see
+        :func:`.shared_meter_split.split_own_power`. What a capped split does
+        not hand out stays in the parent's remainder.
+        """
         if own is None:
             return {n["id"]: None for n in share_nodes}
         running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
-        return {
-            n["id"]: own / len(running) if n["id"] in running else 0.0
-            for n in share_nodes
-        }
+        shares = (
+            split_own_power(
+                own,
+                running,
+                self._shared_meter_weights,
+                tolerance=self._share_tolerances.get(running[0]),
+            )
+            if running
+            else {}
+        )
+        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
 
     def _is_share_running(self, device_id: str) -> bool:
         """Whether a meterless child runs now, by the predicate its history split uses."""

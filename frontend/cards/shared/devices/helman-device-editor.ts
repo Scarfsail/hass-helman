@@ -78,6 +78,9 @@ export const EDITABLE_DEVICE_KINDS = ["generic", "climate", "ev_charger"] as con
  */
 export const SEEDED_PROJECTION = { strategy: "fixed", hourly_energy_kwh: 1 } as const;
 
+/** The tolerance a parent gets when it stops handing its children all its own power. */
+const SEEDED_CHILDREN_TOLERANCE_PERCENT = 20;
+
 const GENERIC_PROJECTION_STRATEGIES = [
     { value: "fixed", labelKey: "editor.values.fixed" },
     { value: "history_average", labelKey: "editor.values.history_average" },
@@ -94,11 +97,16 @@ const APPLIANCE_ICON_SELECTOR = {
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
-/** A device's learned energy, as the appliance-energy job reports it. */
+/**
+ * A device's learned energy, as the appliance-energy job reports it: the
+ * forecast estimate of a `history_average` device, or what any other device's
+ * usage record says -- kWh per hour its signal is on, else a mean day.
+ */
 export type ApplianceEnergyEstimate =
     | { state: "learned"; kwh: number }
     | { state: "failed"; reason: string }
-    | { state: "not_trained" };
+    | { state: "not_trained" }
+    | { state: "recorded"; kwh: number; per: "hour" | "day" };
 
 /**
  * What the editor emits when the reader changes something: the value now at
@@ -544,7 +552,11 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                         helperKey: "editor.helpers.consumption_power_entity",
                                     },
                                 )}
-                            </div>`,
+                                ${this._renderChildrenToleranceField(device)}
+                            </div>
+                            ${this.energyEstimate?.state === "recorded"
+                                ? this._renderEnergyEstimateLine(undefined)
+                                : nothing}`,
                         )}
                         ${renderSimpleSection(
                             this.t("editor.sections.controls"),
@@ -965,6 +977,54 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         `;
     }
 
+    /**
+     * Whether a parent hands its meterless children all of its own power, in
+     * the ratio of their learned power, or caps each at that plus a tolerance.
+     *
+     * Only on a parent with meterless children and a power sensor: without the
+     * sensor there is no unmeasured row, so a capped excess would have nowhere
+     * to show. Turning the switch off writes the tolerance, which the field
+     * below it then edits; turning it on removes the key.
+     */
+    private _renderChildrenToleranceField(device: JsonObject): TemplateResult | typeof nothing {
+        const consumption = asJsonObject(device.consumption) ?? {};
+        if (!meterlessChildren(device).length || !stringValue(consumption.power_entity_id).trim()) {
+            return nothing;
+        }
+        const path: PathSegment[] = [...this.path, "consumption", "children_tolerance_percent"];
+        const distributeAll = consumption.children_tolerance_percent === undefined;
+        return html`
+            <div class="field toggle-field children-distribute-field">
+                <div class="field-label-row">
+                    <ha-formfield .label=${this.t("editor.fields.children_distribute_all")}>
+                        <ha-switch
+                            .checked=${distributeAll}
+                            @change=${(event: Event) =>
+                                this.setValue(
+                                    path,
+                                    (event.currentTarget as HTMLElement & { checked: boolean }).checked
+                                        ? undefined
+                                        : SEEDED_CHILDREN_TOLERANCE_PERCENT,
+                                )}
+                        ></ha-switch>
+                    </ha-formfield>
+                    ${renderHelpIcon(this, "editor.fields.children_distribute_all", "editor.help.children_distribute_all")}
+                </div>
+                <div class="helper">${this.t("editor.helpers.children_distribute_all")}</div>
+            </div>
+            ${distributeAll
+                ? nothing
+                : renderRequiredNumberField(
+                      this,
+                      path,
+                      "editor.fields.children_tolerance_percent",
+                      undefined,
+                      "any",
+                      "editor.help.children_tolerance_percent",
+                  )}
+        `;
+    }
+
     private _setSchedulable(meterless: boolean, value: boolean): void {
         const path = this.path;
         const listPath = path.slice(0, -1);
@@ -1164,7 +1224,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     }
 
     /**
-     * The learned figure a `history_average` device projects with, read-only.
+     * The learned figure, read-only: the one a `history_average` device
+     * projects with, under its Projection settings, or any other device's
+     * recorded average, under its Measurements.
      *
      * Same source as the Training tab's appliance table, so the two agree. The
      * fallback is the draft's `hourly_energy_kwh`, the figure the backend uses
@@ -1175,7 +1237,11 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         if (!estimate) return nothing;
         const kwh = trainingDepthCell(fallbackKwh);
         const text =
-            estimate.state === "learned"
+            estimate.state === "recorded"
+                ? this._tFormat(`editor.appliance_estimate.recorded_${estimate.per}`, {
+                      kwh: estimate.kwh.toFixed(2),
+                  })
+                : estimate.state === "learned"
                 ? this._tFormat("editor.appliance_estimate.learned", { kwh: estimate.kwh.toFixed(2) })
                 : estimate.state === "failed"
                   ? this._tFormat("editor.appliance_estimate.failed", { reason: estimate.reason, kwh })

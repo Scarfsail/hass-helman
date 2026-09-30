@@ -131,6 +131,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_appliance_projections)
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
+    async_register_command(hass, ws_get_device_stats)
     async_register_command(hass, ws_get_solar_bias_status)
     async_register_command(hass, ws_train_solar_bias_now)
     async_register_command(hass, ws_get_solar_bias_profile)
@@ -646,6 +647,29 @@ def ws_get_history(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
     connection.send_result(msg["id"], coordinator.get_history())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_device_stats",
+    vol.Required("device_key"): str,
+})
+@callback
+def ws_get_device_stats(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """One device's learned usage record, or ``null`` when it has none.
+
+    Not admin-gated: it carries only numbers, keyed by an id the card already
+    has, the same exposure as ``helman/get_forecast``. The device detail is
+    open to every user, and ``helman/training/status`` is not.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+    connection.send_result(msg["id"], coordinator.get_device_stats(msg["device_key"]))
 
 
 @websocket_api.websocket_command(GET_FORECAST_REQUEST_FIELDS)

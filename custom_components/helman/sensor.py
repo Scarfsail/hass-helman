@@ -339,8 +339,9 @@ class HelmanUnmeasuredPowerSensor(_HelmanDerivedPowerSensor):
 class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
     """A meterless child's share of its parent's own power.
 
-    The parent's own power split evenly among its running meterless children
-    while this one runs, else 0 W. Named after the device, whose name the tree
+    The parent's own power split among its running meterless children, in the
+    ratio of their learned power and capped by the parent's tolerance, while
+    this one runs, else 0 W. Named after the device, whose name the tree
     has already resolved.
     """
 

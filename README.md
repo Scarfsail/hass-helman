@@ -349,9 +349,7 @@ question you are now asking; that resolves as soon as the rebuild finishes.
    runs three jobs one after another (never at the same time — they share Recorder's worker
    thread): solar bias correction, which learns how your forecast provider is systematically wrong
    for your roof; the house consumption profile, which fits an hour-of-week model over
-   `training.house_consumption.training_window_days` of history; and the per-appliance energy
-   estimates, which work out how much each `history_average` appliance actually draws while it is
-   running. All of it is stored, so
+   `training.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. All of it is stored, so
    a restart reuses it instead of recomputing. Changing a relevant setting recomputes immediately
    rather than waiting for the next night, so you see your change take effect.
 7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast
@@ -368,11 +366,7 @@ question you are now asking; that resolves as soon as the rebuild finishes.
 - `training.house_consumption.training_window_days` (default 56) — how much history the house
   consumption fit reads. This is the single biggest driver of job #6's cost. It has no effect on the
   per-quarter-hour work.
-- An appliance's `consumption.projection.lookback_days` (default 30) — how much history each such
-  appliance's estimate reads: two Recorder queries over the window, one for its switch/climate
-  entity and one for its energy meter. Like `training.house_consumption.training_window_days`, this
-  is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait
-  for. With every appliance on `strategy: fixed` (the default) the job has nothing to do at all.
+- The number of consumer devices, and an appliance's `consumption.projection.lookback_days` (default 30). The device energy records read up to three Recorder queries per device: its energy meter, its power sensor (if it has one) and its switch/climate entity (if it has one). Each entity is read once, over the longest window any device needs it for. A `history_average` appliance reads over its `lookback_days`; every other device, and every shared meter without such an appliance, over the default 30 days. A power sensor that reports every few seconds is the heaviest of these reads. Like `training.house_consumption.training_window_days`, this is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait for.
 
 ### If Home Assistant feels sluggish
 

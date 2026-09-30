@@ -35,9 +35,6 @@ def _install_import_stubs() -> None:
         )
         sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
-    async def _noop(*args, **kwargs):
-        return None
-
     recorder_slots_mod.get_local_current_slot_start = (
         lambda reference_time, *, interval_minutes: reference_time.replace(
             minute=(reference_time.minute // interval_minutes) * interval_minutes,
@@ -45,9 +42,6 @@ def _install_import_stubs() -> None:
             microsecond=0,
         )
     )
-    recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = _noop
-    recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = _noop
-    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = _noop
     recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 

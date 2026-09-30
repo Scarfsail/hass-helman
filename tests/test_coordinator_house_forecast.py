@@ -144,21 +144,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.query_cumulative_hourly_energy_changes = (
         _query_cumulative_hourly_energy_changes
     )
-    async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
-        return None
-
-    async def _estimate_average_hourly_energy_when_climate_active(*args, **kwargs):
-        return None
-
-    recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = (
-        _estimate_average_hourly_energy_when_switch_on
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
     recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
     class _ApplianceRuntimeHistoryReader:

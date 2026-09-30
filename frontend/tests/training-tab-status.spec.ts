@@ -499,18 +499,23 @@ test("a degraded-only status puts no badge on the Training tab", async ({ page }
     await expect(page.locator(".tab-warning-dot")).toHaveCount(0);
 });
 
-test("the appliance panel lists only history_average controllables", async ({ page }) => {
+test("the appliance panel lists every consumer device", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);
 
     const section = jobSection(page, "appliance_energy");
     const rows = section.locator(".training-depth-table tbody tr");
-    await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText("Dishwasher");
-    await expect(rows.first()).toContainText("sensor.dishwasher_energy");
-    // Its own lookback, read from the controllable, in the Lookback column.
-    await expect(rows.first().locator("td").nth(2)).toHaveText("21 d");
-    await expect(section).toContainText("Controllables tab");
+    // Every device learns its usage record, a fixed and a passive one too.
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText("Dishwasher");
+    await expect(rows.nth(0)).toContainText("sensor.dishwasher_energy");
+    // Its own lookback, read from the device, in the Lookback column; the
+    // others read the default 30 days.
+    await expect(rows.nth(0).locator("td").nth(2)).toHaveText("21 d");
+    await expect(rows.nth(1)).toContainText("Boiler");
+    await expect(rows.nth(1).locator("td").nth(2)).toHaveText("30 d");
+    await expect(rows.nth(2)).toContainText("Fridge");
+    await expect(section).toContainText("Devices tab");
 });
 
 test("the solar panel shows its diagnostics under a neutral heading", async ({ page }) => {

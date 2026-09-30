@@ -163,22 +163,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.query_cumulative_hourly_energy_changes = (
         _query_cumulative_hourly_energy_changes
     )
-
-    async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
-        return None
-
-    async def _estimate_average_hourly_energy_when_climate_active(*args, **kwargs):
-        return None
-
-    recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = (
-        _estimate_average_hourly_energy_when_switch_on
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
-    recorder_slots_mod.estimate_average_hourly_energy_for_shared_meter = (
-        _estimate_average_hourly_energy_when_climate_active
-    )
     recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
@@ -495,6 +479,7 @@ finally:
             sys.modules.pop(module_name, None)
 
 HelmanCoordinator = coordinator_module.HelmanCoordinator
+DeviceSubject = coordinator_module.DeviceSubject
 OptimizerInstanceConfig = automation_config_module.OptimizerInstanceConfig
 AutomationInputBundle = input_bundle_module.AutomationInputBundle
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
@@ -1296,11 +1281,19 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
         request = coordinator._read_appliance_energy_training_request()
 
-        self.assertEqual([a.id for a in request.appliances], ["ac_1"])
-        # The meterless child trains on its effective meter, its parent's.
+        # Every device is a subject: the breaker by its meter, each meterless
+        # child by its id, reading its effective meter -- its parent's. Only
+        # the history_average one feeds a forecast estimate.
         self.assertEqual(
-            request.appliances[0].history_energy_entity_id,
-            "sensor.jistic_klimatizace_energy",
+            [
+                (s.device_key, s.meter, s.meterless, s.history_average)
+                for s in request.subjects
+            ],
+            [
+                ("sensor.jistic_klimatizace_energy", "sensor.jistic_klimatizace_energy", False, False),
+                ("ac_1", "sensor.jistic_klimatizace_energy", True, True),
+                ("ac_2", "sensor.jistic_klimatizace_energy", True, False),
+            ],
         )
         shared = request.shared_meters["sensor.jistic_klimatizace_energy"]
         self.assertEqual(shared.metered_children, ())
@@ -1372,7 +1365,25 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
         self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
 
-    def test_only_history_average_appliances_are_trained(self) -> None:
+    def test_the_shared_meter_weights_are_adopted_for_the_live_split(self) -> None:
+        # An unlearned member stays None (it takes the others' mean); junk is
+        # read as unlearned rather than as a weight.
+        coordinator = self._make_coordinator(
+            section={
+                "data": {},
+                "fingerprint": "stale",
+                "shared_meter_weights": {"ac-1": 1.2, "ac-2": None, "ac-3": "x"},
+            }
+        )
+
+        coordinator._adopt_stored_appliance_energy()
+
+        self.assertEqual(
+            coordinator._shared_meter_weights,
+            {"ac-1": 1.2, "ac-2": None, "ac-3": None},
+        )
+
+    def test_a_fixed_appliance_learns_a_record_but_no_estimate(self) -> None:
         coordinator = self._make_coordinator(
             section=None,
             appliances=[
@@ -1383,6 +1394,8 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                     "name": "Pool Pump",
                     "controls": {"switch": {"entity_id": "switch.pool_pump"}},
                     "consumption": {
+                        "energy_entity_id": "sensor.pool_pump_energy",
+                        "power_entity_id": "sensor.pool_pump_power",
                         "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.7},
                     },
                 },
@@ -1391,7 +1404,18 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
         request = coordinator._read_appliance_energy_training_request()
 
-        self.assertEqual(request.appliances, ())
+        self.assertEqual(
+            request.subjects,
+            (
+                DeviceSubject(
+                    device_key="sensor.pool_pump_energy",
+                    meter="sensor.pool_pump_energy",
+                    controllable_id="pool-pump",
+                    power_entity_id="sensor.pool_pump_power",
+                    running_signal=("switch.pool_pump", "switch"),
+                ),
+            ),
+        )
 
     def test_projection_reader_returns_stored_values_and_none_for_the_rest(
         self,

@@ -115,6 +115,20 @@ def consumer_value_type(device_config: Mapping[str, Any] | None, device: str) ->
     return _CONSUMER_VALUE_TYPES[device][is_power_inverted(device_config, device)]
 
 
+def watts_for_value_type(raw: float, value_type: str) -> float:
+    """A raw power reading as the watts a node of ``value_type`` carries.
+
+    ``positive`` and ``negative`` keep only their sign's magnitude; ``default``
+    trusts the reading. The one rule for the live tree and for the usage
+    statistics learned from a device's power history.
+    """
+    if value_type == "positive":
+        return max(0.0, raw)
+    if value_type == "negative":
+        return abs(min(0.0, raw))
+    return raw
+
+
 #: The gerund each option's quantity is *reported* as, keyed by the noun the
 #: option names. Options are written as ``<sign>_is_<quantity>``, and the
 #: quantity there is a noun because the option is a statement about the sensor

@@ -1290,6 +1290,19 @@ def _validate_controllables_config(
                     "behind it under that device as children without a meter"
                 ),
             )
+    # A device's learned record is keyed by its meter, or by its id when it has
+    # none (the card's deviceKey), so one string must not name both.
+    for entity_id, paths in meter_owners.items():
+        if entity_id in seen_ids:
+            report.add_error(
+                section=section,
+                path=f"{paths[0]}.consumption.energy_entity_id",
+                code="meter_is_device_id",
+                message=(
+                    f"energy meter {entity_id!r} is also a device id; a device "
+                    "id must not be a meter's entity id"
+                ),
+            )
 
 
 def _validate_groupings(
@@ -1600,6 +1613,22 @@ def _validate_device_consumption(
         consumption.get("power_entity_id"),
         allowed_domains=("sensor",),
     )
+
+    # How far a parent caps its meterless children above their learned power;
+    # absent hands them all its own power. See ``read_shared_meters``. A null
+    # is the editor's cleared field: configured wrong, not absent.
+    tolerance = consumption.get("children_tolerance_percent")
+    if "children_tolerance_percent" in consumption and (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float))
+        or tolerance < 0
+    ):
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption.children_tolerance_percent",
+            code="invalid_non_negative_number",
+            message=f"{path}.consumption.children_tolerance_percent must be a number >= 0",
+        )
 
     energy_entity_id = consumption.get("energy_entity_id")
     if energy_entity_id is None:

@@ -429,16 +429,13 @@ class LiveShapedMigrationTests(unittest.TestCase):
         # The same runtimes: the four air conditioners still read the breaker.
         self.assertEqual(list(after), before)
 
-        def request(appliances, shared_meters) -> ApplianceEnergyTrainingRequest:
-            return ApplianceEnergyTrainingRequest(
-                appliances=tuple(
-                    a for a in appliances if getattr(a, "uses_history_average", False)
-                ),
-                shared_meters=shared_meters,
-            )
+        # A device's part of the fingerprint is read from the device tree,
+        # which v19 did not have, so the shared part is what is compared: the
+        # migration must not move who shares the breaker.
+        def request(shared_meters) -> ApplianceEnergyTrainingRequest:
+            return ApplianceEnergyTrainingRequest(shared_meters=shared_meters)
 
         v19_request = request(
-            before,
             {
                 _AC_METER: SharedMeter(
                     tuple(
@@ -450,7 +447,6 @@ class LiveShapedMigrationTests(unittest.TestCase):
             },
         )
         v20_request = request(
-            after,
             {
                 meter: SharedMeter(
                     tuple(SharedMeterMember.for_signal(*m) for m in shared["members"]),

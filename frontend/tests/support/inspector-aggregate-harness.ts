@@ -292,6 +292,10 @@ export async function mountInspector(
                     (window as any).__dayRequests.push(msg.date);
                     return { ...dayPayload, date: msg.date };
                 }
+                if (msg.type === "helman/get_device_stats") {
+                    ((window as any).__deviceStatsRequests ??= []).push(msg.device_key);
+                    return null;
+                }
                 return {};
             },
         };

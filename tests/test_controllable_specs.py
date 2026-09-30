@@ -621,9 +621,31 @@ class SharedMeterReaderTests(unittest.TestCase):
                 "sensor.study_energy": {
                     "members": [("lamp", "switch.lamp", "switch")],
                     "metered_children": ["sensor.plug_energy"],
+                    "tolerance": None,
                 }
             },
         )
+
+    def test_the_owners_tolerance_percent_is_read_as_a_fraction(self) -> None:
+        study = _study()
+        study["consumption"]["power_entity_id"] = "sensor.study_power"
+        study["consumption"]["children_tolerance_percent"] = 20
+
+        shared = read_shared_meters({"devices": {"consumers": [study]}})
+
+        self.assertEqual(shared["sensor.study_energy"]["tolerance"], 0.2)
+
+    def test_a_tolerance_left_on_an_owner_without_a_power_sensor_is_ignored(
+        self,
+    ) -> None:
+        # No unmeasured row to show the excess on, and no editor field to undo
+        # it: a leftover key must not keep capping the members.
+        study = _study()
+        study["consumption"]["children_tolerance_percent"] = 20
+
+        shared = read_shared_meters({"devices": {"consumers": [study]}})
+
+        self.assertIsNone(shared["sensor.study_energy"]["tolerance"])
 
     def test_each_member_runs_by_its_own_control(self) -> None:
         shared = read_shared_meters({"devices": {"consumers": [_ac_breaker()]}})
