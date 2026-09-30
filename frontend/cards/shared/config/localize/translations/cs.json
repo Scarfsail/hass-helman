@@ -604,6 +604,12 @@
       "schedulable": "Plánovatelné",
       "issues": "Problémy: {count}"
     },
+    "section_badges": {
+      "mode": "Režim",
+      "parent_meter": "Elektroměr nadřazeného",
+      "count": "{count}",
+      "kwh_per_hour": "{value} kWh/h"
+    },
     "import": {
       "preview": "Náhled importu Energie",
       "draft_only": "Použití změní návrh. Uložení změny uloží.",

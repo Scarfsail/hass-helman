@@ -97,6 +97,18 @@ const APPLIANCE_ICON_SELECTOR = {
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
+/** A device card's sections, each named by its `editor.sections.*` key. */
+type SectionKey =
+    | "identity"
+    | "groups"
+    | "measurements"
+    | "controls"
+    | "projection"
+    | "use_modes"
+    | "eco_gears"
+    | "vehicles"
+    | "children";
+
 /**
  * A device's learned energy, as the appliance-energy job reports it: the
  * forecast estimate of a `history_average` device, or what any other device's
@@ -129,7 +141,7 @@ export function trainingDepthCell(value: unknown): string {
 }
 
 /** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
-function validationPath(path: readonly PathSegment[]): string {
+export function validationPath(path: readonly PathSegment[]): string {
     return path
         .map((segment, index) =>
             typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
@@ -157,6 +169,95 @@ export function deviceIssues(
             (issue.path === own || issue.path.startsWith(`${own}.`)) &&
             !issue.path.startsWith(`${own}.children[`),
     );
+}
+
+/**
+ * The section of a device's card that holds the field an issue points at.
+ *
+ * `devicePath` is the card's own device; an issue under one of its children
+ * belongs to the Children section, so a broken child opens its parent's.
+ */
+function sectionOfIssue(devicePath: readonly PathSegment[], issuePath: string): SectionKey {
+    const rest = issuePath.slice(validationPath(devicePath).length).replace(/^\./, "");
+    const under = (prefix: string) =>
+        rest === prefix || rest.startsWith(`${prefix}.`) || rest.startsWith(`${prefix}[`);
+    if (under("children")) return "children";
+    if (under("consumption.projection")) return "projection";
+    if (under("consumption")) return "measurements";
+    if (under("controls.use_mode.values")) return "use_modes";
+    if (under("controls.eco_gear.values")) return "eco_gears";
+    // An EV charger's power limit is edited among its controls.
+    if (under("controls") || under("schedulable") || under("limits")) return "controls";
+    if (under("vehicles")) return "vehicles";
+    if (under("groups")) return "groups";
+    return "identity";
+}
+
+/**
+ * The issues a report raises on a device, keyed `path code`, and the sections
+ * holding the ones `seen` does not: a section that gains an issue opens, and
+ * one whose issues are all old stays as the reader left it.
+ */
+export function newIssueSections<K extends string>(
+    validation: ValidationReport | null,
+    path: readonly PathSegment[],
+    seen: ReadonlySet<string>,
+    sectionOf: (issuePath: string) => K,
+): { flagged: Set<string>; fresh: K[] } {
+    const own = validationPath(path);
+    const issues = [...(validation?.errors ?? []), ...(validation?.warnings ?? [])].filter(
+        (issue) => issue.path === own || issue.path.startsWith(`${own}.`),
+    );
+    const keyOf = (issue: ValidationIssue) => `${issue.path} ${issue.code}`;
+    return {
+        flagged: new Set(issues.map(keyOf)),
+        fresh: issues.filter((issue) => !seen.has(keyOf(issue))).map((issue) => sectionOf(issue.path)),
+    };
+}
+
+/**
+ * A card's section whose open state the host keeps as a set of keys, so a
+ * reader's toggle survives the host's re-renders.
+ */
+export function renderTrackedSection<K extends string>(
+    label: string,
+    key: K,
+    content: TemplateResult,
+    chips: { key: string; text: string }[],
+    open: ReadonlySet<K>,
+    setOpen: (next: Set<K>) => void,
+): TemplateResult {
+    return renderSimpleSection(label, content, {
+        open: open.has(key),
+        badge: renderBadges(chips),
+        onToggle: (isOpen) => {
+            if (open.has(key) === isOpen) return;
+            const next = new Set(open);
+            if (isOpen) next.add(key);
+            else next.delete(key);
+            setOpen(next);
+        },
+    });
+}
+
+/** A section summary's chips, the way the device card's own badges look. */
+export function renderBadges(chips: { key: string; text: string }[]): TemplateResult | undefined {
+    if (chips.length === 0) return undefined;
+    return html`<div class="device-badges">
+        ${chips.map((chip) => html`<span class="device-badge" data-badge=${chip.key}>${chip.text}</span>`)}
+    </div>`;
+}
+
+/** The derived badges a device's overview row shows, by `editor.device_badges.*` key. */
+function deviceBadgeKeys(device: JsonObject): string[] {
+    const consumption = asJsonObject(device.consumption) ?? {};
+    const badges: [boolean, string][] = [
+        [!!ownMeter(device), "energy"],
+        [stringValue(consumption.power_entity_id) !== "", "power"],
+        [hasSwitch(device), "switch"],
+        [isSchedulable(device), "schedulable"],
+    ];
+    return badges.filter(([shown]) => shown).map(([, key]) => key);
 }
 
 export function renderDeviceIssues(
@@ -397,7 +498,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     @property({ attribute: false })
     listActions?: (path: PathSegment[]) => TemplateResult;
 
-    /** The children section, below the form. */
+    /** The Children section's content, below the form; `nothing` leaves the section out. */
     @property({ attribute: false })
     renderChildren?: (device: JsonObject, path: PathSegment[]) => TemplateResult | typeof nothing;
 
@@ -436,6 +537,25 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      */
     @state() private _showAllDevicesFor: string | null = null;
 
+    /**
+     * The sections the reader has open. All start closed; a section that gains
+     * a validation issue is opened, and only the reader closes one.
+     */
+    @state() private _openSections = new Set<SectionKey>();
+
+    /**
+     * The issues the last validation report raised on this device, as
+     * `path code`, so only a section that gains a new one opens.
+     */
+    private _flaggedIssues = new Set<string>();
+
+    /**
+     * The device the two sets above belong to. The panel's device lists
+     * are unkeyed, so a remove or a reorder hands this element another device,
+     * which starts with its sections closed like any freshly opened one.
+     */
+    private _sectionsFor: string | null = null;
+
     protected createRenderRoot(): HTMLElement {
         return this;
     }
@@ -444,6 +564,45 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         if (changed.has("config") && this._suggestions?.draft === "next") {
             this._suggestions = { ...this._suggestions, draft: this.config };
         }
+        const id = stringValue(asJsonObject(this.getValue(this.path))?.id);
+        if (id !== this._sectionsFor) {
+            this._sectionsFor = id;
+            this._openSections = new Set();
+            this._flaggedIssues = new Set();
+        }
+        if (changed.has("validation") || changed.has("config")) {
+            const { flagged, fresh } = newIssueSections(
+                this.validation,
+                this.path,
+                this._flaggedIssues,
+                (issuePath) => sectionOfIssue(this.path, issuePath),
+            );
+            if (fresh.length) this._openSections = new Set([...this._openSections, ...fresh]);
+            this._flaggedIssues = flagged;
+        }
+    }
+
+    /** One of the card's sections, open while the reader keeps it open. */
+    private _renderSection(
+        key: SectionKey,
+        content: TemplateResult,
+        chips: { key: string; text: string }[] = [],
+    ): TemplateResult {
+        return renderTrackedSection(
+            this.t(`editor.sections.${key}`),
+            key,
+            content,
+            chips,
+            this._openSections,
+            (next) => (this._openSections = next),
+        );
+    }
+
+    /** A count chip, or none for an empty list. */
+    private _countChips(count: number): { key: string; text: string }[] {
+        return count > 0
+            ? [{ key: "count", text: this._tFormat("editor.section_badges.count", { count }) }]
+            : [];
     }
 
     render(): TemplateResult | typeof nothing {
@@ -494,8 +653,8 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         ${this._renameError
                             ? html`<div class="message error">${this._renameError}</div>`
                             : nothing}
-                        ${renderSimpleSection(
-                            this.t("editor.sections.identity"),
+                        ${this._renderSection(
+                            "identity",
                             html`<div class="field-grid">
                                 ${renderOptionalTextField(
                                     this,
@@ -522,10 +681,11 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 ${this._renderDeviceParentField()}
                                 ${haDevice || showAll ? this._renderHaDeviceField(haDevice, id) : nothing}
                             </div>`,
+                            [{ key: "kind", text: this.t(`editor.values.kind_${kind}`) }],
                         )}
                         ${this._renderGroupsSection(device)}
-                        ${renderSimpleSection(
-                            this.t("editor.sections.measurements"),
+                        ${this._renderSection(
+                            "measurements",
                             html`<div class="field-grid">
                                 ${this._renderEntityGroup(
                                     [...path, "consumption", "energy_entity_id"],
@@ -557,19 +717,26 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                             ${this.energyEstimate?.state === "recorded"
                                 ? this._renderEnergyEstimateLine(undefined)
                                 : nothing}`,
+                            [
+                                ...(meterless
+                                    ? [{ key: "parent_meter", text: this.t("editor.section_badges.parent_meter") }]
+                                    : []),
+                                ...this._deviceChips(device, ["energy", "power"]),
+                            ],
                         )}
-                        ${renderSimpleSection(
-                            this.t("editor.sections.controls"),
+                        ${this._renderSection(
+                            "controls",
                             html`<div class="field-grid">
                                 ${this._renderSchedulableField(device)}
                                 ${this._renderDeviceControls(kind, schedulable || meterless, scope)}
                             </div>`,
+                            this._deviceChips(device, ["switch", "schedulable"]),
                         )}
                         ${schedulable && kind !== "ev_charger"
                             ? this._renderProjectionSection(kind)
                             : nothing}
                         ${kind === "ev_charger" ? this._renderEvChargerSections() : nothing}
-                        ${this.renderChildren?.(device, path) ?? nothing}
+                        ${this._renderChildrenSection(device)}
                     `}
                 </div>
             </details>
@@ -581,20 +748,25 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
 
     /** The derived badges of a device's overview row. */
     private _renderDeviceBadges(device: JsonObject): TemplateResult[] {
-        const consumption = asJsonObject(device.consumption) ?? {};
-        const badges: [boolean, string][] = [
-            [!!ownMeter(device), "energy"],
-            [stringValue(consumption.power_entity_id) !== "", "power"],
-            [hasSwitch(device), "switch"],
-            [isSchedulable(device), "schedulable"],
-        ];
-        return badges
-            .filter(([shown]) => shown)
-            .map(
-                ([, key]) => html`
-                    <span class="device-badge" data-badge=${key}>${this.t(`editor.device_badges.${key}`)}</span>
-                `,
-            );
+        return deviceBadgeKeys(device).map(
+            (key) => html`
+                <span class="device-badge" data-badge=${key}>${this.t(`editor.device_badges.${key}`)}</span>
+            `,
+        );
+    }
+
+    /** The overview row's badges among `keys`, as a section's chips. */
+    private _deviceChips(device: JsonObject, keys: string[]): { key: string; text: string }[] {
+        return deviceBadgeKeys(device)
+            .filter((key) => keys.includes(key))
+            .map((key) => ({ key, text: this.t(`editor.device_badges.${key}`) }));
+    }
+
+    /** The host's children list, in a section of the card; none where the host has none. */
+    private _renderChildrenSection(device: JsonObject): TemplateResult | typeof nothing {
+        const children = this.renderChildren?.(device, this.path) ?? nothing;
+        if (children === nothing) return nothing;
+        return this._renderSection("children", children, this._countChips(deviceChildren(device).length));
     }
 
     private _renderEntityGroup(
@@ -790,17 +962,8 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
             return { grouping, groupingId, groups, current, group: groups.find((group) => group.id === current) };
         });
         const assigned = rows.filter((row) => row.current);
-        const badge = assigned.length
-            ? html`<div class="device-badges">
-                  ${assigned.map(
-                      (row) => html`<span class="device-badge" data-badge="group">
-                          ${stringValue(row.group?.name) || row.current}
-                      </span>`,
-                  )}
-              </div>`
-            : undefined;
-        return renderSimpleSection(
-            this.t("editor.sections.groups"),
+        return this._renderSection(
+            "groups",
             html`<div class="field-grid">
                 ${rows.map(
                     ({ grouping, groupingId, groups, current, group }) => html`
@@ -834,7 +997,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                     `,
                 )}
             </div>`,
-            { open: false, badge },
+            assigned.map((row) => ({ key: "group", text: stringValue(row.group?.name) || row.current })),
         );
     }
 
@@ -1098,26 +1261,28 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         const ecoGears = objectEntries(this.getValue([...path, "controls", "eco_gear", "values"]));
         const vehicles = asJsonArray(this.getValue([...path, "vehicles"])) ?? [];
         return html`
-            ${renderSimpleSection(
-                this.t("editor.sections.use_modes"),
+            ${this._renderSection(
+                "use_modes",
                 html`<div class="list-stack">
                     ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(modeKey, modeConfig))}
                 </div>
                 <div class="section-footer">
                     <button type="button" class="add-button" @click=${() => this._addUseMode()}>${this.t("editor.actions.add_use_mode")}</button>
                 </div>`,
+                this._countChips(useModes.length),
             )}
-            ${renderSimpleSection(
-                this.t("editor.sections.eco_gears"),
+            ${this._renderSection(
+                "eco_gears",
                 html`<div class="list-stack">
                     ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(gearKey, gearConfig))}
                 </div>
                 <div class="section-footer">
                     <button type="button" class="add-button" @click=${() => this._addEcoGear()}>${this.t("editor.actions.add_eco_gear")}</button>
                 </div>`,
+                this._countChips(ecoGears.length),
             )}
-            ${renderSimpleSection(
-                this.t("editor.sections.vehicles"),
+            ${this._renderSection(
+                "vehicles",
                 html`${renderSortableList({
                     items: vehicles,
                     containerClass: "list-stack",
@@ -1130,6 +1295,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                 <div class="section-footer">
                     <button type="button" class="add-button" @click=${() => this._addVehicle()}>${this.t("editor.actions.add_vehicle")}</button>
                 </div>`,
+                this._countChips(vehicles.length),
             )}
         `;
     }
@@ -1142,8 +1308,10 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         const path = this.path;
         const projectionPath: PathSegment[] = [...path, "consumption", "projection"];
         const strategy = stringValue(this.getValue([...projectionPath, "strategy"])) || "fixed";
-        return renderSimpleSection(
-            this.t("editor.sections.projection"),
+        const hourly = this.getValue([...projectionPath, "hourly_energy_kwh"]);
+        const strategyLabel = GENERIC_PROJECTION_STRATEGIES.find((option) => option.value === strategy)?.labelKey;
+        return this._renderSection(
+            "projection",
             html`
                 <p class="inline-note">
                     ${this.t(
@@ -1194,9 +1362,15 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         : nothing}
                 </div>
                 ${strategy === "history_average"
-                    ? this._renderEnergyEstimateLine(this.getValue([...projectionPath, "hourly_energy_kwh"]))
+                    ? this._renderEnergyEstimateLine(hourly)
                     : nothing}
             `,
+            [
+                { key: "strategy", text: strategyLabel ? this.t(strategyLabel) : strategy },
+                ...(typeof hourly === "number" && Number.isFinite(hourly)
+                    ? [{ key: "hourly_energy_kwh", text: this._tFormat("editor.section_badges.kwh_per_hour", { value: hourly }) }]
+                    : []),
+            ],
         );
     }
 

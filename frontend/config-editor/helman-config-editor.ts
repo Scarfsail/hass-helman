@@ -179,9 +179,12 @@ import {
   deviceIdentityTargets,
   deviceIssues,
   deviceName,
+  newIssueSections,
   renderDeviceIssues,
   renderIssueCountBadge,
+  renderTrackedSection,
   trainingDepthCell,
+  validationPath,
   type ApplianceEnergyEstimate,
   type DeviceConfigChangedDetail,
   type HelmanDeviceEditor,
@@ -228,6 +231,16 @@ type OptimizerBucket = OptimizerConfigBucket;
  * the card lays them out. Mirrors `CONTROLLABLE_SPECS["inverter"]` in Python:
  * the backend owns the list, this is the editor's copy of it.
  */
+type InverterSectionKey = "identity" | "controls" | "action_options";
+
+/** The inverter card's section that holds the field an issue points at. */
+function inverterSectionOfIssue(path: readonly PathSegment[], issuePath: string): InverterSectionKey {
+  const rest = issuePath.slice(validationPath(path).length).replace(/^\./, "");
+  if (rest.startsWith("controls.mode.options")) return "action_options";
+  if (rest === "controls" || rest.startsWith("controls.")) return "controls";
+  return "identity";
+}
+
 const INVERTER_ACTION_OPTIONS = [
   { key: "normal", labelKey: "editor.fields.normal_option" },
   { key: "charge_to_target_soc", labelKey: "editor.fields.charge_to_target_soc_option" },
@@ -323,6 +336,7 @@ export class HelmanConfigEditorPanel
     _configDefaults: { state: true },
     _helpDialog: { state: true },
     _entitiesOnly: { state: true },
+    _inverterOpenSections: { state: true },
     _trainingStatus: { state: true },
     _inspectorCardError: { state: true },
   };
@@ -944,6 +958,14 @@ export class HelmanConfigEditorPanel
   private _saving = false;
   private _validating = false;
   private _validation: ValidationReport | null = null;
+  /**
+   * The inverter card's open sections. Like a consumer card's, all start
+   * closed; a section that gains a validation issue is opened, and only the
+   * reader closes one.
+   */
+  private _inverterOpenSections = new Set<InverterSectionKey>();
+  /** The inverter issues the last validation report raised, so only new ones open. */
+  private _inverterFlaggedIssues = new Set<string>();
   private _message: StatusMessage | null = null;
   /**
    * The stored config moved while a draft was open, and we refused to reload.
@@ -1111,6 +1133,29 @@ export class HelmanConfigEditorPanel
     if (this._trainingStatusTimer !== undefined) {
       clearInterval(this._trainingStatusTimer);
       this._trainingStatusTimer = undefined;
+    }
+  }
+
+  protected willUpdate(changedProperties: PropertyValues<this>): void {
+    super.willUpdate(changedProperties);
+    // A removed inverter takes its section state with it, so the next one
+    // added starts collapsed like any freshly opened card.
+    if (changedProperties.has("_config") && !this._inverterPath()) {
+      this._inverterOpenSections = new Set();
+      this._inverterFlaggedIssues = new Set();
+    }
+    if (changedProperties.has("_validation")) {
+      const path = this._inverterPath() ?? [];
+      const { flagged, fresh } = newIssueSections(
+        this._validation,
+        path,
+        this._inverterFlaggedIssues,
+        (issuePath) => inverterSectionOfIssue(path, issuePath),
+      );
+      if (fresh.length) {
+        this._inverterOpenSections = new Set([...this._inverterOpenSections, ...fresh]);
+      }
+      this._inverterFlaggedIssues = flagged;
     }
   }
 
@@ -3957,12 +4002,9 @@ export class HelmanConfigEditorPanel
    * own. Validation allows only the inverter here, at most once.
    */
   private _renderSystemDevices(): TemplateResult {
-    const devices = asJsonArray(this._getValue(["devices", "system"])) ?? [];
-    const index = devices.findIndex(
-      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
-    );
-    return index >= 0
-      ? this._renderInverterCard(asJsonObject(devices[index]) ?? {}, ["devices", "system", index])
+    const path = this._inverterPath();
+    return path
+      ? this._renderInverterCard(asJsonObject(this._getValue(path)) ?? {}, path)
       : html`
           <div class="message info">${this._t("editor.empty.no_inverter")}</div>
           <div class="section-footer">
@@ -3973,6 +4015,31 @@ export class HelmanConfigEditorPanel
         `;
   }
 
+  /** Where the inverter sits in `devices.system`, or `null` when there is none. */
+  private _inverterPath(): PathSegment[] | null {
+    const devices = asJsonArray(this._getValue(["devices", "system"])) ?? [];
+    const index = devices.findIndex(
+      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
+    );
+    return index >= 0 ? ["devices", "system", index] : null;
+  }
+
+  /** One of the inverter card's sections, open while the reader keeps it open. */
+  private _renderInverterSection(
+    key: InverterSectionKey,
+    content: TemplateResult,
+    chips: { key: string; text: string }[],
+  ): TemplateResult {
+    return renderTrackedSection(
+      this._t(`editor.sections.${key}`),
+      key,
+      content,
+      chips,
+      this._inverterOpenSections,
+      (next) => (this._inverterOpenSections = next),
+    );
+  }
+
   private _renderInverterCard(inverter: JsonObject, path: PathSegment[]): TemplateResult {
     const modePath: PathSegment[] = [...path, "controls", "mode"];
     const inverterName =
@@ -3981,6 +4048,11 @@ export class HelmanConfigEditorPanel
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const isYaml = this._getDeviceMode(path) === "yaml";
     const issues = deviceIssues(this._validation, path);
+    const mode = asJsonObject(asJsonObject(inverter.controls)?.mode) ?? {};
+    const options = asJsonObject(mode.options) ?? {};
+    const optionCount = INVERTER_ACTION_OPTIONS.filter(
+      (option) => this._stringValue(options[option.key]) !== "",
+    ).length;
 
     return html`
       <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
@@ -4007,16 +4079,17 @@ export class HelmanConfigEditorPanel
           ${isYaml
             ? this._renderDeviceYamlEditor(path)
             : html`
-              ${this._renderSimpleSection(
-                this._t("editor.sections.identity"),
+              ${this._renderInverterSection(
+                "identity",
                 html`<div class="field-grid">
                   ${this._renderRequiredTextField([...path, "id"], "editor.fields.controllable_id", undefined, "editor.help.controllable_id")}
                   ${this._renderRequiredTextField([...path, "name"], "editor.fields.controllable_name", undefined, "editor.help.controllable_name")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="inverter" disabled /></div>
                 </div>`,
+                [{ key: "kind", text: this._t("editor.dynamic.inverter") }],
               )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.controls"),
+              ${this._renderInverterSection(
+                "controls",
                 html`<div class="field-grid">
                   ${this._renderEntityGroup(
                     [...modePath, "entity_id"],
@@ -4029,9 +4102,12 @@ export class HelmanConfigEditorPanel
                     },
                   )}
                 </div>`,
+                this._stringValue(mode.entity_id)
+                  ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
+                  : [],
               )}
-              ${this._renderSimpleSection(
-                this._t("editor.sections.action_options"),
+              ${this._renderInverterSection(
+                "action_options",
                 html`<div class="field-grid">
                   ${INVERTER_ACTION_OPTIONS.map((option) =>
                     this._renderOptionalTextField(
@@ -4042,6 +4118,14 @@ export class HelmanConfigEditorPanel
                     ),
                   )}
                 </div>`,
+                optionCount > 0
+                  ? [
+                      {
+                        key: "count",
+                        text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                      },
+                    ]
+                  : [],
               )}
             `}
         </div>
@@ -4177,13 +4261,10 @@ export class HelmanConfigEditorPanel
     const hasChildren = (asJsonArray(device.children) ?? []).length > 0;
     const canParent = canHaveChildren(device);
     if (!hasChildren && !canParent) return nothing;
-    return this._renderSimpleSection(
-      this._t("editor.sections.children"),
-      html`
-        ${hasChildren ? this._renderDeviceList([...path, "children"], device) : nothing}
-        ${canParent ? this._renderAddDevice([...path, "children"], device) : nothing}
-      `,
-    );
+    return html`
+      ${hasChildren ? this._renderDeviceList([...path, "children"], device) : nothing}
+      ${canParent ? this._renderAddDevice([...path, "children"], device) : nothing}
+    `;
   }
 
   private _renderOptionalTextField(
