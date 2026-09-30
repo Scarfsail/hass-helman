@@ -1229,7 +1229,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices.consumers[0]"
+                issue.path == "devices.consumers[0].controls.climate.entity_id"
                 and "controls.climate.entity_id" in issue.message
                 for issue in report.errors
             )
@@ -1246,7 +1246,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "devices.consumers[0]"
+                issue.path == "devices.consumers[0].icon"
                 and ".icon must be a non-empty string" in issue.message
                 for issue in report.errors
             )
@@ -1646,7 +1646,54 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(appliance)
 
-        self.assertIn(("devices.consumers[0]", "invalid_appliance"), errors)
+        self.assertIn(("devices.consumers[0].controls", "invalid_appliance"), errors)
+
+    def test_an_invalid_generic_appliance_is_reported_at_the_field(self) -> None:
+        appliance = _generic_appliance()
+        del appliance["consumption"]["projection"]["hourly_energy_kwh"]
+
+        errors, _ = self._codes(appliance)
+
+        self.assertIn(
+            (
+                "devices.consumers[0].consumption.projection.hourly_energy_kwh",
+                "invalid_appliance",
+            ),
+            errors,
+        )
+
+    def test_an_invalid_climate_appliance_is_reported_at_the_field(self) -> None:
+        appliance = _climate_appliance()
+        del appliance["controls"]["climate"]
+
+        errors, _ = self._codes(appliance)
+
+        self.assertIn(
+            ("devices.consumers[0].controls.climate", "invalid_appliance"), errors
+        )
+
+    def test_an_invalid_ev_charger_is_reported_at_the_field(self) -> None:
+        charger = _valid_config()["devices"]["consumers"][0]
+        charger["controls"]["use_mode"]["values"] = {}
+
+        errors, _ = self._codes(charger)
+
+        self.assertIn(
+            ("devices.consumers[0].controls.use_mode.values", "invalid_appliance"),
+            errors,
+        )
+
+    def test_a_blank_use_mode_id_is_reported_at_the_values(self) -> None:
+        charger = _valid_config()["devices"]["consumers"][0]
+        values = charger["controls"]["use_mode"]["values"]
+        values[" "] = next(iter(values.values()))
+
+        errors, _ = self._codes(charger)
+
+        self.assertIn(
+            ("devices.consumers[0].controls.use_mode.values", "invalid_appliance"),
+            errors,
+        )
 
     def test_ids_are_unique_across_the_whole_tree(self) -> None:
         breaker = _ac_breaker()

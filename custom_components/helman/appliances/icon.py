@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from ..const import DEFAULT_APPLIANCE_ICON
+from .errors import ApplianceConfigError
 
 
 def read_optional_appliance_icon(
     value: object,
     *,
     path: str,
-    error_type: type[Exception] = ValueError,
+    error_type: type[ApplianceConfigError],
 ) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise error_type(f"{path} must be a non-empty string")
+        raise error_type(path, "must be a non-empty string")
     return value.strip()
 
 

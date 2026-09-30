@@ -4,6 +4,7 @@ from importlib import import_module
 
 __all__ = [
     "AppliancesRuntimeRegistry",
+    "ApplianceConfigError",
     "ApplianceMetadataResponseDict",
     "ApplianceProjectionsResponseDict",
     "ApplianceProjectionPointDict",
@@ -51,6 +52,7 @@ __all__ = [
 
 _EXPORTS = {
     "AppliancesRuntimeRegistry": (".state", "AppliancesRuntimeRegistry"),
+    "ApplianceConfigError": (".errors", "ApplianceConfigError"),
     "ApplianceMetadataResponseDict": (".dto", "ApplianceMetadataResponseDict"),
     "ApplianceProjectionsResponseDict": (
         ".projection_response",
