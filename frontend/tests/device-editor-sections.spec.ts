@@ -302,6 +302,16 @@ test("a section closed by hand stays closed until a new issue appears in it", as
     await validate(page, VALID);
     await validate(page, { valid: false, errors: [], warnings: [measurements] });
     await expect.poll(() => openSections(panel(page), "heater")).toEqual(["Measurements", "Controls"]);
+
+    // Closed again, then a second issue joins the one that persists: it opens.
+    await panel(page)
+        .locator('details.device-card[data-device-id="heater"] > .appliance-body > details.section-card[open]')
+        .first()
+        .evaluate((details) => ((details as HTMLDetailsElement).open = false));
+    await expect.poll(() => openSections(panel(page), "heater")).toEqual(["Controls"]);
+    const energy = issue("devices.consumers[0].consumption.energy_entity_id", "energy is odd");
+    await validate(page, { valid: false, errors: [energy], warnings: [measurements] });
+    await expect.poll(() => openSections(panel(page), "heater")).toEqual(["Measurements", "Controls"]);
 });
 
 test("a broken child opens its parent's Children section", async ({ page }) => {

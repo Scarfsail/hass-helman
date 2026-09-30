@@ -496,11 +496,14 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      */
     @state() private _openSections = new Set<SectionKey>();
 
-    /** The sections the last validation report flagged, so only new ones open. */
-    private _flaggedSections = new Set<SectionKey>();
+    /**
+     * The issues the last validation report raised on this device, as
+     * `path code`, so only a section that gains a new one opens.
+     */
+    private _flaggedIssues = new Set<string>();
 
     /**
-     * The device the two section sets above belong to. The panel's device lists
+     * The device the two sets above belong to. The panel's device lists
      * are unkeyed, so a remove or a reorder hands this element another device,
      * which starts with its sections closed like any freshly opened one.
      */
@@ -518,18 +521,18 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         if (id !== this._sectionsFor) {
             this._sectionsFor = id;
             this._openSections = new Set();
-            this._flaggedSections = new Set();
+            this._flaggedIssues = new Set();
         }
         if (changed.has("validation") || changed.has("config")) {
             const own = validationPath(this.path);
-            const flagged = new Set(
-                [...(this.validation?.errors ?? []), ...(this.validation?.warnings ?? [])]
-                    .filter((issue) => issue.path === own || issue.path.startsWith(`${own}.`))
-                    .map((issue) => sectionOfIssue(this.path, issue.path)),
-            );
-            const fresh = [...flagged].filter((key) => !this._flaggedSections.has(key));
+            const issues = [...(this.validation?.errors ?? []), ...(this.validation?.warnings ?? [])]
+                .filter((issue) => issue.path === own || issue.path.startsWith(`${own}.`));
+            const flagged = new Set(issues.map((issue) => `${issue.path} ${issue.code}`));
+            const fresh = issues
+                .filter((issue) => !this._flaggedIssues.has(`${issue.path} ${issue.code}`))
+                .map((issue) => sectionOfIssue(this.path, issue.path));
             if (fresh.length) this._openSections = new Set([...this._openSections, ...fresh]);
-            this._flaggedSections = flagged;
+            this._flaggedIssues = flagged;
         }
     }
 
