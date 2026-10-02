@@ -542,6 +542,10 @@ test.describe("states and notes", () => {
                 warning: root?.querySelector(".quality-glyph")?.classList.contains("warning"),
             };
         })).toEqual({ boxes: 0, glyph: "⚠", warning: true });
+        // A screen reader hears the warnings themselves, not just "Data quality".
+        const label = await page.evaluate(() => window.__shellRoot()?.querySelector(".quality-glyph")?.getAttribute("aria-label") ?? "");
+        expect(label).toContain("Data quality");
+        expect(label).toContain("solar meter");
         const shown = await hoverTooltip(page, "__shellRoot", "helman-device-report-shell .quality-glyph", "Data quality");
         expect(shown.rows[0]).toContain("solar meter");
         expect(shown.rows[0]).not.toContain("battery");

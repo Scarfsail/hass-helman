@@ -481,7 +481,7 @@ export class HelmanDeviceReportShell extends LitElement {
             <button
                 type="button"
                 class=${"quality-glyph" + (missing.length > 0 ? " warning" : "")}
-                aria-label=${tooltip.title ?? ""}
+                aria-label=${[tooltip.title, ...rows.map((row) => row.forecast?.value)].filter(Boolean).join(". ")}
                 @mousemove=${(event: MouseEvent) => this._tooltip.show(event, tooltip)}
                 @mouseleave=${() => this._tooltip.hide()}
                 @click=${(event: MouseEvent) => this._tooltip.toggle(event, tooltip)}
