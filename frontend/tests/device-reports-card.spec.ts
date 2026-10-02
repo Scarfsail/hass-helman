@@ -267,6 +267,23 @@ test.describe("the period and fetching", () => {
         await expect.poll(() => requestCount(page)).toBe(2);
     });
 
+    test("a report in flight when a config is saved is neither kept nor blocking", async ({ page }) => {
+        await mountCard(page, { complete: true, hold: true });
+        await expect.poll(() => requestCount(page)).toBe(1);
+        await page.evaluate(() => window.__emitDataChanged("config"));
+        await expect.poll(() => requestCount(page)).toBe(2);
+        await page.evaluate(() => window.__releaseReport(0));
+        await page.evaluate(() => window.__releaseReport(1));
+        await rendered(page);
+        // Back and forth: the old answer was not memoised, the new one was.
+        await clickPreset(page, "last_7");
+        await expect.poll(() => requestCount(page)).toBe(3);
+        await page.evaluate(() => window.__releaseReport(2));
+        await clickPreset(page, "last_30");
+        await rendered(page);
+        expect(await requestCount(page)).toBe(3);
+    });
+
     test("an incomplete payload is refetched once five minutes old", async ({ page }) => {
         await mountCard(page, { fakeTimersAt: FIXED_NOW_ISO });
         await expect.poll(() => requestCount(page)).toBe(1);

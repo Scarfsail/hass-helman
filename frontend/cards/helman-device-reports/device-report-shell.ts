@@ -101,6 +101,8 @@ export class HelmanDeviceReportShell extends LitElement {
     private _localizeBuilt = false;
     /** Each request's sequence number: only the latest one's answer is kept. */
     private _requestSeq = 0;
+    /** Bumped on a config announcement: answers to requests made before it are not kept. */
+    private _configGeneration = 0;
     private _stopClock?: () => void;
     private _unsubscribeDataChanged?: () => void;
     private _debounceTimer?: number;
@@ -190,6 +192,11 @@ export class HelmanDeviceReportShell extends LitElement {
             if (!kinds.has("config")) return;
             this._memo.clear();
             this._failed = null;
+            // A request in flight was built from the old config: neither keep
+            // its answer nor let it block the refetch.
+            this._configGeneration += 1;
+            this._requestSeq += 1;
+            this._inflightKey = null;
             this._memoVersion += 1;
         });
     }
@@ -254,10 +261,12 @@ export class HelmanDeviceReportShell extends LitElement {
 
     private _fetch(key: string, report: string, query: DeviceReportQuery): void {
         const seq = ++this._requestSeq;
+        const generation = this._configGeneration;
         this._inflightKey = key;
         this._error = null;
         fetchDeviceReport(this.hass!, report, query).then(
             (payload) => {
+                if (generation !== this._configGeneration) return;
                 // Kept even when a newer request was made meanwhile: it is still
                 // the right answer for its own key, should that be asked again.
                 this._memo.set(key, { payload, fetchedAtMs: Date.now() });
