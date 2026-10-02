@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing, type PropertyValues } from "lit";
+import { LitElement, css, html, nothing, unsafeCSS, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type {
     DeviceReportMoneySide,
@@ -6,16 +6,9 @@ import type {
     RankingNode,
     RankingReportPayload,
 } from "../helman-api";
-import {
-    BATT_COLOR,
-    GRID_COLOR,
-    GRID_IMPORT_COLOR,
-    NEUTRAL_COLOR,
-    PRICE_NEGATIVE_COLOR,
-    SOLAR_COLOR,
-} from "../color-utils";
-import { helmanColorVars } from "../color-vars";
+import { PRICE_NEGATIVE_COLOR } from "../color-utils";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../helman-solar-inspector/chart-colors";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { formatKwhValue, formatPriceValue } from "../shared/forecast-value-format";
 import {
@@ -33,14 +26,18 @@ const SHOW_MODES: readonly ShowMode[] = ["both", "energy", "money"];
 const SORT_MODES: readonly SortMode[] = ["energy", "paid", "forgone", "paid_forgone"];
 const SOURCES = ["solar", "battery", "grid", "unattributed"] as const;
 
-/** The tooltip swatches: the colours the `.seg` and `.money-seg` bars default to. */
+/**
+ * The inspector's chart colours, so a device's split reads like the inspector's
+ * columns: solar, battery and grid as its stack, paid as its import cost and
+ * forgone (export not realised) as its export gain.
+ */
 const SOURCE_COLORS: Record<(typeof SOURCES)[number], string> = {
-    solar: SOLAR_COLOR,
-    battery: BATT_COLOR,
-    grid: GRID_COLOR,
-    unattributed: NEUTRAL_COLOR,
+    solar: CHART_COLORS.actual,
+    battery: CHART_COLORS.battery,
+    grid: CHART_COLORS.grid,
+    unattributed: CHART_COLORS.unattributed,
 };
-const MONEY_COLORS = { paid: GRID_IMPORT_COLOR, forgone: SOLAR_COLOR } as const;
+const MONEY_COLORS = { paid: CHART_COLORS.gridImport, forgone: CHART_COLORS.gridExport } as const;
 
 /** Above this share of a row's kWh, an over-allocation or a partial figure is worth showing. */
 const MARK_SHARE = 0.01;
@@ -157,7 +154,6 @@ export class HelmanDeviceReportRanking extends LitElement {
     private _modelKey: { payload: RankingReportPayload | undefined; sort: SortMode } | null = null;
 
     static styles = [
-        helmanColorVars,
         hoverTooltipStyles,
         css`
             :host { display: block; }
@@ -183,7 +179,19 @@ export class HelmanDeviceReportRanking extends LitElement {
                 border-color: var(--primary-color);
                 color: var(--text-primary-color, #fff);
             }
-            .controls select { font: inherit; }
+            .controls select {
+                font: inherit;
+                padding: 2px 6px;
+                border-radius: 10px;
+                border: 1px solid var(--divider-color, #ccc);
+                background: transparent;
+                color: var(--primary-text-color);
+                cursor: pointer;
+            }
+            .controls select option {
+                background: var(--card-background-color, #fff);
+                color: var(--primary-text-color);
+            }
             .row {
                 cursor: pointer;
                 padding: 4px 0;
@@ -219,9 +227,9 @@ export class HelmanDeviceReportRanking extends LitElement {
                 color: var(--secondary-text-color);
                 white-space: nowrap;
             }
-            .money-figure.paid { color: var(--helman-grid-import); }
-            .money-figure.forgone { color: var(--helman-solar); }
-            .money-figure.negative { color: var(--helman-price-negative); }
+            .money-figure.paid { color: ${unsafeCSS(MONEY_COLORS.paid)}; }
+            .money-figure.forgone { color: ${unsafeCSS(MONEY_COLORS.forgone)}; }
+            .money-figure.negative { color: ${unsafeCSS(PRICE_NEGATIVE_COLOR)}; }
             .track {
                 position: relative;
                 height: 6px;
@@ -234,18 +242,20 @@ export class HelmanDeviceReportRanking extends LitElement {
                 display: flex;
                 height: 100%;
             }
+            /* Measured quantities, filled like the inspector's actual bands. */
+            .seg, .money-seg { opacity: ${ACTUAL_FILL_OPACITY}; }
             .seg { height: 100%; }
-            .seg.solar { background: var(--helman-solar); }
-            .seg.battery { background: var(--helman-battery); }
-            .seg.grid { background: var(--helman-grid); }
-            .seg.unattributed { background: var(--helman-neutral); }
+            .seg.solar { background-color: ${unsafeCSS(SOURCE_COLORS.solar)}; }
+            .seg.battery { background-color: ${unsafeCSS(SOURCE_COLORS.battery)}; }
+            .seg.grid { background-color: ${unsafeCSS(SOURCE_COLORS.grid)}; }
+            .seg.unattributed { background-color: ${unsafeCSS(SOURCE_COLORS.unattributed)}; }
             .money .money-seg {
                 position: absolute;
                 top: 0;
                 bottom: 0;
             }
-            .money-seg.paid { background: var(--helman-grid-import); }
-            .money-seg.forgone { background: var(--helman-solar); }
+            .money-seg.paid { background-color: ${unsafeCSS(MONEY_COLORS.paid)}; }
+            .money-seg.forgone { background-color: ${unsafeCSS(MONEY_COLORS.forgone)}; }
             .money-seg.partial {
                 background-image: repeating-linear-gradient(
                     135deg,

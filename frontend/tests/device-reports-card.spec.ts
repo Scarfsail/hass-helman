@@ -633,17 +633,24 @@ test.describe("the ranking", () => {
         const washer = await page.evaluate(() => {
             const row = window.__rankingRoot()?.querySelector(".row[data-id='sensor.washer']");
             const paid = row?.querySelector(".head .money-figure.paid");
+            const forgone = row?.querySelector(".head .money-figure.forgone");
+            const seg = row?.querySelector(".money-seg.forgone");
             return {
                 children: [...(row?.children ?? [])].map((child) => child.className),
                 figures: row?.querySelector(".figures")?.textContent?.replace(/\s+/g, " ").trim(),
                 paidColor: paid ? getComputedStyle(paid).color : null,
+                forgoneColor: forgone ? getComputedStyle(forgone).color : null,
+                forgoneBar: seg ? [getComputedStyle(seg).backgroundColor, getComputedStyle(seg).opacity] : null,
             };
         });
         expect(washer.children).toEqual(["head", "track energy", "track money"]);
         // Amounts are in the currency, not the price unit.
         expect(washer.figures).toBe("30 kWh · 30 % of house · 12.0 CZK · 3.0 CZK");
-        // Coloured as its bar: the grid-import blue.
+        // Coloured as the inspector's money columns: import cost dark blue, export gain light blue.
         expect(washer.paidColor).toBe("rgb(37, 99, 235)");
+        expect(washer.forgoneColor).toBe("rgb(125, 211, 252)");
+        // Filled like the inspector's measured bands.
+        expect(washer.forgoneBar).toEqual(["rgb(125, 211, 252)", "0.45"]);
 
         await page.evaluate(() => (window.__rankingRoot()
             ?.querySelector("button[data-show='energy']") as HTMLButtonElement).click());

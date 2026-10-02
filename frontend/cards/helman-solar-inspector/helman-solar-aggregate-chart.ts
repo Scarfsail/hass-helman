@@ -4,7 +4,7 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { CHART_COLORS } from "./chart-colors";
+import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
 import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-selection";
 import { selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
@@ -112,12 +112,6 @@ export interface AggregateBucketHoverDetail {
  */
 const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, marginLeft: 44 } as const;
 
-/**
- * The fill opacity the day chart gives a measured band, repeated here so the
- * two views read as one language rather than as two charts that happen to share
- * colours.
- */
-const BAND_FILL_OPACITY = 0.45;
 
 /**
  * How a picked column is drawn, and how a pointed-at one is -- the day view's
@@ -539,7 +533,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                                 () => yFor(0),
                                 xFor,
                             )}
-                            fill=${CHART_COLORS.battery} fill-opacity=${BAND_FILL_OPACITY}
+                            fill=${CHART_COLORS.battery} fill-opacity=${ACTUAL_FILL_OPACITY}
                             stroke=${CHART_COLORS.battery} stroke-width="0.75" stroke-opacity="0.6"
                             pointer-events="none"
                         ></path>
@@ -695,7 +689,7 @@ export class HelmanSolarAggregateChart extends LitElement {
             <path
                 class=${klass}
                 d=${stepAreaPath(run, (index) => yFor(read(index)!), () => zeroY, xFor)}
-                fill=${color} fill-opacity=${BAND_FILL_OPACITY}
+                fill=${color} fill-opacity=${ACTUAL_FILL_OPACITY}
                 stroke=${color} stroke-width="0.75" stroke-opacity="0.6"
                 pointer-events="none"
             ></path>
@@ -892,7 +886,7 @@ export class HelmanSolarAggregateChart extends LitElement {
                 <path
                     class="energy-band"
                     d=${d}
-                    fill=${band.layer.color} fill-opacity=${BAND_FILL_OPACITY}
+                    fill=${band.layer.color} fill-opacity=${ACTUAL_FILL_OPACITY}
                     stroke=${band.layer.color} stroke-width="0.75" stroke-opacity="0.6"
                     pointer-events="none"
                 ></path>

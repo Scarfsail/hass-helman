@@ -30,7 +30,7 @@ import {
   NEUTRAL_COLOR,
   nodeAccentColor,
 } from "../color-utils";
-import { CHART_COLORS } from "./chart-colors";
+import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
 import { formatEnergy } from "../power-format";
 import {
   hoverTooltipStyles,
@@ -302,8 +302,6 @@ const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
 const SOC_UNUSABLE_HATCH_ID = "soc-unusable-hatch";
 
-/** Fill of the measured stack; low enough that the forecast outline reads through it. */
-const ACTUAL_BAND_FILL_OPACITY = 0.45;
 /**
  * The forecast's own fill, past the last actual. Its muting comes from the
  * hatch pattern being mostly transparent, so the paint itself stays near solid.
@@ -4234,7 +4232,7 @@ export class HelmanSolarInspector extends LitElement {
       // Measured hours read as solid colour; the forecast is hatched, so it is
       // legible as a projection even where no actual line sits beside it.
       const fill = forecast ? `url(#${hatchId(band.layer.color)})` : band.layer.color;
-      const fillOpacity = forecast ? FORECAST_BAND_FILL_OPACITY : ACTUAL_BAND_FILL_OPACITY;
+      const fillOpacity = forecast ? FORECAST_BAND_FILL_OPACITY : ACTUAL_FILL_OPACITY;
       return svg`
         <path d=${`${toPath([...outer, ...inner])} Z`} fill=${fill}
               fill-opacity=${fillOpacity} stroke=${band.layer.color} stroke-width="0.75"
