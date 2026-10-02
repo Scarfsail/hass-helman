@@ -157,7 +157,13 @@ class DatasetTestCase(unittest.TestCase):
         by_id = {node.id: node for node in dataset.nodes}
         for node in dataset.nodes:
             if node.children:
-                children = sum(by_id[child].total_kwh for child in node.children)
+                # Over the hours the node's own meter measured.
+                children = sum(
+                    kwh
+                    for child in node.children
+                    for hour_key, kwh in by_id[child].kwh.items()
+                    if hour_key in node.kwh
+                )
                 self.assertAlmostEqual(
                     children - node.overallocated_kwh, node.total_kwh, places=9, msg=node.id
                 )
@@ -335,6 +341,21 @@ class TestNodes(DatasetTestCase):
         self.assertAlmostEqual(breaker.overallocated_kwh, 2.0)
         self.assertEqual(self.node(dataset, "sensor_breaker_energy_unmeasured").total_kwh, 0)
         self.assertEqual(self.node(dataset, WASHER).total_kwh, 7.0)
+
+    def test_hours_the_parent_did_not_measure_are_not_overallocation(self):
+        # The breaker's meter starts at hour 1; its washer was measured before.
+        dataset = self.build(
+            tree(metered(BREAKER, metered(WASHER))),
+            history(
+                {0: {"H": 5}, 1: {"H": 5}},
+                devices={BREAKER: {1: 2.0}, WASHER: {0: 3.0, 1: 1.5}},
+            ),
+        )
+        breaker = self.node(dataset, BREAKER)
+        self.assertEqual(breaker.overallocated_kwh, 0.0)
+        self.assertAlmostEqual(
+            self.node(dataset, "sensor_breaker_energy_unmeasured").total_kwh, 0.5
+        )
 
     def test_an_estimated_child_reads_its_mean_and_scales_the_hour_in_progress(self):
         now = START + timedelta(hours=1, minutes=15)

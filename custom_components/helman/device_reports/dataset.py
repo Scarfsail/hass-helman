@@ -353,20 +353,18 @@ def _remainder(
 ) -> tuple[dict[datetime, float], float]:
     """The parent's meter minus its children, floored at 0, and what the floor hid.
 
-    The live remainder sensors' definition, per hour. Children keep their
-    measured values, so ``Σ children + unmeasured − overallocated = node``
-    exactly, hour by hour and therefore over the period.
+    The live remainder sensors' definition, per hour. Only hours the parent's
+    meter measured are compared: a child's energy in an hour the parent has no
+    reading for (before its meter existed, or a gap) is not the children
+    measuring more than the parent, so it is not over-allocation. Children keep
+    their measured values, so ``Σ children + unmeasured − overallocated = node``
+    holds exactly over the hours the parent measured.
     """
-    hours = set(node.kwh)
-    for child in children:
-        hours.update(child.kwh)
     remainder: dict[datetime, float] = {}
     overallocated = 0.0
-    for hour in hours:
-        own = node.kwh.get(hour, 0.0)
+    for hour, own in node.kwh.items():
         measured = sum(child.kwh.get(hour, 0.0) for child in children)
-        if hour in node.kwh:
-            remainder[hour] = max(0.0, own - measured)
+        remainder[hour] = max(0.0, own - measured)
         overallocated += max(0.0, measured - own)
     return remainder, overallocated
 
