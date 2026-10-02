@@ -202,6 +202,8 @@ export class HelmanDeviceReportRanking extends LitElement {
                 display: grid;
                 grid-template-columns: minmax(90px, max-content) auto auto minmax(40px, 1fr);
                 column-gap: 8px;
+                /* A card narrower than the columns' minimum scrolls rather than clips. */
+                overflow-x: auto;
             }
             .list.with-money {
                 grid-template-columns: minmax(90px, max-content) auto auto auto auto minmax(40px, 1fr);

@@ -351,6 +351,11 @@ export class HoverTooltipController implements ReactiveController {
         const popup = this._host.renderRoot?.querySelector(".hover-tooltip") as HTMLElement | null;
         if (point === null || popup === null) return;
         const margin = 8;
+        // Wider than the viewport (a long device name): cap it and let it wrap.
+        const max = window.innerWidth - 2 * margin;
+        popup.style.maxWidth = max + "px";
+        popup.style.whiteSpace = "";
+        if (popup.scrollWidth > max) popup.style.whiteSpace = "normal";
         const half = popup.offsetWidth / 2;
         const x = Math.max(margin + half, Math.min(window.innerWidth - margin - half, point.x));
         // The popup hangs 10px above its `top` (translate -100%, -10px): above the

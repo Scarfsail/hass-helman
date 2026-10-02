@@ -574,6 +574,29 @@ test.describe("states and notes", () => {
 });
 
 test.describe("the ranking", () => {
+    test("a card narrower than its columns scrolls the list rather than clipping it", async ({ page }) => {
+        await page.setViewportSize({ width: 280, height: 600 });
+        await mountCard(page);
+        await rendered(page);
+        const list = await page.evaluate(() => {
+            const element = window.__rankingRoot()?.querySelector(".list") as HTMLElement;
+            return { overflow: getComputedStyle(element).overflowX, wider: element.scrollWidth > element.clientWidth };
+        });
+        expect(list).toEqual({ overflow: "auto", wider: true });
+    });
+
+    test("a tooltip wider than the viewport wraps inside it", async ({ page }) => {
+        await page.setViewportSize({ width: 200, height: 600 });
+        await mountCard(page);
+        await rendered(page);
+        await page.evaluate(() => (window.__rankingRoot()?.querySelector(".list") as HTMLElement).scrollLeft = 0);
+        await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.washer'] .name", "Washer 2026-09-22..2026-10-21");
+        await expect.poll(() => page.evaluate(() => {
+            const rect = window.__rankingRoot()!.querySelector(".hover-tooltip")!.getBoundingClientRect();
+            return rect.left >= 7 && rect.right <= 193;
+        })).toBe(true);
+    });
+
     test("rows are sorted with the house remainder last", async ({ page }) => {
         await mountCard(page);
         await rendered(page);
