@@ -146,6 +146,178 @@ export function fetchDeviceStats(
     return hass.callWS({ type: "helman/get_device_stats", device_key: deviceKey });
 }
 
+/** The bucket size of a report that is bucketed by it. */
+/** The bucket sizes `helman/device_report` accepts: the backend's `span_buckets.BUCKETS`. */
+export const DEVICE_REPORT_GRANULARITIES = ["day", "week", "month"] as const;
+export type DeviceReportGranularity = (typeof DEVICE_REPORT_GRANULARITIES)[number];
+
+/**
+ * The period a device report covers: local dates, both inclusive. A report
+ * bucketed by granularity carries it; any other report leaves it out.
+ */
+export interface DeviceReportQuery {
+    start_date: string;
+    end_date: string;
+    granularity?: DeviceReportGranularity;
+}
+
+/**
+ * One money figure of a device report. `priced_kwh + unpriced_kwh` is the
+ * row's kWh; a known zero counts as priced. `amount` is null only when nothing
+ * was priced.
+ */
+export interface DeviceReportMoneySide {
+    amount: number | null;
+    priced_kwh: number;
+    unpriced_kwh: number;
+    /** `paid` only: the priced kWh valued at today's configured tariff. */
+    tariff_kwh?: number;
+}
+
+export interface DeviceReportSources {
+    solar: number;
+    battery: number;
+    grid: number;
+    unattributed: number;
+}
+
+/** What every report payload carries, whatever the report. */
+export interface DeviceReportCommon {
+    report: string;
+    start_date: string;
+    end_date: string;
+    currency: string | null;
+    /** Fractions of the period's battery charge, by what charged it. */
+    charge_origin: {
+        charged_kwh: number;
+        grid: number;
+        grid_recorded: number;
+        grid_tariff: number;
+        grid_unpriced: number;
+        solar: number;
+        solar_priced: number;
+        solar_unpriced: number;
+        unknown: number;
+        paid_rate: number | null;
+        forgone_rate: number | null;
+    };
+    house_kwh: number;
+    ambiguous_kwh: number;
+    unattributed_kwh: number;
+    mismatch_kwh: number;
+    meters: { grid: boolean; solar: boolean; battery: boolean; house: boolean };
+    /** The backend's clock when it built the payload, ISO. */
+    as_of: string;
+    /** The recorder had compiled the whole period: the figures no longer change. */
+    complete: boolean;
+    range: { minDate: string; maxDate: string };
+}
+
+/** Why there is no report at all: a setting the reports need is missing. */
+export interface DeviceReportUnavailable {
+    unavailable: "no_house_node" | "no_house_meter";
+}
+
+export type DeviceReportPayload = DeviceReportCommon | DeviceReportUnavailable;
+
+export function isDeviceReportUnavailable(
+    payload: DeviceReportPayload,
+): payload is DeviceReportUnavailable {
+    return "unavailable" in payload;
+}
+
+/** One row of the Ranking report. A parent's figures include its children. */
+export interface RankingNode {
+    id: string;
+    parent_id: string | null;
+    depth: number;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    unmeasured: boolean;
+    children: string[];
+    kwh: number;
+    sources: DeviceReportSources;
+    money: { paid: DeviceReportMoneySide; forgone: DeviceReportMoneySide };
+    /** Covered hours over the period's elapsed hours, 0..1. */
+    coverage: number;
+    first_hour: string | null;
+    overallocated_kwh: number;
+}
+
+export interface RankingReportPayload extends DeviceReportCommon {
+    /** Pre-order; `nodes[0]` is the house. */
+    nodes: RankingNode[];
+}
+
+/**
+ * One bucket of the Over time report, clamped to the period. Over the hours
+ * the house meter measured, `Σ values + unmeasured − overallocated = house`.
+ */
+export interface OverTimeBucket {
+    /** The bucket's first and last local day, inclusive. */
+    start: string;
+    end: string;
+    /** The period cuts the bucket, or the bucket is still running. */
+    partial: boolean;
+    /** The house meter. */
+    house: number;
+    /** kWh per top-level device, keyed by series id. */
+    values: Record<string, number>;
+    /** The house's remainder. */
+    unmeasured: number;
+    /** What the devices measure beyond the house meter. */
+    overallocated: number;
+}
+
+/** A top-level device of the Over time report. */
+export interface OverTimeSeries {
+    id: string;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    first_hour: string | null;
+}
+
+export interface OverTimeReportPayload extends DeviceReportCommon {
+    granularity: DeviceReportGranularity;
+    buckets: OverTimeBucket[];
+    /** Every top-level device, ranked by its period total. */
+    series: OverTimeSeries[];
+}
+
+/** A top-level device, or the house's remainder, of the Daily profile report. */
+export interface DailyProfileRow {
+    id: string;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    unmeasured: boolean;
+    kwh: number;
+    /** Covered hours over the period's elapsed hours, 0..1. */
+    coverage: number;
+    first_hour: string | null;
+    /** Mean W per local hour of day, 0..23, over the hours the row was observed; null where it never was. */
+    watts: Array<number | null>;
+}
+
+export interface DailyProfileReportPayload extends DeviceReportCommon {
+    /** In period-kWh order. */
+    rows: DailyProfileRow[];
+    /** Mean rate per local hour of day over the elapsed hours that had one. */
+    import_rate: Array<number | null>;
+    export_rate: Array<number | null>;
+}
+
+/** One device report over `query`'s period. */
+export function fetchDeviceReport(
+    hass: Pick<HomeAssistantLike, "callWS">,
+    report: string,
+    query: DeviceReportQuery,
+): Promise<DeviceReportPayload> {
+    return hass.callWS({ type: "helman/device_report", report, ...query });
+}
+
 export type ForecastStatus =
     | "not_configured"
     | "insufficient_history"
