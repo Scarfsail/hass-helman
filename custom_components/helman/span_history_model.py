@@ -85,10 +85,15 @@ class SpanHistory:
 def period_hours(local_start: datetime, local_end: datetime) -> list[datetime]:
     """Every hour in ``[local_start, local_end)``, as UTC instants, in order.
 
-    Floored to the UTC hour, which is how statistics rows are keyed: in a zone
-    with a half-hour offset, local midnight falls mid-hour.
+    Statistics rows are keyed on whole UTC hours. In a zone with a fractional
+    offset, local midnight falls mid-hour, so the first key is rounded *up*:
+    an hour belongs to the period its start falls in, the same
+    ``local_start <= hour < local_end`` rule the statistics reader filters by.
     """
-    cursor = local_start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = local_start.astimezone(timezone.utc)
+    cursor = start.replace(minute=0, second=0, microsecond=0)
+    if cursor < start:
+        cursor += timedelta(hours=1)
     end = local_end.astimezone(timezone.utc)
     hours: list[datetime] = []
     while cursor < end:

@@ -113,13 +113,16 @@ def history(
 ) -> model.SpanHistory:
     """A span read: ``flows`` is ``{hour: {"I": kWh, "S": kWh, ...}}``.
 
-    A meter ``meters`` leaves unconfigured reads nothing, as in the real read.
+    Every configured meter has a row for each listed hour, as in the real read:
+    one left out reads 0, and ``None`` means it has no row for that hour. A
+    meter ``meters`` leaves unconfigured reads nothing.
     """
     energy: dict[str, dict[datetime, float]] = {}
     for index, values in flows.items():
-        for key, kwh in values.items():
-            meter = getattr(meters, _ROLE[key])
-            if meter is not None:
+        for key, role in _ROLE.items():
+            meter = getattr(meters, role)
+            kwh = values.get(key, 0.0)
+            if meter is not None and kwh is not None:
                 energy.setdefault(meter, {})[hour(index)] = kwh
     for meter, by_hour in (devices or {}).items():
         energy[meter] = {hour(index): kwh for index, kwh in by_hour.items()}
@@ -253,6 +256,18 @@ class TestSourceSplit(DatasetTestCase):
         self.assertEqual(split.battery, 0)
         self.assertAlmostEqual(split.grid, 0.5)
         self.assertAlmostEqual(split.unattributed, 0.5)
+
+
+    def test_an_hour_a_source_meter_has_no_row_for_is_unattributed(self):
+        # The import meter has no row at hour 0: not a measured zero, so the
+        # house is not handed to solar, and the charge is unexplained.
+        dataset, split = self.house_split(
+            {0: {"H": 1, "S": 3, "C": 1, "I": None}, 1: {"H": 1, "I": 1}}
+        )
+        self.assertAlmostEqual(split.unattributed, 1)
+        self.assertAlmostEqual(split.grid, 1)
+        self.assertAlmostEqual(split.solar, 0)
+        self.assertAlmostEqual(dataset.charge_origin.unknown, 1)
 
 
 class TestAmbiguity(DatasetTestCase):
@@ -487,6 +502,18 @@ class TestRankingPayload(DatasetTestCase):
         dataset = self.build(tree(), history({0: {"H": 1}}))
         self.assertFalse(dataset.complete)
 
+
+
+class TestPeriodHours(unittest.TestCase):
+    def test_a_fractional_offset_day_keys_the_hours_starting_within_it(self):
+        kolkata = ZoneInfo("Asia/Kolkata")
+        start = datetime(2026, 9, 15, tzinfo=kolkata)
+        hours = model.period_hours(start, start + timedelta(days=1))
+        # Local midnight is 18:30 UTC: the first whole UTC hour starting in the
+        # day is 19:00, and the last is 18:00 the next day.
+        self.assertEqual(len(hours), 24)
+        self.assertEqual(hours[0], datetime(2026, 9, 14, 19, tzinfo=timezone.utc))
+        self.assertEqual(hours[-1], datetime(2026, 9, 15, 18, tzinfo=timezone.utc))
 
 if __name__ == "__main__":
     unittest.main()

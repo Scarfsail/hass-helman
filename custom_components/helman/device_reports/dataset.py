@@ -439,7 +439,23 @@ def _hourly_mix(
         "H": history.energy_for(meters.house),
     }
     measured_hours = set().union(*series.values())
-    attributable = bool(meters.grid_import)
+    # A configured source meter with no row for an hour (before it existed, or
+    # a recorder gap) is not a measured zero: solving the flows with it read as
+    # one would hand its share to whichever source did report. Such an hour is
+    # left unattributed and its charge unexplained. Without an import meter at
+    # all, nothing says how much of the house the grid carried, so no hour is
+    # attributable.
+    source_series = [
+        series[key]
+        for key, meter in (
+            ("I", meters.grid_import),
+            ("E", meters.grid_export),
+            ("S", meters.solar),
+            ("C", meters.battery_charge),
+            ("D", meters.battery_discharge),
+        )
+        if meter
+    ]
 
     mix: dict[datetime, HourMix] = {}
     flows: dict[datetime, _HourFlows] = {}
@@ -447,6 +463,11 @@ def _hourly_mix(
         if hour not in measured_hours:
             continue
         I, E, S, C, D, H = (max(0.0, series[key].get(hour, 0.0)) for key in "IESCDH")
+        attributable = bool(meters.grid_import) and all(hour in samples for samples in source_series)
+        if not attributable:
+            flows[hour] = _HourFlows(charged=C, grid_to_battery=0.0, solar_to_battery=0.0)
+            mix[hour] = _UNATTRIBUTED_HOUR
+            continue
 
         solar_to_grid = min(S, E)
         battery_to_grid = min(D, E - solar_to_grid)
@@ -468,9 +489,7 @@ def _hourly_mix(
             grid_to_battery=grid_to_battery,
             solar_to_battery=solar_to_battery,
         )
-        if not attributable or demand <= _EPSILON_KWH:
-            # No import meter: nothing says how much of the house the grid
-            # carried, so no source is named for any of it.
+        if demand <= _EPSILON_KWH:
             mix[hour] = HourMix(
                 solar=0.0,
                 battery=0.0,
