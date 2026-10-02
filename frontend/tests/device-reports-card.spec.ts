@@ -586,14 +586,14 @@ test.describe("the ranking", () => {
     });
 
     test("a tooltip wider than the viewport wraps inside it", async ({ page }) => {
-        await page.setViewportSize({ width: 200, height: 600 });
+        await page.setViewportSize({ width: 150, height: 600 });
         await mountCard(page);
         await rendered(page);
         await page.evaluate(() => (window.__rankingRoot()?.querySelector(".list") as HTMLElement).scrollLeft = 0);
         await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.washer'] .name", "Washer 2026-09-22..2026-10-21");
         await expect.poll(() => page.evaluate(() => {
             const rect = window.__rankingRoot()!.querySelector(".hover-tooltip")!.getBoundingClientRect();
-            return rect.left >= 7 && rect.right <= 193;
+            return rect.left >= 7 && rect.right <= 143;
         })).toBe(true);
     });
 
