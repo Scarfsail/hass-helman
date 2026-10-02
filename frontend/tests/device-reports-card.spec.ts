@@ -290,6 +290,38 @@ async function rendered(page: Page): Promise<void> {
     await expect.poll(() => page.evaluate(() => !!window.__rankingRoot()?.querySelector(".row"))).toBe(true);
 }
 
+type RootName = "__shellRoot" | "__rankingRoot" | "__overTimeRoot" | "__dailyProfileRoot";
+
+/**
+ * The hover tooltip open in one element's shadow root: its title, its rows --
+ * "label value", or a text line on its own -- and its note; null when closed.
+ */
+function tooltip(page: Page, root: RootName) {
+    return page.evaluate((name: RootName) => {
+        const popup = window[name]()?.querySelector(".hover-tooltip");
+        if (!popup) return null;
+        const text = (element: Element | null | undefined) =>
+            (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+        const rows: string[] = [];
+        for (const child of popup.querySelector(".hover-tooltip-table")?.children ?? []) {
+            if (child.classList.contains("hover-tooltip-cell")) rows[rows.length - 1] += " " + text(child);
+            else rows.push(text(child));
+        }
+        return {
+            title: text(popup.querySelector(".hover-tooltip-title")),
+            rows,
+            note: text(popup.querySelector(".hover-tooltip-note")),
+        };
+    }, root);
+}
+
+/** Hover `selector` with the mouse and wait for `root`'s tooltip to say `title`. */
+async function hoverTooltip(page: Page, root: RootName, selector: string, title: string) {
+    await page.locator(selector).hover();
+    await expect.poll(async () => (await tooltip(page, root))?.title).toBe(title);
+    return (await tooltip(page, root))!;
+}
+
 async function setHidden(page: Page, hidden: boolean): Promise<void> {
     await page.evaluate((value: boolean) => {
         Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
@@ -496,21 +528,44 @@ test.describe("states and notes", () => {
             .toBe(false);
     });
 
-    test("a missing meter warns and a data-quality figure is noted", async ({ page }) => {
+    test("a missing meter is a warning glyph, its text in the tooltip", async ({ page }) => {
         await mountCard(page, {
             meters: { grid: true, solar: false, battery: true, house: true },
             ambiguousKwh: 5,
         });
         await rendered(page);
-        const notes = await page.evaluate(() => ({
-            warning: window.__shellRoot()?.querySelector(".warning")?.textContent ?? "",
-            ambiguous: window.__shellRoot()?.querySelector("[data-quality='ambiguous']")?.textContent ?? "",
+        expect(await page.evaluate(() => {
+            const root = window.__shellRoot();
+            return {
+                boxes: root?.querySelectorAll(".warning:not(.quality-glyph), .quality").length,
+                glyph: root?.querySelector(".status .quality-glyph")?.textContent?.trim(),
+                warning: root?.querySelector(".quality-glyph")?.classList.contains("warning"),
+            };
+        })).toEqual({ boxes: 0, glyph: "⚠", warning: true });
+        const shown = await hoverTooltip(page, "__shellRoot", "helman-device-report-shell .quality-glyph", "Data quality");
+        expect(shown.rows[0]).toContain("solar meter");
+        expect(shown.rows[0]).not.toContain("battery");
+        const quality = await page.evaluate(() => ({
+            ambiguous: window.__shellRoot()?.querySelector(".hover-tooltip [data-quality='ambiguous']")?.textContent ?? "",
             unattributed: !!window.__shellRoot()?.querySelector("[data-quality='unattributed']"),
         }));
-        expect(notes.warning).toContain("solar meter");
-        expect(notes.warning).not.toContain("battery");
-        expect(notes.ambiguous).toContain("solar-first rule");
-        expect(notes.unattributed).toBe(false);
+        expect(quality.ambiguous).toContain("solar-first rule");
+        expect(quality.unattributed).toBe(false);
+    });
+
+    test("a data-quality figure alone is an info glyph", async ({ page }) => {
+        await mountCard(page, { ambiguousKwh: 5 });
+        await rendered(page);
+        expect(await page.evaluate(() => {
+            const glyph = window.__shellRoot()?.querySelector(".quality-glyph");
+            return { text: glyph?.textContent?.trim(), warning: glyph?.classList.contains("warning") };
+        })).toEqual({ text: "ⓘ", warning: false });
+    });
+
+    test("a clean report has no glyph", async ({ page }) => {
+        await mountCard(page);
+        await rendered(page);
+        expect(await page.evaluate(() => !!window.__shellRoot()?.querySelector(".quality-glyph"))).toBe(false);
     });
 });
 
@@ -568,59 +623,111 @@ test.describe("the ranking", () => {
         expect(await requestCount(page)).toBe(1);
     });
 
-    test("the over-allocation and coverage marks", async ({ page }) => {
+    test("a row is its head line and its bars, its money figures on the head", async ({ page }) => {
         await mountCard(page);
         await rendered(page);
-        expect(await rankingText(page, ".row[data-id='sensor.breaker'] .marks"))
-            .toContain("children measure 2.0 kWh more than this meter");
-        expect(await rankingText(page, ".row[data-id='sensor.fridge'] .marks"))
-            .toContain("data for 50 % of the period (from 2026-10-07)");
-        expect(await rankingText(page, ".row[data-id='sensor.washer'] .marks")).toBeNull();
+        const washer = await page.evaluate(() => {
+            const row = window.__rankingRoot()?.querySelector(".row[data-id='sensor.washer']");
+            const paid = row?.querySelector(".head .money-figure.paid");
+            return {
+                children: [...(row?.children ?? [])].map((child) => child.className),
+                figures: row?.querySelector(".figures")?.textContent?.replace(/\s+/g, " ").trim(),
+                paidColor: paid ? getComputedStyle(paid).color : null,
+            };
+        });
+        expect(washer.children).toEqual(["head", "track energy", "track money"]);
+        // Amounts are in the currency, not the price unit.
+        expect(washer.figures).toBe("30 kWh · 30 % of house · 12.0 CZK · 3.0 CZK");
+        // Coloured as its bar: the grid-import blue.
+        expect(washer.paidColor).toBe("rgb(37, 99, 235)");
+
+        await page.evaluate(() => (window.__rankingRoot()
+            ?.querySelector("button[data-show='energy']") as HTMLButtonElement).click());
+        await expect.poll(() => page.evaluate(
+            () => window.__rankingRoot()?.querySelectorAll(".money-figure").length,
+        )).toBe(0);
+    });
+
+    test("the split, coverage and over-allocation are in the row tooltip, not in the row", async ({ page }) => {
+        await mountCard(page);
+        await rendered(page);
+        const breaker = await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.breaker']", "Breaker");
+        expect(breaker.rows).toContain("children measure 2.0 kWh more than this meter");
+        expect(await rankingText(page, ".row[data-id='sensor.breaker']")).not.toContain("children measure");
+
+        const fridge = await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.fridge']", "Fridge");
+        expect(fridge.rows).toContain("data for 50 % of the period (from 2026-10-07)");
+        expect(await rankingText(page, ".row[data-id='sensor.fridge']")).not.toContain("data for");
+
+        const washer = await hoverTooltip(
+            page, "__rankingRoot", ".row[data-id='sensor.washer']", "Washer 2026-09-22..2026-10-21",
+        );
+        expect(washer.rows.slice(0, 5)).toEqual([
+            "Total 30 kWh · 30 % of house",
+            "Solar 10 kWh (33 %)",
+            "Battery 5.0 kWh (17 %)",
+            "Grid 15 kWh (50 %)",
+            "Unattributed 0.00 kWh (0 %)",
+        ]);
+        expect(washer.rows.join("\n")).not.toContain("data for");
+        expect(washer.rows.join("\n")).not.toContain("children measure");
     });
 
     test("a partial money figure is marked partial, without a bound", async ({ page }) => {
         await mountCard(page);
         await rendered(page);
-        const fridge = await page.evaluate(() => {
-            const row = window.__rankingRoot()?.querySelector(".row[data-id='sensor.fridge']");
-            const paid = row?.querySelector(".money-figure.paid");
-            return {
-                text: row?.querySelector(".money-label")?.textContent ?? "",
-                partialMark: !!paid?.querySelector(".partial-mark"),
-                title: paid?.getAttribute("title") ?? "",
-                hatched: !!row?.querySelector(".money-seg.paid.partial"),
-                forgonePartial: !!row?.querySelector(".money-figure.forgone .partial-mark"),
-            };
+        expect(await page.evaluate(() => ({
+            paid: !!window.__rankingRoot()?.querySelector(".row[data-id='sensor.fridge'] .money-seg.paid.partial"),
+            forgone: !!window.__rankingRoot()?.querySelector(".row[data-id='sensor.fridge'] .money-seg.forgone.partial"),
+        }))).toEqual({ paid: true, forgone: false });
+        const fridge = await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.fridge']", "Fridge");
+        const paid = fridge.rows.indexOf("Paid 15.0 CZK (partial)");
+        expect(paid).toBeGreaterThan(0);
+        expect(fridge.rows[paid + 1]).toBe("priced 8.0 of 10 kWh; 1.0 kWh at today's configured tariff");
+        expect(fridge.rows).toContain("Forgone 0.0 CZK");
+        expect(fridge.rows.join("\n")).not.toMatch(/[≥≤]/);
+    });
+
+    test("the money bar grows from zero; a negative figure has no width, its sign in the tooltip", async ({ page }) => {
+        await mountCard(page);
+        await rendered(page);
+        const segments = await page.evaluate(() => Object.fromEntries(
+            [...(window.__rankingRoot()?.querySelectorAll(".row[data-id='sensor.breaker'] .money-seg") ?? [])]
+                .map((segment) => [
+                    segment.classList.contains("paid") ? "paid" : "forgone",
+                    (segment as HTMLElement).style.cssText,
+                ]),
+        ));
+        // 2 CZK paid against the washer's 15 CZK stack.
+        expect(segments.paid).toContain("left: 0%");
+        expect(segments.forgone).toContain("width: 0%");
+        expect(await page.evaluate(() => !!window.__rankingRoot()?.querySelector(".center, .money-seg.negative"))).toBe(false);
+        // The head line still states the negative figure, in the negative-price colour.
+        expect(await page.evaluate(() => window.__rankingRoot()
+            ?.querySelector(".row[data-id='sensor.breaker'] .money-figure.negative")?.textContent?.trim())).toBe("-1.5 CZK");
+        const breaker = await hoverTooltip(page, "__rankingRoot", ".row[data-id='sensor.breaker']", "Breaker");
+        expect(breaker.rows).toContain("Forgone -1.5 CZK");
+    });
+
+    test.describe("on a touch screen", () => {
+        test.use({ hasTouch: true });
+
+        test("a tap opens the tooltip, a second tap or one outside closes it", async ({ page }) => {
+            await mountCard(page);
+            await rendered(page);
+            const row = page.locator(".row[data-id='sensor.washer']");
+            await row.tap();
+            await expect.poll(async () => (await tooltip(page, "__rankingRoot"))?.rows)
+                .toContain("Solar 10 kWh (33 %)");
+            expect(await page.evaluate(() => !!window.__rankingRoot()?.querySelector(".detail"))).toBe(false);
+            await row.tap();
+            await expect.poll(() => tooltip(page, "__rankingRoot")).toBeNull();
+
+            await row.tap();
+            await expect.poll(() => tooltip(page, "__rankingRoot")).not.toBeNull();
+            await page.touchscreen.tap(640, 710);
+            await expect.poll(() => tooltip(page, "__rankingRoot")).toBeNull();
         });
-        expect(fridge.partialMark).toBe(true);
-        expect(fridge.hatched).toBe(true);
-        expect(fridge.forgonePartial).toBe(false);
-        expect(fridge.text).not.toMatch(/[≥≤]/);
-        expect(fridge.title).toContain("priced 8.0 of 10 kWh");
-        // Amounts are in the currency, not the price unit.
-        const moneyLabel = await rankingText(page, ".row[data-id='sensor.washer'] .money-label");
-        expect(moneyLabel).toContain("12.0 CZK");
-        expect(moneyLabel).not.toContain("/kWh");
-        expect(fridge.title).toContain("1.0 kWh at today's configured tariff");
-    });
-
-    test("a negative forgone figure is drawn left of zero", async ({ page }) => {
-        await mountCard(page);
-        await rendered(page);
-        const style = await page.evaluate(() => window.__rankingRoot()
-            ?.querySelector(".row[data-id='sensor.breaker'] .money-seg.forgone.negative")
-            ?.getAttribute("style") ?? null);
-        expect(style).toContain("right:50%");
-    });
-
-    test("a tap shows the exact split", async ({ page }) => {
-        await mountCard(page);
-        await rendered(page);
-        await page.evaluate(() => (window.__rankingRoot()
-            ?.querySelector(".row[data-id='sensor.washer'] .head") as HTMLElement).click());
-        await expect.poll(() => rankingText(page, ".row[data-id='sensor.washer'] .detail"))
-            .toContain("Solar");
-        expect(await rankingText(page, ".row[data-id='sensor.washer'] .detail")).toContain("33 %");
     });
 });
 
@@ -698,8 +805,10 @@ test.describe("over time", () => {
         expect(columns.map((segments) => segments.map(([id]) => id))).toEqual(
             Array(3).fill(["sensor.a", "sensor.b", "sensor.c", "other", "unmeasured"]),
         );
-        expect(await page.evaluate(() => window.__overTimeRoot()
-            ?.querySelector(".column")?.getAttribute("title") ?? "")).toContain("Other devices: 10 kWh");
+        const first = await hoverTooltip(
+            page, "__overTimeRoot", ".column[data-start='2026-09-22']", "2026-09-22 – 2026-10-04 (partial)",
+        );
+        expect(first.rows).toContain("Other devices 10 kWh");
 
         await page.evaluate(() => (window.__overTimeRoot()
             ?.querySelector("button[data-top='10']") as HTMLButtonElement).click());
@@ -754,15 +863,19 @@ test.describe("over time", () => {
             .map((column) => ({
                 partial: column.classList.contains("partial"),
                 opacity: getComputedStyle(column).opacity,
-                title: column.getAttribute("title") ?? "",
             })));
         expect(columns.map((column) => column.partial)).toEqual([true, false, true]);
         expect(columns[0].opacity).toBe("0.45");
         expect(columns[1].opacity).toBe("1");
-        expect(columns[0].title.split("\n")[0]).toBe("2026-09-22 – 2026-10-04 (partial)");
-        expect(columns[1].title).not.toContain("partial");
-        expect(await page.evaluate(() => window.__overTimeRoot()?.querySelector(".partial-note")?.textContent ?? ""))
-            .toContain("partial");
+        expect(await page.evaluate(() => !!window.__overTimeRoot()?.querySelector(".partial-note, .note"))).toBe(false);
+        const partial = await hoverTooltip(
+            page, "__overTimeRoot", ".column[data-start='2026-09-22']", "2026-09-22 – 2026-10-04 (partial)",
+        );
+        expect(partial.note).toContain("partial");
+        const whole = await hoverTooltip(
+            page, "__overTimeRoot", ".column[data-start='2026-10-05']", "2026-10-05 – 2026-10-11",
+        );
+        expect(whole.note).toBe("");
     });
 
     test("an over-allocated column shows the house tick below its top", async ({ page }) => {
@@ -774,7 +887,6 @@ test.describe("over time", () => {
                 stackTop: column.querySelector(".stack")!.getBoundingClientRect().top,
                 tickTop: column.querySelector(".tick")!.getBoundingClientRect().top,
                 excess: !!column.querySelector(".excess"),
-                title: column.getAttribute("title") ?? "",
             })));
         expect(columns.map((column) => column.over)).toEqual([false, true, false]);
         expect(columns[1].excess).toBe(true);
@@ -782,9 +894,16 @@ test.describe("over time", () => {
         // Screen y grows downwards: the tick sits below the stack's top.
         expect(columns[1].tickTop).toBeGreaterThan(columns[1].stackTop + 1);
         expect(Math.abs(columns[0].tickTop - columns[0].stackTop)).toBeLessThanOrEqual(2);
-        expect(columns[1].title).toContain("devices measure 5.0 kWh more than the house meter");
-        expect(columns[1].title).toContain("Total: 30 kWh");
-        expect(columns[0].title).not.toContain("devices measure");
+        const over = await hoverTooltip(
+            page, "__overTimeRoot", ".column[data-start='2026-10-05']", "2026-10-05 – 2026-10-11",
+        );
+        expect(over.rows).toContain("devices measure 5.0 kWh more than the house meter");
+        expect(over.rows).toContain("Total 30 kWh");
+        expect(over.rows).toContain("House meter 25 kWh");
+        const under = await hoverTooltip(
+            page, "__overTimeRoot", ".column[data-start='2026-09-22']", "2026-09-22 – 2026-10-04 (partial)",
+        );
+        expect(under.rows.join("\n")).not.toContain("devices measure");
     });
 });
 
@@ -805,7 +924,6 @@ function profileCells(page: Page, rowId: string) {
             missing: cell.classList.contains("missing"),
             background: getComputedStyle(cell).backgroundImage,
             color: getComputedStyle(cell).backgroundColor,
-            title: cell.getAttribute("title") ?? "",
         })), rowId);
 }
 
@@ -841,10 +959,20 @@ test.describe("daily profile", () => {
         expect(b[12].level).toBe("1.000");
         expect(b[12].color).not.toBe(a[19].color);
         expect(b[0].level).toBe("0.500");
-        expect(a[19].title).toContain("Device A · 19:00–20:00");
-        expect(a[19].title).toContain("Average: 2.0 kW");
-        expect(a[19].title).toContain("Import price: 6.00 CZK/kWh");
-        expect(a[19].title).toContain("Export price: 1.00 CZK/kWh");
+        const peak = await hoverTooltip(
+            page, "__dailyProfileRoot", ".cell[data-row='sensor.a'][data-hour='19']", "Device A · 19:00–20:00",
+        );
+        expect(peak.rows).toEqual([
+            "Average 2.0 kW",
+            "Of the row's peak 100 %",
+            "Import price 6.00 CZK/kWh",
+            "Export price 1.00 CZK/kWh",
+        ]);
+        // Below full coverage, a cell says so.
+        const half = await hoverTooltip(
+            page, "__dailyProfileRoot", ".cell[data-row='sensor.b'][data-hour='0']", "Device B · 00:00–01:00",
+        );
+        expect(half.rows).toContain("data for 50 % of the period (from 2026-10-07)");
     });
 
     test("a missing cell is hatched, unlike a zero cell", async ({ page }) => {
@@ -853,15 +981,36 @@ test.describe("daily profile", () => {
         const b = await profileCells(page, "sensor.b");
         expect(b[3]).toMatchObject({ level: "", missing: true });
         expect(b[3].background).toContain("repeating-linear-gradient");
-        expect(b[3].title).toContain("Average: no data");
         expect(b[4]).toMatchObject({ level: "0.000", missing: false, background: "none" });
-        expect(b[4].title).toContain("Average: 0 W");
-        // The coverage mark, worded as in Ranking.
-        expect(await page.evaluate(() => window.__dailyProfileRoot()
-            ?.querySelector(".label[data-row='sensor.b'] .mark")?.textContent ?? ""))
-            .toBe("data for 50 % of the period (from 2026-10-07)");
-        expect(await page.evaluate(() => window.__dailyProfileRoot()
-            ?.querySelector(".label[data-row='sensor.a'] .mark") ?? null)).toBeNull();
+        const missing = await hoverTooltip(
+            page, "__dailyProfileRoot", ".cell[data-row='sensor.b'][data-hour='3']", "Device B · 03:00–04:00",
+        );
+        expect(missing.rows[0]).toBe("Average no data");
+        expect(missing.rows.join("\n")).not.toContain("peak");
+        const zero = await hoverTooltip(
+            page, "__dailyProfileRoot", ".cell[data-row='sensor.b'][data-hour='4']", "Device B · 04:00–05:00",
+        );
+        expect(zero.rows[0]).toBe("Average 0 W");
+    });
+
+    test("a label is its name; its tooltip carries coverage, figures and the explanation", async ({ page }) => {
+        await mountCard(page);
+        await openDailyProfile(page);
+        expect(await page.evaluate(() => ({
+            text: window.__dailyProfileRoot()?.querySelector(".label[data-row='sensor.b']")?.textContent?.trim(),
+            marks: window.__dailyProfileRoot()?.querySelectorAll(".mark, .note").length,
+        }))).toEqual({ text: "Device B", marks: 0 });
+        const b = await hoverTooltip(page, "__dailyProfileRoot", ".label[data-row='sensor.b']", "Device B");
+        // The coverage, worded as in Ranking.
+        expect(b.rows[0]).toBe("data for 50 % of the period (from 2026-10-07)");
+        expect(b.note).toContain("shaded relative to its own peak");
+        const a = await hoverTooltip(page, "__dailyProfileRoot", ".label[data-row='sensor.a']", "Device A");
+        // 22 hours at 100 W, 2000 W at 19:00 and 1000 W at 20:00.
+        expect(a.rows).toEqual([
+            "data for 100 % of the period (from 2026-09-22)",
+            "Peak 19:00–20:00 · 2.0 kW",
+            "Per day, over the hours with data 5.2 kWh",
+        ]);
     });
 
     test("the price rows are drawn below the devices", async ({ page }) => {
@@ -877,7 +1026,14 @@ test.describe("daily profile", () => {
         expect(imports[18].level).toBe("1.000");
         expect(imports[0].level).toBe("0.150");
         expect(imports[5].missing).toBe(true);
-        expect(imports[5].title).toContain("Import price: —");
+        const missing = await hoverTooltip(
+            page, "__dailyProfileRoot", ".cell[data-row='import'][data-hour='5']", "05:00–06:00",
+        );
+        expect(missing.rows).toEqual(["Import price —", "Export price 1.00 CZK/kWh"]);
+        const label = await hoverTooltip(page, "__dailyProfileRoot", ".label[data-row='import']", "Import price");
+        expect(label.rows[0]).toBe("Min 3.00 CZK/kWh");
+        expect(label.rows[2]).toBe("Max 6.00 CZK/kWh");
+        expect(label.note).toContain("cheapest to the dearest hour");
         // A negative export price is drawn in the negative-price colour.
         expect(exports[13].level).toBe("1.000");
         expect(exports[13].color).not.toBe(exports[12].color);

@@ -743,6 +743,7 @@
       "no_house_node": "Reporty spotřebičů potřebují senzor výkonu domu (Energetické uzly → Dům → Výkon). Bez něj není strom spotřebičů domu, o kterém by šlo reportovat.",
       "no_house_meter": "Reporty spotřebičů potřebují elektroměr domu (Energetické uzly → Dům → Předpověď → Celková energie). Bez něj není znám součet domu ani žádný zbytek."
     },
+    "quality_title": "Kvalita dat",
     "missing_meters": "Nenastaveno: {meters}. Barvy zdrojů nemohou ukázat, co by tyto elektroměry naměřily.",
     "meters": {
       "grid": "elektroměry odběru/dodávky do sítě",
@@ -808,6 +809,13 @@
       "no_data": "bez dat",
       "import": "Cena odběru",
       "export": "Cena dodávky",
+      "peak": "Špička",
+      "per_day": "Za den, za hodiny s daty",
+      "of_peak": "Z maxima řádku",
+      "min": "Minimum",
+      "mean": "Průměr",
+      "max": "Maximum",
+      "price_note": "Stínováno od nejlevnější po nejdražší hodinu; záporná cena má vlastní barvu.",
       "note": "Průměrný výkon v každé hodině dne, za hodiny, pro které má řádek data. Každý řádek je stínovaný vůči svému vlastnímu maximu; šrafované buňky nemají data.",
       "empty": "Žádné spotřebiče k zobrazení"
     }

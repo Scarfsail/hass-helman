@@ -9,6 +9,12 @@ import type {
 } from "../helman-api";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { formatKwhValue } from "../shared/forecast-value-format";
+import {
+    HoverTooltipController,
+    hoverTooltipStyles,
+    tooltipRow,
+    type TooltipBody,
+} from "../shared/hover-tooltip";
 import { OTHER_DEVICES_COLOR, UNMEASURED_COLOR, deviceColor } from "./device-palette";
 
 const TOP_OPTIONS = [3, 5, 10] as const;
@@ -38,13 +44,13 @@ interface Column {
     /** The stack above the house tick, when the devices measure more than it. */
     excessStyle: string | null;
     axisLabel: string;
-    title: string;
+    tooltip: TooltipBody;
 }
 
 interface LegendItem {
     id: string;
     label: string;
-    style: string;
+    color: string;
 }
 
 interface OverTimeModel {
@@ -52,7 +58,6 @@ interface OverTimeModel {
     legend: LegendItem[];
     /** Too many columns for gaps between them. */
     dense: boolean;
-    anyPartial: boolean;
 }
 
 function heightStyle(part: number, whole: number): string {
@@ -93,6 +98,8 @@ export class HelmanDeviceReportOverTime extends LitElement {
 
     @state() private _top: TopX = HelmanDeviceReportOverTime._lastTop;
 
+    private _tooltip = new HoverTooltipController(this);
+
     private _model: OverTimeModel | null = null;
     private _modelKey: {
         payload: OverTimeReportPayload | undefined;
@@ -100,7 +107,7 @@ export class HelmanDeviceReportOverTime extends LitElement {
         localize: LocalizeFunction | undefined;
     } | null = null;
 
-    static styles = css`
+    static styles = [hoverTooltipStyles, css`
         :host { display: block; }
         .controls {
             display: flex;
@@ -195,12 +202,12 @@ export class HelmanDeviceReportOverTime extends LitElement {
             border-radius: 2px;
             flex: none;
         }
-        .note, .empty {
+        .empty {
             font-size: 0.75rem;
             color: var(--secondary-text-color);
             margin-top: 6px;
         }
-    `;
+    `];
 
     protected willUpdate(_changed: PropertyValues<this>): void {
         const key = this._modelKey;
@@ -230,19 +237,19 @@ export class HelmanDeviceReportOverTime extends LitElement {
         const legend: LegendItem[] = shown.map((series, rank) => ({
             id: series.id,
             label: this._seriesLabel(series),
-            style: "background:" + deviceColor(rank),
+            color: deviceColor(rank),
         }));
         if (folded.length > 0) {
             legend.push({
                 id: OTHER,
                 label: this._t("device_reports.over_time.other"),
-                style: "background:" + OTHER_DEVICES_COLOR,
+                color: OTHER_DEVICES_COLOR,
             });
         }
         legend.push({
             id: UNMEASURED,
             label: this._t("house_section.unmeasured"),
-            style: "background:" + UNMEASURED_COLOR,
+            color: UNMEASURED_COLOR,
         });
 
         const stacks = payload.buckets.map((bucket) => {
@@ -264,7 +271,7 @@ export class HelmanDeviceReportOverTime extends LitElement {
             const segments = legend.map((item) => ({
                 id: item.id,
                 kwh: kwh.get(item.id) ?? 0,
-                style: item.style + ";height:" + heightStyle(kwh.get(item.id) ?? 0, total),
+                style: "background:" + item.color + ";height:" + heightStyle(kwh.get(item.id) ?? 0, total),
             }));
             // Exactly the over-allocation, at the top of the stack: the stack can
             // also rise above the tick in hours the house meter did not measure,
@@ -280,33 +287,34 @@ export class HelmanDeviceReportOverTime extends LitElement {
                         + ";height:" + heightStyle(Math.min(total, bucket.overallocated), scale)
                     : null,
                 axisLabel: index % every === 0 ? bucketLabel(bucket, payload.granularity) : "",
-                title: this._columnTitle(bucket, legend, segments, total),
+                tooltip: this._columnTooltip(bucket, legend, segments, total),
             };
         });
-        return { columns, legend, dense: columns.length > DENSE_COLUMNS, anyPartial: payload.buckets.some((bucket) => bucket.partial) };
+        return { columns, legend, dense: columns.length > DENSE_COLUMNS };
     }
 
-    private _columnTitle(
+    private _columnTooltip(
         bucket: OverTimeBucket,
         legend: LegendItem[],
         segments: Segment[],
         total: number,
-    ): string {
-        const lines = [
-            bucketTitle(bucket)
-                + (bucket.partial ? " (" + this._t("device_reports.over_time.partial") + ")" : ""),
-        ];
-        segments.forEach((segment, index) => {
-            lines.push(legend[index].label + ": " + formatKwhValue(segment.kwh) + " kWh");
-        });
-        lines.push(this._t("device_reports.over_time.total") + ": " + formatKwhValue(total) + " kWh");
-        lines.push(this._t("device_reports.over_time.house") + ": " + formatKwhValue(bucket.house) + " kWh");
+    ): TooltipBody {
+        const rows = segments.map((segment, index) =>
+            tooltipRow(legend[index].label, formatKwhValue(segment.kwh) + " kWh", legend[index].color));
+        rows.push(tooltipRow(this._t("device_reports.over_time.total"), formatKwhValue(total) + " kWh"));
+        rows.push(tooltipRow(this._t("device_reports.over_time.house"), formatKwhValue(bucket.house) + " kWh"));
         if (bucket.overallocated > 0) {
-            lines.push(fillTemplate(this._t("device_reports.over_time.overallocated"), {
+            rows.push(tooltipRow("", fillTemplate(this._t("device_reports.over_time.overallocated"), {
                 kwh: formatKwhValue(bucket.overallocated),
-            }));
+            })));
         }
-        return lines.join("\n");
+        return {
+            title: bucketTitle(bucket)
+                + (bucket.partial ? " (" + this._t("device_reports.over_time.partial") + ")" : ""),
+            hasActual: false,
+            rows,
+            note: bucket.partial ? this._t("device_reports.over_time.partial_note") : undefined,
+        };
     }
 
     render() {
@@ -333,7 +341,9 @@ export class HelmanDeviceReportOverTime extends LitElement {
                         class=${"column" + (column.bucket.partial ? " partial" : "")
                             + (column.excessStyle !== null ? " overallocated" : "")}
                         data-start=${column.bucket.start}
-                        title=${column.title}
+                        @mousemove=${(event: MouseEvent) => this._tooltip.show(event, column.tooltip)}
+                        @mouseleave=${() => this._tooltip.hide()}
+                        @click=${(event: MouseEvent) => this._tooltip.toggle(event, column.tooltip)}
                     >
                         <div class="stack" style=${column.stackStyle}>
                             ${column.segments.map((segment) => html`
@@ -354,13 +364,11 @@ export class HelmanDeviceReportOverTime extends LitElement {
             <div class="legend">
                 ${model.legend.map((item) => html`
                     <span class="legend-item" data-series=${item.id}>
-                        <span class="swatch" style=${item.style}></span>${item.label}
+                        <span class="swatch" style=${"background:" + item.color}></span>${item.label}
                     </span>
                 `)}
             </div>
-            ${model.anyPartial
-                ? html`<div class="note partial-note">${this._t("device_reports.over_time.partial_note")}</div>`
-                : nothing}
+            ${this._tooltip.render()}
         `;
     }
 }

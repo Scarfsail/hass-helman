@@ -6,10 +6,25 @@ import type {
     RankingNode,
     RankingReportPayload,
 } from "../helman-api";
+import {
+    BATT_COLOR,
+    GRID_COLOR,
+    GRID_IMPORT_COLOR,
+    NEUTRAL_COLOR,
+    PRICE_NEGATIVE_COLOR,
+    SOLAR_COLOR,
+} from "../color-utils";
 import { helmanColorVars } from "../color-vars";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { formatKwhValue, formatPriceValue } from "../shared/forecast-value-format";
+import {
+    HoverTooltipController,
+    hoverTooltipStyles,
+    tooltipRow,
+    type TooltipBody,
+    type TooltipRow,
+} from "../shared/hover-tooltip";
 
 type ShowMode = "both" | "energy" | "money";
 type SortMode = "energy" | "paid" | "forgone" | "paid_forgone";
@@ -18,10 +33,17 @@ const SHOW_MODES: readonly ShowMode[] = ["both", "energy", "money"];
 const SORT_MODES: readonly SortMode[] = ["energy", "paid", "forgone", "paid_forgone"];
 const SOURCES = ["solar", "battery", "grid", "unattributed"] as const;
 
-/** Above this share of a row's kWh, a mark or a partial figure is worth showing. */
+/** The tooltip swatches: the colours the `.seg` and `.money-seg` bars default to. */
+const SOURCE_COLORS: Record<(typeof SOURCES)[number], string> = {
+    solar: SOLAR_COLOR,
+    battery: BATT_COLOR,
+    grid: GRID_COLOR,
+    unattributed: NEUTRAL_COLOR,
+};
+const MONEY_COLORS = { paid: GRID_IMPORT_COLOR, forgone: SOLAR_COLOR } as const;
+
+/** Above this share of a row's kWh, an over-allocation or a partial figure is worth showing. */
 const MARK_SHARE = 0.01;
-/** Below this coverage a row says how much of the period it has data for. */
-const COVERAGE_MARK = 0.99;
 
 interface RankingModel {
     byId: ReadonlyMap<string, RankingNode>;
@@ -30,7 +52,7 @@ interface RankingModel {
     house: RankingNode;
     /** The largest top-level row's kWh: what the energy bars are relative to. */
     energyScale: number;
-    /** The largest top-level money stack, either side: what the money bars are relative to. */
+    /** The largest top-level money stack: what the money bars are relative to. */
     moneyScale: number;
 }
 
@@ -49,15 +71,9 @@ function sortValue(node: RankingNode, sort: SortMode): number {
     }
 }
 
+/** A row's money stack: a negative amount draws as nothing. */
 function moneyExtent(node: RankingNode): number {
-    let positive = 0;
-    let negative = 0;
-    for (const side of [node.money.paid, node.money.forgone]) {
-        const amount = side.amount ?? 0;
-        if (amount >= 0) positive += amount;
-        else negative -= amount;
-    }
-    return Math.max(positive, negative);
+    return Math.max(0, node.money.paid.amount ?? 0) + Math.max(0, node.money.forgone.amount ?? 0);
 }
 
 function buildModel(payload: RankingReportPayload, sort: SortMode): RankingModel | null {
@@ -91,21 +107,34 @@ function percent(part: number, whole: number): string {
     return whole > 0 ? String(Math.round((part / whole) * 100)) : "0";
 }
 
+/** Coverage short of what still rounds to 100 % -- "data for 100 %" would contradict itself. */
+export function partlyCovered(coverage: number): boolean {
+    return Math.round(coverage * 100) < 100;
+}
+
+/** "data for X % of the period (from date)", as a tooltip line. */
+export function coverageRow(t: (key: string) => string, coverage: number, firstHour: string | null): TooltipRow {
+    return tooltipRow("", fillTemplate(t("device_reports.ranking.coverage"), {
+        pct: String(Math.round(coverage * 100)),
+        date: firstHour ? firstHour.slice(0, 10) : "—",
+    }));
+}
+
 function widthStyle(fraction: number): string {
     return "width:" + Math.max(0, Math.min(1, fraction)) * 100 + "%;";
 }
 
 interface MoneySegment {
     side: "paid" | "forgone";
-    amount: number;
     partial: boolean;
     style: string;
-    title: string;
 }
 
 /**
  * The Ranking report: every device of the house, ranked, its kWh split by
- * source and its two money figures.
+ * source and its two money figures. A row is one line of figures and its bars;
+ * everything else -- the split, the pricing detail, coverage, over-allocation
+ * -- is in the row's hover tooltip.
  *
  * Show and sort are local: they reshape the payload already here and change no
  * fetch. The model is built in `willUpdate` behind the two inputs it reads.
@@ -119,14 +148,17 @@ export class HelmanDeviceReportRanking extends LitElement {
     @state() private _show: ShowMode = "both";
     @state() private _sort: SortMode = "energy";
     @state() private _expanded: ReadonlySet<string> = new Set();
-    /** The row whose exact split is open, from a tap. */
-    @state() private _detail: string | null = null;
+
+    private _tooltip = new HoverTooltipController(this);
+    /** Each row's tooltip, built on its first hover and kept until the next render. */
+    private _tooltips = new Map<string, TooltipBody>();
 
     private _model: RankingModel | null = null;
     private _modelKey: { payload: RankingReportPayload | undefined; sort: SortMode } | null = null;
 
     static styles = [
         helmanColorVars,
+        hoverTooltipStyles,
         css`
             :host { display: block; }
             .controls {
@@ -153,6 +185,7 @@ export class HelmanDeviceReportRanking extends LitElement {
             }
             .controls select { font: inherit; }
             .row {
+                cursor: pointer;
                 padding: 4px 0;
                 border-bottom: 1px solid color-mix(in srgb, var(--divider-color, #ccc) 50%, transparent);
             }
@@ -162,7 +195,6 @@ export class HelmanDeviceReportRanking extends LitElement {
                 align-items: center;
                 gap: 4px;
                 font-size: 0.85rem;
-                cursor: pointer;
             }
             .toggle {
                 width: 18px;
@@ -187,11 +219,9 @@ export class HelmanDeviceReportRanking extends LitElement {
                 color: var(--secondary-text-color);
                 white-space: nowrap;
             }
-            .marks {
-                font-size: 0.7rem;
-                color: var(--secondary-text-color);
-                margin-left: 22px;
-            }
+            .money-figure.paid { color: var(--helman-grid-import); }
+            .money-figure.forgone { color: var(--helman-solar); }
+            .money-figure.negative { color: var(--helman-price-negative); }
             .track {
                 position: relative;
                 height: 6px;
@@ -209,15 +239,6 @@ export class HelmanDeviceReportRanking extends LitElement {
             .seg.battery { background: var(--helman-battery); }
             .seg.grid { background: var(--helman-grid); }
             .seg.unattributed { background: var(--helman-neutral); }
-            .money .center {
-                position: absolute;
-                left: 50%;
-                top: 0;
-                bottom: 0;
-                width: 1px;
-                background: var(--secondary-text-color);
-                z-index: 1;
-            }
             .money .money-seg {
                 position: absolute;
                 top: 0;
@@ -225,34 +246,12 @@ export class HelmanDeviceReportRanking extends LitElement {
             }
             .money-seg.paid { background: var(--helman-grid-import); }
             .money-seg.forgone { background: var(--helman-solar); }
-            .money-seg.negative { background: var(--helman-price-negative); }
-            .money-seg.forgone.negative {
-                background: color-mix(in srgb, var(--helman-price-negative) 60%, transparent);
-            }
             .money-seg.partial {
                 background-image: repeating-linear-gradient(
                     135deg,
                     transparent 0 2px,
                     color-mix(in srgb, var(--card-background-color, #fff) 70%, transparent) 2px 4px
                 );
-            }
-            .money-label {
-                font-size: 0.72rem;
-                color: var(--secondary-text-color);
-                margin-left: 22px;
-            }
-            .partial-mark {
-                color: var(--helman-neutral);
-                font-style: italic;
-            }
-            .detail {
-                margin: 4px 0 2px 22px;
-                font-size: 0.75rem;
-                color: var(--secondary-text-color);
-                display: grid;
-                grid-template-columns: auto auto auto;
-                gap: 0 12px;
-                justify-content: start;
             }
             .empty {
                 font-size: 0.8rem;
@@ -262,6 +261,7 @@ export class HelmanDeviceReportRanking extends LitElement {
     ];
 
     protected willUpdate(_changed: PropertyValues<this>): void {
+        this._tooltips.clear();
         const key = this._modelKey;
         if (key === null || key.payload !== this.payload || key.sort !== this._sort) {
             this._modelKey = { payload: this.payload, sort: this._sort };
@@ -298,57 +298,67 @@ export class HelmanDeviceReportRanking extends LitElement {
         return title;
     }
 
-    private _splitTitle(node: RankingNode): string {
-        const lines = SOURCES.map((source) =>
-            this._t("device_reports.ranking.sources." + source) + ": "
-            + formatKwhValue(node.sources[source]) + " kWh ("
-            + percent(node.sources[source], node.kwh) + " %)");
-        lines.push(this._t("device_reports.ranking.paid") + ": " + this._money(node.money.paid.amount));
-        lines.push(this._t("device_reports.ranking.forgone") + ": " + this._money(node.money.forgone.amount));
-        return lines.join("\n");
+    private _moneyRows(node: RankingNode, side: "paid" | "forgone"): TooltipRow[] {
+        const figure = node.money[side];
+        const amount = figure.amount;
+        let value = this._money(amount);
+        if (isPartial(figure, node.kwh)) value += " (" + this._t("device_reports.ranking.partial") + ")";
+        return [
+            tooltipRow(
+                this._t("device_reports.ranking." + side),
+                value,
+                amount !== null && amount < 0 ? PRICE_NEGATIVE_COLOR : MONEY_COLORS[side],
+            ),
+            tooltipRow("", this._pricedTitle(figure, node.kwh)),
+        ];
     }
 
-    private _moneySegments(node: RankingNode, scale: number): MoneySegment[] {
-        const segments: MoneySegment[] = [];
-        let positive = 0;
-        let negative = 0;
-        for (const side of ["paid", "forgone"] as const) {
-            const figure = node.money[side];
-            const amount = figure.amount;
-            if (amount === null || amount === 0 || scale <= 0) continue;
-            const width = Math.min(50, (Math.abs(amount) / scale) * 50);
-            const offset = amount > 0 ? positive : negative;
-            const anchor = amount > 0 ? "left" : "right";
-            segments.push({
-                side,
-                amount,
-                partial: isPartial(figure, node.kwh),
-                style: anchor + ":" + (50 + offset) + "%;width:" + width + "%;",
-                title: this._t("device_reports.ranking." + side) + ": " + this._money(amount)
-                    + " (" + this._pricedTitle(figure, node.kwh) + ")",
+    private _tooltipContent(node: RankingNode, model: RankingModel): TooltipBody {
+        let body = this._tooltips.get(node.id);
+        if (body === undefined) {
+            body = this._buildTooltip(node, model);
+            this._tooltips.set(node.id, body);
+        }
+        return body;
+    }
+
+    private _buildTooltip(node: RankingNode, model: RankingModel): TooltipBody {
+        let total = formatKwhValue(node.kwh) + " kWh";
+        if (node.id !== model.house.id) {
+            total += " · " + fillTemplate(this._t("device_reports.ranking.of_house"), {
+                pct: percent(node.kwh, model.house.kwh),
             });
-            if (amount > 0) positive += width;
-            else negative += width;
         }
-        return segments;
+        const rows = [
+            tooltipRow(this._t("device_reports.over_time.total"), total),
+            ...SOURCES.map((source) => tooltipRow(
+                this._t("device_reports.ranking.sources." + source),
+                formatKwhValue(node.sources[source]) + " kWh ("
+                    + percent(node.sources[source], node.kwh) + " %)",
+                SOURCE_COLORS[source],
+            )),
+            ...this._moneyRows(node, "paid"),
+            ...this._moneyRows(node, "forgone"),
+        ];
+        if (partlyCovered(node.coverage)) rows.push(coverageRow(this._t.bind(this), node.coverage, node.first_hour));
+        if (node.overallocated_kwh > MARK_SHARE * node.kwh && node.overallocated_kwh > 0) {
+            rows.push(tooltipRow("", fillTemplate(this._t("device_reports.ranking.overallocated"), {
+                kwh: formatKwhValue(node.overallocated_kwh),
+            })));
+        }
+        return { title: this._label(node, model.house), hasActual: false, rows };
     }
 
-    private _renderMarks(node: RankingNode) {
-        const marks: string[] = [];
-        if (node.overallocated_kwh > MARK_SHARE * node.kwh && node.overallocated_kwh > 0) {
-            marks.push(fillTemplate(this._t("device_reports.ranking.overallocated"), {
-                kwh: formatKwhValue(node.overallocated_kwh),
-            }));
-        }
-        if (node.coverage < COVERAGE_MARK) {
-            marks.push(fillTemplate(this._t("device_reports.ranking.coverage"), {
-                pct: String(Math.round(node.coverage * 100)),
-                date: node.first_hour ? node.first_hour.slice(0, 10) : "—",
-            }));
-        }
-        return marks.length > 0
-            ? html`<div class="marks">${marks.map((mark) => html`<div class="mark">${mark}</div>`)}</div>`
-            : nothing;
+    /** Paid then forgone, stacked from zero; a negative amount draws as nothing. */
+    private _moneySegments(node: RankingNode, scale: number): MoneySegment[] {
+        let left = 0;
+        return (["paid", "forgone"] as const).map((side) => {
+            const figure = node.money[side];
+            const fraction = scale > 0 ? Math.max(0, figure.amount ?? 0) / scale : 0;
+            const style = "left:" + left * 100 + "%;" + widthStyle(fraction);
+            left += fraction;
+            return { side, partial: isPartial(figure, node.kwh), style };
+        });
     }
 
     private _renderEnergy(node: RankingNode, scale: number) {
@@ -367,51 +377,23 @@ export class HelmanDeviceReportRanking extends LitElement {
     }
 
     private _renderMoney(node: RankingNode, scale: number) {
-        const segments = this._moneySegments(node, scale);
-        const label = (side: "paid" | "forgone") => {
-            const figure = node.money[side];
-            return html`
-                <span class=${"money-figure " + side} title=${this._pricedTitle(figure, node.kwh)}>
-                    ${this._t("device_reports.ranking." + side)} ${this._money(figure.amount)}
-                    ${isPartial(figure, node.kwh)
-                        ? html`<span class="partial-mark">${this._t("device_reports.ranking.partial")}</span>`
-                        : nothing}
-                </span>
-            `;
-        };
         return html`
             <div class="track money">
-                <span class="center"></span>
-                ${segments.map((segment) => html`
+                ${this._moneySegments(node, scale).map((segment) => html`
                     <span
-                        class=${"money-seg " + segment.side
-                            + (segment.amount < 0 ? " negative" : "")
-                            + (segment.partial ? " partial" : "")}
+                        class=${"money-seg " + segment.side + (segment.partial ? " partial" : "")}
                         style=${segment.style}
-                        title=${segment.title}
                     ></span>
                 `)}
             </div>
-            <div class="money-label">${label("paid")} · ${label("forgone")}</div>
         `;
     }
 
-    private _renderDetail(node: RankingNode) {
-        return html`
-            <div class="detail">
-                ${SOURCES.map((source) => html`
-                    <span>${this._t("device_reports.ranking.sources." + source)}</span>
-                    <span>${formatKwhValue(node.sources[source])} kWh</span>
-                    <span>${percent(node.sources[source], node.kwh)} %</span>
-                `)}
-                <span>${this._t("device_reports.ranking.paid")}</span>
-                <span>${this._money(node.money.paid.amount)}</span>
-                <span>${this._pricedTitle(node.money.paid, node.kwh)}</span>
-                <span>${this._t("device_reports.ranking.forgone")}</span>
-                <span>${this._money(node.money.forgone.amount)}</span>
-                <span>${this._pricedTitle(node.money.forgone, node.kwh)}</span>
-            </div>
-        `;
+    /** A head-line money figure, coloured like its bar -- or as a negative price when below zero. */
+    private _renderMoneyFigure(node: RankingNode, side: "paid" | "forgone") {
+        const amount = node.money[side].amount;
+        const negative = amount !== null && amount < 0;
+        return html`<span class=${"money-figure " + (negative ? "negative" : side)}>${this._money(amount)}</span>`;
     }
 
     private _toggleExpanded(id: string, event: Event): void {
@@ -420,10 +402,6 @@ export class HelmanDeviceReportRanking extends LitElement {
         if (next.has(id)) next.delete(id);
         else next.add(id);
         this._expanded = next;
-    }
-
-    private _toggleDetail(id: string): void {
-        this._detail = this._detail === id ? null : id;
     }
 
     private _renderRow(node: RankingNode, model: RankingModel, isHouse: boolean): unknown {
@@ -435,8 +413,15 @@ export class HelmanDeviceReportRanking extends LitElement {
         const houseKwh = model.house.kwh;
         const indent = "padding-left:" + Math.max(0, node.depth - 1) * 14 + "px;";
         return html`
-            <div class=${"row" + (isHouse ? " house" : "")} data-id=${node.id} style=${indent}>
-                <div class="head" title=${this._splitTitle(node)} @click=${() => this._toggleDetail(node.id)}>
+            <div
+                class=${"row" + (isHouse ? " house" : "")}
+                data-id=${node.id}
+                style=${indent}
+                @mousemove=${(event: MouseEvent) => this._tooltip.show(event, this._tooltipContent(node, model))}
+                @mouseleave=${() => this._tooltip.hide()}
+                @click=${(event: MouseEvent) => this._tooltip.toggle(event, this._tooltipContent(node, model))}
+            >
+                <div class="head">
                     ${expandable ? html`
                         <button
                             type="button"
@@ -447,13 +432,11 @@ export class HelmanDeviceReportRanking extends LitElement {
                     ` : html`<span class="toggle"></span>`}
                     <span class="label">${node.estimated ? html`<span class="estimated">≈ </span>` : nothing}${this._label(node, model.house)}</span>
                     <span class="figures">
-                        ${formatKwhValue(node.kwh)} kWh${isHouse ? nothing : html` · ${fillTemplate(this._t("device_reports.ranking.of_house"), { pct: percent(node.kwh, houseKwh) })}`}
+                        ${formatKwhValue(node.kwh)} kWh${isHouse ? nothing : html` · ${fillTemplate(this._t("device_reports.ranking.of_house"), { pct: percent(node.kwh, houseKwh) })}`}${this._show !== "energy" ? html` · ${this._renderMoneyFigure(node, "paid")} · ${this._renderMoneyFigure(node, "forgone")}` : nothing}
                     </span>
                 </div>
-                ${this._renderMarks(node)}
                 ${this._show !== "money" ? this._renderEnergy(node, energyScale) : nothing}
                 ${this._show !== "energy" ? this._renderMoney(node, moneyScale) : nothing}
-                ${this._detail === node.id ? this._renderDetail(node) : nothing}
             </div>
             ${expandable && expanded ? children.map((child) => this._renderRow(child, model, false)) : nothing}
         `;
@@ -492,6 +475,7 @@ export class HelmanDeviceReportRanking extends LitElement {
             </div>
             ${this._renderRow(model.house, model, true)}
             ${top.map((node) => this._renderRow(node, model, false))}
+            ${this._tooltip.render()}
         `;
     }
 }

@@ -14,6 +14,13 @@ import {
 import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { formatKwhValue } from "../shared/forecast-value-format";
+import {
+    HoverTooltipController,
+    hoverTooltipStyles,
+    tooltipRow,
+    type TooltipBody,
+    type TooltipRow,
+} from "../shared/hover-tooltip";
 import { startNowClock } from "../shared/now-clock";
 import { todayIso } from "../shared/today-iso";
 import { DEVICE_REPORTS, type DeviceReportEntry } from "./report-registry";
@@ -28,7 +35,7 @@ import {
 const OPEN_PAYLOAD_TTL_MS = 5 * 60_000;
 /** How long a custom date edit settles before it is fetched. */
 const CUSTOM_DEBOUNCE_MS = 400;
-/** Above this share of the house, a data-quality figure is worth a note. */
+/** Above this share of the house, a data-quality figure is worth a mention. */
 const QUALITY_NOTE_SHARE = 0.01;
 
 const SOURCE_METERS = ["grid", "solar", "battery"] as const;
@@ -120,8 +127,9 @@ export class HelmanDeviceReportShell extends LitElement {
     private _debounceTimer?: number;
     /** Custom date edits not yet applied; a key present with null clears that date. */
     private _pendingCustom: { start?: string | null; end?: string | null } = {};
+    private _tooltip = new HoverTooltipController(this);
 
-    static styles = css`
+    static styles = [hoverTooltipStyles, css`
         :host { display: block; }
         .bar {
             display: flex;
@@ -155,18 +163,21 @@ export class HelmanDeviceReportShell extends LitElement {
             color: var(--secondary-text-color);
             margin-bottom: 6px;
         }
-        .warning, .quality, .error, .unavailable {
+        .quality-glyph {
+            font: inherit;
+            margin-left: 4px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+        .quality-glyph.warning { color: var(--warning-color, #f4b400); }
+        .error, .unavailable {
             font-size: 0.8rem;
             padding: 6px 8px;
             border-radius: 4px;
             margin-bottom: 8px;
-        }
-        .warning {
-            background: color-mix(in srgb, var(--warning-color, #f4b400) 15%, transparent);
-        }
-        .quality {
-            background: color-mix(in srgb, var(--secondary-text-color, #888) 12%, transparent);
-            color: var(--secondary-text-color);
         }
         .error {
             background: color-mix(in srgb, var(--error-color, #db4437) 15%, transparent);
@@ -174,7 +185,7 @@ export class HelmanDeviceReportShell extends LitElement {
         .unavailable {
             background: color-mix(in srgb, var(--secondary-text-color, #888) 12%, transparent);
         }
-    `;
+    `];
 
     connectedCallback(): void {
         super.connectedCallback();
@@ -436,27 +447,43 @@ export class HelmanDeviceReportShell extends LitElement {
         `;
     }
 
-    private _renderNotes(payload: DeviceReportCommon) {
+    /**
+     * The missing meters and the data-quality figures, as a glyph after the
+     * as-of time: ⚠ when a meter is missing, ⓘ for quality figures alone, and
+     * nothing when there is neither. Its tooltip carries the text.
+     */
+    private _renderQuality(payload: DeviceReportCommon) {
         const t = this._localize;
         const missing = SOURCE_METERS.filter((meter) => !payload.meters[meter]);
         const house = payload.house_kwh;
         const quality = (["ambiguous", "unattributed", "mismatch"] as const)
             .map((kind) => ({ kind, kwh: payload[(kind + "_kwh") as "ambiguous_kwh"] }))
             .filter(({ kwh }) => house > 0 && kwh > QUALITY_NOTE_SHARE * house);
+        if (missing.length === 0 && quality.length === 0) return nothing;
+        const rows: TooltipRow[] = missing.length > 0
+            ? [tooltipRow("", fillTemplate(t("device_reports.missing_meters"), {
+                meters: missing.map((meter) => t("device_reports.meters." + meter)).join(", "),
+            }))]
+            : [];
+        for (const { kind, kwh } of quality) {
+            rows.push({
+                ...tooltipRow("", fillTemplate(t("device_reports.quality." + kind), {
+                    kwh: formatKwhValue(kwh),
+                    pct: String(Math.round((kwh / house) * 100)),
+                })),
+                quality: kind,
+            });
+        }
+        const tooltip: TooltipBody = { title: t("device_reports.quality_title"), hasActual: false, rows };
         return html`
-            ${missing.length > 0 ? html`
-                <div class="warning">${fillTemplate(t("device_reports.missing_meters"), {
-                    meters: missing.map((meter) => t("device_reports.meters." + meter)).join(", "),
-                })}</div>
-            ` : nothing}
-            ${quality.length > 0 ? html`
-                <div class="quality">${quality.map(({ kind, kwh }) => html`
-                    <div data-quality=${kind}>${fillTemplate(t("device_reports.quality." + kind), {
-                        kwh: formatKwhValue(kwh),
-                        pct: String(Math.round((kwh / house) * 100)),
-                    })}</div>
-                `)}</div>
-            ` : nothing}
+            <button
+                type="button"
+                class=${"quality-glyph" + (missing.length > 0 ? " warning" : "")}
+                aria-label=${tooltip.title ?? ""}
+                @mousemove=${(event: MouseEvent) => this._tooltip.show(event, tooltip)}
+                @mouseleave=${() => this._tooltip.hide()}
+                @click=${(event: MouseEvent) => this._tooltip.toggle(event, tooltip)}
+            >${missing.length > 0 ? "⚠" : "ⓘ"}</button>
         `;
     }
 
@@ -475,7 +502,7 @@ export class HelmanDeviceReportShell extends LitElement {
             ${entry.usesGranularity ? this._renderGranularity() : nothing}
             <div class="status">
                 ${payload && !isDeviceReportUnavailable(payload)
-                    ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.as_of) })}</span>`
+                    ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.as_of) })}</span>${this._renderQuality(payload)}`
                     : nothing}
                 ${loading ? html`<span class="loading">${t("device_reports.loading")}</span>` : nothing}
             </div>
@@ -486,9 +513,9 @@ export class HelmanDeviceReportShell extends LitElement {
                 <div class="unavailable">${t("device_reports.unavailable." + payload.unavailable)}</div>
             ` : nothing}
             ${payload && !isDeviceReportUnavailable(payload) ? html`
-                ${this._renderNotes(payload)}
                 ${staticHtml`<${tag} .payload=${payload} .query=${query} .localize=${this._localize}></${tag}>`}
             ` : nothing}
+            ${this._tooltip.render()}
         `;
     }
 }

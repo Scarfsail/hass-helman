@@ -232,6 +232,7 @@
       "no_house_node": "Device reports need the house power sensor (Energy nodes → House → Power). Without it there is no house device tree to report on.",
       "no_house_meter": "Device reports need the house energy meter (Energy nodes → House → Forecast → Total energy). Without it the house total and every remainder are unknown."
     },
+    "quality_title": "Data quality",
     "missing_meters": "Not configured: {meters}. The source colours cannot show what these meters would have measured.",
     "meters": {
       "grid": "grid import/export meters",
@@ -297,6 +298,13 @@
       "no_data": "no data",
       "import": "Import price",
       "export": "Export price",
+      "peak": "Peak",
+      "per_day": "Per day, over the hours with data",
+      "of_peak": "Of the row's peak",
+      "min": "Min",
+      "mean": "Mean",
+      "max": "Max",
+      "price_note": "Shaded from the cheapest to the dearest hour; a negative price has its own colour.",
       "note": "Mean power per hour of day, over the hours each row has data for. Each row is shaded relative to its own peak; hatched cells have no data.",
       "empty": "No devices to show"
     }

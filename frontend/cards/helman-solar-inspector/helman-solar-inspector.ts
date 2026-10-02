@@ -32,6 +32,14 @@ import {
 } from "../color-utils";
 import { CHART_COLORS } from "./chart-colors";
 import { formatEnergy } from "../power-format";
+import {
+  hoverTooltipStyles,
+  renderHoverTooltip,
+  sameTooltipContent,
+  type TooltipCell,
+  type TooltipContent,
+  type TooltipRow,
+} from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { formatIsoDate, todayIso } from "../shared/today-iso";
@@ -431,60 +439,6 @@ type ChartLayout = {
   /** Inverse of `yForW`: the watts a plot-space y coordinate reads as. */
   wForY: (y: number) => number;
 };
-
-/**
- * One cell of a hover popup's actual/forecast column, optionally swatched --
- * either with a literal colour, or with a schedule action's tone class, whose
- * accent colour rides in via `schedulingSharedStyles`.
- */
-type TooltipCell = { value: string; color?: string; toneClass?: string } | null;
-
-/**
- * One row of a hover popup: a label, and its actual and forecast readings side
- * by side. `forecast` is the only cell guaranteed present -- a slot with no
- * actual data yet (still ahead of it) leaves `actual` null, and the popup
- * drops that column entirely rather than show it empty.
- */
-type TooltipRow = { label: string; actual: TooltipCell; forecast: TooltipCell };
-
-/**
- * The floating popup that follows the cursor over whichever bar/band it sits
- * on. `hasActual` decides once, for the whole popup, whether the actual
- * column renders -- the hovered slot either has lived through or it hasn't,
- * so every row in one popup agrees on it.
- */
-type TooltipContent = {
-  x: number;
-  y: number;
-  title?: string;
-  hasActual: boolean;
-  rows: TooltipRow[];
-};
-
-/** Two popup cells saying the same thing, coordinates excluded by construction. */
-function sameTooltipCell(a: TooltipCell, b: TooltipCell): boolean {
-  if (a === null || b === null) return a === b;
-  return a.value === b.value && a.color === b.color && a.toneClass === b.toneClass;
-}
-
-/**
- * Whether two popups say the same thing.
- *
- * Compared by value rather than by identity because every source builds its
- * rows fresh per pointer report -- and by contents rather than by position,
- * which is what makes a sweep across one column cost nothing: see
- * `_applyTooltip`.
- */
-function sameTooltipContent(a: TooltipContent | null, b: TooltipContent | null): boolean {
-  if (a === null || b === null) return a === b;
-  if (a.title !== b.title || a.hasActual !== b.hasActual || a.rows.length !== b.rows.length) {
-    return false;
-  }
-  return a.rows.every((row, index) =>
-    row.label === b.rows[index].label
-    && sameTooltipCell(row.actual, b.rows[index].actual)
-    && sameTooltipCell(row.forecast, b.rows[index].forecast));
-}
 
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
@@ -977,7 +931,7 @@ export class HelmanSolarInspector extends LitElement {
   private _unsubscribeScheduleOwner?: () => void;
   private _unsubscribeDataChanged?: () => void;
 
-  static styles = [helmanColorVars, schedulingSharedStyles, css`
+  static styles = [helmanColorVars, schedulingSharedStyles, hoverTooltipStyles, css`
     :host {
       display: block;
       width: 100%;
@@ -1169,68 +1123,6 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--secondary-text-color);
       background: var(--secondary-background-color);
       line-height: 1.35;
-    }
-
-    .hover-tooltip {
-      position: fixed;
-      z-index: 20;
-      pointer-events: none;
-      transform: translate(-50%, -100%) translateY(-10px);
-      background: var(--card-background-color, #fff);
-      border: 1px solid var(--divider-color);
-      border-radius: 6px;
-      padding: 6px 9px;
-      font-size: 12px;
-      line-height: 1.5;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-      white-space: nowrap;
-    }
-
-    .hover-tooltip-title {
-      font-weight: 600;
-      margin-bottom: 3px;
-    }
-
-    .hover-tooltip-table {
-      display: grid;
-      column-gap: 10px;
-      row-gap: 2px;
-      align-items: center;
-    }
-
-    .hover-tooltip-table.has-actual {
-      grid-template-columns: auto 1fr 1fr;
-    }
-
-    .hover-tooltip-table.forecast-only {
-      grid-template-columns: auto 1fr;
-    }
-
-    .hover-tooltip-header {
-      color: var(--secondary-text-color);
-      font-size: 0.9em;
-      text-align: right;
-    }
-
-    .hover-tooltip-cell {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 4px;
-      font-weight: 600;
-      text-align: right;
-    }
-
-    .hover-tooltip-swatch {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 2px;
-      flex: none;
-    }
-
-    .hover-tooltip-label {
-      color: var(--secondary-text-color);
     }
 
     .interpolation-note {
@@ -4086,53 +3978,14 @@ export class HelmanSolarInspector extends LitElement {
     });
   };
 
-  private _renderTooltipCell(cell: TooltipCell) {
-    if (!cell) return html`<span class="hover-tooltip-cell">—</span>`;
-    const swatch = cell.toneClass
-      ? html`<span class="hover-tooltip-swatch ${cell.toneClass}" style="background: var(--schedule-action-tone-accent);"></span>`
-      : cell.color
-        ? html`<span class="hover-tooltip-swatch" style="background: ${cell.color};"></span>`
-        : "";
-    return html`
-      <span class="hover-tooltip-cell">
-        ${swatch}
-        ${cell.value}
-      </span>
-    `;
-  }
-
-  /**
-   * The popup itself: a title, then a label/actual/forecast table, following
-   * the cursor. A slot with no actual reading yet drops the actual column
-   * entirely rather than pad it with dashes -- what the popup states as
-   * "the" value there is simply the forecast.
-   */
+  /** The shared popup, its two columns captioned actual and forecast. */
   private _renderTooltip() {
     if (!this._tooltip) return "";
-    const { title, hasActual, rows } = this._tooltip;
-    // Position comes from `_tooltipPoint`, not from the content: the popup is
-    // moved by writing this element's style directly, and this binding only
-    // has to put a freshly-created popup where the cursor already is.
-    const { x, y } = this._tooltipPoint ?? { x: this._tooltip.x, y: this._tooltip.y };
-    return html`
-      <div class="hover-tooltip" style="left: ${x}px; top: ${y}px;">
-        ${title ? html`<div class="hover-tooltip-title">${title}</div>` : ""}
-        <div class="hover-tooltip-table ${hasActual ? "has-actual" : "forecast-only"}">
-          ${hasActual
-            ? html`
-                <span></span>
-                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_actual")}</span>
-                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_forecast")}</span>
-              `
-            : ""}
-          ${rows.map((row) => html`
-            <span class="hover-tooltip-label">${row.label}</span>
-            ${hasActual ? this._renderTooltipCell(row.actual) : ""}
-            ${this._renderTooltipCell(row.forecast)}
-          `)}
-        </div>
-      </div>
-    `;
+    return renderHoverTooltip(
+      this._tooltip,
+      this._tooltipPoint ?? { x: this._tooltip.x, y: this._tooltip.y },
+      [this._t("bias_correction.inspector.column_actual"), this._t("bias_correction.inspector.column_forecast")],
+    );
   }
 
   /**
