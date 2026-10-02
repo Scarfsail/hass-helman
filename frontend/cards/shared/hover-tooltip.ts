@@ -298,7 +298,9 @@ export class HoverTooltipController implements ReactiveController {
     /** A tap: open the popup, or close it when it already says this. */
     toggle(event: MouseEvent, body: TooltipBody): void {
         // A mouse or pen is already hovering what it clicks: the click must not close it.
-        if (this._pointerType === "touch" && sameTooltipContent(this._pending?.next ?? this.content, body)) {
+        // A pending close (a press elsewhere just queued it) is what the popup is about to be.
+        const current = this._pending !== null ? this._pending.next : this.content;
+        if (this._pointerType === "touch" && sameTooltipContent(current, body)) {
             this.hide();
             return;
         }
