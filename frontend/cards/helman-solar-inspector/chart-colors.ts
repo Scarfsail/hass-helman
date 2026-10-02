@@ -21,6 +21,7 @@ import {
   GRID_EXPORT_COLOR,
   GRID_IMPORT_COLOR,
   HOUSE_COLOR,
+  NEUTRAL_COLOR,
   SOLAR_COLOR,
 } from "../color-utils";
 
@@ -36,4 +37,12 @@ export const CHART_COLORS = {
   gridExport:      GRID_EXPORT_COLOR,
   impactPositive:  CHARGE_COLOR,
   impactNegative:  DISCHARGE_COLOR,
+  unattributed:    NEUTRAL_COLOR,
 } as const;
+
+/**
+ * Fill of a measured (actual) band -- low enough that a forecast outline reads
+ * through it. Shared by the day chart, the aggregate views and the device
+ * reports, so a measured quantity looks the same wherever it is drawn.
+ */
+export const ACTUAL_FILL_OPACITY = 0.45;

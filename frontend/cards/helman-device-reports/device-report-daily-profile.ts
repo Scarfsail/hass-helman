@@ -8,6 +8,15 @@ import type {
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PRICE_NEGATIVE_COLOR } from "../color-utils";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { formatPower } from "../power-format";
+import { formatKwhValue } from "../shared/forecast-value-format";
+import {
+    HoverTooltipController,
+    hoverTooltipStyles,
+    tooltipRow,
+    type TooltipBody,
+    type TooltipRow,
+} from "../shared/hover-tooltip";
+import { coverageRow, partlyCovered } from "./device-report-ranking";
 import { DEVICE_PALETTE, OTHER_DEVICES_COLOR, UNMEASURED_COLOR, deviceColor } from "./device-palette";
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
@@ -15,21 +24,19 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const AXIS_EVERY = 3;
 /** The faintest shade a priced hour gets, so the cheapest hour still reads as priced. */
 const PRICE_FLOOR_LEVEL = 0.15;
-/** Below this coverage a row says how much of the period it has data for, as in Ranking. */
-const COVERAGE_MARK = 0.99;
 
 interface Cell {
     /** The cell's value over its row's peak, 0..1; null for a missing cell. */
     level: number | null;
     style: string;
-    title: string;
+    tooltip: TooltipBody;
 }
 
 interface HeatRow {
     id: string;
     label: string;
     swatchStyle: string;
-    mark: string | null;
+    tooltip: TooltipBody;
     cells: Cell[];
 }
 
@@ -60,8 +67,8 @@ function shade(color: string, level: number): string {
  * A row is shaded relative to its own peak, so a small device is as readable as
  * a large one; an hour the row was never observed in is hatched, not drawn as 0.
  * A device's colour is its rank among the devices, from the shared device
- * palette, as in Over time. The model is built in `willUpdate` behind the
- * inputs it reads.
+ * palette, as in Over time. Every label and cell carries its hover tooltip,
+ * built with the model in `willUpdate` behind the inputs it reads.
  */
 @customElement("helman-device-report-daily-profile")
 export class HelmanDeviceReportDailyProfile extends LitElement {
@@ -69,13 +76,14 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
     @property({ attribute: false }) public query?: DeviceReportQuery;
     @property({ attribute: false }) public localize?: LocalizeFunction;
 
+    private _tooltip = new HoverTooltipController(this);
     private _model: DailyProfileModel | null = null;
     private _modelKey: {
         payload: DailyProfileReportPayload | undefined;
         localize: LocalizeFunction | undefined;
     } | null = null;
 
-    static styles = css`
+    static styles = [hoverTooltipStyles, css`
         :host { display: block; }
         .grid {
             display: grid;
@@ -98,10 +106,6 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
             overflow: hidden;
             white-space: nowrap;
             text-overflow: ellipsis;
-        }
-        .mark {
-            font-size: 0.65rem;
-            color: var(--secondary-text-color);
         }
         .swatch {
             width: 10px;
@@ -129,14 +133,16 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
             white-space: nowrap;
             overflow: visible;
         }
-        .note, .empty {
+        .empty {
             font-size: 0.75rem;
             color: var(--secondary-text-color);
             margin-top: 6px;
         }
-    `;
+    `];
 
-    protected willUpdate(_changed: PropertyValues<this>): void {
+    protected willUpdate(changed: PropertyValues<this>): void {
+        // A refresh reuses the hovered node: its popup would keep the old figures.
+        if (changed.has("payload")) this._tooltip.hide();
         const key = this._modelKey;
         if (key === null || key.payload !== this.payload || key.localize !== this.localize) {
             this._modelKey = { payload: this.payload, localize: this.localize };
@@ -163,18 +169,76 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
     }
 
     /** What every cell of an hour carries in its hover: that hour's mean prices. */
-    private _priceLines(payload: DailyProfileReportPayload, hour: number): string {
-        return [
-            this._t("device_reports.daily_profile.import") + ": "
-                + this._rate(payload.import_rate[hour] ?? null, payload.currency),
-            this._t("device_reports.daily_profile.export") + ": "
-                + this._rate(payload.export_rate[hour] ?? null, payload.currency),
-        ].join("\n");
+    private _priceRows(payload: DailyProfileReportPayload, hour: number): TooltipRow[] {
+        return (["import", "export"] as const).map((side) => {
+            const rate = (side === "import" ? payload.import_rate : payload.export_rate)[hour] ?? null;
+            const color = rate !== null && rate < 0
+                ? PRICE_NEGATIVE_COLOR
+                : side === "import" ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR;
+            return tooltipRow(
+                this._t("device_reports.daily_profile." + side),
+                this._rate(rate, payload.currency),
+                color,
+            );
+        });
+    }
+
+    private _coverageRow(row: DailyProfileRow): TooltipRow {
+        return coverageRow(this._t.bind(this), row.coverage, row.first_hour);
+    }
+
+    /** A device's label: its coverage, its peak hour and its mean energy per day. */
+    private _deviceTooltip(row: DailyProfileRow, label: string, color: string): TooltipBody {
+        const observed = HOURS.filter((hour) => row.watts[hour] != null);
+        const peakHour = observed.reduce<number | null>(
+            (best, hour) => best === null || row.watts[hour]! > row.watts[best]! ? hour : best,
+            null,
+        );
+        const perDay = observed.reduce((sum, hour) => sum + row.watts[hour]!, 0) / 1000;
+        return {
+            title: label,
+            hasActual: false,
+            rows: [
+                this._coverageRow(row),
+                tooltipRow(
+                    this._t("device_reports.daily_profile.peak"),
+                    peakHour === null
+                        ? "—"
+                        : hourSpan(peakHour) + " · " + formatPower(row.watts[peakHour]!).display,
+                    color,
+                ),
+                tooltipRow(
+                    this._t("device_reports.daily_profile.per_day"),
+                    formatKwhValue(perDay) + " kWh",
+                    color,
+                ),
+            ],
+            note: this._t("device_reports.daily_profile.note"),
+        };
+    }
+
+    /** A price row's label: the min, mean and max over the hours it has a rate for. */
+    private _priceTooltip(label: string, rates: readonly (number | null)[], unit: string | null): TooltipBody {
+        const known = rates.filter((rate): rate is number => rate !== null);
+        const stat = (value: number) => this._rate(known.length > 0 ? value : null, unit);
+        return {
+            title: label,
+            hasActual: false,
+            rows: [
+                tooltipRow(this._t("device_reports.daily_profile.min"), stat(Math.min(...known))),
+                tooltipRow(
+                    this._t("device_reports.daily_profile.mean"),
+                    stat(known.reduce((sum, rate) => sum + rate, 0) / known.length),
+                ),
+                tooltipRow(this._t("device_reports.daily_profile.max"), stat(Math.max(...known))),
+            ],
+            note: this._t("device_reports.daily_profile.price_note"),
+        };
     }
 
     private _buildModel(payload: DailyProfileReportPayload): DailyProfileModel | null {
         if (payload.rows.length === 0) return null;
-        const priceLines = HOURS.map((hour) => this._priceLines(payload, hour));
+        const priceRows = HOURS.map((hour) => this._priceRows(payload, hour));
         let rank = 0;
         const rows = payload.rows.map((row): HeatRow => {
             // Past the palette, devices share the neutral "other" colour rather
@@ -188,26 +252,31 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                 id: row.id,
                 label,
                 swatchStyle: "background:" + color,
-                mark: row.coverage < COVERAGE_MARK
-                    ? fillTemplate(this._t("device_reports.ranking.coverage"), {
-                        pct: String(Math.round(row.coverage * 100)),
-                        date: row.first_hour ? row.first_hour.slice(0, 10) : "—",
-                    })
-                    : null,
+                tooltip: this._deviceTooltip(row, label, color),
                 cells: HOURS.map((hour): Cell => {
                     const watts = row.watts[hour] ?? null;
                     const level = watts === null ? null : peak > 0 ? watts / peak : 0;
+                    const rows = [
+                        tooltipRow(
+                            this._t("device_reports.daily_profile.average"),
+                            watts === null
+                                ? this._t("device_reports.daily_profile.no_data")
+                                : formatPower(watts).display,
+                            color,
+                        ),
+                    ];
+                    if (level !== null) {
+                        rows.push(tooltipRow(
+                            this._t("device_reports.daily_profile.of_peak"),
+                            Math.round(level * 100) + " %",
+                        ));
+                    }
+                    rows.push(...priceRows[hour]);
+                    if (partlyCovered(row.coverage)) rows.push(this._coverageRow(row));
                     return {
                         level,
                         style: level === null ? "" : shade(color, level),
-                        title: [
-                            label + " · " + hourSpan(hour),
-                            this._t("device_reports.daily_profile.average") + ": "
-                                + (watts === null
-                                    ? this._t("device_reports.daily_profile.no_data")
-                                    : formatPower(watts).display),
-                            priceLines[hour],
-                        ].join("\n"),
+                        tooltip: { title: label + " · " + hourSpan(hour), hasActual: false, rows },
                     };
                 }),
             };
@@ -221,11 +290,12 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
             const known = rates.filter((rate): rate is number => rate !== null && rate >= 0);
             const low = known.length > 0 ? Math.min(...known) : 0;
             const high = known.length > 0 ? Math.max(...known) : 0;
+            const label = this._t("device_reports.daily_profile." + side);
             return {
                 id: side,
-                label: this._t("device_reports.daily_profile." + side),
+                label,
                 swatchStyle: "",
-                mark: null,
+                tooltip: this._priceTooltip(label, rates, payload.currency),
                 cells: HOURS.map((hour): Cell => {
                     const rate = rates[hour] ?? null;
                     const level = rate === null
@@ -238,7 +308,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                         style: rate === null
                             ? ""
                             : shade(rate < 0 ? PRICE_NEGATIVE_COLOR : color, level),
-                        title: hourSpan(hour) + "\n" + priceLines[hour],
+                        tooltip: { title: hourSpan(hour), hasActual: false, rows: priceRows[hour] },
                     };
                 }),
             };
@@ -248,12 +318,17 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
 
     private _renderRow(row: HeatRow, kind: "device" | "price") {
         return html`
-            <div class=${"label " + kind} data-row=${row.id}>
+            <div
+                class=${"label " + kind}
+                data-row=${row.id}
+                @mousemove=${(event: MouseEvent) => this._tooltip.show(event, row.tooltip)}
+                @mouseleave=${() => this._tooltip.hide()}
+                @click=${(event: MouseEvent) => this._tooltip.toggle(event, row.tooltip)}
+            >
                 <span class="name">
                     ${row.swatchStyle ? html`<span class="swatch" style=${row.swatchStyle}></span>` : nothing}
                     ${row.label}
                 </span>
-                ${row.mark !== null ? html`<span class="mark">${row.mark}</span>` : nothing}
             </div>
             ${row.cells.map((cell, hour) => html`
                 <div
@@ -262,7 +337,9 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                     data-hour=${hour}
                     data-level=${cell.level === null ? "" : cell.level.toFixed(3)}
                     style=${cell.style}
-                    title=${cell.title}
+                    @mousemove=${(event: MouseEvent) => this._tooltip.show(event, cell.tooltip)}
+                    @mouseleave=${() => this._tooltip.hide()}
+                    @click=${(event: MouseEvent) => this._tooltip.toggle(event, cell.tooltip)}
                 ></div>
             `)}
         `;
@@ -281,7 +358,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                 <div></div>
                 ${HOURS.map((hour) => html`<div class="axis">${hour % AXIS_EVERY === 0 ? pad(hour) : ""}</div>`)}
             </div>
-            <div class="note">${this._t("device_reports.daily_profile.note")}</div>
+            ${this._tooltip.render()}
         `;
     }
 }
