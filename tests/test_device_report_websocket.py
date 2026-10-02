@@ -324,6 +324,37 @@ class TestPayload(DeviceReportTestCase):
         # Today's week, and cut by the period's end.
         self.assertTrue(second["partial"])
 
+    async def test_the_daily_profile_shape(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        self.recorder.hourly(WASHER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        connection = await self.request(
+            now, "2026-09-07", "2026-09-08", report="daily_profile", granularity="week"
+        )
+        self.assertEqual(connection.errors, [])
+        payload = connection.results[0][1]
+
+        self.assertEqual(payload["report"], "daily_profile")
+        self.assertNotIn("granularity", payload)
+        self.assertEqual(
+            payload["rows"][0],
+            {
+                "id": WASHER,
+                "label": "Washer",
+                "icon": None,
+                "estimated": False,
+                "unmeasured": False,
+                "kwh": 48.0,
+                "coverage": 1.0,
+                "first_hour": _local(2026, 9, 7).isoformat(),
+                "watts": [1000.0] * 24,
+            },
+        )
+        self.assertEqual(payload["rows"][1]["id"], "house_unmeasured")
+        self.assertEqual(payload["rows"][1]["watts"], [0.0] * 24)
+        self.assertEqual(payload["import_rate"], [None] * 24)
+        self.assertEqual(payload["export_rate"], [None] * 24)
+
     async def test_complete_follows_the_recorder_not_the_clock(self):
         now = _local(2026, 9, 16, 0, 20)
         # The 23:00 hour is not compiled yet at 00:20.

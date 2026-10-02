@@ -1,5 +1,6 @@
 import "./device-report-ranking";
 import "./device-report-over-time";
+import "./device-report-daily-profile";
 
 /**
  * The reports the card offers, one tab each, in tab order.
@@ -32,5 +33,11 @@ export const DEVICE_REPORTS: readonly DeviceReportEntry[] = Object.freeze([
         labelKey: "device_reports.over_time.title",
         tag: "helman-device-report-over-time",
         usesGranularity: true,
+    },
+    {
+        id: "daily_profile",
+        labelKey: "device_reports.daily_profile.title",
+        tag: "helman-device-report-daily-profile",
+        usesGranularity: false,
     },
 ]);

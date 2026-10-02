@@ -286,6 +286,29 @@ export interface OverTimeReportPayload extends DeviceReportCommon {
     series: OverTimeSeries[];
 }
 
+/** A top-level device, or the house's remainder, of the Daily profile report. */
+export interface DailyProfileRow {
+    id: string;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    unmeasured: boolean;
+    kwh: number;
+    /** Covered hours over the period's elapsed hours, 0..1. */
+    coverage: number;
+    first_hour: string | null;
+    /** Mean W per local hour of day, 0..23, over the hours the row was observed; null where it never was. */
+    watts: Array<number | null>;
+}
+
+export interface DailyProfileReportPayload extends DeviceReportCommon {
+    /** In period-kWh order. */
+    rows: DailyProfileRow[];
+    /** Mean rate per local hour of day over the elapsed hours that had one. */
+    import_rate: Array<number | null>;
+    export_rate: Array<number | null>;
+}
+
 /** One device report over `query`'s period. */
 export function fetchDeviceReport(
     hass: Pick<HomeAssistantLike, "callWS">,

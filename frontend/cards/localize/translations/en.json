@@ -290,6 +290,15 @@
       "partial_note": "Dimmed columns are partial: the period cuts them, or they are still running.",
       "overallocated": "devices measure {kwh} kWh more than the house meter",
       "empty": "No devices to show"
+    },
+    "daily_profile": {
+      "title": "Daily profile",
+      "average": "Average",
+      "no_data": "no data",
+      "import": "Import price",
+      "export": "Export price",
+      "note": "Mean power per hour of day, over the hours each row has data for. Each row is shaded relative to its own peak; hatched cells have no data.",
+      "empty": "No devices to show"
     }
   }
 }

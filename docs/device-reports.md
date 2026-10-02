@@ -1,6 +1,6 @@
 # Device reports
 
-The device reports card (`custom:helman-device-reports-card`) shows how the house's devices used energy over a period: how much each one used, where that energy came from (solar, battery, grid), and what it cost. Its reports are **Ranking** (who used it over the whole period) and **Over time** (how that developed).
+The device reports card (`custom:helman-device-reports-card`) shows how the house's devices used energy over a period: how much each one used, where that energy came from (solar, battery, grid), and what it cost. Its reports are **Ranking** (who used it over the whole period), **Over time** (how that developed) and **Daily profile** (when in the day it ran, against the price).
 
 Everything is computed by the backend from data Home Assistant already records, through one websocket command, `helman/device_report`. The card only picks the period and draws the answer.
 
@@ -144,6 +144,20 @@ The **Over time** report shows every top-level device's energy per **day**, **we
 - **Over-allocation.** When the devices measure more than the house meter, the stack rises above the tick; the excess is hatched and the hover says *"devices measure x kWh more than the house meter"*.
 
 **Example.** A week where the house meter read 25 kWh and the devices 30 kWh in hours where they exceeded it: the stack reaches 30, the tick sits at 25, and 30 + 0 − 5 = 25.
+
+---
+
+## 8. Daily profile
+
+The **Daily profile** report shows when in the day each top-level device, and the house's *Untracked consumption*, draws power, next to the average import and export price for each hour of the day. It is the view for deciding what is worth shifting. It ignores the granularity selector, which is not shown on this tab.
+
+- **A cell is the row's mean power at that local hour of day**: Σ kWh in the hours the row has data for at that hour ÷ Σ its coverage over them (section 2). A device whose history starts mid-period, or has gaps, is averaged over the hours it was observed, not diluted by the ones it wasn't. The hour in progress weighs its elapsed fraction.
+- **Hours are counted in UTC**, then placed on the local clock, so the fall-back day's repeated hour is averaged rather than doubled, and the spring-forward day's missing hour does not dilute its hour of day.
+- **Missing is not zero.** An hour of day the row has no data for at all is hatched; a measured 0 W is drawn as a plain, unshaded cell. A row with less than 99 % coverage carries the same mark as in Ranking.
+- **Each row is shaded relative to its own peak**, so a small device is as readable as a large one. Rows are in period-kWh order, and a device's colour is its rank among the devices, as in Over time.
+- **The price rows** are the plain mean of each hour of day's rate over the elapsed hours that had one; an hour with no rate is left out, not counted as 0. Like the money figures, the import rate falls back to today's configured tariff where the price sensor has no history. A negative export price is drawn in the negative-price colour. Hovering any cell shows the mean power and that hour's mean prices.
+
+**Example.** A dishwasher that only has data for the last 7 days of a 30-day period, running at 1.2 kW every evening at 20:00, shows 1.2 kW at 20:00 rather than a quarter of it.
 
 ---
 

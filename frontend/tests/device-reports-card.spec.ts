@@ -9,7 +9,7 @@ import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
  * `helman/device_report` is answered from a fixture generated in the page, so
  * what the card asked for -- and how often -- is what these tests assert on.
  * The shell owns the period, the granularity, the fetching and the
- * freshness; the Ranking and Over time reports only render. Specs that are about the clock fake the page's timers
+ * freshness; the Ranking, Over time and Daily profile reports only render. Specs that are about the clock fake the page's timers
  * and poll from Node, since `page.waitForFunction` would poll on the very
  * timers it took away.
  */
@@ -44,6 +44,7 @@ declare global {
         __shellRoot: () => ShadowRoot | null | undefined;
         __rankingRoot: () => ShadowRoot | null | undefined;
         __overTimeRoot: () => ShadowRoot | null | undefined;
+        __dailyProfileRoot: () => ShadowRoot | null | undefined;
         __fakeHass: Record<string, unknown>;
         __updates: Record<string, number>;
         __emitDataChanged: (kind: string) => void;
@@ -89,7 +90,8 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
         const common = (start: string, end: string) => ({
             start_date: start,
             end_date: end,
-            currency: "CZK",
+            // The backend's currency is the price unit, as the inspector's is.
+            currency: "CZK/kWh",
             charge_origin: {
                 charged_kwh: 10, grid: 0.5, grid_recorded: 0.5, grid_tariff: 0, grid_unpriced: 0,
                 solar: 0.5, solar_priced: 0.5, solar_unpriced: 0, unknown: 0,
@@ -132,6 +134,35 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                     values: values(1, 1, 1, 0, 0, 0, 0), unmeasured: 2, overallocated: 0,
                 },
             ],
+        });
+        // Device a peaks at 2000 W, device b at 50 W; b has no data at 03:00 and
+        // reads 0 at 04:00, and only half the period. No import rate at 05:00.
+        const hourly = (at: (hour: number) => number | null) =>
+            Array.from({ length: 24 }, (_, hour) => at(hour));
+        const profileRow = (fields: Record<string, unknown>) => ({
+            icon: null, estimated: false, unmeasured: false, coverage: 1,
+            first_hour: "2026-09-22T00:00:00+02:00", ...fields,
+        });
+        const dailyProfile = (start: string, end: string) => ({
+            ...common(start, end),
+            report: "daily_profile",
+            rows: [
+                profileRow({
+                    id: "house_unmeasured", label: "", unmeasured: true, kwh: 60,
+                    watts: hourly(() => 300),
+                }),
+                profileRow({
+                    id: "sensor.a", label: "Device A", kwh: 30,
+                    watts: hourly((hour) => (hour === 19 ? 2000 : hour === 20 ? 1000 : 100)),
+                }),
+                profileRow({
+                    id: "sensor.b", label: "Device B", kwh: 1, coverage: 0.5,
+                    first_hour: "2026-10-07T00:00:00+02:00",
+                    watts: hourly((hour) => (hour === 3 ? null : hour === 4 ? 0 : hour === 12 ? 50 : 25)),
+                }),
+            ],
+            import_rate: hourly((hour) => (hour === 5 ? null : hour >= 17 && hour < 21 ? 6 : 3)),
+            export_rate: hourly((hour) => (hour === 13 ? -0.5 : 1)),
         });
         const ranking = (start: string, end: string) => ({
             ...common(start, end),
@@ -205,7 +236,9 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                     ? { unavailable: opts.unavailable }
                     : msg.report === "over_time"
                         ? overTime(msg.start_date, msg.end_date, msg.granularity ?? "day")
-                        : ranking(msg.start_date, msg.end_date);
+                        : msg.report === "daily_profile"
+                            ? dailyProfile(msg.start_date, msg.end_date)
+                            : ranking(msg.start_date, msg.end_date);
                 if (!opts.hold) return answer();
                 return new Promise((resolveAnswer) => {
                     pending.push(() => resolveAnswer(answer()));
@@ -219,6 +252,8 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             ?.querySelector("helman-device-report-ranking")?.shadowRoot;
         window.__overTimeRoot = () => window.__shellRoot()
             ?.querySelector("helman-device-report-over-time")?.shadowRoot;
+        window.__dailyProfileRoot = () => window.__shellRoot()
+            ?.querySelector("helman-device-report-daily-profile")?.shadowRoot;
 
         const card = document.createElement("helman-device-reports-card") as HTMLElement &
             Record<string, unknown> & { setConfig: (config: unknown) => void };
@@ -549,6 +584,10 @@ test.describe("the ranking", () => {
         expect(fridge.forgonePartial).toBe(false);
         expect(fridge.text).not.toMatch(/[≥≤]/);
         expect(fridge.title).toContain("priced 8.0 of 10 kWh");
+        // Amounts are in the currency, not the price unit.
+        const moneyLabel = await rankingText(page, ".row[data-id='sensor.washer'] .money-label");
+        expect(moneyLabel).toContain("12.0 CZK");
+        expect(moneyLabel).not.toContain("/kWh");
         expect(fridge.title).toContain("1.0 kWh at today's configured tariff");
     });
 
@@ -733,6 +772,117 @@ test.describe("over time", () => {
         expect(columns[1].title).toContain("devices measure 5.0 kWh more than the house meter");
         expect(columns[1].title).toContain("Total: 30 kWh");
         expect(columns[0].title).not.toContain("devices measure");
+    });
+});
+
+async function openDailyProfile(page: Page): Promise<void> {
+    await rendered(page);
+    await clickShell(page, "button[data-report='daily_profile']");
+    await expect.poll(() => page.evaluate(
+        () => !!window.__dailyProfileRoot()?.querySelector(".cell"),
+    )).toBe(true);
+}
+
+/** One row's cells, by hour, as `{ level, missing, background }`. */
+function profileCells(page: Page, rowId: string) {
+    return page.evaluate((id: string) => [...(window.__dailyProfileRoot()
+        ?.querySelectorAll(".cell[data-row='" + id + "']") ?? [])]
+        .map((cell) => ({
+            level: (cell as HTMLElement).dataset.level,
+            missing: cell.classList.contains("missing"),
+            background: getComputedStyle(cell).backgroundImage,
+            color: getComputedStyle(cell).backgroundColor,
+            title: cell.getAttribute("title") ?? "",
+        })), rowId);
+}
+
+test.describe("daily profile", () => {
+    test("it ignores granularity and keeps the period across tabs", async ({ page }) => {
+        await mountCard(page);
+        await rendered(page);
+        await clickPreset(page, "last_7");
+        await expect.poll(() => requestCount(page)).toBe(2);
+        await openDailyProfile(page);
+        expect(await hasGranularityBar(page)).toBe(false);
+        expect((await requests(page))[2]).toEqual(
+            { report: "daily_profile", start: "2026-10-15", end: "2026-10-21" },
+        );
+        // Back to the Ranking: same period, still memoised.
+        await clickShell(page, "button[data-report='ranking']");
+        await rendered(page);
+        expect(await page.evaluate(() => window.__shellRoot()
+            ?.querySelector("button[data-preset='last_7']")?.classList.contains("selected"))).toBe(true);
+        expect(await requestCount(page)).toBe(3);
+    });
+
+    test("each row is shaded relative to its own peak", async ({ page }) => {
+        await mountCard(page);
+        await openDailyProfile(page);
+        const a = await profileCells(page, "sensor.a");
+        const b = await profileCells(page, "sensor.b");
+        expect(a).toHaveLength(24);
+        expect(a[19].level).toBe("1.000");
+        expect(a[20].level).toBe("0.500");
+        expect(a[0].level).toBe("0.050");
+        // 50 W is b's peak: as dark as a's 2000 W.
+        expect(b[12].level).toBe("1.000");
+        expect(b[12].color).not.toBe(a[19].color);
+        expect(b[0].level).toBe("0.500");
+        expect(a[19].title).toContain("Device A · 19:00–20:00");
+        expect(a[19].title).toContain("Average: 2.0 kW");
+        expect(a[19].title).toContain("Import price: 6.00 CZK/kWh");
+        expect(a[19].title).toContain("Export price: 1.00 CZK/kWh");
+    });
+
+    test("a missing cell is hatched, unlike a zero cell", async ({ page }) => {
+        await mountCard(page);
+        await openDailyProfile(page);
+        const b = await profileCells(page, "sensor.b");
+        expect(b[3]).toMatchObject({ level: "", missing: true });
+        expect(b[3].background).toContain("repeating-linear-gradient");
+        expect(b[3].title).toContain("Average: no data");
+        expect(b[4]).toMatchObject({ level: "0.000", missing: false, background: "none" });
+        expect(b[4].title).toContain("Average: 0 W");
+        // The coverage mark, worded as in Ranking.
+        expect(await page.evaluate(() => window.__dailyProfileRoot()
+            ?.querySelector(".label[data-row='sensor.b'] .mark")?.textContent ?? ""))
+            .toBe("data for 50 % of the period (from 2026-10-07)");
+        expect(await page.evaluate(() => window.__dailyProfileRoot()
+            ?.querySelector(".label[data-row='sensor.a'] .mark") ?? null)).toBeNull();
+    });
+
+    test("the price rows are drawn below the devices", async ({ page }) => {
+        await mountCard(page);
+        await openDailyProfile(page);
+        expect(await page.evaluate(() => [...(window.__dailyProfileRoot()?.querySelectorAll(".label") ?? [])]
+            .map((label) => (label as HTMLElement).dataset.row)))
+            .toEqual(["house_unmeasured", "sensor.a", "sensor.b", "import", "export"]);
+        const imports = await profileCells(page, "import");
+        const exports = await profileCells(page, "export");
+        expect(imports).toHaveLength(24);
+        // Shaded from the row's cheapest hour (a faint floor) to its dearest.
+        expect(imports[18].level).toBe("1.000");
+        expect(imports[0].level).toBe("0.150");
+        expect(imports[5].missing).toBe(true);
+        expect(imports[5].title).toContain("Import price: —");
+        // A negative export price is drawn in the negative-price colour.
+        expect(exports[13].level).toBe("1.000");
+        expect(exports[13].color).not.toBe(exports[12].color);
+    });
+
+    test("devices take the palette by rank, the remainder its own colour", async ({ page }) => {
+        await mountCard(page);
+        await openDailyProfile(page);
+        const swatches = await page.evaluate(() => Object.fromEntries(
+            [...(window.__dailyProfileRoot()?.querySelectorAll(".label.device") ?? [])].map((label) => [
+                (label as HTMLElement).dataset.row,
+                (label.querySelector(".swatch") as HTMLElement).style.background,
+            ]),
+        ));
+        // The palette's first two colours, indigo-500 and orange-500.
+        expect(swatches["sensor.a"]).toBe("rgb(99, 102, 241)");
+        expect(swatches["sensor.b"]).toBe("rgb(249, 115, 22)");
+        expect(new Set(Object.values(swatches)).size).toBe(3);
     });
 });
 
