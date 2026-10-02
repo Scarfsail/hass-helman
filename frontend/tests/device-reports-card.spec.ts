@@ -768,6 +768,20 @@ test.describe("the ranking", () => {
             await page.touchscreen.tap(640, 710);
             await expect.poll(() => tooltip(page, "__rankingRoot")).toBeNull();
         });
+
+        test("a card detached and reinserted (a view switch) comes back without the open tooltip", async ({ page }) => {
+            await mountCard(page);
+            await rendered(page);
+            await page.locator(".row[data-id='sensor.washer']").tap();
+            await expect.poll(() => tooltip(page, "__rankingRoot")).not.toBeNull();
+            await page.evaluate(() => {
+                const card = document.querySelector("helman-device-reports-card")!;
+                const parent = card.parentNode!;
+                parent.removeChild(card);
+                parent.appendChild(card);
+            });
+            await expect.poll(() => tooltip(page, "__rankingRoot")).toBeNull();
+        });
     });
 });
 

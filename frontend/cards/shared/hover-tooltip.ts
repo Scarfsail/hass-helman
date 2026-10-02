@@ -265,6 +265,14 @@ export class HoverTooltipController implements ReactiveController {
         cancelAnimationFrame(this._frame);
         this._frame = 0;
         this._pending = null;
+        // HA detaches and reinserts a card on a view switch, shadow DOM intact:
+        // an open popup must not come back describing what it was opened on.
+        if (this.content !== null) {
+            this.content = null;
+            this._host.requestUpdate();
+        }
+        this.point = null;
+        this._anchor = null;
     }
 
     hostUpdated(): void {
