@@ -77,30 +77,39 @@ def _local_iso(dataset: DeviceDataset, instant: datetime | None) -> str | None:
     return None if instant is None else instant.astimezone(dataset.local_tz).isoformat()
 
 
-def _ranking_node(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
-    attribution = attribute_energy(dataset, node.kwh)
-    covered = sum(node.coverage.values())
+def _coverage(dataset: DeviceDataset, node: DatasetNode) -> float:
+    """The node's covered hours over the period's elapsed hours, 0..1."""
+    if dataset.elapsed_hours <= 0:
+        return 0.0
+    return round(min(1.0, sum(node.coverage.values()) / dataset.elapsed_hours), 4)
+
+
+def _node_fields(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
+    """What every report says about a node's identity, size and data coverage."""
     return {
         "id": node.id,
-        "parent_id": node.parent_id,
-        "depth": node.depth,
         "label": node.label,
         "icon": node.icon,
         "estimated": node.estimated,
         "unmeasured": node.unmeasured,
-        "children": list(node.children),
         "kwh": _round_kwh(node.total_kwh),
+        "coverage": _coverage(dataset, node),
+        "first_hour": _local_iso(dataset, node.first_hour),
+    }
+
+
+def _ranking_node(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
+    attribution = attribute_energy(dataset, node.kwh)
+    return {
+        **_node_fields(dataset, node),
+        "parent_id": node.parent_id,
+        "depth": node.depth,
+        "children": list(node.children),
         "sources": _sources(attribution),
         "money": {
             "paid": _money_side(attribution.paid, tariff=True),
             "forgone": _money_side(attribution.forgone, tariff=False),
         },
-        "coverage": (
-            round(min(1.0, covered / dataset.elapsed_hours), 4)
-            if dataset.elapsed_hours > 0
-            else 0.0
-        ),
-        "first_hour": _local_iso(dataset, node.first_hour),
         "overallocated_kwh": _round_kwh(node.overallocated_kwh),
     }
 
@@ -136,9 +145,8 @@ def _build_over_time(dataset: DeviceDataset, query: ReportQuery) -> dict[str, An
     the house's over-allocation, so over the hours the house meter measured
     ``Σ values + unmeasured − overallocated = house``.
     """
-    by_id = {node.id: node for node in dataset.nodes}
     house = dataset.house
-    children = [by_id[child] for child in house.children]
+    children = _top_level(dataset)
     devices = sorted(
         (node for node in children if not node.unmeasured),
         key=lambda node: node.total_kwh,
@@ -182,9 +190,70 @@ def _build_over_time(dataset: DeviceDataset, query: ReportQuery) -> dict[str, An
     }
 
 
+def _top_level(dataset: DeviceDataset) -> list[DatasetNode]:
+    """The house's children: its top-level devices and its remainder."""
+    by_id = {node.id: node for node in dataset.nodes}
+    return [by_id[child] for child in dataset.house.children]
+
+
+def _hour_of_day_means(
+    values: dict[datetime, float],
+    weights: dict[datetime, float],
+    hour_of_day: dict[datetime, int],
+) -> list[float | None]:
+    """``Σ values ÷ Σ weights`` per local hour of day, over the hours with a weight.
+
+    ``None`` for an hour of day nothing weighed in on. Keyed by UTC hour, so
+    the fall-back day's repeated hour counts twice in both sums and the
+    spring-forward day's missing hour in neither: neither skews the mean.
+    """
+    sums = [0.0] * 24
+    totals = [0.0] * 24
+    for hour, weight in weights.items():
+        index = hour_of_day.get(hour)
+        if index is None or weight <= 0:
+            continue
+        sums[index] += values.get(hour, 0.0)
+        totals[index] += weight
+    return [sums[i] / totals[i] if totals[i] > 0 else None for i in range(24)]
+
+
+def _build_daily_profile(dataset: DeviceDataset, query: ReportQuery) -> dict[str, Any]:
+    """Each top-level device's, and the house remainder's, mean W per local hour.
+
+    A row averages over the hours it was observed -- its coverage, the hour in
+    progress by its elapsed part -- so a device that starts mid-period, or has
+    gaps, is not diluted by the hours it has no data for; an hour of day with
+    none is ``None``, not 0. Rows are in period-kWh order. The import and export
+    rates are plain means per local hour over the elapsed hours that had one.
+    """
+    hour_of_day = {hour: hour.astimezone(dataset.local_tz).hour for hour in dataset.hours}
+    rows = sorted(_top_level(dataset), key=lambda node: node.total_kwh, reverse=True)
+
+    def rate_means(rates: dict[datetime, float]) -> list[float | None]:
+        elapsed = {hour: 1.0 for hour in rates if hour < dataset.now}
+        return [_round_rate(rate) for rate in _hour_of_day_means(rates, elapsed, hour_of_day)]
+
+    return {
+        "rows": [
+            {
+                **_node_fields(dataset, node),
+                "watts": [
+                    None if kw is None else round(kw * 1000.0, 1)
+                    for kw in _hour_of_day_means(node.kwh, node.coverage, hour_of_day)
+                ],
+            }
+            for node in rows
+        ],
+        "import_rate": rate_means(dataset.import_rate),
+        "export_rate": rate_means(dataset.export_rate),
+    }
+
+
 REPORTS: dict[str, ReportSpec] = {
     "ranking": ReportSpec(build=_build_ranking),
     "over_time": ReportSpec(build=_build_over_time, uses_granularity=True),
+    "daily_profile": ReportSpec(build=_build_daily_profile),
 }
 
 

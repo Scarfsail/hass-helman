@@ -1,4 +1,4 @@
-"""Report specs over the device dataset: the Over time report.
+"""Report specs over the device dataset: the Over time and Daily profile reports.
 
 Pure -- the dataset and the reports import nothing from Home Assistant, so the
 span read is a :class:`SpanHistory` built here and nothing is stubbed. Every
@@ -14,7 +14,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -94,16 +94,25 @@ TREE = {
 }
 
 
-def span(energy: dict[str, dict[datetime, float]]) -> model.SpanHistory:
+def span(
+    energy: dict[str, dict[datetime, float]],
+    *,
+    start: datetime = START,
+    end: datetime = END,
+    rows: dict[str, dict[datetime, dict]] | None = None,
+    import_rate: dict[datetime, float] | None = None,
+    export_rate: dict[datetime, float] | None = None,
+) -> model.SpanHistory:
+    import_rate = import_rate or {}
     return model.SpanHistory(
         meters=METERS,
-        local_start=START,
-        local_end=END,
+        local_start=start,
+        local_end=end,
         energy_kwh=energy,
-        rows={},
-        import_rate={},
-        import_rate_source={},
-        export_rate={},
+        rows=rows or {},
+        import_rate=import_rate,
+        import_rate_source=dict.fromkeys(import_rate, model.RATE_RECORDED),
+        export_rate=export_rate or {},
     )
 
 
@@ -252,6 +261,175 @@ class TestOverTime(OverTimeTestCase):
         self.assertNotIn("granularity", payload)
         self.assertFalse(reports_mod.REPORTS["ranking"].uses_granularity)
         self.assertTrue(reports_mod.REPORTS["over_time"].uses_granularity)
+
+
+SHARE = "sensor.lamp_share"
+
+
+def estimated(node_id: str, share_sensor: str) -> dict:
+    return {
+        "id": node_id,
+        "displayName": node_id.title(),
+        "icon": None,
+        "energyEntityId": None,
+        "powerSensorId": share_sensor,
+        "isEstimated": True,
+        "isUnmeasured": False,
+        "children": [],
+    }
+
+
+def local_hours(start: datetime, end: datetime) -> list[datetime]:
+    return model.period_hours(start, end)
+
+
+class TestDailyProfile(unittest.TestCase):
+    def daily_profile(
+        self,
+        history: model.SpanHistory,
+        *,
+        tree: dict = TREE,
+        now: datetime = AFTER,
+    ) -> dict:
+        dataset = dataset_mod.build_device_dataset(tree, history, local_tz=PRAGUE, now=now)
+        start = history.local_start.date()
+        end = (history.local_end - timedelta(days=1)).date()
+        payload = reports_mod.build_report(
+            "daily_profile",
+            dataset,
+            reports_mod.ReportQuery(start_date=start, end_date=end, granularity="week"),
+            currency="CZK",
+            navigation_range={},
+        )
+        for row in payload["rows"]:
+            self.assertEqual(len(row["watts"]), 24)
+        self.assertEqual(len(payload["import_rate"]), 24)
+        self.assertEqual(len(payload["export_rate"]), 24)
+        return payload
+
+    @staticmethod
+    def row(payload: dict, node_id: str) -> dict:
+        return next(row for row in payload["rows"] if row["id"] == node_id)
+
+    def test_rows_are_the_top_level_devices_and_the_remainder_in_kwh_order(self):
+        payload = self.daily_profile(span(default_energy()))
+        # The house's remainder is 7 × 48 − 84 − 42 − 10 = 200 kWh.
+        self.assertEqual(
+            [row["id"] for row in payload["rows"]],
+            ["house_unmeasured", BREAKER, FRIDGE, WASHER],
+        )
+        self.assertEqual([row["unmeasured"] for row in payload["rows"]], [True, False, False, False])
+        self.assertNotIn("granularity", payload)
+        self.assertFalse(reports_mod.REPORTS["daily_profile"].uses_granularity)
+
+    def test_a_device_averages_its_power_per_local_hour(self):
+        energy = default_energy()
+        # On at 1 kW for 08:00-17:59 on one day of seven, measured every hour.
+        energy[WASHER] = {**every_hour(0.0), **energy[WASHER]}
+        payload = self.daily_profile(span(energy))
+        washer = self.row(payload, WASHER)
+        self.assertEqual(washer["watts"][:8], [0.0] * 8)
+        self.assertAlmostEqual(washer["watts"][8], 1000.0 / 7, places=1)
+        self.assertEqual(self.row(payload, BREAKER)["watts"], [500.0] * 24)
+        self.assertEqual(washer["coverage"], 1.0)
+
+    def test_a_share_sensor_averages_over_its_observed_days_only(self):
+        start = datetime(2026, 9, 1, tzinfo=PRAGUE)
+        end = datetime(2026, 10, 1, tzinfo=PRAGUE)
+        hours = local_hours(start, end)
+        observed = [key for key in hours if key >= datetime(2026, 9, 24, tzinfo=PRAGUE)]
+        tree = {"consumers": [{**TREE["consumers"][0], "children": [estimated("lamp", SHARE)]}]}
+        payload = self.daily_profile(
+            span(
+                {HOUSE: dict.fromkeys(hours, 1.0)},
+                start=start,
+                end=end,
+                rows={SHARE: {key: {"mean": 600.0} for key in observed}},
+            ),
+            tree=tree,
+            now=datetime(2026, 10, 5, tzinfo=PRAGUE),
+        )
+        lamp = self.row(payload, "lamp")
+        # 600 W for the 7 days it has data for, not a quarter of it over 30.
+        self.assertEqual(lamp["watts"], [600.0] * 24)
+        self.assertAlmostEqual(lamp["coverage"], 7 / 30, places=4)
+        self.assertEqual(lamp["first_hour"], "2026-09-24T00:00:00+02:00")
+
+    def test_a_gap_is_none_and_a_measured_zero_is_zero(self):
+        energy = default_energy()
+        # The fridge has no reading at 03:00 any day, and reads 0 at 04:00.
+        energy[FRIDGE] = {
+            key: (0.0 if key.astimezone(PRAGUE).hour == 4 else kwh)
+            for key, kwh in energy[FRIDGE].items()
+            if key.astimezone(PRAGUE).hour != 3
+        }
+        fridge = self.row(self.daily_profile(span(energy)), FRIDGE)
+        self.assertIsNone(fridge["watts"][3])
+        self.assertEqual(fridge["watts"][4], 0.0)
+        self.assertEqual(fridge["watts"][5], 250.0)
+        self.assertAlmostEqual(fridge["coverage"], 23 / 24, places=4)
+
+    def test_the_hour_in_progress_weighs_its_elapsed_fraction(self):
+        now = datetime(2026, 9, 7, 12, 15, tzinfo=PRAGUE)
+        hours = [key for key in local_hours(START, END) if key < now]
+        energy = default_energy()
+        # 1 kW at noon every day; the quarter of today's noon so far read 0.25 kWh.
+        energy[WASHER] = {key: 1.0 for key in hours if key.astimezone(PRAGUE).hour == 12}
+        energy[WASHER][hour(6, 12)] = 0.25
+        payload = self.daily_profile(span(energy), now=now)
+        # (6 × 1 + 0.25) ÷ (6 + 0.25) h, not 6.25 kWh over 7 hours.
+        self.assertEqual(self.row(payload, WASHER)["watts"][12], 1000.0)
+        # Hours that have not started yet weigh nothing, though the fixture has kWh for them.
+        self.assertEqual(self.row(payload, BREAKER)["watts"][20], 500.0)
+
+    def test_the_fall_back_days_repeated_hour_is_not_doubled(self):
+        # 2026-10-25 lives 02:00 twice in Prague.
+        start = datetime(2026, 10, 20, tzinfo=PRAGUE)
+        end = datetime(2026, 11, 1, tzinfo=PRAGUE)
+        hours = local_hours(start, end)
+        self.assertEqual(sum(1 for key in hours if key.astimezone(PRAGUE).hour == 2), 13)
+        payload = self.daily_profile(
+            span({HOUSE: dict.fromkeys(hours, 2.0), FRIDGE: dict.fromkeys(hours, 0.25)}, start=start, end=end),
+            now=datetime(2026, 11, 5, tzinfo=PRAGUE),
+        )
+        self.assertEqual(self.row(payload, FRIDGE)["watts"], [250.0] * 24)
+        self.assertEqual(self.row(payload, "house_unmeasured")["watts"], [1750.0] * 24)
+
+    def test_the_spring_forward_days_missing_hour_is_not_diluted(self):
+        # 2026-03-29 has no 02:00 in Prague.
+        start = datetime(2026, 3, 25, tzinfo=PRAGUE)
+        end = datetime(2026, 4, 1, tzinfo=PRAGUE)
+        hours = local_hours(start, end)
+        self.assertEqual(sum(1 for key in hours if key.astimezone(PRAGUE).hour == 2), 6)
+        payload = self.daily_profile(
+            span({HOUSE: dict.fromkeys(hours, 2.0), FRIDGE: dict.fromkeys(hours, 0.25)}, start=start, end=end),
+            now=datetime(2026, 11, 5, tzinfo=PRAGUE),
+        )
+        self.assertEqual(self.row(payload, FRIDGE)["watts"], [250.0] * 24)
+
+    def test_an_hour_without_a_rate_is_left_out_of_its_mean_price(self):
+        rates = {key: 1.0 for key in local_hours(START, END)}
+        rates[hour(0, 18)] = 4.0
+        del rates[hour(1, 18)]
+        # No rate at all at 05:00.
+        for day in range(7):
+            del rates[hour(day, 5)]
+        payload = self.daily_profile(
+            span(default_energy(), import_rate=rates, export_rate={hour(0, 18): -0.5})
+        )
+        # (4 + 5 × 1) ÷ 6 rated hours, not ÷ 7.
+        self.assertAlmostEqual(payload["import_rate"][18], 1.5, places=6)
+        self.assertEqual(payload["import_rate"][17], 1.0)
+        self.assertIsNone(payload["import_rate"][5])
+        self.assertEqual(payload["export_rate"][18], -0.5)
+        self.assertIsNone(payload["export_rate"][17])
+
+    def test_a_rate_for_an_hour_still_ahead_is_left_out(self):
+        now = datetime(2026, 9, 4, 0, 0, tzinfo=PRAGUE)
+        # Today's tariff fills the hours ahead too; they have not happened.
+        rates = {key: (1.0 if key < now else 9.0) for key in local_hours(START, END)}
+        payload = self.daily_profile(span(default_energy(), import_rate=rates), now=now)
+        self.assertEqual(payload["import_rate"], [1.0] * 24)
 
 
 if __name__ == "__main__":

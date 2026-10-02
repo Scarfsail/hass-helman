@@ -8,6 +8,7 @@ import type {
 } from "../helman-api";
 import { helmanColorVars } from "../color-vars";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { formatKwhValue, formatPriceValue } from "../shared/forecast-value-format";
 
 type ShowMode = "both" | "energy" | "money";
@@ -279,7 +280,9 @@ export class HelmanDeviceReportRanking extends LitElement {
     }
 
     private _money(amount: number | null): string {
-        return amount === null ? "—" : formatPriceValue(amount, this.payload?.currency ?? null);
+        // The payload's currency is the price unit (CZK/kWh); an amount is in CZK.
+        const currency = currencyFromPriceUnit(this.payload?.currency);
+        return amount === null ? "—" : formatPriceValue(amount, currency || null);
     }
 
     private _pricedTitle(side: DeviceReportMoneySide, kwh: number): string {

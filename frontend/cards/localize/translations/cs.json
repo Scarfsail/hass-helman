@@ -801,6 +801,15 @@
       "partial_note": "Ztlumené sloupce jsou částečné: období je ořezává, nebo ještě probíhají.",
       "overallocated": "spotřebiče naměřily o {kwh} kWh víc než elektroměr domu",
       "empty": "Žádné spotřebiče k zobrazení"
+    },
+    "daily_profile": {
+      "title": "Denní profil",
+      "average": "Průměr",
+      "no_data": "bez dat",
+      "import": "Cena odběru",
+      "export": "Cena dodávky",
+      "note": "Průměrný výkon v každé hodině dne, za hodiny, pro které má řádek data. Každý řádek je stínovaný vůči svému vlastnímu maximu; šrafované buňky nemají data.",
+      "empty": "Žádné spotřebiče k zobrazení"
     }
   }
 }
