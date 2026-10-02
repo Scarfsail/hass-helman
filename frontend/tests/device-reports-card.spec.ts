@@ -45,6 +45,7 @@ declare global {
         __rankingRoot: () => ShadowRoot | null | undefined;
         __fakeHass: Record<string, unknown>;
         __updates: Record<string, number>;
+        __emitDataChanged: (kind: string) => void;
     }
 }
 
@@ -151,7 +152,12 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             language: "en",
             locale: { language: "en" },
             config: { time_zone: opts.timeZone ?? "UTC" },
-            connection: {},
+            connection: {
+                subscribeMessage: async (callback: (message: { kind: string }) => void) => {
+                    window.__emitDataChanged = (kind: string) => callback({ kind });
+                    return () => undefined;
+                },
+            },
             states: {},
             callWS: async (msg: { type: string; report: string; start_date: string; end_date: string }) => {
                 if (msg.type !== "helman/device_report") return {};
@@ -248,6 +254,17 @@ test.describe("the period and fetching", () => {
         await clickPreset(page, "last_30");
         await page.clock.runFor(2 * FIVE_MINUTES);
         expect(await requestCount(page)).toBe(2);
+    });
+
+    test("a saved config drops even a complete payload; a replan does not", async ({ page }) => {
+        await mountCard(page, { complete: true, fakeTimersAt: FIXED_NOW_ISO });
+        await expect.poll(() => requestCount(page)).toBe(1);
+        await page.evaluate(() => window.__emitDataChanged("plan"));
+        await page.clock.runFor(1_000);
+        expect(await requestCount(page)).toBe(1);
+        await page.evaluate(() => window.__emitDataChanged("config"));
+        await page.clock.runFor(1_000);
+        await expect.poll(() => requestCount(page)).toBe(2);
     });
 
     test("an incomplete payload is refetched once five minutes old", async ({ page }) => {

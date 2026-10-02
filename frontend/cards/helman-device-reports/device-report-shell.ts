@@ -9,6 +9,7 @@ import {
     type DeviceReportPayload,
     type DeviceReportQuery,
 } from "../helman-api";
+import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { formatKwhValue } from "../shared/forecast-value-format";
 import { startNowClock } from "../shared/now-clock";
@@ -38,8 +39,10 @@ interface MemoEntry {
 /**
  * When a memoised payload stops being good.
  *
- * A complete payload never does: the recorder had compiled its whole period,
- * so its hours no longer change. Anything else -- a period still open, or one
+ * A complete payload never does on its own: the recorder had compiled its
+ * whole period, so its hours no longer change. A saved config can still change
+ * the tree, the meters or the tariff it was built from, so the shell drops the
+ * whole memo when one is announced. Anything else -- a period still open, or one
  * that closed after the fetch -- expires five minutes after it was fetched.
  * Whether the period is in the past is deliberately not the test: a report
  * fetched at 23:58 is incomplete however closed its period is by 00:05.
@@ -99,6 +102,7 @@ export class HelmanDeviceReportShell extends LitElement {
     /** Each request's sequence number: only the latest one's answer is kept. */
     private _requestSeq = 0;
     private _stopClock?: () => void;
+    private _unsubscribeDataChanged?: () => void;
     private _debounceTimer?: number;
     /** Custom date edits not yet applied; a key present with null clears that date. */
     private _pendingCustom: { start?: string | null; end?: string | null } = {};
@@ -161,13 +165,33 @@ export class HelmanDeviceReportShell extends LitElement {
     connectedCallback(): void {
         super.connectedCallback();
         this._stopClock = startNowClock(this._tick);
+        this._syncDataChangedSubscription();
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._stopClock?.();
         this._stopClock = undefined;
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         window.clearTimeout(this._debounceTimer);
+    }
+
+    /**
+     * Through the shared feed, like the inspector. Only `config` is acted on,
+     * deliberately against the feed's reload-everything advice: a report reads
+     * the device tree, the meters and the tariff, and nothing a schedule or
+     * plan announcement rewrites, while every refetch is a statistics read
+     * over the whole period.
+     */
+    private _syncDataChangedSubscription(): void {
+        if (!this.hass || !this.isConnected || this._unsubscribeDataChanged) return;
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe((kinds) => {
+            if (!kinds.has("config")) return;
+            this._memo.clear();
+            this._failed = null;
+            this._memoVersion += 1;
+        });
     }
 
     private _timeZone(): string | undefined {
@@ -197,6 +221,7 @@ export class HelmanDeviceReportShell extends LitElement {
                 this._localize = this.hass ? getLocalizeFunction(this.hass) : (key: string) => key;
             }
             this._today = todayIso(this._timeZone());
+            this._syncDataChangedSubscription();
         }
         const next = this._preset === "custom"
             ? (this._customStart && this._customEnd
