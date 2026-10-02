@@ -284,6 +284,28 @@ test.describe("the period and fetching", () => {
         expect(await requestCount(page)).toBe(3);
     });
 
+    test("a new connection drops even a complete payload and rebinds the feed", async ({ page }) => {
+        await mountCard(page, { complete: true, fakeTimersAt: FIXED_NOW_ISO });
+        await expect.poll(() => requestCount(page)).toBe(1);
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-device-reports-card") as HTMLElement & Record<string, unknown>;
+            const previous = window.__fakeHass;
+            const connection = {
+                subscribeMessage: async (callback: (message: { kind: string }) => void) => {
+                    window.__emitDataChanged = (kind: string) => callback({ kind });
+                    return () => undefined;
+                },
+            };
+            window.__emitDataChanged = () => undefined;
+            window.__fakeHass = { ...previous, connection };
+            card.hass = window.__fakeHass;
+        });
+        await expect.poll(() => requestCount(page)).toBe(2);
+        await page.evaluate(() => window.__emitDataChanged("config"));
+        await page.clock.runFor(1_000);
+        await expect.poll(() => requestCount(page)).toBe(3);
+    });
+
     test("an incomplete payload is refetched once five minutes old", async ({ page }) => {
         await mountCard(page, { fakeTimersAt: FIXED_NOW_ISO });
         await expect.poll(() => requestCount(page)).toBe(1);

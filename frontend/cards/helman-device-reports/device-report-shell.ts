@@ -101,10 +101,16 @@ export class HelmanDeviceReportShell extends LitElement {
     private _localizeBuilt = false;
     /** Each request's sequence number: only the latest one's answer is kept. */
     private _requestSeq = 0;
-    /** Bumped on a config announcement: answers to requests made before it are not kept. */
-    private _configGeneration = 0;
+    /**
+     * Bumped whenever what a report was built from may have changed (a config
+     * announcement, a new connection or time zone): answers to requests made
+     * before it are not kept.
+     */
+    private _generation = 0;
     private _stopClock?: () => void;
     private _unsubscribeDataChanged?: () => void;
+    /** The connection and time zone the memo and the subscription belong to. */
+    private _context: { connection: unknown; timeZone: string | undefined } | null = null;
     private _debounceTimer?: number;
     /** Custom date edits not yet applied; a key present with null clears that date. */
     private _pendingCustom: { start?: string | null; end?: string | null } = {};
@@ -189,16 +195,40 @@ export class HelmanDeviceReportShell extends LitElement {
     private _syncDataChangedSubscription(): void {
         if (!this.hass || !this.isConnected || this._unsubscribeDataChanged) return;
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe((kinds) => {
-            if (!kinds.has("config")) return;
-            this._memo.clear();
-            this._failed = null;
-            // A request in flight was built from the old config: neither keep
-            // its answer nor let it block the refetch.
-            this._configGeneration += 1;
-            this._requestSeq += 1;
-            this._inflightKey = null;
-            this._memoVersion += 1;
+            if (kinds.has("config")) this._invalidate();
         });
+    }
+
+    /** Drop every memoised report and the request in flight, and refetch. */
+    private _invalidate(): void {
+        this._memo.clear();
+        this._failed = null;
+        // A request in flight was built from what has just changed: neither
+        // keep its answer nor let it block the refetch.
+        this._generation += 1;
+        this._requestSeq += 1;
+        this._inflightKey = null;
+        this._memoVersion += 1;
+    }
+
+    /**
+     * A new connection or time zone: the subscription is rebound to the new
+     * connection, and nothing fetched under the old context is kept -- a
+     * custom range in particular means other hours in another zone.
+     */
+    private _syncContext(): void {
+        const context = { connection: this.hass?.connection, timeZone: this._timeZone() };
+        const previous = this._context;
+        this._context = context;
+        if (
+            previous === null
+            || (previous.connection === context.connection && previous.timeZone === context.timeZone)
+        ) {
+            return;
+        }
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
+        this._invalidate();
     }
 
     private _timeZone(): string | undefined {
@@ -228,6 +258,7 @@ export class HelmanDeviceReportShell extends LitElement {
                 this._localize = this.hass ? getLocalizeFunction(this.hass) : (key: string) => key;
             }
             this._today = todayIso(this._timeZone());
+            this._syncContext();
             this._syncDataChangedSubscription();
         }
         const next = this._preset === "custom"
@@ -261,12 +292,12 @@ export class HelmanDeviceReportShell extends LitElement {
 
     private _fetch(key: string, report: string, query: DeviceReportQuery): void {
         const seq = ++this._requestSeq;
-        const generation = this._configGeneration;
+        const generation = this._generation;
         this._inflightKey = key;
         this._error = null;
         fetchDeviceReport(this.hass!, report, query).then(
             (payload) => {
-                if (generation !== this._configGeneration) return;
+                if (generation !== this._generation) return;
                 // Kept even when a newer request was made meanwhile: it is still
                 // the right answer for its own key, should that be asked again.
                 this._memo.set(key, { payload, fetchedAtMs: Date.now() });
