@@ -479,7 +479,7 @@ export class HelmanDeviceReportShell extends LitElement {
                     : nothing}
                 ${loading ? html`<span class="loading">${t("device_reports.loading")}</span>` : nothing}
             </div>
-            ${this._error && !payload ? html`
+            ${this._error && (!payload || this._failed?.key === key) ? html`
                 <div class="error">${fillTemplate(t("device_reports.error"), { message: this._error })}</div>
             ` : nothing}
             ${payload && isDeviceReportUnavailable(payload) ? html`

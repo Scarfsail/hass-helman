@@ -449,6 +449,19 @@ test.describe("the period and fetching", () => {
         expect(await requestCount(page)).toBe(2);
     });
 
+    test("a failed refresh is shown over the report it could not replace", async ({ page }) => {
+        await mountCard(page, { fakeTimersAt: FIXED_NOW_ISO });
+        await rendered(page);
+        await page.evaluate(() => {
+            const hass = window.__fakeHass as { callWS: unknown };
+            hass.callWS = async () => { throw new Error("boom"); };
+        });
+        await page.clock.runFor(FIVE_MINUTES + 60_000);
+        await expect.poll(() => page.evaluate(() => !!window.__shellRoot()?.querySelector(".error"))).toBe(true);
+        // The stale report stays visible beneath it.
+        expect(await page.evaluate(() => !!window.__rankingRoot()?.querySelector(".row"))).toBe(true);
+    });
+
     test("a failed fetch is retried once five minutes old, not on every tick", async ({ page }) => {
         await mountCard(page, { fail: true, fakeTimersAt: FIXED_NOW_ISO });
         await expect.poll(() => requestCount(page)).toBe(1);
