@@ -632,20 +632,26 @@ test.describe("the ranking", () => {
         await rendered(page);
         const washer = await page.evaluate(() => {
             const row = window.__rankingRoot()?.querySelector(".row[data-id='sensor.washer']");
-            const paid = row?.querySelector(".figures .money-figure.paid");
-            const forgone = row?.querySelector(".figures .money-figure.forgone");
+            const paid = row?.querySelector(".money-figure.paid");
+            const forgone = row?.querySelector(".money-figure.forgone");
             const seg = row?.querySelector(".money-seg.forgone");
             return {
                 children: [...(row?.children ?? [])].map((child) => child.className),
-                figures: row?.querySelector(".figures")?.textContent?.replace(/\s+/g, " ").trim(),
+                figures: [...(row?.querySelectorAll(".num") ?? [])].map((cell) => cell.textContent?.trim()),
                 paidColor: paid ? getComputedStyle(paid).color : null,
                 forgoneColor: forgone ? getComputedStyle(forgone).color : null,
                 forgoneBar: seg ? [getComputedStyle(seg).backgroundColor, getComputedStyle(seg).opacity] : null,
             };
         });
-        expect(washer.children).toEqual(["name", "gauges", "figures"]);
+        expect(washer.children).toEqual(["name", "num kwh", "num share", "num money-figure paid", "num money-figure forgone", "gauges"]);
         // Amounts are in the currency, not the price unit.
-        expect(washer.figures).toBe("30 kWh · 30 % · 12.0 CZK · 3.0 CZK");
+        expect(washer.figures).toEqual(["30 kWh", "30 %", "12.0 CZK", "3.0 CZK"]);
+        // Each kind of figure is a column: its right edge is the same on every row.
+        const edges = await page.evaluate(() => ["kwh", "share", "paid", "forgone"].map((kind) => new Set(
+            [...(window.__rankingRoot()?.querySelectorAll(".num." + kind) ?? [])]
+                .map((cell) => Math.round(cell.getBoundingClientRect().right)),
+        ).size));
+        expect(edges).toEqual([1, 1, 1, 1]);
         // Coloured as the inspector's money columns: import cost dark blue, export gain light blue.
         expect(washer.paidColor).toBe("rgb(37, 99, 235)");
         expect(washer.forgoneColor).toBe("rgb(125, 211, 252)");

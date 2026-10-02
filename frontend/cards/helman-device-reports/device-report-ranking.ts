@@ -129,7 +129,7 @@ interface MoneySegment {
 
 /**
  * The Ranking report: every device of the house, ranked, its kWh split by
- * source and its two money figures. A row is one line: its name, its bars and its figures;
+ * source and its two money figures. A row is one line: its name, its figures and its bars;
  * everything else -- the split, the pricing detail, coverage, over-allocation
  * -- is in the row's hover tooltip.
  *
@@ -193,14 +193,18 @@ export class HelmanDeviceReportRanking extends LitElement {
                 color: var(--primary-text-color);
             }
             /*
-             * One line per row: name, gauges, figures. The rows share the list's
-             * columns (subgrid), so every gauge starts and ends at the same x and
-             * the bars stay comparable down the list.
+             * One line per row: name, kWh, share, paid, forgone, gauges. The rows
+             * share the list's columns (subgrid), so each kind of figure lines up
+             * in its own column and every gauge starts and ends at the same x,
+             * keeping the bars comparable down the list.
              */
             .list {
                 display: grid;
-                grid-template-columns: minmax(90px, max-content) minmax(40px, 1fr) auto;
+                grid-template-columns: minmax(90px, max-content) auto auto minmax(40px, 1fr);
                 column-gap: 8px;
+            }
+            .list.with-money {
+                grid-template-columns: minmax(90px, max-content) auto auto auto auto minmax(40px, 1fr);
             }
             .row {
                 grid-column: 1 / -1;
@@ -241,14 +245,12 @@ export class HelmanDeviceReportRanking extends LitElement {
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
-            .figures {
+            .num {
                 text-align: right;
-                white-space: normal;
+                white-space: nowrap;
                 font-size: 0.75rem;
                 color: var(--secondary-text-color);
             }
-            /* On a narrow card the figures break between energy and money, never inside either. */
-            .figures .part { white-space: nowrap; }
             .money-figure.paid { color: ${unsafeCSS(MONEY_COLORS.paid)}; }
             .money-figure.forgone { color: ${unsafeCSS(MONEY_COLORS.forgone)}; }
             .money-figure.negative { color: ${unsafeCSS(PRICE_NEGATIVE_COLOR)}; }
@@ -426,7 +428,7 @@ export class HelmanDeviceReportRanking extends LitElement {
     private _renderMoneyFigure(node: RankingNode, side: "paid" | "forgone") {
         const amount = node.money[side].amount;
         const negative = amount !== null && amount < 0;
-        return html`<span class=${"money-figure " + (negative ? "negative" : side)}>${this._money(amount)}</span>`;
+        return html`<span class=${"num money-figure " + (negative ? "negative" : side)}>${this._money(amount)}</span>`;
     }
 
     private _toggleExpanded(id: string, event: Event): void {
@@ -464,13 +466,16 @@ export class HelmanDeviceReportRanking extends LitElement {
                     ` : html`<span class="toggle"></span>`}
                     <span class="label">${node.estimated ? html`<span class="estimated">≈ </span>` : nothing}${this._label(node, model.house)}</span>
                 </div>
+                <span class="num kwh">${formatKwhValue(node.kwh)} kWh</span>
+                <span class="num share">${isHouse ? nothing : percent(node.kwh, houseKwh) + " %"}</span>
+                ${this._show !== "energy" ? html`
+                    ${this._renderMoneyFigure(node, "paid")}
+                    ${this._renderMoneyFigure(node, "forgone")}
+                ` : nothing}
                 <div class="gauges">
                     ${this._show !== "money" ? this._renderEnergy(node, energyScale) : nothing}
                     ${this._show !== "energy" ? this._renderMoney(node, moneyScale) : nothing}
                 </div>
-                <span class="figures">
-                    <span class="part">${formatKwhValue(node.kwh)} kWh${isHouse ? nothing : " · " + percent(node.kwh, houseKwh) + " %"}</span>${this._show !== "energy" ? html` <span class="part">· ${this._renderMoneyFigure(node, "paid")} · ${this._renderMoneyFigure(node, "forgone")}</span>` : nothing}
-                </span>
             </div>
             ${expandable && expanded ? children.map((child) => this._renderRow(child, model, false)) : nothing}
         `;
@@ -507,7 +512,7 @@ export class HelmanDeviceReportRanking extends LitElement {
                     </select>
                 </label>
             </div>
-            <div class="list">
+            <div class=${"list" + (this._show !== "energy" ? " with-money" : "")}>
                 ${this._renderRow(model.house, model, true)}
                 ${top.map((node) => this._renderRow(node, model, false))}
             </div>
