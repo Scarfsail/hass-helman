@@ -33,6 +33,7 @@ const CARD_TAGS = [
     "scheduling-explanation-panel",
     "helman-optimizer-edit-dialog",
     "helman-device-edit-dialog",
+    "helman-device-reports-card",
 ];
 const EDITOR_TAGS = [
     "helman-config-editor-panel",

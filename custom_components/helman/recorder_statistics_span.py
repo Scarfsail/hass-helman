@@ -291,6 +291,11 @@ class SpanStatistics:
     #: ``{statistic_id: {utc_hour_start: kwh}}``, energy accumulated *during*
     #: that hour, the padded hour excluded.
     energy_kwh: dict[str, dict[datetime, float]]
+    #: ``{statistic_id: utc_instant}``, the end of the newest hour the **hourly**
+    #: table had a row for, before the tail was merged in. How far the recorder
+    #: has compiled, which is a different question from how far the clock has
+    #: run: an id with no hourly row at all is absent.
+    compiled_until: dict[str, datetime] = field(default_factory=dict)
 
     def rows_for(self, statistic_id: str | None) -> dict[datetime, dict[str, Any]]:
         """One entity's hourly rows, or an empty map for an unconfigured one."""
@@ -378,6 +383,7 @@ async def query_hourly_statistics(
     energy: dict[str, dict[datetime, float]] = {
         statistic_id: {} for statistic_id in unique_ids
     }
+    compiled_until: dict[str, datetime] = {}
     for statistic_id, entity_rows in (raw or {}).items():
         by_hour: dict[datetime, dict[str, Any]] = {}
         for row in entity_rows or []:
@@ -385,6 +391,8 @@ async def query_hourly_statistics(
             if start is None:
                 continue
             by_hour[datetime.fromtimestamp(start, tz=timezone.utc)] = row
+        if by_hour:
+            compiled_until[statistic_id] = max(by_hour) + timedelta(hours=1)
 
         # Fill, never overwrite -- see the docstring. Merging here, before the
         # energy differencing below, is what keeps the tail invisible: the hour
@@ -418,7 +426,28 @@ async def query_hourly_statistics(
             by_hour, local_start=local_start, local_end=local_end
         )
 
-    return SpanStatistics(rows=rows, energy_kwh=energy)
+    return SpanStatistics(rows=rows, energy_kwh=energy, compiled_until=compiled_until)
+
+
+async def query_newest_hour_end(hass: HomeAssistant, statistic_id: str) -> datetime | None:
+    """The end of the newest hour ``statistic_id`` has a row for in the hourly table.
+
+    Unlike :attr:`SpanStatistics.compiled_until`, this is not bounded by any
+    window. An hour the recorder never compiled -- Home Assistant was down --
+    leaves a gap that a windowed read cannot tell from an hour still to come;
+    a newer row anywhere says the recorder has moved past it.
+    """
+    # Imported here: test harnesses stub ``recorder.statistics`` with only the
+    # reader the span views use.
+    from homeassistant.components.recorder import statistics as recorder_statistics
+
+    raw = await get_instance(hass).async_add_executor_job(
+        recorder_statistics.get_last_statistics, hass, 1, statistic_id, False, {"state"}
+    )
+    rows = (raw or {}).get(statistic_id) or []
+    if not rows or rows[0].get("start") is None:
+        return None
+    return datetime.fromtimestamp(rows[0]["start"], tz=timezone.utc) + timedelta(hours=1)
 
 
 async def query_spliced_hourly_energy(

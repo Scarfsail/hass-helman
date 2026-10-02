@@ -1,0 +1,399 @@
+import { LitElement, css, html, nothing, type PropertyValues } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
+import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
+import type { HomeAssistant } from "../../hass-frontend/src/types";
+import {
+    fetchDeviceReport,
+    isDeviceReportUnavailable,
+    type DeviceReportCommon,
+    type DeviceReportPayload,
+    type DeviceReportQuery,
+} from "../helman-api";
+import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
+import { formatKwhValue } from "../shared/forecast-value-format";
+import { startNowClock } from "../shared/now-clock";
+import { todayIso } from "../shared/today-iso";
+import { DEVICE_REPORTS } from "./report-registry";
+import {
+    DEFAULT_PERIOD_PRESET,
+    PERIOD_PRESETS,
+    presetQuery,
+    type PeriodPreset,
+} from "./report-period";
+
+/** How long a payload whose period the recorder had not finished compiling is kept. */
+const OPEN_PAYLOAD_TTL_MS = 5 * 60_000;
+/** How long a custom date edit settles before it is fetched. */
+const CUSTOM_DEBOUNCE_MS = 400;
+/** Above this share of the house, a data-quality figure is worth a note. */
+const QUALITY_NOTE_SHARE = 0.01;
+
+const SOURCE_METERS = ["grid", "solar", "battery"] as const;
+
+interface MemoEntry {
+    payload: DeviceReportPayload;
+    fetchedAtMs: number;
+}
+
+/**
+ * When a memoised payload stops being good.
+ *
+ * A complete payload never does: the recorder had compiled its whole period,
+ * so its hours no longer change. Anything else -- a period still open, or one
+ * that closed after the fetch -- expires five minutes after it was fetched.
+ * Whether the period is in the past is deliberately not the test: a report
+ * fetched at 23:58 is incomplete however closed its period is by 00:05.
+ *
+ * Timed by the browser's clock, not the payload's server-side `as_of`: a
+ * browser clock running ahead of the server would otherwise see every fresh
+ * payload as already expired and refetch it in a loop.
+ */
+function expiresAtMs(entry: MemoEntry): number {
+    const payload = entry.payload;
+    if (!isDeviceReportUnavailable(payload) && payload.complete) {
+        return Number.POSITIVE_INFINITY;
+    }
+    return entry.fetchedAtMs + OPEN_PAYLOAD_TTL_MS;
+}
+
+function memoKey(report: string, query: DeviceReportQuery): string {
+    return report + "|" + query.start_date + "|" + query.end_date;
+}
+
+/**
+ * The device reports' shell: the period, the tabs, the fetching and the
+ * freshness. A report element owns only its rendering, and is handed exactly
+ * `payload`, `query` and `localize`.
+ */
+@customElement("helman-device-report-shell")
+export class HelmanDeviceReportShell extends LitElement {
+    /** Handed down by the card only when its context changes. */
+    @property({ attribute: false }) public hass?: HomeAssistant;
+
+    @state() private _preset: PeriodPreset = DEFAULT_PERIOD_PRESET;
+    @state() private _customStart: string | null = null;
+    @state() private _customEnd: string | null = null;
+    @state() private _reportId: string = DEVICE_REPORTS[0].id;
+    /** Today's local day key, moved by the clock: it rolls the presets over. */
+    @state() private _today = "";
+    /** The memo key of the request in flight, or null. */
+    @state() private _inflightKey: string | null = null;
+    @state() private _error: string | null = null;
+    /** Bumped whenever the memo takes a payload, so the shell re-renders. */
+    @state() private _memoVersion = 0;
+    /**
+     * The memo key whose last fetch failed, and when. Not refetched on every
+     * update -- that would retry in a tight loop -- but once it has been failed
+     * as long as an open payload is kept, so an error that will not go away
+     * (a range the backend rejects) is not resent every tick.
+     */
+    private _failed: { key: string; atMs: number } | null = null;
+
+    private _memo = new Map<string, MemoEntry>();
+    /** The visible query, identity-stable while its dates are unchanged. */
+    private _query: DeviceReportQuery | null = null;
+    private _range: { minDate: string; maxDate: string } | null = null;
+    private _localize: LocalizeFunction = (key: string) => key;
+    private _localizeLanguage: string | undefined = undefined;
+    private _localizeBuilt = false;
+    /** Each request's sequence number: only the latest one's answer is kept. */
+    private _requestSeq = 0;
+    private _stopClock?: () => void;
+    private _debounceTimer?: number;
+    /** Custom date edits not yet applied; a key present with null clears that date. */
+    private _pendingCustom: { start?: string | null; end?: string | null } = {};
+
+    static styles = css`
+        :host { display: block; }
+        .bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .bar button {
+            font: inherit;
+            font-size: 0.8rem;
+            padding: 3px 8px;
+            border-radius: 12px;
+            border: 1px solid var(--divider-color, #ccc);
+            background: transparent;
+            color: var(--primary-text-color);
+            cursor: pointer;
+        }
+        .bar button.selected {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: var(--text-primary-color, #fff);
+        }
+        .custom input {
+            font: inherit;
+            font-size: 0.8rem;
+        }
+        .tabs button { border-radius: 4px; }
+        .status {
+            font-size: 0.75rem;
+            color: var(--secondary-text-color);
+            margin-bottom: 6px;
+        }
+        .warning, .quality, .error, .unavailable {
+            font-size: 0.8rem;
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .warning {
+            background: color-mix(in srgb, var(--warning-color, #f4b400) 15%, transparent);
+        }
+        .quality {
+            background: color-mix(in srgb, var(--secondary-text-color, #888) 12%, transparent);
+            color: var(--secondary-text-color);
+        }
+        .error {
+            background: color-mix(in srgb, var(--error-color, #db4437) 15%, transparent);
+        }
+        .unavailable {
+            background: color-mix(in srgb, var(--secondary-text-color, #888) 12%, transparent);
+        }
+    `;
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        this._stopClock = startNowClock(this._tick);
+    }
+
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._stopClock?.();
+        this._stopClock = undefined;
+        window.clearTimeout(this._debounceTimer);
+    }
+
+    private _timeZone(): string | undefined {
+        return this.hass?.config?.time_zone;
+    }
+
+    /**
+     * The clock moved. Two things read it: the rolling presets, which move at
+     * local midnight, and the visible payload's expiry. Anything else drops the
+     * tick without writing state.
+     */
+    private _tick = (): void => {
+        const today = todayIso(this._timeZone());
+        if (today !== this._today) {
+            this._today = today;
+            return;
+        }
+        this._ensureFresh();
+    };
+
+    protected willUpdate(changed: PropertyValues<this>): void {
+        if (changed.has("hass")) {
+            const language = this.hass?.language;
+            if (!this._localizeBuilt || language !== this._localizeLanguage) {
+                this._localizeBuilt = true;
+                this._localizeLanguage = language;
+                this._localize = this.hass ? getLocalizeFunction(this.hass) : (key: string) => key;
+            }
+            this._today = todayIso(this._timeZone());
+        }
+        const next = this._preset === "custom"
+            ? (this._customStart && this._customEnd
+                ? { start_date: this._customStart, end_date: this._customEnd }
+                : null)
+            : presetQuery(this._preset, this._today);
+        if (next === null) {
+            this._query = null;
+        } else if (
+            this._query === null
+            || this._query.start_date !== next.start_date
+            || this._query.end_date !== next.end_date
+        ) {
+            this._query = Object.freeze(next);
+        }
+        this._ensureFresh();
+    }
+
+    /** Fetch the visible report unless the memo holds a payload that is still good. */
+    private _ensureFresh(): void {
+        const query = this._query;
+        if (!this.hass || !query) return;
+        const key = memoKey(this._reportId, query);
+        const entry = this._memo.get(key);
+        if (entry && Date.now() < expiresAtMs(entry)) return;
+        if (this._inflightKey === key) return;
+        if (this._failed?.key === key && Date.now() < this._failed.atMs + OPEN_PAYLOAD_TTL_MS) return;
+        this._fetch(key, this._reportId, query);
+    }
+
+    private _fetch(key: string, report: string, query: DeviceReportQuery): void {
+        const seq = ++this._requestSeq;
+        this._inflightKey = key;
+        this._error = null;
+        fetchDeviceReport(this.hass!, report, query).then(
+            (payload) => {
+                // Kept even when a newer request was made meanwhile: it is still
+                // the right answer for its own key, should that be asked again.
+                this._memo.set(key, { payload, fetchedAtMs: Date.now() });
+                // But it is not shown: the visible query has moved on.
+                if (seq !== this._requestSeq) return;
+                if (!isDeviceReportUnavailable(payload)) this._range = payload.range;
+                this._inflightKey = null;
+                this._memoVersion += 1;
+            },
+            (error: unknown) => {
+                if (seq !== this._requestSeq) return;
+                this._inflightKey = null;
+                this._failed = { key, atMs: Date.now() };
+                const message = (error as { message?: string } | null)?.message;
+                this._error = message ?? String(error);
+            },
+        );
+    }
+
+    private _selectPreset(preset: PeriodPreset): void {
+        if (preset === "custom" && this._query && !this._customStart) {
+            this._customStart = this._query.start_date;
+            this._customEnd = this._query.end_date;
+        }
+        this._preset = preset;
+    }
+
+    private _onCustomInput(which: "start" | "end", event: Event): void {
+        const value = (event.target as HTMLInputElement).value || null;
+        this._pendingCustom = { ...this._pendingCustom, [which]: value };
+        window.clearTimeout(this._debounceTimer);
+        this._debounceTimer = window.setTimeout(() => {
+            const pending = this._pendingCustom;
+            if ("start" in pending) this._customStart = pending.start ?? null;
+            if ("end" in pending) this._customEnd = pending.end ?? null;
+            this._pendingCustom = {};
+        }, CUSTOM_DEBOUNCE_MS);
+    }
+
+    private _formatAsOf(asOf: string): string {
+        const instant = new Date(asOf);
+        if (Number.isNaN(instant.getTime())) return asOf;
+        try {
+            return new Intl.DateTimeFormat(this.hass?.language ?? "en", {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+                timeZone: this._timeZone(),
+            }).format(instant);
+        } catch {
+            return asOf;
+        }
+    }
+
+    private _renderPresets() {
+        const t = this._localize;
+        return html`
+            <div class="bar presets">
+                ${PERIOD_PRESETS.map((preset) => html`
+                    <button
+                        type="button"
+                        data-preset=${preset}
+                        class=${preset === this._preset ? "selected" : ""}
+                        @click=${() => this._selectPreset(preset)}
+                    >${t("device_reports.presets." + preset)}</button>
+                `)}
+            </div>
+            ${this._preset === "custom" ? html`
+                <div class="bar custom">
+                    <label>${t("device_reports.from")}
+                        <input
+                            type="date"
+                            class="custom-start"
+                            .value=${this._customStart ?? ""}
+                            min=${this._range?.minDate ?? nothing}
+                            max=${this._customEnd ?? this._today}
+                            @change=${(event: Event) => this._onCustomInput("start", event)}
+                        />
+                    </label>
+                    <label>${t("device_reports.to")}
+                        <input
+                            type="date"
+                            class="custom-end"
+                            .value=${this._customEnd ?? ""}
+                            min=${this._customStart ?? this._range?.minDate ?? nothing}
+                            max=${this._today}
+                            @change=${(event: Event) => this._onCustomInput("end", event)}
+                        />
+                    </label>
+                </div>
+            ` : nothing}
+        `;
+    }
+
+    private _renderTabs() {
+        return html`
+            <div class="bar tabs">
+                ${DEVICE_REPORTS.map((entry) => html`
+                    <button
+                        type="button"
+                        data-report=${entry.id}
+                        class=${entry.id === this._reportId ? "selected" : ""}
+                        @click=${() => { this._reportId = entry.id; }}
+                    >${this._localize(entry.labelKey)}</button>
+                `)}
+            </div>
+        `;
+    }
+
+    private _renderNotes(payload: DeviceReportCommon) {
+        const t = this._localize;
+        const missing = SOURCE_METERS.filter((meter) => !payload.meters[meter]);
+        const house = payload.house_kwh;
+        const quality = (["ambiguous", "unattributed", "mismatch"] as const)
+            .map((kind) => ({ kind, kwh: payload[(kind + "_kwh") as "ambiguous_kwh"] }))
+            .filter(({ kwh }) => house > 0 && kwh > QUALITY_NOTE_SHARE * house);
+        return html`
+            ${missing.length > 0 ? html`
+                <div class="warning">${fillTemplate(t("device_reports.missing_meters"), {
+                    meters: missing.map((meter) => t("device_reports.meters." + meter)).join(", "),
+                })}</div>
+            ` : nothing}
+            ${quality.length > 0 ? html`
+                <div class="quality">${quality.map(({ kind, kwh }) => html`
+                    <div data-quality=${kind}>${fillTemplate(t("device_reports.quality." + kind), {
+                        kwh: formatKwhValue(kwh),
+                        pct: String(Math.round((kwh / house) * 100)),
+                    })}</div>
+                `)}</div>
+            ` : nothing}
+        `;
+    }
+
+    render() {
+        const t = this._localize;
+        const query = this._query;
+        const key = query ? memoKey(this._reportId, query) : null;
+        const payload = key ? this._memo.get(key)?.payload ?? null : null;
+        const loading = key !== null && this._inflightKey === key;
+        const entry = DEVICE_REPORTS.find((report) => report.id === this._reportId) ?? DEVICE_REPORTS[0];
+        const tag = unsafeStatic(entry.tag);
+
+        return html`
+            ${this._renderPresets()}
+            ${this._renderTabs()}
+            <div class="status">
+                ${payload && !isDeviceReportUnavailable(payload)
+                    ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.as_of) })}</span>`
+                    : nothing}
+                ${loading ? html`<span class="loading">${t("device_reports.loading")}</span>` : nothing}
+            </div>
+            ${this._error && !payload ? html`
+                <div class="error">${fillTemplate(t("device_reports.error"), { message: this._error })}</div>
+            ` : nothing}
+            ${payload && isDeviceReportUnavailable(payload) ? html`
+                <div class="unavailable">${t("device_reports.unavailable." + payload.unavailable)}</div>
+            ` : nothing}
+            ${payload && !isDeviceReportUnavailable(payload) ? html`
+                ${this._renderNotes(payload)}
+                ${staticHtml`<${tag} .payload=${payload} .query=${query} .localize=${this._localize}></${tag}>`}
+            ` : nothing}
+        `;
+    }
+}
