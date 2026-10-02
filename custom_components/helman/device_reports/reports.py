@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from ..span_buckets import period_buckets
 from .dataset import Attribution, DatasetNode, DeviceDataset, MoneySide, attribute_energy
 
 #: The widest period a report may cover, in days, inclusive.
@@ -22,15 +23,22 @@ MAX_REPORT_DAYS = 366
 
 @dataclass(frozen=True)
 class ReportQuery:
-    """The period a report is asked for, local dates, both inclusive."""
+    """The period a report is asked for, local dates, both inclusive.
+
+    ``granularity`` is one of :data:`~..span_buckets.BUCKETS`; only a report
+    whose spec ``uses_granularity`` reads it.
+    """
 
     start_date: date
     end_date: date
+    granularity: str = "day"
 
 
 @dataclass(frozen=True)
 class ReportSpec:
     build: Callable[[DeviceDataset, ReportQuery], dict[str, Any]]
+    #: The report is bucketed by ``query.granularity``, so the card offers it.
+    uses_granularity: bool = False
 
 
 def _round_kwh(value: float) -> float:
@@ -106,8 +114,77 @@ def _build_ranking(dataset: DeviceDataset, query: ReportQuery) -> dict[str, Any]
     return {"nodes": [_ranking_node(dataset, node) for node in dataset.nodes]}
 
 
+def _bucket_sums(
+    kwh: dict[datetime, float], bucket_of: dict[datetime, int], count: int
+) -> list[float]:
+    """``kwh`` folded into ``count`` buckets, in one pass over its own hours."""
+    sums = [0.0] * count
+    for hour, value in kwh.items():
+        index = bucket_of.get(hour)
+        if index is not None:
+            sums[index] += value
+    return [_round_kwh(value) for value in sums]
+
+
+def _build_over_time(dataset: DeviceDataset, query: ReportQuery) -> dict[str, Any]:
+    """Every top-level device's kWh per bucket of ``query.granularity``.
+
+    ``series`` holds all top-level devices, ranked once by their period total
+    rather than per bucket, so a device keeps its place, and its colour, in
+    every column; the card cuts its Top X from them. Per bucket, ``house`` is
+    the house meter, ``unmeasured`` the house's remainder and ``overallocated``
+    the house's over-allocation, so over the hours the house meter measured
+    ``Σ values + unmeasured − overallocated = house``.
+    """
+    by_id = {node.id: node for node in dataset.nodes}
+    house = dataset.house
+    children = [by_id[child] for child in house.children]
+    devices = sorted(
+        (node for node in children if not node.unmeasured),
+        key=lambda node: node.total_kwh,
+        reverse=True,
+    )
+    unmeasured = next((node for node in children if node.unmeasured), None)
+
+    spans = period_buckets(dataset.local_start, dataset.local_end, query.granularity, dataset.now)
+    bucket_of = {hour: index for index, span in enumerate(spans) for hour in span.hours}
+
+    def sums(kwh: dict[datetime, float]) -> list[float]:
+        return _bucket_sums(kwh, bucket_of, len(spans))
+
+    house_kwh = sums(house.kwh)
+    overallocated = sums(house.overallocated)
+    unmeasured_kwh = sums(unmeasured.kwh) if unmeasured else [0.0] * len(spans)
+    device_kwh = {node.id: sums(node.kwh) for node in devices}
+    return {
+        "buckets": [
+            {
+                "start": span.start_date.isoformat(),
+                "end": span.end_date.isoformat(),
+                "partial": span.partial,
+                "house": house_kwh[index],
+                "values": {node_id: values[index] for node_id, values in device_kwh.items()},
+                "unmeasured": unmeasured_kwh[index],
+                "overallocated": overallocated[index],
+            }
+            for index, span in enumerate(spans)
+        ],
+        "series": [
+            {
+                "id": node.id,
+                "label": node.label,
+                "icon": node.icon,
+                "estimated": node.estimated,
+                "first_hour": _local_iso(dataset, node.first_hour),
+            }
+            for node in devices
+        ],
+    }
+
+
 REPORTS: dict[str, ReportSpec] = {
     "ranking": ReportSpec(build=_build_ranking),
+    "over_time": ReportSpec(build=_build_over_time, uses_granularity=True),
 }
 
 
@@ -120,13 +197,15 @@ def build_report(
     navigation_range: dict[str, str],
 ) -> dict[str, Any]:
     """One report's payload, with the fields every report carries."""
+    spec = REPORTS[report]
     origin = dataset.charge_origin
     house = attribute_energy(dataset, dataset.house.kwh)
     return {
-        **REPORTS[report].build(dataset, query),
+        **spec.build(dataset, query),
         "report": report,
         "start_date": query.start_date.isoformat(),
         "end_date": query.end_date.isoformat(),
+        **({"granularity": query.granularity} if spec.uses_granularity else {}),
         "currency": currency,
         "charge_origin": {
             "charged_kwh": _round_kwh(origin.charged_kwh),

@@ -274,6 +274,22 @@
       "of_house": "{pct} % of house",
       "overallocated": "children measure {kwh} kWh more than this meter",
       "coverage": "data for {pct} % of the period (from {date})"
+    },
+    "granularity": {
+      "day": "1d",
+      "week": "1w",
+      "month": "1mo"
+    },
+    "over_time": {
+      "title": "Over time",
+      "top": "Top",
+      "other": "Other devices",
+      "total": "Total",
+      "house": "House meter",
+      "partial": "partial",
+      "partial_note": "Dimmed columns are partial: the period cuts them, or they are still running.",
+      "overallocated": "devices measure {kwh} kWh more than the house meter",
+      "empty": "No devices to show"
     }
   }
 }

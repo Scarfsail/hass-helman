@@ -1,6 +1,6 @@
 # Device reports
 
-The device reports card (`custom:helman-device-reports-card`) shows how the house's devices used energy over a period: how much each one used, where that energy came from (solar, battery, grid), and what it cost. Its first report is **Ranking**.
+The device reports card (`custom:helman-device-reports-card`) shows how the house's devices used energy over a period: how much each one used, where that energy came from (solar, battery, grid), and what it cost. Its reports are **Ranking** (who used it over the whole period) and **Over time** (how that developed).
 
 Everything is computed by the backend from data Home Assistant already records, through one websocket command, `helman/device_report`. The card only picks the period and draws the answer.
 
@@ -130,6 +130,20 @@ One rule holds for both figures: **priced kWh + unpriced kWh = the row's kWh**. 
 - **Complete** reports are kept for good: the recorder had compiled the whole period when it was fetched, so its hours no longer change. This is recorder progress, not the clock: a report fetched at 00:20 whose 23:00 hour is not compiled yet is incomplete.
 - Every other report expires **5 minutes** after it was computed, including one whose period has since ended, and is fetched again when it is next shown.
 - The rolling presets (last N days, this month, this year) move at local midnight.
+
+---
+
+## 7. Over time
+
+The **Over time** report shows every top-level device's energy per **day**, **week** or **month** of the period (the 1d / 1w / 1mo selector, shown only on this tab).
+
+- **Buckets are clamped to the period.** A week runs Monday to Sunday and a month is the calendar month, but a bucket the period starts or ends inside covers only the period's part of it. Such a bucket, and one still running (today's), is **partial**: drawn dimmed, and its hover says so. Buckets follow local days, so a week across a daylight-saving change holds 167 or 169 hours.
+- **One ranking for the whole period.** The devices are ranked once, by their period total, not per bucket, so a device keeps its place and its colour in every column. Per-bucket ranking would shift colours and make trends unreadable.
+- **Top X** (3 / 5 / 10, default 5) picks how many devices are drawn; the rest are folded into *Other devices*. It changes no fetch.
+- **Each column** stacks the top devices in rank order, then *Other devices*, then the house's *Untracked consumption*. A tick marks the house meter. Over the hours the house meter measured, **devices + untracked − overallocated = house**, exactly, per bucket.
+- **Over-allocation.** When the devices measure more than the house meter, the stack rises above the tick; the excess is hatched and the hover says *"devices measure x kWh more than the house meter"*.
+
+**Example.** A week where the house meter read 25 kWh and the devices 30 kWh in hours where they exceeded it: the stack reaches 30, the tick sits at 25, and 30 + 0 − 5 = 25.
 
 ---
 

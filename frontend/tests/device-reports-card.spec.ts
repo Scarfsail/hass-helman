@@ -8,8 +8,8 @@ import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
  *
  * `helman/device_report` is answered from a fixture generated in the page, so
  * what the card asked for -- and how often -- is what these tests assert on.
- * The shell owns the period, the fetching and the freshness; the Ranking
- * report only renders. Specs that are about the clock fake the page's timers
+ * The shell owns the period, the granularity, the fetching and the
+ * freshness; the Ranking and Over time reports only render. Specs that are about the clock fake the page's timers
  * and poll from Node, since `page.waitForFunction` would poll on the very
  * timers it took away.
  */
@@ -39,10 +39,11 @@ interface FakeOptions {
 
 declare global {
     interface Window {
-        __reportRequests: Array<{ report: string; start: string; end: string }>;
+        __reportRequests: Array<{ report: string; start: string; end: string; granularity?: string }>;
         __releaseReport: (index: number) => void;
         __shellRoot: () => ShadowRoot | null | undefined;
         __rankingRoot: () => ShadowRoot | null | undefined;
+        __overTimeRoot: () => ShadowRoot | null | undefined;
         __fakeHass: Record<string, unknown>;
         __updates: Record<string, number>;
         __emitDataChanged: (kind: string) => void;
@@ -85,8 +86,7 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             paid: { amount: paid, priced_kwh: kwh - unpriced, unpriced_kwh: unpriced, tariff_kwh: tariff },
             forgone: { amount: forgone, priced_kwh: kwh, unpriced_kwh: 0 },
         });
-        const payload = (start: string, end: string) => ({
-            report: "ranking",
+        const common = (start: string, end: string) => ({
             start_date: start,
             end_date: end,
             currency: "CZK",
@@ -103,6 +103,39 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             as_of: new Date(Date.now() - (opts.serverLagMs ?? 0)).toISOString(),
             complete: opts.complete ?? false,
             range: { minDate: "2026-01-01", maxDate: end },
+        });
+        // Seven devices ranked a..g by their period total. In the second column
+        // b outdoes a, and the devices measure 5 kWh more than the house meter.
+        const series = ["a", "b", "c", "d", "e", "f", "g"].map((letter) => ({
+            id: "sensor." + letter, label: "Device " + letter.toUpperCase(), icon: null,
+            estimated: false, first_hour: null,
+        }));
+        const values = (...kwh: number[]) => Object.fromEntries(
+            series.map((item, index) => [item.id, kwh[index]]),
+        );
+        const overTime = (start: string, end: string, granularity: string) => ({
+            ...common(start, end),
+            report: "over_time",
+            granularity,
+            series,
+            buckets: [
+                {
+                    start, end: "2026-10-04", partial: true, house: 40,
+                    values: values(10, 8, 6, 4, 3, 2, 1), unmeasured: 6, overallocated: 0,
+                },
+                {
+                    start: "2026-10-05", end: "2026-10-11", partial: false, house: 25,
+                    values: values(5, 9, 6, 4, 3, 2, 1), unmeasured: 0, overallocated: 5,
+                },
+                {
+                    start: "2026-10-12", end, partial: true, house: 5,
+                    values: values(1, 1, 1, 0, 0, 0, 0), unmeasured: 2, overallocated: 0,
+                },
+            ],
+        });
+        const ranking = (start: string, end: string) => ({
+            ...common(start, end),
+            report: "ranking",
             nodes: [
                 node({
                     id: "house", parent_id: null, depth: 0, label: "", kwh: 100,
@@ -159,15 +192,20 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                 },
             },
             states: {},
-            callWS: async (msg: { type: string; report: string; start_date: string; end_date: string }) => {
+            callWS: async (msg: {
+                type: string; report: string; start_date: string; end_date: string; granularity?: string;
+            }) => {
                 if (msg.type !== "helman/device_report") return {};
                 window.__reportRequests.push({
                     report: msg.report, start: msg.start_date, end: msg.end_date,
+                    ...(msg.granularity ? { granularity: msg.granularity } : {}),
                 });
                 if (opts.fail) throw new Error("boom");
                 const answer = () => opts.unavailable
                     ? { unavailable: opts.unavailable }
-                    : payload(msg.start_date, msg.end_date);
+                    : msg.report === "over_time"
+                        ? overTime(msg.start_date, msg.end_date, msg.granularity ?? "day")
+                        : ranking(msg.start_date, msg.end_date);
                 if (!opts.hold) return answer();
                 return new Promise((resolveAnswer) => {
                     pending.push(() => resolveAnswer(answer()));
@@ -179,6 +217,8 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             ?.shadowRoot?.querySelector("helman-device-report-shell")?.shadowRoot;
         window.__rankingRoot = () => window.__shellRoot()
             ?.querySelector("helman-device-report-ranking")?.shadowRoot;
+        window.__overTimeRoot = () => window.__shellRoot()
+            ?.querySelector("helman-device-report-over-time")?.shadowRoot;
 
         const card = document.createElement("helman-device-reports-card") as HTMLElement &
             Record<string, unknown> & { setConfig: (config: unknown) => void };
@@ -529,6 +569,170 @@ test.describe("the ranking", () => {
         await expect.poll(() => rankingText(page, ".row[data-id='sensor.washer'] .detail"))
             .toContain("Solar");
         expect(await rankingText(page, ".row[data-id='sensor.washer'] .detail")).toContain("33 %");
+    });
+});
+
+async function clickShell(page: Page, selector: string): Promise<void> {
+    await page.evaluate((sel: string) => {
+        (window.__shellRoot()?.querySelector(sel) as HTMLButtonElement).click();
+    }, selector);
+}
+
+async function openOverTime(page: Page): Promise<void> {
+    await rendered(page);
+    await clickShell(page, "button[data-report='over_time']");
+    await expect.poll(() => page.evaluate(
+        () => !!window.__overTimeRoot()?.querySelector(".column"),
+    )).toBe(true);
+}
+
+function hasGranularityBar(page: Page) {
+    return page.evaluate(() => !!window.__shellRoot()?.querySelector(".bar.granularity"));
+}
+
+/** Each column's segments, bottom up, as `[series, background]`. */
+function columnSegments(page: Page) {
+    return page.evaluate(() => [...(window.__overTimeRoot()?.querySelectorAll(".column") ?? [])]
+        .map((column) => [...column.querySelectorAll(".seg")].map((seg) => [
+            (seg as HTMLElement).dataset.series,
+            (seg as HTMLElement).style.background,
+        ])));
+}
+
+function legendIds(page: Page) {
+    return page.evaluate(() => [...(window.__overTimeRoot()?.querySelectorAll(".legend-item") ?? [])]
+        .map((item) => (item as HTMLElement).dataset.series));
+}
+
+test.describe("over time", () => {
+    test("the granularity selector is shown only for it, and refetches", async ({ page }) => {
+        await mountCard(page);
+        await rendered(page);
+        expect(await hasGranularityBar(page)).toBe(false);
+
+        await openOverTime(page);
+        expect(await hasGranularityBar(page)).toBe(true);
+        await clickShell(page, "button[data-granularity='week']");
+        await expect.poll(() => requests(page)).toEqual([
+            { report: "ranking", start: "2026-09-22", end: "2026-10-21" },
+            { report: "over_time", start: "2026-09-22", end: "2026-10-21", granularity: "day" },
+            { report: "over_time", start: "2026-09-22", end: "2026-10-21", granularity: "week" },
+        ]);
+
+        // The Ranking ignores granularity: it is neither offered nor refetched.
+        await clickShell(page, "button[data-report='ranking']");
+        await rendered(page);
+        expect(await hasGranularityBar(page)).toBe(false);
+        expect(await requestCount(page)).toBe(3);
+        // And the day payload is still memoised.
+        await clickShell(page, "button[data-report='over_time']");
+        await clickShell(page, "button[data-granularity='day']");
+        await page.waitForTimeout(100);
+        expect(await requestCount(page)).toBe(3);
+    });
+
+    test("top X refolds the columns without a refetch", async ({ page }) => {
+        await mountCard(page);
+        await openOverTime(page);
+        expect(await legendIds(page)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "sensor.d", "sensor.e", "other", "unmeasured",
+        ]);
+        await page.evaluate(() => (window.__overTimeRoot()
+            ?.querySelector("button[data-top='3']") as HTMLButtonElement).click());
+        await expect.poll(() => legendIds(page)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "other", "unmeasured",
+        ]);
+        const columns = await columnSegments(page);
+        expect(columns.map((segments) => segments.map(([id]) => id))).toEqual(
+            Array(3).fill(["sensor.a", "sensor.b", "sensor.c", "other", "unmeasured"]),
+        );
+        expect(await page.evaluate(() => window.__overTimeRoot()
+            ?.querySelector(".column")?.getAttribute("title") ?? "")).toContain("Other devices: 10 kWh");
+
+        await page.evaluate(() => (window.__overTimeRoot()
+            ?.querySelector("button[data-top='10']") as HTMLButtonElement).click());
+        await expect.poll(() => legendIds(page)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "sensor.d", "sensor.e", "sensor.f", "sensor.g",
+            "unmeasured",
+        ]);
+        expect(await requestCount(page)).toBe(2);
+    });
+
+    test("top X survives a refetch for another granularity", async ({ page }) => {
+        await mountCard(page);
+        await openOverTime(page);
+        await page.evaluate(() => (window.__overTimeRoot()
+            ?.querySelector("button[data-top='3']") as HTMLButtonElement).click());
+        await expect.poll(() => legendIds(page)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "other", "unmeasured",
+        ]);
+        await clickShell(page, "button[data-granularity='week']");
+        await expect.poll(() => requestCount(page)).toBe(3);
+        await expect.poll(() => legendIds(page)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "other", "unmeasured",
+        ]);
+    });
+
+    test("a series keeps its colour and its rank in every column", async ({ page }) => {
+        await mountCard(page);
+        await openOverTime(page);
+        const columns = await columnSegments(page);
+        const legend = await page.evaluate(() => Object.fromEntries(
+            [...(window.__overTimeRoot()?.querySelectorAll(".legend-item") ?? [])].map((item) => [
+                (item as HTMLElement).dataset.series,
+                (item.querySelector(".swatch") as HTMLElement).style.background,
+            ]),
+        ));
+        // In the second column b outdoes a, yet a is still drawn first.
+        expect(columns[1].map(([id]) => id)).toEqual([
+            "sensor.a", "sensor.b", "sensor.c", "sensor.d", "sensor.e", "other", "unmeasured",
+        ]);
+        for (const segments of columns) {
+            for (const [id, background] of segments) {
+                expect(background).toBe(legend[id!]);
+            }
+        }
+        expect(new Set(Object.values(legend)).size).toBe(Object.keys(legend).length);
+    });
+
+    test("partial buckets are dimmed and labelled", async ({ page }) => {
+        await mountCard(page);
+        await openOverTime(page);
+        const columns = await page.evaluate(() => [...(window.__overTimeRoot()?.querySelectorAll(".column") ?? [])]
+            .map((column) => ({
+                partial: column.classList.contains("partial"),
+                opacity: getComputedStyle(column).opacity,
+                title: column.getAttribute("title") ?? "",
+            })));
+        expect(columns.map((column) => column.partial)).toEqual([true, false, true]);
+        expect(columns[0].opacity).toBe("0.45");
+        expect(columns[1].opacity).toBe("1");
+        expect(columns[0].title.split("\n")[0]).toBe("2026-09-22 – 2026-10-04 (partial)");
+        expect(columns[1].title).not.toContain("partial");
+        expect(await page.evaluate(() => window.__overTimeRoot()?.querySelector(".partial-note")?.textContent ?? ""))
+            .toContain("partial");
+    });
+
+    test("an over-allocated column shows the house tick below its top", async ({ page }) => {
+        await mountCard(page);
+        await openOverTime(page);
+        const columns = await page.evaluate(() => [...(window.__overTimeRoot()?.querySelectorAll(".column") ?? [])]
+            .map((column) => ({
+                over: column.classList.contains("overallocated"),
+                stackTop: column.querySelector(".stack")!.getBoundingClientRect().top,
+                tickTop: column.querySelector(".tick")!.getBoundingClientRect().top,
+                excess: !!column.querySelector(".excess"),
+                title: column.getAttribute("title") ?? "",
+            })));
+        expect(columns.map((column) => column.over)).toEqual([false, true, false]);
+        expect(columns[1].excess).toBe(true);
+        expect(columns[0].excess).toBe(false);
+        // Screen y grows downwards: the tick sits below the stack's top.
+        expect(columns[1].tickTop).toBeGreaterThan(columns[1].stackTop + 1);
+        expect(Math.abs(columns[0].tickTop - columns[0].stackTop)).toBeLessThanOrEqual(2);
+        expect(columns[1].title).toContain("devices measure 5.0 kWh more than the house meter");
+        expect(columns[1].title).toContain("Total: 30 kWh");
+        expect(columns[0].title).not.toContain("devices measure");
     });
 });
 

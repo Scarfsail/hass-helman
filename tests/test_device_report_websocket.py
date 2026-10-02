@@ -170,14 +170,23 @@ class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    async def request(self, now: datetime, start: str, end: str, report: str = "ranking"):
+    async def request(
+        self,
+        now: datetime,
+        start: str,
+        end: str,
+        report: str = "ranking",
+        granularity: str = "day",
+    ):
         connection = FakeConnection()
+        # Called past the schema, so its default is filled in here.
         msg = {
             "id": 7,
             "type": "helman/device_report",
             "report": report,
             "start_date": start,
             "end_date": end,
+            "granularity": granularity,
         }
         with patch("homeassistant.util.dt.now", return_value=now):
             await websockets_module.ws_get_device_report.__wrapped__(
@@ -227,6 +236,24 @@ class TestValidation(DeviceReportTestCase):
         with self.assertRaises(vol.Invalid):
             schema({**message, "report": "nope"})
 
+    def test_granularity_defaults_to_day_and_an_invalid_one_is_rejected(self):
+        schema = websockets_module.ws_get_device_report._ws_schema
+        message = {
+            "id": 1,
+            "type": "helman/device_report",
+            "report": "over_time",
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+        }
+        self.assertEqual(schema(dict(message))["granularity"], "day")
+        for granularity in ("day", "week", "month"):
+            self.assertEqual(
+                schema({**message, "granularity": granularity})["granularity"], granularity
+            )
+        for granularity in ("year", "hour", "", 7):
+            with self.subTest(granularity=granularity), self.assertRaises(vol.Invalid):
+                schema({**message, "granularity": granularity})
+
     async def test_a_future_end_date_is_clamped_to_today(self):
         payload = await self.report(self.NOW, "2026-09-10", "2026-12-31")
         self.assertEqual(payload["end_date"], "2026-09-15")
@@ -255,6 +282,47 @@ class TestPayload(DeviceReportTestCase):
         # No grid meter read anything, so nothing is attributed.
         self.assertEqual(rows[WASHER]["sources"]["unattributed"], 24.0)
         self.assertEqual(rows[WASHER]["coverage"], 1.0)
+
+    async def test_the_over_time_shape(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 15, 13))
+        self.recorder.hourly(WASHER, _local(2026, 9, 6, 23), _local(2026, 9, 15, 13))
+        connection = await self.request(
+            now, "2026-09-07", "2026-09-15", report="over_time", granularity="week"
+        )
+        self.assertEqual(connection.errors, [])
+        payload = connection.results[0][1]
+
+        self.assertEqual(payload["report"], "over_time")
+        self.assertEqual(payload["granularity"], "week")
+        self.assertEqual(
+            payload["series"],
+            [
+                {
+                    "id": WASHER,
+                    "label": "Washer",
+                    "icon": None,
+                    "estimated": False,
+                    "first_hour": _local(2026, 9, 7).isoformat(),
+                }
+            ],
+        )
+        first, second = payload["buckets"]
+        self.assertEqual(
+            first,
+            {
+                "start": "2026-09-07",
+                "end": "2026-09-13",
+                "partial": False,
+                "house": 168.0,
+                "values": {WASHER: 168.0},
+                "unmeasured": 0.0,
+                "overallocated": 0.0,
+            },
+        )
+        self.assertEqual((second["start"], second["end"]), ("2026-09-14", "2026-09-15"))
+        # Today's week, and cut by the period's end.
+        self.assertTrue(second["partial"])
 
     async def test_complete_follows_the_recorder_not_the_clock(self):
         now = _local(2026, 9, 16, 0, 20)

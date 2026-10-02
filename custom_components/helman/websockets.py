@@ -22,6 +22,7 @@ from .controllables.spec import appliance_controllable_kinds
 from .config_defaults import CONFIG_FIELD_DEFAULTS
 from .config_validation import validate_config_document
 from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
+from .span_buckets import BUCKETS
 from .entity_inspection import inspect_targets
 from .solar_bias_correction.websocket import (
     _is_dashed_date,
@@ -685,6 +686,7 @@ def ws_get_device_stats(
     vol.Required("report"): vol.In(REPORTS),
     vol.Required("start_date"): str,
     vol.Required("end_date"): str,
+    vol.Optional("granularity", default="day"): vol.In(BUCKETS),
 })
 @websocket_api.async_response
 async def ws_get_device_report(
@@ -698,7 +700,8 @@ async def ws_get_device_report(
     ``end_date`` past today, in Home Assistant's time zone, is clamped to today
     rather than rejected, as the inspector's span read does. A period over
     :data:`~.device_reports.reports.MAX_REPORT_DAYS` days, or one that starts
-    after it ends, is ``invalid_date``.
+    after it ends, is ``invalid_date``. ``granularity`` (``day``, ``week`` or
+    ``month``) is read only by a report bucketed by it.
 
     Not admin-gated: it carries only numbers, the same exposure as
     ``helman/get_device_stats``.
@@ -728,7 +731,10 @@ async def ws_get_device_report(
         return
     try:
         payload = await coordinator.async_device_report(
-            msg["report"], ReportQuery(start_date=start_date, end_date=end_date)
+            msg["report"],
+            ReportQuery(
+                start_date=start_date, end_date=end_date, granularity=msg["granularity"]
+            ),
         )
     except Exception:
         _LOGGER.exception("Unexpected device report failure")
