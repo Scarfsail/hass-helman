@@ -785,6 +785,22 @@
       "of_house": "{pct} % domu",
       "overallocated": "podřízené spotřebiče naměřily o {kwh} kWh víc než tento elektroměr",
       "coverage": "data za {pct} % období (od {date})"
+    },
+    "granularity": {
+      "day": "1 d",
+      "week": "1 týd",
+      "month": "1 měs"
+    },
+    "over_time": {
+      "title": "V čase",
+      "top": "Prvních",
+      "other": "Ostatní spotřebiče",
+      "total": "Celkem",
+      "house": "Elektroměr domu",
+      "partial": "částečné",
+      "partial_note": "Ztlumené sloupce jsou částečné: období je ořezává, nebo ještě probíhají.",
+      "overallocated": "spotřebiče naměřily o {kwh} kWh víc než elektroměr domu",
+      "empty": "Žádné spotřebiče k zobrazení"
     }
   }
 }

@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
+from ..span_buckets import add_months, bucket_key, bucket_keys
 from ..span_history_model import SpanMeters
 from ..training.schedule import next_scheduled_training_at
 from .actuals import (
@@ -575,7 +576,7 @@ class SolarBiasCorrectionService:
         )
 
         days: list[dict[str, Any]] = []
-        for key in _bucket_keys(start_date, end_date, bucket):
+        for key in bucket_keys(start_date, end_date, bucket):
             min_pct, max_pct = soc_by_bucket.get(key, (None, None))
             cost, gain = money_by_bucket.get(key, (None, None))
             days.append(
@@ -3171,59 +3172,13 @@ def _direction_total(values: Iterable[float | None]) -> float | None:
 #
 # Everything below folds ``{utc_hour: StatisticsRow}`` maps -- what
 # ``recorder_statistics_span.query_hourly_statistics`` returns -- into buckets
-# keyed by an ISO date. The hour keys are UTC instants (see that function for
+# keyed by an ISO date (:mod:`..span_buckets`). The hour keys are UTC instants (see that function for
 # why they must not be local ones), so every fold converts before it keys. Day
 # and month differ only in that key, so the folds themselves are written once.
 
 
-def _bucket_key(utc_hour: datetime, bucket: str, local_tz: ZoneInfo) -> str:
-    """The bucket an hour belongs to, as the ISO date the payload reports.
-
-    A month bucket is named by its first day rather than by ``YYYY-MM`` so that
-    every row of every span carries the same kind of value in ``date``: the local
-    date the bucket starts on.
-    """
-    local_date = utc_hour.astimezone(local_tz).date()
-    return (
-        local_date.isoformat()
-        if bucket == "day"
-        else local_date.replace(day=1).isoformat()
-    )
-
-
-def _bucket_keys(start_date: date, end_date: date, bucket: str) -> list[str]:
-    """Every bucket in the span, in order, whether or not it has data.
-
-    The span is enumerated rather than read off the statistics, so a bucket the
-    recorder holds nothing for still appears -- with nulls, which is a different
-    statement from being absent.
-    """
-    if bucket == "day":
-        keys: list[str] = []
-        cursor = start_date
-        while cursor <= end_date:
-            keys.append(cursor.isoformat())
-            cursor += timedelta(days=1)
-        return keys
-
-    keys = []
-    cursor = start_date.replace(day=1)
-    last = end_date.replace(day=1)
-    while cursor <= last:
-        keys.append(cursor.isoformat())
-        cursor = _add_months(cursor, 1)
-    return keys
-
-
-def _add_months(anchor: date, delta: int) -> date:
-    """The first of the month ``delta`` months from ``anchor``'s month."""
-    total = anchor.year * 12 + (anchor.month - 1) + delta
-    year, month_index = divmod(total, 12)
-    return date(year, month_index + 1, 1)
-
-
 def _last_day_of_month(anchor: date) -> date:
-    return _add_months(anchor, 1) - timedelta(days=1)
+    return add_months(anchor, 1) - timedelta(days=1)
 
 
 def _trim_span_to_cap(start_date: date, end_date: date, bucket: str) -> date:
@@ -3235,7 +3190,7 @@ def _trim_span_to_cap(start_date: date, end_date: date, bucket: str) -> date:
     cap = _MAX_AGGREGATE_BUCKETS[bucket]
     if bucket == "day":
         return max(start_date, end_date - timedelta(days=cap - 1))
-    return max(start_date, _add_months(end_date.replace(day=1), -(cap - 1)))
+    return max(start_date, add_months(end_date.replace(day=1), -(cap - 1)))
 
 
 def _energy_by_bucket(
@@ -3256,7 +3211,7 @@ def _energy_by_bucket(
     """
     totals: dict[str, float] = {}
     for utc_hour, kwh in hourly_kwh.items():
-        key = _bucket_key(utc_hour, bucket, local_tz)
+        key = bucket_key(utc_hour, bucket, local_tz)
         totals[key] = totals.get(key, 0.0) + kwh
     return totals
 
@@ -3286,7 +3241,7 @@ def _soc_bounds_by_bucket(
         high_value = row.get("max")
         if low_value is None and high_value is None:
             continue
-        key = _bucket_key(utc_hour, bucket, local_tz)
+        key = bucket_key(utc_hour, bucket, local_tz)
         low, high = bounds.get(key, (None, None))
         if low_value is not None:
             low = low_value if low is None else min(low, low_value)
@@ -3355,14 +3310,14 @@ def _money_by_bucket(
         rate = import_rate.get(utc_hour)
         if rate is None:
             continue
-        key = _bucket_key(utc_hour, bucket, local_tz)
+        key = bucket_key(utc_hour, bucket, local_tz)
         cost[key] = cost.get(key, 0.0) + kwh * rate
 
     for utc_hour, kwh in export_kwh_by_hour.items():
         rate = export_rate.get(utc_hour)
         if rate is None:
             continue
-        key = _bucket_key(utc_hour, bucket, local_tz)
+        key = bucket_key(utc_hour, bucket, local_tz)
         gain[key] = gain.get(key, 0.0) + kwh * rate
 
     return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}

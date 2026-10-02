@@ -3,9 +3,11 @@ import { customElement, property, state } from "lit/decorators.js";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import {
+    DEVICE_REPORT_GRANULARITIES,
     fetchDeviceReport,
     isDeviceReportUnavailable,
     type DeviceReportCommon,
+    type DeviceReportGranularity,
     type DeviceReportPayload,
     type DeviceReportQuery,
 } from "../helman-api";
@@ -14,7 +16,7 @@ import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../loc
 import { formatKwhValue } from "../shared/forecast-value-format";
 import { startNowClock } from "../shared/now-clock";
 import { todayIso } from "../shared/today-iso";
-import { DEVICE_REPORTS } from "./report-registry";
+import { DEVICE_REPORTS, type DeviceReportEntry } from "./report-registry";
 import {
     DEFAULT_PERIOD_PRESET,
     PERIOD_PRESETS,
@@ -60,13 +62,16 @@ function expiresAtMs(entry: MemoEntry): number {
 }
 
 function memoKey(report: string, query: DeviceReportQuery): string {
-    return report + "|" + query.start_date + "|" + query.end_date;
+    return report + "|" + query.start_date + "|" + query.end_date + "|" + (query.granularity ?? "");
 }
 
 /**
- * The device reports' shell: the period, the tabs, the fetching and the
- * freshness. A report element owns only its rendering, and is handed exactly
- * `payload`, `query` and `localize`.
+ * The device reports' shell: the period, the granularity, the tabs, the
+ * fetching and the freshness. A report element owns only its rendering, and is
+ * handed exactly `payload`, `query` and `localize`.
+ *
+ * The granularity is offered, sent and memoised only for a report whose
+ * registry entry uses it, so changing it never refetches one that does not.
  */
 @customElement("helman-device-report-shell")
 export class HelmanDeviceReportShell extends LitElement {
@@ -77,6 +82,7 @@ export class HelmanDeviceReportShell extends LitElement {
     @state() private _customStart: string | null = null;
     @state() private _customEnd: string | null = null;
     @state() private _reportId: string = DEVICE_REPORTS[0].id;
+    @state() private _granularity: DeviceReportGranularity = "day";
     /** Today's local day key, moved by the clock: it rolls the presets over. */
     @state() private _today = "";
     /** The memo key of the request in flight, or null. */
@@ -93,7 +99,7 @@ export class HelmanDeviceReportShell extends LitElement {
     private _failed: { key: string; atMs: number } | null = null;
 
     private _memo = new Map<string, MemoEntry>();
-    /** The visible query, identity-stable while its dates are unchanged. */
+    /** The visible query, identity-stable while its fields are unchanged. */
     private _query: DeviceReportQuery | null = null;
     private _range: { minDate: string; maxDate: string } | null = null;
     private _localize: LocalizeFunction = (key: string) => key;
@@ -261,21 +267,29 @@ export class HelmanDeviceReportShell extends LitElement {
             this._syncContext();
             this._syncDataChangedSubscription();
         }
-        const next = this._preset === "custom"
+        const dates = this._preset === "custom"
             ? (this._customStart && this._customEnd
                 ? { start_date: this._customStart, end_date: this._customEnd }
                 : null)
             : presetQuery(this._preset, this._today);
+        const next: DeviceReportQuery | null = dates && this._entry().usesGranularity
+            ? { ...dates, granularity: this._granularity }
+            : dates;
         if (next === null) {
             this._query = null;
         } else if (
             this._query === null
             || this._query.start_date !== next.start_date
             || this._query.end_date !== next.end_date
+            || this._query.granularity !== next.granularity
         ) {
             this._query = Object.freeze(next);
         }
         this._ensureFresh();
+    }
+
+    private _entry(): DeviceReportEntry {
+        return DEVICE_REPORTS.find((report) => report.id === this._reportId) ?? DEVICE_REPORTS[0];
     }
 
     /** Fetch the visible report unless the memo holds a payload that is still good. */
@@ -407,6 +421,21 @@ export class HelmanDeviceReportShell extends LitElement {
         `;
     }
 
+    private _renderGranularity() {
+        return html`
+            <div class="bar granularity">
+                ${DEVICE_REPORT_GRANULARITIES.map((granularity) => html`
+                    <button
+                        type="button"
+                        data-granularity=${granularity}
+                        class=${granularity === this._granularity ? "selected" : ""}
+                        @click=${() => { this._granularity = granularity; }}
+                    >${this._localize("device_reports.granularity." + granularity)}</button>
+                `)}
+            </div>
+        `;
+    }
+
     private _renderNotes(payload: DeviceReportCommon) {
         const t = this._localize;
         const missing = SOURCE_METERS.filter((meter) => !payload.meters[meter]);
@@ -437,12 +466,13 @@ export class HelmanDeviceReportShell extends LitElement {
         const key = query ? memoKey(this._reportId, query) : null;
         const payload = key ? this._memo.get(key)?.payload ?? null : null;
         const loading = key !== null && this._inflightKey === key;
-        const entry = DEVICE_REPORTS.find((report) => report.id === this._reportId) ?? DEVICE_REPORTS[0];
+        const entry = this._entry();
         const tag = unsafeStatic(entry.tag);
 
         return html`
             ${this._renderPresets()}
             ${this._renderTabs()}
+            ${entry.usesGranularity ? this._renderGranularity() : nothing}
             <div class="status">
                 ${payload && !isDeviceReportUnavailable(payload)
                     ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.as_of) })}</span>`

@@ -146,10 +146,19 @@ export function fetchDeviceStats(
     return hass.callWS({ type: "helman/get_device_stats", device_key: deviceKey });
 }
 
-/** The period a device report covers: local dates, both inclusive. */
+/** The bucket size of a report that is bucketed by it. */
+/** The bucket sizes `helman/device_report` accepts: the backend's `span_buckets.BUCKETS`. */
+export const DEVICE_REPORT_GRANULARITIES = ["day", "week", "month"] as const;
+export type DeviceReportGranularity = (typeof DEVICE_REPORT_GRANULARITIES)[number];
+
+/**
+ * The period a device report covers: local dates, both inclusive. A report
+ * bucketed by granularity carries it; any other report leaves it out.
+ */
 export interface DeviceReportQuery {
     start_date: string;
     end_date: string;
+    granularity?: DeviceReportGranularity;
 }
 
 /**
@@ -239,6 +248,42 @@ export interface RankingNode {
 export interface RankingReportPayload extends DeviceReportCommon {
     /** Pre-order; `nodes[0]` is the house. */
     nodes: RankingNode[];
+}
+
+/**
+ * One bucket of the Over time report, clamped to the period. Over the hours
+ * the house meter measured, `Σ values + unmeasured − overallocated = house`.
+ */
+export interface OverTimeBucket {
+    /** The bucket's first and last local day, inclusive. */
+    start: string;
+    end: string;
+    /** The period cuts the bucket, or the bucket is still running. */
+    partial: boolean;
+    /** The house meter. */
+    house: number;
+    /** kWh per top-level device, keyed by series id. */
+    values: Record<string, number>;
+    /** The house's remainder. */
+    unmeasured: number;
+    /** What the devices measure beyond the house meter. */
+    overallocated: number;
+}
+
+/** A top-level device of the Over time report. */
+export interface OverTimeSeries {
+    id: string;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    first_hour: string | null;
+}
+
+export interface OverTimeReportPayload extends DeviceReportCommon {
+    granularity: DeviceReportGranularity;
+    buckets: OverTimeBucket[];
+    /** Every top-level device, ranked by its period total. */
+    series: OverTimeSeries[];
 }
 
 /** One device report over `query`'s period. */

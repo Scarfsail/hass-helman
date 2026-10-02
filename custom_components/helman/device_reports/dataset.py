@@ -101,13 +101,18 @@ class DatasetNode:
     #: ``{utc_hour: covered fraction}``: 1 for an hour its source has a value
     #: for, the elapsed fraction for the hour in progress.
     coverage: dict[datetime, float]
-    #: ``Σ_h max(0, Σ children − node)``: what the children measure beyond this
-    #: node's own meter, which the remainder's floor would otherwise hide.
-    overallocated_kwh: float = 0.0
+    #: ``{utc_hour: max(0, Σ children − node)}`` over the hours this node's own
+    #: meter measured: what the children measure beyond it, which the
+    #: remainder's floor would otherwise hide. Only hours with an excess.
+    overallocated: dict[datetime, float] = field(default_factory=dict)
 
     @property
     def total_kwh(self) -> float:
         return sum(self.kwh.values())
+
+    @property
+    def overallocated_kwh(self) -> float:
+        return sum(self.overallocated.values())
 
     @property
     def first_hour(self) -> datetime | None:
@@ -328,7 +333,7 @@ def _add_node(
     node.children = [child.id for child in children]
 
     if children:
-        remainder, node.overallocated_kwh = _remainder(node, children)
+        remainder, node.overallocated = _remainder(node, children)
         unmeasured = DatasetNode(
             # The tree's own convention for a remainder's id.
             id=f"{node.id.replace('.', '_')}_unmeasured",
@@ -350,7 +355,7 @@ def _add_node(
 
 def _remainder(
     node: DatasetNode, children: list[DatasetNode]
-) -> tuple[dict[datetime, float], float]:
+) -> tuple[dict[datetime, float], dict[datetime, float]]:
     """The parent's meter minus its children, floored at 0, and what the floor hid.
 
     The live remainder sensors' definition, per hour. Only hours the parent's
@@ -361,11 +366,12 @@ def _remainder(
     holds exactly over the hours the parent measured.
     """
     remainder: dict[datetime, float] = {}
-    overallocated = 0.0
+    overallocated: dict[datetime, float] = {}
     for hour, own in node.kwh.items():
         measured = sum(child.kwh.get(hour, 0.0) for child in children)
         remainder[hour] = max(0.0, own - measured)
-        overallocated += max(0.0, measured - own)
+        if measured > own:
+            overallocated[hour] = measured - own
     return remainder, overallocated
 
 
