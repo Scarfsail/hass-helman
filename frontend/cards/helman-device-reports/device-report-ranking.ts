@@ -260,7 +260,9 @@ export class HelmanDeviceReportRanking extends LitElement {
         `,
     ];
 
-    protected willUpdate(_changed: PropertyValues<this>): void {
+    protected willUpdate(changed: PropertyValues<this>): void {
+        // A refresh reuses the hovered node: its popup would keep the old figures.
+        if (changed.has("payload")) this._tooltip.hide();
         this._tooltips.clear();
         const key = this._modelKey;
         if (key === null || key.payload !== this.payload || key.sort !== this._sort) {

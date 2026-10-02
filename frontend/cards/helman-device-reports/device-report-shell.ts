@@ -267,6 +267,8 @@ export class HelmanDeviceReportShell extends LitElement {
     };
 
     protected willUpdate(changed: PropertyValues<this>): void {
+        // A refresh or another query reuses the glyph: its popup would keep the old figures.
+        if (changed.has("_memoVersion") || changed.has("_inflightKey")) this._tooltip.hide();
         if (changed.has("hass")) {
             const language = this.hass?.language;
             if (!this._localizeBuilt || language !== this._localizeLanguage) {

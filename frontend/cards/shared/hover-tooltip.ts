@@ -227,6 +227,9 @@ export function renderHoverTooltip(
  * "hovering" and then close it by clicking. A keyboard activation has no
  * pointer, so its popup sits on the target instead.
  *
+ * The host hides it when the data it describes changes (a refresh reuses the
+ * target's node, so nothing here would notice), and a scroll or resize hides it.
+ *
  * The popup is kept inside the viewport: shifted sideways off an edge, and
  * dropped below the pointer when there is no room above it.
  */
@@ -248,11 +251,17 @@ export class HoverTooltipController implements ReactiveController {
     hostConnected(): void {
         document.addEventListener("pointerdown", this._onPointer, true);
         document.addEventListener("pointermove", this._onPointer, true);
+        // Capture, because the scroller is an ancestor of the card (HA's view), not
+        // the window. A fixed popup would stay put while its target moves away.
+        window.addEventListener("scroll", this._onViewportChange, { capture: true, passive: true });
+        window.addEventListener("resize", this._onViewportChange, { passive: true });
     }
 
     hostDisconnected(): void {
         document.removeEventListener("pointerdown", this._onPointer, true);
         document.removeEventListener("pointermove", this._onPointer, true);
+        window.removeEventListener("scroll", this._onViewportChange, { capture: true });
+        window.removeEventListener("resize", this._onViewportChange);
         cancelAnimationFrame(this._frame);
         this._frame = 0;
         this._pending = null;
@@ -292,6 +301,10 @@ export class HoverTooltipController implements ReactiveController {
     render() {
         return this.content ? renderHoverTooltip(this.content, this.point ?? this.content) : nothing;
     }
+
+    private _onViewportChange = (): void => {
+        if (this.content !== null || this._pending !== null) this.hide();
+    };
 
     private _onPointer = (event: PointerEvent): void => {
         this._pointerType = event.pointerType;
