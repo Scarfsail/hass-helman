@@ -279,6 +279,18 @@ class TestPayload(DeviceReportTestCase):
         payload = await self.report(now, "2026-09-15", "2026-09-15")
         self.assertTrue(payload["complete"])
 
+    async def test_a_failed_statistics_read_is_an_error_not_an_empty_report(self):
+        now = _local(2026, 9, 16, 9, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 16, 7))
+
+        def _explode(*args):
+            raise RuntimeError("statistics read failed")
+
+        with patch.object(span_module, "statistics_during_period", _explode):
+            connection = await self.request(now, "2026-09-15", "2026-09-15")
+        self.assertEqual(connection.results, [])
+        self.assertEqual(connection.errors[0][1], "internal_error")
+
     async def test_an_open_period_is_incomplete(self):
         now = _local(2026, 9, 15, 14, 0)
         self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 15, 12))
@@ -328,6 +340,24 @@ class TestUnavailable(DeviceReportTestCase):
         self.assertEqual(payload, {"unavailable": "no_house_meter"})
         self.assertEqual(self.recorder.calls, [])
 
+
+
+class TestTariffSampling(unittest.TestCase):
+    def test_a_fractional_offset_hour_is_sampled_from_its_own_minute(self):
+        from custom_components.helman.grid_price_forecast_builder import (
+            FixedGridImportPriceWindow,
+        )
+
+        windows = (
+            FixedGridImportPriceWindow(start_minutes=0, end_minutes=8 * 60, price=1.0),
+            FixedGridImportPriceWindow(start_minutes=8 * 60, end_minutes=24 * 60, price=3.0),
+        )
+        kolkata = ZoneInfo("Asia/Kolkata")
+        # A statistics hour starting 07:30 local: half at the night rate, half at the day rate.
+        rate = span_history_module._config_import_rate(
+            windows, datetime(2026, 9, 15, 7, 30, tzinfo=kolkata)
+        )
+        self.assertAlmostEqual(rate, 2.0)
 
 if __name__ == "__main__":
     unittest.main()

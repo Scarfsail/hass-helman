@@ -68,6 +68,9 @@ class SpanHistory:
     #: ``{statistic_id: utc_instant}``: how far the hourly table had compiled
     #: each id when it was read, before the tail was merged.
     compiled_until: dict[str, datetime] = field(default_factory=dict)
+    #: The statistics read failed and was read as empty: nothing in this
+    #: history is a measurement.
+    statistics_failed: bool = False
 
     def energy_for(self, statistic_id: str | None) -> dict[datetime, float]:
         """One id's hourly energy, or an empty map for an unconfigured one."""

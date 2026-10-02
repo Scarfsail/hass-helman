@@ -80,6 +80,9 @@ async def read_span_history(
     except Exception:
         _LOGGER.exception("Failed to load statistics for a span read")
         span = SpanStatistics(rows={}, energy_kwh={})
+        statistics_failed = True
+    else:
+        statistics_failed = False
 
     # Both rates through the one price reader every historical price goes
     # through, so a month's money and the day it is made of are priced from the
@@ -103,7 +106,7 @@ async def read_span_history(
     # The window table is keyed on minute-of-day, so its rate for an hour
     # depends only on that hour's local clock reading: computed once per
     # hour-of-day rather than once per hour of a year.
-    tariff_by_hour_of_day: dict[int, float | None] = {}
+    tariff_by_hour_of_day: dict[tuple[int, int], float | None] = {}
     for utc_hour in period_hours(local_start, local_end):
         rate = _hourly_rate(import_rows, utc_hour)
         if rate is not None:
@@ -111,11 +114,12 @@ async def read_span_history(
             import_rate_source[utc_hour] = RATE_RECORDED
         else:
             local_hour = utc_hour.astimezone(local_tz)
-            if local_hour.hour not in tariff_by_hour_of_day:
-                tariff_by_hour_of_day[local_hour.hour] = _config_import_rate(
+            clock = (local_hour.hour, local_hour.minute)
+            if clock not in tariff_by_hour_of_day:
+                tariff_by_hour_of_day[clock] = _config_import_rate(
                     import_price_windows, local_hour
                 )
-            tariff = tariff_by_hour_of_day[local_hour.hour]
+            tariff = tariff_by_hour_of_day[clock]
             if tariff is not None:
                 import_rate[utc_hour] = tariff
                 import_rate_source[utc_hour] = RATE_TARIFF
@@ -133,6 +137,7 @@ async def read_span_history(
         import_rate_source=import_rate_source,
         export_rate=export_rate,
         compiled_until=span.compiled_until,
+        statistics_failed=statistics_failed,
     )
 
 
@@ -185,14 +190,16 @@ def _config_import_rate(import_price_windows, local_hour: datetime) -> float | N
         lookup_grid_import_price,
     )
 
-    hour_start = local_hour.hour * 60
+    # From the hour's actual local minute: in a fractional-offset zone a
+    # statistics hour starts at HH:30.
+    hour_start = local_hour.hour * 60 + local_hour.minute
     total = 0.0
     covered = 0
     for offset in range(0, 60, _TARIFF_SAMPLE_MINUTES):
         try:
             total += lookup_grid_import_price(
                 windows=import_price_windows,
-                minute_of_day=hour_start + offset,
+                minute_of_day=(hour_start + offset) % (24 * 60),
             )
         except GridImportPriceConfigError:
             continue
@@ -200,9 +207,9 @@ def _config_import_rate(import_price_windows, local_hour: datetime) -> float | N
 
     if covered == 0:
         _LOGGER.debug(
-            "No import price window covers %02d:00-%02d:59; leaving the hour unpriced",
+            "No import price window covers the hour from %02d:%02d; leaving it unpriced",
             local_hour.hour,
-            local_hour.hour,
+            local_hour.minute,
         )
         return None
     return total / covered

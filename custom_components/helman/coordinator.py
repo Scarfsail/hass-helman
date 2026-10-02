@@ -1421,6 +1421,10 @@ class HelmanCoordinator:
             tail_start=recorder_tail_start(local_start, local_end, now),
             import_price_windows=None if price_config is None else price_config.windows,
         )
+        if history.statistics_failed:
+            # The inspector degrades to an empty read; a report must not, since
+            # zeros marked complete would be kept by the card for good.
+            raise RuntimeError("The statistics read for the device report failed")
         if history.compiled_until.get(meters.house, local_start) < local_end:
             # The read sees only the period's own rows, so an hour the recorder
             # skipped while Home Assistant was down would keep the period
