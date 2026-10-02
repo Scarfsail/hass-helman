@@ -9,6 +9,14 @@ const languages: Record<string, any> = {
 
 export type LocalizeFunction = (key: string) => string;
 
+/** Substitutes each `{name}` placeholder in a localized template. */
+export function fillTemplate(template: string, values: Record<string, string>): string {
+    return Object.entries(values).reduce(
+        (text, [key, value]) => text.split('{' + key + '}').join(value),
+        template,
+    );
+}
+
 export function getLocalizeFunction(hass: HomeAssistant): LocalizeFunction {
     const lang = getLanguage(hass?.language || 'cs');
     return (string: string) => localize(string, lang);

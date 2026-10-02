@@ -723,5 +723,68 @@
     "scheduler_note": "Plánovač zařízení počítá s touto hodnotou",
     "failed": "Bez odhadu: {reason}",
     "not_trained": "Zatím nenaučeno"
+  },
+  "device_reports": {
+    "presets": {
+      "last_7": "Posledních 7 dní",
+      "last_30": "Posledních 30 dní",
+      "last_90": "Posledních 90 dní",
+      "this_month": "Tento měsíc",
+      "last_month": "Minulý měsíc",
+      "this_year": "Tento rok",
+      "custom": "Vlastní"
+    },
+    "from": "Od",
+    "to": "Do",
+    "loading": "Načítání…",
+    "error": "Report se nepodařilo načíst: {message}",
+    "as_of": "stav k {time}",
+    "unavailable": {
+      "no_house_node": "Reporty spotřebičů potřebují senzor výkonu domu (Energetické uzly → Dům → Výkon). Bez něj není strom spotřebičů domu, o kterém by šlo reportovat.",
+      "no_house_meter": "Reporty spotřebičů potřebují elektroměr domu (Energetické uzly → Dům → Předpověď → Celková energie). Bez něj není znám součet domu ani žádný zbytek."
+    },
+    "missing_meters": "Nenastaveno: {meters}. Barvy zdrojů nemohou ukázat, co by tyto elektroměry naměřily.",
+    "meters": {
+      "grid": "elektroměry odběru/dodávky do sítě",
+      "solar": "elektroměr FVE",
+      "battery": "elektroměry nabíjení/vybíjení baterie"
+    },
+    "quality": {
+      "ambiguous": "{kwh} kWh ({pct} % domu) přiřazeno pravidlem „nejdřív FVE“",
+      "unattributed": "{kwh} kWh ({pct} % domu) nevysvětluje žádný měřený zdroj",
+      "mismatch": "{kwh} kWh ({pct} % domu) měřených toků nad rámec elektroměru domu"
+    },
+    "ranking": {
+      "title": "Pořadí",
+      "house": "Dům",
+      "empty": "Žádné spotřebiče k seřazení",
+      "show": "Zobrazit",
+      "sort": "Řadit podle",
+      "show_options": {
+        "both": "Obojí",
+        "energy": "Energie",
+        "money": "Peníze"
+      },
+      "sort_options": {
+        "energy": "Energie",
+        "paid": "Zaplaceno",
+        "forgone": "Ušlo",
+        "paid_forgone": "Zaplaceno + ušlo"
+      },
+      "sources": {
+        "solar": "FVE",
+        "battery": "Baterie",
+        "grid": "Síť",
+        "unattributed": "Nepřiřazeno"
+      },
+      "paid": "Zaplaceno",
+      "forgone": "Ušlo",
+      "partial": "částečně",
+      "priced": "oceněno {priced} z {total} kWh",
+      "tariff": "{kwh} kWh podle dnes nastaveného tarifu",
+      "of_house": "{pct} % domu",
+      "overallocated": "podřízené spotřebiče naměřily o {kwh} kWh víc než tento elektroměr",
+      "coverage": "data za {pct} % období (od {date})"
+    }
   }
 }

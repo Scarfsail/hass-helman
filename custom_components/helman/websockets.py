@@ -1,10 +1,13 @@
 from __future__ import annotations
 from datetime import date
+import logging
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components.websocket_api import async_register_command
+from homeassistant.util import dt as dt_util
 from .const import (
     CONFIG_DOCUMENT_VERSION,
     DATA_CHANGED_KIND_CONFIG,
@@ -18,8 +21,10 @@ from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
 from .config_defaults import CONFIG_FIELD_DEFAULTS
 from .config_validation import validate_config_document
+from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
 from .entity_inspection import inspect_targets
 from .solar_bias_correction.websocket import (
+    _is_dashed_date,
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
     ws_get_solar_bias_profile,
@@ -32,6 +37,8 @@ from .storage import HelmanStorage
 
 if TYPE_CHECKING:
     from homeassistant.core import Event
+
+_LOGGER = logging.getLogger(__name__)
 
 ACTION_KIND_SCHEMA = vol.In(SCHEDULE_ACTION_KINDS)
 SCHEDULE_ACTION_SCHEMA = vol.Schema(
@@ -132,6 +139,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_device_stats)
+    async_register_command(hass, ws_get_device_report)
     async_register_command(hass, ws_get_solar_bias_status)
     async_register_command(hass, ws_train_solar_bias_now)
     async_register_command(hass, ws_get_solar_bias_profile)
@@ -670,6 +678,63 @@ def ws_get_device_stats(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
     connection.send_result(msg["id"], coordinator.get_device_stats(msg["device_key"]))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/device_report",
+    vol.Required("report"): vol.In(REPORTS),
+    vol.Required("start_date"): str,
+    vol.Required("end_date"): str,
+})
+@websocket_api.async_response
+async def ws_get_device_report(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """One device report over a period of local dates, both inclusive.
+
+    One command for every report: ``report`` names a registry entry. An
+    ``end_date`` past today, in Home Assistant's time zone, is clamped to today
+    rather than rejected, as the inspector's span read does. A period over
+    :data:`~.device_reports.reports.MAX_REPORT_DAYS` days, or one that starts
+    after it ends, is ``invalid_date``.
+
+    Not admin-gated: it carries only numbers, the same exposure as
+    ``helman/get_device_stats``.
+    """
+    raw_start = msg.get("start_date")
+    raw_end = msg.get("end_date")
+    if not _is_dashed_date(raw_start) or not _is_dashed_date(raw_end):
+        connection.send_error(msg["id"], "invalid_date", "Dates must use YYYY-MM-DD format")
+        return
+    today = dt_util.now().astimezone(ZoneInfo(str(hass.config.time_zone))).date()
+    start_date = date.fromisoformat(raw_start)
+    end_date = min(date.fromisoformat(raw_end), today)
+    if start_date > end_date:
+        connection.send_error(
+            msg["id"], "invalid_date", "start_date must not be after end_date or today"
+        )
+        return
+    if (end_date - start_date).days + 1 > MAX_REPORT_DAYS:
+        connection.send_error(
+            msg["id"], "invalid_date", f"A report covers at most {MAX_REPORT_DAYS} days"
+        )
+        return
+
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+    try:
+        payload = await coordinator.async_device_report(
+            msg["report"], ReportQuery(start_date=start_date, end_date=end_date)
+        )
+    except Exception:
+        _LOGGER.exception("Unexpected device report failure")
+        connection.send_error(msg["id"], "internal_error", "Unexpected device report failure")
+        return
+    connection.send_result(msg["id"], payload)
 
 
 @websocket_api.websocket_command(GET_FORECAST_REQUEST_FIELDS)

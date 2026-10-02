@@ -212,5 +212,68 @@
     "scheduler_note": "The device scheduler projects with this figure",
     "failed": "No estimate: {reason}",
     "not_trained": "Not trained yet"
+  },
+  "device_reports": {
+    "presets": {
+      "last_7": "Last 7 days",
+      "last_30": "Last 30 days",
+      "last_90": "Last 90 days",
+      "this_month": "This month",
+      "last_month": "Last month",
+      "this_year": "This year",
+      "custom": "Custom"
+    },
+    "from": "From",
+    "to": "To",
+    "loading": "Loading…",
+    "error": "The report could not be loaded: {message}",
+    "as_of": "as of {time}",
+    "unavailable": {
+      "no_house_node": "Device reports need the house power sensor (Energy nodes → House → Power). Without it there is no house device tree to report on.",
+      "no_house_meter": "Device reports need the house energy meter (Energy nodes → House → Forecast → Total energy). Without it the house total and every remainder are unknown."
+    },
+    "missing_meters": "Not configured: {meters}. The source colours cannot show what these meters would have measured.",
+    "meters": {
+      "grid": "grid import/export meters",
+      "solar": "solar meter",
+      "battery": "battery charge/discharge meters"
+    },
+    "quality": {
+      "ambiguous": "{kwh} kWh ({pct} % of the house) assigned by the solar-first rule",
+      "unattributed": "{kwh} kWh ({pct} % of the house) not explained by any measured source",
+      "mismatch": "{kwh} kWh ({pct} % of the house) of measured flows exceeding the house meter"
+    },
+    "ranking": {
+      "title": "Ranking",
+      "house": "House",
+      "empty": "No devices to rank",
+      "show": "Show",
+      "sort": "Sort by",
+      "show_options": {
+        "both": "Both",
+        "energy": "Energy",
+        "money": "Money"
+      },
+      "sort_options": {
+        "energy": "Energy",
+        "paid": "Paid",
+        "forgone": "Forgone",
+        "paid_forgone": "Paid + forgone"
+      },
+      "sources": {
+        "solar": "Solar",
+        "battery": "Battery",
+        "grid": "Grid",
+        "unattributed": "Unattributed"
+      },
+      "paid": "Paid",
+      "forgone": "Forgone",
+      "partial": "partial",
+      "priced": "priced {priced} of {total} kWh",
+      "tariff": "{kwh} kWh at today's configured tariff",
+      "of_house": "{pct} % of house",
+      "overallocated": "children measure {kwh} kWh more than this meter",
+      "coverage": "data for {pct} % of the period (from {date})"
+    }
   }
 }

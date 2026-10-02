@@ -34,6 +34,7 @@ import { CHART_COLORS } from "./chart-colors";
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
+import { formatIsoDate, todayIso } from "../shared/today-iso";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -191,31 +192,6 @@ const VIEW_STOP_GROUPS: readonly (readonly ViewStop[])[] = [
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
-
-/**
- * One `Intl.DateTimeFormat` per time zone for the page's lifetime.
- *
- * `_todayIso()` is asked for the current day key several times per render, and
- * building a formatter for each of those was the single most expensive thing
- * the navigation did.
- */
-const DAY_KEY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
-
-function _getDayKeyFormatter(timeZone: string): Intl.DateTimeFormat {
-  const formatter = DAY_KEY_FORMATTERS.get(timeZone);
-  if (formatter !== undefined) {
-    return formatter;
-  }
-
-  const nextFormatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  DAY_KEY_FORMATTERS.set(timeZone, nextFormatter);
-  return nextFormatter;
-}
 
 /**
  * The slot width to open at when the card configures no explicit default: a
@@ -2454,8 +2430,8 @@ export class HelmanSolarInspector extends LitElement {
     // Day zero of the next month is the last of this one, leap years included.
     const last = new Date(Date.UTC(year, month, 0));
     return {
-      start: this._formatDateParts(year, month, 1),
-      end: this._formatDateParts(year, month, last.getUTCDate()),
+      start: formatIsoDate(year, month, 1),
+      end: formatIsoDate(year, month, last.getUTCDate()),
     };
   }
 
@@ -2470,7 +2446,7 @@ export class HelmanSolarInspector extends LitElement {
   private _spanStart(dayKey: string): string {
     const { year } = this._parseIsoDate(dayKey);
     if (this._viewMode === "month") return this._monthBounds(dayKey).start;
-    if (this._viewMode === "year") return this._formatDateParts(year, 1, 1);
+    if (this._viewMode === "year") return formatIsoDate(year, 1, 1);
     return dayKey;
   }
 
@@ -2478,7 +2454,7 @@ export class HelmanSolarInspector extends LitElement {
   private _spanEnd(dayKey: string): string {
     const { year } = this._parseIsoDate(dayKey);
     if (this._viewMode === "month") return this._monthBounds(dayKey).end;
-    if (this._viewMode === "year") return this._formatDateParts(year, 12, 31);
+    if (this._viewMode === "year") return formatIsoDate(year, 12, 31);
     return dayKey;
   }
 
@@ -6177,7 +6153,7 @@ export class HelmanSolarInspector extends LitElement {
   private _addDays(dayKey: string, delta: number): string {
     const current = this._parseIsoDate(dayKey);
     const moved = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
-    return this._formatDateParts(
+    return formatIsoDate(
       moved.getUTCFullYear(),
       moved.getUTCMonth() + 1,
       moved.getUTCDate(),
@@ -6339,56 +6315,9 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
-  /**
-   * Today's day key, recomputed at most once a second.
-   *
-   * It is asked for several times per render and the answer only changes at
-   * midnight, so a second of staleness is invisible -- but only a second: this
-   * deliberately does not ride the coarse `now-clock` resolution, because half
-   * a minute of lag at midnight is a visibly wrong answer. The time zone is
-   * part of the key because it really does change, when a payload lands
-   * carrying its own.
-   */
-  private _todayIsoMemo: { second: number; timeZone: string | undefined; value: string } | null = null;
-
+  /** Today's day key in the time zone this card reads dates in. See `shared/today-iso`. */
   private _todayIso() {
-    const timeZone = this._haTimeZone();
-    const second = Math.floor(Date.now() / 1000);
-    const memo = this._todayIsoMemo;
-    if (memo !== null && memo.second === second && memo.timeZone === timeZone) {
-      return memo.value;
-    }
-
-    const value = this._formatDateInTimeZone(new Date(), timeZone);
-    this._todayIsoMemo = { second, timeZone, value };
-    return value;
-  }
-
-  private _formatDateInTimeZone(value: Date, timeZone: string | undefined) {
-    if (!timeZone) {
-      return this._formatDateParts(
-        value.getFullYear(),
-        value.getMonth() + 1,
-        value.getDate(),
-      );
-    }
-
-    const parts = _getDayKeyFormatter(timeZone).formatToParts(value);
-    const year = Number(parts.find((part) => part.type === "year")?.value);
-    const month = Number(parts.find((part) => part.type === "month")?.value);
-    const day = Number(parts.find((part) => part.type === "day")?.value);
-    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-      return this._formatDateParts(
-        value.getFullYear(),
-        value.getMonth() + 1,
-        value.getDate(),
-      );
-    }
-    return this._formatDateParts(year, month, day);
-  }
-
-  private _formatDateParts(year: number, month: number, day: number) {
-    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return todayIso(this._haTimeZone());
   }
 
   private _parseIsoDate(value: string): { year: number; month: number; day: number } {

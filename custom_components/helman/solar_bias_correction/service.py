@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
+from ..span_history_model import SpanMeters
 from ..training.schedule import next_scheduled_training_at
 from .actuals import (
     load_actuals_for_day,
@@ -483,14 +484,7 @@ class SolarBiasCorrectionService:
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
 
-        (
-            solar_entity,
-            import_entity,
-            export_entity,
-            house_entity,
-            charge_entity,
-            discharge_entity,
-        ) = self._energy_meter_entity_ids()
+        meters = self.energy_meter_entity_ids()
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
         # The same roster the day view splits its house actual by, so a day
         # column and that day's slots itemise the same appliances under the same
@@ -521,51 +515,49 @@ class SolarBiasCorrectionService:
             )
         )
 
-        from ..recorder_statistics_span import (
-            SpanStatistics,
-            query_hourly_statistics,
-            query_price_history,
+        from ..span_history import read_span_history
+
+        import_price_config = self._grid_import_price_config()
+        # The meters, the SoC, the roster and both price rails in the one read
+        # every span view shares, with the import rate already resolved per
+        # hour -- recorded first, today's window table where nothing was
+        # recorded. See :func:`_money_by_bucket` for why per hour.
+        history = await read_span_history(
+            self._hass,
+            meter_ids=meters,
+            extra_ids=[soc_entity, *consumer_entities],
+            local_start=local_start,
+            local_end=local_end,
+            tail_start=tail_start,
+            import_price_windows=(
+                None if import_price_config is None else import_price_config.windows
+            ),
         )
 
-        try:
-            span = await query_hourly_statistics(
-                self._hass,
-                [
-                    solar_entity,
-                    import_entity,
-                    export_entity,
-                    house_entity,
-                    charge_entity,
-                    discharge_entity,
-                    soc_entity,
-                    GRID_IMPORT_PRICE_ENTITY_ID,
-                    GRID_EXPORT_PRICE_ENTITY_ID,
-                    *consumer_entities,
-                ],
-                local_start=local_start,
-                local_end=local_end,
-                tail_start=tail_start,
-            )
-        except Exception:
-            _LOGGER.exception("Failed to load statistics for span aggregates")
-            span = SpanStatistics(rows={}, energy_kwh={})
-
-        solar_kwh = _energy_by_bucket(span.energy_for(solar_entity), bucket, local_tz)
-        imported_kwh = _energy_by_bucket(span.energy_for(import_entity), bucket, local_tz)
-        exported_kwh = _energy_by_bucket(span.energy_for(export_entity), bucket, local_tz)
-        house_kwh = _energy_by_bucket(span.energy_for(house_entity), bucket, local_tz)
-        charged_kwh = _energy_by_bucket(span.energy_for(charge_entity), bucket, local_tz)
+        solar_kwh = _energy_by_bucket(history.energy_for(meters.solar), bucket, local_tz)
+        imported_kwh = _energy_by_bucket(
+            history.energy_for(meters.grid_import), bucket, local_tz
+        )
+        exported_kwh = _energy_by_bucket(
+            history.energy_for(meters.grid_export), bucket, local_tz
+        )
+        house_kwh = _energy_by_bucket(history.energy_for(meters.house), bucket, local_tz)
+        charged_kwh = _energy_by_bucket(
+            history.energy_for(meters.battery_charge), bucket, local_tz
+        )
         discharged_kwh = _energy_by_bucket(
-            span.energy_for(discharge_entity), bucket, local_tz
+            history.energy_for(meters.battery_discharge), bucket, local_tz
         )
-        soc_by_bucket = _soc_bounds_by_bucket(span.rows_for(soc_entity), bucket, local_tz)
+        soc_by_bucket = _soc_bounds_by_bucket(
+            history.rows_for(soc_entity), bucket, local_tz
+        )
         # One fold per consumer through the same helper the six meters use, so a
         # consumer's bucket total is arrived at exactly as the house total it is
         # subtracted from.
         consumer_kwh_by_entity = {
             consumer["energy_entity_id"]: _energy_by_bucket(
                 self._consumer_own_energy(
-                    consumer, span.energy_kwh, slot=timedelta(hours=1)
+                    consumer, history.energy_kwh, slot=timedelta(hours=1)
                 ),
                 bucket,
                 local_tz,
@@ -573,30 +565,13 @@ class SolarBiasCorrectionService:
             for consumer in breakdown_consumers
         }
 
-        import_price_config = self._grid_import_price_config()
-        # Both rates through the one price reader every historical price goes
-        # through, so a month's money and the day it is made of are priced from
-        # the same tiers. The hourly rows this read already fetched are handed
-        # over rather than re-queried; what the reader adds is the raw-state
-        # tier under them, which covers the hours the statistics compiler has
-        # holes in.
-        price_history = await query_price_history(
-            self._hass,
-            [GRID_IMPORT_PRICE_ENTITY_ID, GRID_EXPORT_PRICE_ENTITY_ID],
-            local_start=local_start,
-            local_end=local_end,
-            statistics_rows=span.rows,
-        )
         money_by_bucket = _money_by_bucket(
-            span.energy_for(import_entity),
-            span.energy_for(export_entity),
-            price_history[GRID_IMPORT_PRICE_ENTITY_ID].hourly_means(),
-            price_history[GRID_EXPORT_PRICE_ENTITY_ID].hourly_means(),
+            history.energy_for(meters.grid_import),
+            history.energy_for(meters.grid_export),
+            history.import_rate,
+            history.export_rate,
             bucket=bucket,
             local_tz=local_tz,
-            import_price_windows=(
-                None if import_price_config is None else import_price_config.windows
-            ),
         )
 
         days: list[dict[str, Any]] = []
@@ -631,6 +606,28 @@ class SolarBiasCorrectionService:
             "days": days,
             "range": navigation_range,
         }
+
+    # --- What a span read needs, for callers outside this service -------------
+    #
+    # The device reports read the same span as the aggregate views, so they need
+    # the same inputs. These are the public names for them; the private ones stay
+    # this service's own.
+
+    def energy_meter_entity_ids(self) -> SpanMeters:
+        """The six meters, by role. See :meth:`_energy_meter_entity_ids`."""
+        return SpanMeters(*self._energy_meter_entity_ids())
+
+    def grid_import_price_config(self):
+        """The import-price window table, or None. See :meth:`_grid_import_price_config`."""
+        return self._grid_import_price_config()
+
+    async def async_resolve_span_currency(self, import_price_config) -> str | None:
+        """The money columns' unit. See :meth:`_resolve_span_currency`."""
+        return await self._resolve_span_currency(import_price_config)
+
+    async def async_history_floor(self, local_now: datetime) -> date:
+        """The oldest date history may be browsed back to. See :meth:`_async_history_floor`."""
+        return await self._async_history_floor(local_now)
 
     async def _resolve_span_currency(self, import_price_config) -> str | None:
         """The unit both money columns are in, resolved as the day view resolves it.
@@ -3302,12 +3299,11 @@ def _soc_bounds_by_bucket(
 def _money_by_bucket(
     import_kwh_by_hour: dict[datetime, float],
     export_kwh_by_hour: dict[datetime, float],
-    import_rate_rows: dict[datetime, dict[str, Any]],
-    export_rate_rows: dict[datetime, dict[str, Any]],
+    import_rate: dict[datetime, float],
+    export_rate: dict[datetime, float],
     *,
     bucket: str,
     local_tz: ZoneInfo,
-    import_price_windows,
 ) -> dict[str, tuple[float | None, float | None]]:
     """Cost and gain per bucket, priced hour by hour.
 
@@ -3315,13 +3311,15 @@ def _money_by_bucket(
     rarely the ones the house imported in, which is the same reason
     :func:`_money_points` prices the day per slot.
 
-    Both rails follow the inspector day's precedence -- recorded history first.
-    The import rate is the price sensor Helman publishes, whose hourly ``mean``
-    is real tariff history from the day the feature shipped; the configured
-    window table fills only the hours statistics have nothing for, per hour and
-    never per bucket, because the sensor's ship date and the recorder's retention
-    edge each fall mid-span and anything coarser would either blank a covered
-    stretch or overwrite recorded truth with today's tariff.
+    The rates arrive already resolved per hour by
+    :func:`~..span_history.read_span_history`, with the inspector day's
+    precedence -- recorded history first. The import rate is the price sensor
+    Helman publishes, whose hourly ``mean`` is real tariff history from the day
+    the feature shipped; the configured window table fills only the hours
+    statistics have nothing for, per hour and never per bucket, because the
+    sensor's ship date and the recorder's retention edge each fall mid-span and
+    anything coarser would either blank a covered stretch or overwrite recorded
+    truth with today's tariff.
 
     Known limitation, stated rather than engineered around: the window table is
     keyed on minute-of-day and holds no history, so buckets older than the price
@@ -3354,95 +3352,20 @@ def _money_by_bucket(
     gain: dict[str, float] = {}
 
     for utc_hour, kwh in import_kwh_by_hour.items():
-        rate = _hourly_rate(import_rate_rows, utc_hour)
-        if rate is None:
-            rate = _config_import_rate(
-                import_price_windows, utc_hour.astimezone(local_tz)
-            )
+        rate = import_rate.get(utc_hour)
         if rate is None:
             continue
         key = _bucket_key(utc_hour, bucket, local_tz)
         cost[key] = cost.get(key, 0.0) + kwh * rate
 
     for utc_hour, kwh in export_kwh_by_hour.items():
-        rate = _hourly_rate(export_rate_rows, utc_hour)
+        rate = export_rate.get(utc_hour)
         if rate is None:
             continue
         key = _bucket_key(utc_hour, bucket, local_tz)
         gain[key] = gain.get(key, 0.0) + kwh * rate
 
     return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
-
-
-def _hourly_rate(
-    rate_rows: dict[datetime, dict[str, Any]],
-    utc_hour: datetime,
-) -> float | None:
-    """A price sensor's recorded rate for one hour, or None where it has none.
-
-    Matched on the UTC instant, which is the only key that tells the fall-back
-    day's two 02:00 hours apart -- and they can carry different rates.
-    """
-    row = rate_rows.get(utc_hour)
-    return None if row is None else row.get("mean")
-
-
-#: The finest grain the window table is sampled at when pricing a whole hour.
-#:
-#: Windows are configured in minutes and need not begin on the hour, so an hour
-#: the tariff changes inside of has no single rate. One minute is exact for any
-#: window a user can express and costs sixty lookups on a path that only runs
-#: for hours long-term statistics have no recorded rate for.
-_TARIFF_SAMPLE_MINUTES = 1
-
-
-def _config_import_rate(import_price_windows, local_hour: datetime) -> float | None:
-    """The configured import tariff across ``local_hour``, or None.
-
-    The rate is averaged over the hour's minutes rather than read off its start.
-    A window boundary that does not land on the hour -- a night tariff ending at
-    08:30, say -- otherwise mis-prices the crossing hour by the full difference
-    between the two rates, and does so systematically: this fallback exists to
-    price history older than the price sensor, so every such hour in a year view
-    would carry the same error rather than it averaging out.
-
-    Minutes no window covers are left out of the average rather than counted as
-    zero; an hour no window covers at all is unpriced. Weighting is by time, not
-    by energy, because the intra-hour shape of the import is exactly what
-    statistics no longer hold.
-
-    Imported lazily, like the other cross-module helpers here -- the builder
-    module pulls in Home Assistant's core, which several importers of this module
-    deliberately do without.
-    """
-    if import_price_windows is None:
-        return None
-    from ..grid_price_forecast_builder import (
-        GridImportPriceConfigError,
-        lookup_grid_import_price,
-    )
-
-    hour_start = local_hour.hour * 60
-    total = 0.0
-    covered = 0
-    for offset in range(0, 60, _TARIFF_SAMPLE_MINUTES):
-        try:
-            total += lookup_grid_import_price(
-                windows=import_price_windows,
-                minute_of_day=hour_start + offset,
-            )
-        except GridImportPriceConfigError:
-            continue
-        covered += 1
-
-    if covered == 0:
-        _LOGGER.debug(
-            "No import price window covers %02d:00-%02d:59; leaving the hour unpriced",
-            local_hour.hour,
-            local_hour.hour,
-        )
-        return None
-    return total / covered
 
 
 def _round_wh(value_kwh: float | None) -> float | None:

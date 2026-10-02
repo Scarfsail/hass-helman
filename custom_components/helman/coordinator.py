@@ -129,6 +129,12 @@ from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .grid_price_forecast_response import build_grid_price_forecast_response
+from .device_reports.dataset import (
+    build_device_dataset,
+    dataset_statistic_ids,
+    find_house_node,
+)
+from .device_reports.reports import ReportQuery, build_report
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
@@ -202,6 +208,7 @@ from .training.house_consumption import (
     HouseTrainingRequest,
 )
 from .training.house_consumption import health_for as house_consumption_health_for
+from .span_history_model import recorder_tail_start
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
@@ -1375,6 +1382,68 @@ class HelmanCoordinator:
             builder = HelmanTreeBuilder(self._hass, self._active_config)
             self._cached_tree = await builder.build()
         return self._cached_tree
+
+    async def async_device_report(self, report: str, query: ReportQuery) -> dict[str, Any]:
+        """One device report over ``query``'s period, or why there can be none.
+
+        Resolves the inputs -- the house subtree of the device tree, the six
+        meters, the price windows -- reads the period once through
+        :func:`~.span_history.read_span_history` and builds the dataset every
+        report is a view of. ``query`` arrives validated, its end already
+        clamped to today.
+        """
+        # Deferred like the other recorder readers: test harnesses that stub
+        # the recorder only partially still import the coordinator.
+        from .recorder_statistics_span import query_newest_hour_end
+        from .span_history import read_span_history
+
+        tree = await self.get_device_tree()
+        if find_house_node(tree) is None:
+            return {"unavailable": "no_house_node"}
+        service = self._solar_bias_service
+        meters = service.energy_meter_entity_ids()
+        if meters.house is None:
+            return {"unavailable": "no_house_meter"}
+
+        local_tz = ZoneInfo(str(self._hass.config.time_zone))
+        now = dt_util.now().astimezone(local_tz)
+        local_start = datetime.combine(query.start_date, datetime.min.time(), tzinfo=local_tz)
+        local_end = datetime.combine(
+            query.end_date + timedelta(days=1), datetime.min.time(), tzinfo=local_tz
+        )
+        price_config = service.grid_import_price_config()
+        history = await read_span_history(
+            self._hass,
+            meter_ids=meters,
+            extra_ids=dataset_statistic_ids(tree),
+            local_start=local_start,
+            local_end=local_end,
+            tail_start=recorder_tail_start(local_start, local_end, now),
+            import_price_windows=None if price_config is None else price_config.windows,
+        )
+        if history.statistics_failed:
+            # The inspector degrades to an empty read; a report must not, since
+            # zeros marked complete would be kept by the card for good.
+            raise RuntimeError("The statistics read for the device report failed")
+        if history.compiled_until.get(meters.house, local_start) < local_end:
+            # The read sees only the period's own rows, so an hour the recorder
+            # skipped while Home Assistant was down would keep the period
+            # incomplete for good. The meter's newest row anywhere settles it.
+            newest = await query_newest_hour_end(self._hass, meters.house)
+            if newest is not None:
+                history.compiled_until[meters.house] = newest
+        dataset = build_device_dataset(tree, history, local_tz=local_tz, now=now)
+        floor = await service.async_history_floor(now)
+        return build_report(
+            report,
+            dataset,
+            query,
+            currency=await service.async_resolve_span_currency(price_config),
+            navigation_range={
+                "minDate": floor.isoformat(),
+                "maxDate": now.date().isoformat(),
+            },
+        )
 
     def _get_house_energy_entity_id(self) -> str | None:
         energy_nodes = ConsumptionForecastBuilder._read_dict(
