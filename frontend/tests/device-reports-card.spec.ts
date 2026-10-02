@@ -645,7 +645,7 @@ test.describe("the ranking", () => {
         });
         expect(washer.children).toEqual(["name", "gauges", "figures"]);
         // Amounts are in the currency, not the price unit.
-        expect(washer.figures).toBe("30 kWh · 30 % of house · 12.0 CZK · 3.0 CZK");
+        expect(washer.figures).toBe("30 kWh · 30 % · 12.0 CZK · 3.0 CZK");
         // Coloured as the inspector's money columns: import cost dark blue, export gain light blue.
         expect(washer.paidColor).toBe("rgb(37, 99, 235)");
         expect(washer.forgoneColor).toBe("rgb(125, 211, 252)");

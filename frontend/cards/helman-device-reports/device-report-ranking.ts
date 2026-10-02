@@ -199,7 +199,7 @@ export class HelmanDeviceReportRanking extends LitElement {
              */
             .list {
                 display: grid;
-                grid-template-columns: minmax(90px, 2fr) minmax(40px, 3fr) auto;
+                grid-template-columns: minmax(90px, max-content) minmax(40px, 1fr) auto;
                 column-gap: 8px;
             }
             .row {
@@ -469,7 +469,7 @@ export class HelmanDeviceReportRanking extends LitElement {
                     ${this._show !== "energy" ? this._renderMoney(node, moneyScale) : nothing}
                 </div>
                 <span class="figures">
-                    <span class="part">${formatKwhValue(node.kwh)} kWh${isHouse ? nothing : html` · ${fillTemplate(this._t("device_reports.ranking.of_house"), { pct: percent(node.kwh, houseKwh) })}`}</span>${this._show !== "energy" ? html` <span class="part">· ${this._renderMoneyFigure(node, "paid")} · ${this._renderMoneyFigure(node, "forgone")}</span>` : nothing}
+                    <span class="part">${formatKwhValue(node.kwh)} kWh${isHouse ? nothing : " · " + percent(node.kwh, houseKwh) + " %"}</span>${this._show !== "energy" ? html` <span class="part">· ${this._renderMoneyFigure(node, "paid")} · ${this._renderMoneyFigure(node, "forgone")}</span>` : nothing}
                 </span>
             </div>
             ${expandable && expanded ? children.map((child) => this._renderRow(child, model, false)) : nothing}
