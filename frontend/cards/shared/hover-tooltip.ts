@@ -353,9 +353,14 @@ export class HoverTooltipController implements ReactiveController {
         const margin = 8;
         const half = popup.offsetWidth / 2;
         const x = Math.max(margin + half, Math.min(window.innerWidth - margin - half, point.x));
-        // The popup hangs 10px above its point (translate -100%, -10px); with no room there, below it.
-        const above = point.y - popup.offsetHeight - 10 >= margin;
+        // The popup hangs 10px above its `top` (translate -100%, -10px): above the
+        // point, or with no room there below it -- and either way kept on screen,
+        // its top edge winning when it is taller than the viewport.
+        const height = popup.offsetHeight;
+        const above = point.y - height - 10 >= margin;
+        const wanted = above ? point.y : point.y + height + 20;
+        const top = Math.max(margin + height + 10, Math.min(window.innerHeight - margin + 10, wanted));
         popup.style.left = x + "px";
-        popup.style.top = (above ? point.y : point.y + popup.offsetHeight + 20) + "px";
+        popup.style.top = top + "px";
     }
 }
