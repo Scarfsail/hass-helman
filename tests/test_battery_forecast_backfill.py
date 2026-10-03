@@ -37,10 +37,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from custom_components.helman import battery_forecast_backfill as mod  # noqa: E402
+from custom_components.helman import recorder_statistics_span as span  # noqa: E402
 from custom_components.helman.solar_bias_correction import statistics_day  # noqa: E402
 
 TZ = ZoneInfo("Europe/Prague")
 HASS = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+#: ``(imports so far, entity_id)`` for every month-cache invalidation of a run.
+FORGOTTEN: list[tuple[int, str]] = []
 
 SOC = mod.BATTERY_SOC_FORECAST_CURRENT_ENTITY
 GRID_NET = mod.GRID_NET_FORECAST_CURRENT_ENTITY
@@ -93,8 +96,14 @@ def _run(days, *, first_owned=FAR_FUTURE, marker=None):
     async def _fake_first_owned(hass, entity_id):
         return first_owned
 
+    async def _fake_forget(hass, entity_id):
+        FORGOTTEN.append((len(imports), entity_id))
+
+    FORGOTTEN.clear()
     with patch.object(mod, "storage", SimpleNamespace(Store=_FakeStore)), patch.object(
         mod, "_first_hour_home_assistant_owns", _fake_first_owned
+    ), patch.object(
+        span, "async_forget_imported_statistics", _fake_forget
     ), patch.object(
         mod,
         "async_import_statistics",
@@ -310,6 +319,22 @@ class TestSourceFile(unittest.TestCase):
         imports, marker = _run({})
         self.assertEqual(imports, [])
         self.assertIsNone(marker)
+
+
+class TestMonthCacheInvalidation(unittest.TestCase):
+    def test_every_imported_chunk_forgets_its_series_months(self):
+        # The span reads cache closed months' rows, and these imports land in
+        # them; each chunk is forgotten as soon as it is written, so a run that
+        # fails part-way leaves nothing stale behind.
+        days = {"2026-05-20": {"07:00": {"socPct": 50.0, "gridNetWh": 100.0}}}
+
+        imports, _marker = _run(days)
+
+        self.assertTrue(imports)
+        self.assertEqual(
+            FORGOTTEN,
+            [(index + 1, metadata["statistic_id"]) for index, (metadata, _rows) in enumerate(imports)],
+        )
 
 
 class TestDoneMarker(unittest.TestCase):

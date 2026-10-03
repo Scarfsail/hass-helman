@@ -236,6 +236,17 @@ def _hour(raw: str) -> datetime:
     return datetime.fromisoformat(raw)
 
 
+def _hass(**fields) -> SimpleNamespace:
+    """A Home Assistant stub: the span read caches in ``hass.data`` and
+    post-processes on the general executor, faked like the recorder's."""
+    return SimpleNamespace(
+        data={},
+        async_add_executor_job=RECORDER_STUB.async_add_executor_job,
+        states=SimpleNamespace(get=lambda entity_id: None),
+        **fields,
+    )
+
+
 class _DummyStore:
     profile = None
 
@@ -244,10 +255,9 @@ class _DummyStore:
 
 
 def _make_service(*, import_price_config=None):
-    hass = SimpleNamespace(
+    hass = _hass(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
-        states=SimpleNamespace(get=lambda entity_id: None),
     )
     cfg = models.BiasConfig(
         enabled=True,
@@ -1288,7 +1298,7 @@ class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):
 
     async def test_it_de_duplicates_ids_and_maps_the_unrecorded_to_empty(self):
         _set_rows({})
-        hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
+        hass = _hass()
         local_start = _hour("2026-04-23T00:00:00+02:00")
 
         span = await span_mod.query_hourly_statistics(
@@ -1306,7 +1316,7 @@ class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_empty_id_list_costs_no_query(self):
         _set_rows({})
-        hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
+        hass = _hass()
         local_start = _hour("2026-04-23T00:00:00+02:00")
 
         span = await span_mod.query_hourly_statistics(

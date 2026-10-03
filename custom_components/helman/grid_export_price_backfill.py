@@ -191,6 +191,8 @@ async def async_backfill_grid_export_price_statistics(
     without it, so a failure here is logged and dropped rather than taken out on
     whatever started the task.
     """
+    from .recorder_statistics_span import async_forget_imported_statistics
+
     try:
         store = GridExportPriceBackfillStore(hass)
         await store.async_load()
@@ -223,6 +225,7 @@ async def async_backfill_grid_export_price_statistics(
                     rows,
                 )
                 written += len(rows)
+                await async_forget_imported_statistics(hass, target_entity_id)
             cursor = chunk_start
             await store.async_record(
                 source_entity_id=source_entity_id, oldest_hour=cursor, done=exhausted

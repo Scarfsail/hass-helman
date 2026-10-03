@@ -141,6 +141,8 @@ async def async_backfill_solar_forecast_statistics(
     nothing that is currently working and is logged rather than taken out on
     whatever started the task.
     """
+    from .recorder_statistics_span import async_forget_imported_statistics
+
     try:
         store = SolarForecastBackfillStore(hass)
         await store.async_load()
@@ -169,6 +171,7 @@ async def async_backfill_solar_forecast_statistics(
                 found_any = True
                 async_import_statistics(hass, _metadata(target_entity_id), rows)
                 written += len(rows)
+                await async_forget_imported_statistics(hass, target_entity_id)
             cursor = chunk_start
             # ``done`` only once something was actually recovered. A walk that
             # finds nothing at all is far more likely to mean the recorder has

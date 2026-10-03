@@ -239,6 +239,8 @@ class _DummyStore:
 
 def _make_service(*, with_consumers: bool = False):
     hass = SimpleNamespace(
+        data={},
+        async_add_executor_job=RECORDER_STUB.async_add_executor_job,
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         states=SimpleNamespace(get=lambda entity_id: None),

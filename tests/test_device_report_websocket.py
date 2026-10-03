@@ -14,6 +14,7 @@ import importlib
 import os
 import sys
 import unittest
+from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -140,10 +141,12 @@ class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
         self.recorder = FakeRecorder()
         self.coordinator = object.__new__(coordinator_module.HelmanCoordinator)
         self.coordinator._cached_tree = TREE
+        self.coordinator._device_datasets = OrderedDict()
         self.coordinator._solar_bias_service = FakeService()
         self.hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             data={const.DOMAIN: {"coordinator": self.coordinator}},
+            async_add_executor_job=_executor,
         )
         self.coordinator._hass = self.hass
         empty_prices = {
@@ -362,8 +365,10 @@ class TestPayload(DeviceReportTestCase):
         payload = await self.report(now, "2026-09-15", "2026-09-15")
         self.assertFalse(payload["complete"])
 
+        # An open period's dataset is reused for five minutes, as the card's
+        # memo is, so the recorder is asked again once those have passed.
         self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 15, 23))
-        payload = await self.report(now, "2026-09-15", "2026-09-15")
+        payload = await self.report(now + timedelta(minutes=5), "2026-09-15", "2026-09-15")
         self.assertTrue(payload["complete"])
 
     async def test_an_hour_skipped_by_an_outage_does_not_keep_it_incomplete(self):
@@ -395,6 +400,88 @@ class TestPayload(DeviceReportTestCase):
         self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 15, 12))
         payload = await self.report(now, "2026-09-15", "2026-09-15")
         self.assertFalse(payload["complete"])
+
+
+class TestDatasetCache(DeviceReportTestCase):
+    """The reports on one period are views of one dataset, built once."""
+
+    def hourly_calls(self) -> list[dict]:
+        return [call for call in self.recorder.calls if call["period"] == "hour"]
+
+    async def test_a_second_report_on_the_same_period_reuses_the_dataset(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        self.recorder.hourly(WASHER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        await self.report(now, "2026-09-07", "2026-09-08")
+        reads = len(self.hourly_calls())
+
+        cached = await self.request(now, "2026-09-07", "2026-09-08", report="daily_profile")
+        self.assertEqual(len(self.hourly_calls()), reads)
+
+        # And it is exactly what a cold build returns.
+        self.coordinator._device_datasets.clear()
+        cold = await self.request(now, "2026-09-07", "2026-09-08", report="daily_profile")
+        self.assertEqual(cached.results, cold.results)
+        self.assertGreater(len(self.hourly_calls()), reads)
+
+    async def test_a_new_tree_object_rebuilds_the_dataset(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        await self.report(now, "2026-09-07", "2026-09-08")
+        reads = len(self.hourly_calls())
+
+        # Equal content, but a registry update replaces the tree object.
+        self.coordinator._cached_tree = dict(TREE)
+        await self.report(now, "2026-09-07", "2026-09-08")
+        self.assertGreater(len(self.hourly_calls()), reads)
+
+    async def test_a_backfill_into_past_statistics_rebuilds_the_dataset(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        await self.report(now, "2026-09-07", "2026-09-08")
+        reads = len(self.hourly_calls())
+
+        # A complete period is otherwise kept for good, so the backfill's
+        # forget is what lets its new rows through.
+        span_module.forget_cached_month_rows(
+            self.coordinator._hass, const.GRID_EXPORT_PRICE_ENTITY_ID
+        )
+        await self.report(now, "2026-09-07", "2026-09-08")
+        self.assertGreater(len(self.hourly_calls()), reads)
+
+    async def test_a_time_zone_change_rebuilds_the_dataset(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        await self.report(now, "2026-09-07", "2026-09-08")
+        reads = len(self.hourly_calls())
+
+        # A core setting: it moves the dates' UTC bounds without a reload.
+        self.coordinator._hass.config.time_zone = "Europe/London"
+        await self.report(now, "2026-09-07", "2026-09-08")
+        self.assertGreater(len(self.hourly_calls()), reads)
+
+    async def test_an_open_periods_dataset_expires_after_five_minutes(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 15, 12))
+        payload = await self.report(now, "2026-09-15", "2026-09-15")
+        self.assertFalse(payload["complete"])
+        reads = len(self.hourly_calls())
+
+        await self.report(now + timedelta(minutes=4, seconds=59), "2026-09-15", "2026-09-15")
+        self.assertEqual(len(self.hourly_calls()), reads)
+
+        await self.report(now + timedelta(minutes=5), "2026-09-15", "2026-09-15")
+        self.assertGreater(len(self.hourly_calls()), reads)
+
+    async def test_a_complete_periods_dataset_outlives_five_minutes(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        payload = await self.report(now, "2026-09-07", "2026-09-08")
+        self.assertTrue(payload["complete"])
+        reads = len(self.hourly_calls())
+
+        await self.report(now + timedelta(hours=6), "2026-09-07", "2026-09-08")
+        self.assertEqual(len(self.hourly_calls()), reads)
 
 
 class TestTailWindow(DeviceReportTestCase):

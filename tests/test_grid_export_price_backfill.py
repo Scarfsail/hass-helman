@@ -50,12 +50,19 @@ IMPORTS: list[tuple[dict, list[dict]]] = []
 COMPILED_ROWS: dict[datetime, dict] = {}
 #: The single fake ``Store``'s contents, so a test can seed or inspect a cursor.
 STORED: dict[str, object] = {}
+#: How many rows had been imported each time the back-fill waited for the
+#: recorder to commit.
+FLUSHES: list[int] = []
 
 
 class _FakeState:
     def __init__(self, instant: datetime, value: object) -> None:
         self.state = value
         self.last_updated = instant
+
+
+async def _run_in_executor(func, *args):
+    return func(*args)
 
 
 def _install_import_stubs() -> None:
@@ -75,12 +82,13 @@ def _install_import_stubs() -> None:
     components_mod.__path__ = []
     sys.modules["homeassistant.components"] = components_mod
 
-    async def _run_in_executor(func, *args):
-        return func(*args)
+    async def _async_block_till_done():
+        FLUSHES.append(sum(len(rows) for _metadata, rows in IMPORTS))
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        async_add_executor_job=_run_in_executor
+        async_add_executor_job=_run_in_executor,
+        async_block_till_done=_async_block_till_done,
     )
     sys.modules["homeassistant.components.recorder"] = recorder_mod
 
@@ -214,11 +222,16 @@ def _reset(states: list[tuple[datetime, object]], *, compiled=None, stored=None)
     COMPILED_ROWS.update(compiled or {})
     STORED.clear()
     STORED.update(stored or {})
+    FLUSHES.clear()
 
 
-async def _run(unit: str | None = "CZK/kWh") -> None:
+def _hass() -> SimpleNamespace:
+    return SimpleNamespace(data={}, async_add_executor_job=_run_in_executor)
+
+
+async def _run(unit: str | None = "CZK/kWh", hass: SimpleNamespace | None = None) -> None:
     await backfill.async_backfill_grid_export_price_statistics(
-        SimpleNamespace(),
+        hass or _hass(),
         source_entity_id=SOURCE,
         unit_of_measurement=unit,
         target_entity_id=MIRROR,
@@ -432,6 +445,36 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(HISTORY_CALLS), 1)
         self.assertEqual(IMPORTS, [])
+        # Nothing written, so nothing to wait for or forget.
+        self.assertEqual(FLUSHES, [])
+
+
+class TestMonthCacheInvalidation(unittest.IsolatedAsyncioTestCase):
+    """The span reads keep closed months' rows; the back-fill writes into them."""
+
+    async def test_a_run_that_wrote_forgets_the_mirrors_months_and_only_those(self):
+        span = importlib.import_module("custom_components.helman.recorder_statistics_span")
+        _reset([(CURRENT_HOUR - timedelta(days=60), "2.0")])
+        hass = _hass()
+        other_key = ("sensor.other", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        cache = span._month_rows_cache(hass)
+        cache[other_key] = []
+
+        await _run(hass=hass)
+
+        # The commit is awaited after every import, before the months go, so a
+        # run that fails part-way leaves nothing stale behind.
+        self.assertTrue(IMPORTS)
+        written = 0
+        expected = []
+        for _metadata, rows in IMPORTS:
+            written += len(rows)
+            expected.append(written)
+        self.assertEqual(FLUSHES, expected)
+        # The read of what the compiler owns cached the mirror's closed months
+        # -- as empty -- and the rows just written have to replace them.
+        self.assertEqual([key for key in cache if key[0] == MIRROR], [])
+        self.assertEqual(list(cache), [other_key])
 
 
 class TestImportedMetadata(unittest.IsolatedAsyncioTestCase):

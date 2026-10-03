@@ -242,6 +242,8 @@ async def _backfill_series(
     timezone: ZoneInfo,
 ) -> int:
     """Import one series' hourly rows, paced in chunks. Returns the row count."""
+    from .recorder_statistics_span import async_forget_imported_statistics
+
     first_owned = await _first_hour_home_assistant_owns(hass, series.entity_id)
     rows = _hourly_rows(series, days, timezone, before=first_owned)
     if not rows:
@@ -252,6 +254,7 @@ async def _backfill_series(
     for chunk in _in_chunks(rows):
         async_import_statistics(hass, metadata, chunk)
         written += len(chunk)
+        await async_forget_imported_statistics(hass, series.entity_id)
         await asyncio.sleep(_CHUNK_PAUSE_SECONDS)
     return written
 
