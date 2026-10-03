@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -130,6 +130,7 @@ from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .device_reports.dataset import (
+    DeviceDataset,
     build_device_dataset,
     dataset_statistic_ids,
     find_house_node,
@@ -208,7 +209,7 @@ from .training.house_consumption import (
     HouseTrainingRequest,
 )
 from .training.house_consumption import health_for as house_consumption_health_for
-from .span_history_model import recorder_tail_start
+from .span_history_model import SpanMeters, recorder_tail_start
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
@@ -218,6 +219,12 @@ _LOGGER = logging.getLogger(__name__)
 # callee re-reading hass.states.
 _LIVE_STATE_UNSET: Any = object()
 _UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
+#: How long a device dataset for a period still in progress is reused: the
+#: card's own memo of an open period, so the backend never serves one older.
+_OPEN_DATASET_TTL = timedelta(minutes=5)
+#: How many periods' device datasets are kept. Report navigation touches a few
+#: at a time.
+_DEVICE_DATASET_CACHE_SIZE = 8
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 # The battery-forecast schedule cache key: the inverter action of every slot.
@@ -656,6 +663,20 @@ class _ForecastRefreshResult:
     bundle_ready: bool
 
 
+@dataclass(frozen=True)
+class _CachedDeviceDataset:
+    """One period's device dataset, and what it was built from and when."""
+
+    #: The device tree object the dataset was built from. A tree change replaces
+    #: the coordinator's tree object, so identity alone says the entry is stale.
+    tree: dict
+    dataset: DeviceDataset
+    fetched_at: datetime
+    #: The month-row cache's generation when the read began. A backfill into
+    #: past statistics moves it on, and the rows behind the dataset with it.
+    generation: int
+
+
 class HelmanCoordinator:
     # Class-level default so the accessor's log dedupe works on a coordinator
     # built with ``object.__new__`` — which the tests do, and which would
@@ -670,6 +691,9 @@ class HelmanCoordinator:
         self._hass = hass
         self._storage = storage
         self._cached_tree: dict | None = None
+        self._device_datasets: OrderedDict[tuple[date, date], _CachedDeviceDataset] = (
+            OrderedDict()
+        )
         self._unsub_listeners: list = []
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
@@ -1390,13 +1414,9 @@ class HelmanCoordinator:
         meters, the price windows -- reads the period once through
         :func:`~.span_history.read_span_history` and builds the dataset every
         report is a view of. ``query`` arrives validated, its end already
-        clamped to today.
+        clamped to today. The dataset and the report are built on the executor:
+        a year of hours is seconds of Python the event loop must not wait on.
         """
-        # Deferred like the other recorder readers: test harnesses that stub
-        # the recorder only partially still import the coordinator.
-        from .recorder_statistics_span import query_newest_hour_end
-        from .span_history import read_span_history
-
         tree = await self.get_device_tree()
         if find_house_node(tree) is None:
             return {"unavailable": "no_house_node"}
@@ -1407,11 +1427,69 @@ class HelmanCoordinator:
 
         local_tz = ZoneInfo(str(self._hass.config.time_zone))
         now = dt_util.now().astimezone(local_tz)
+        price_config = service.grid_import_price_config()
+        dataset = await self._async_device_dataset(
+            tree, meters, query, local_tz=local_tz, now=now, price_config=price_config
+        )
+        # Resolved per request, not cached with the dataset: both are cheap, and
+        # the navigation range moves daily.
+        floor = await service.async_history_floor(now)
+        currency = await service.async_resolve_span_currency(price_config)
+        return await self._hass.async_add_executor_job(
+            functools.partial(
+                build_report,
+                report,
+                dataset,
+                query,
+                currency=currency,
+                navigation_range={
+                    "minDate": floor.isoformat(),
+                    "maxDate": now.date().isoformat(),
+                },
+            )
+        )
+
+    async def _async_device_dataset(
+        self,
+        tree: dict,
+        meters: SpanMeters,
+        query: ReportQuery,
+        *,
+        local_tz: ZoneInfo,
+        now: datetime,
+        price_config: Any,
+    ) -> DeviceDataset:
+        """The dataset for ``query``'s period, reused while it still holds.
+
+        The reports on one period are views of one dataset, so switching report
+        reuses it. An entry holds while the tree is the object it was built
+        from and no backfill has written into past statistics since; a complete period's then holds for good, an open one's for
+        :data:`_OPEN_DATASET_TTL`.
+        """
+        # Deferred like the other recorder readers: test harnesses that stub
+        # the recorder only partially still import the coordinator.
+        from .recorder_statistics_span import (
+            month_rows_generation,
+            query_newest_hour_end,
+        )
+        from .span_history import read_span_history
+
+        key = (query.start_date, query.end_date)
+        generation = month_rows_generation(self._hass)
+        cached = self._device_datasets.get(key)
+        if (
+            cached is not None
+            and cached.tree is tree
+            and cached.generation == generation
+            and (cached.dataset.complete or now - cached.fetched_at < _OPEN_DATASET_TTL)
+        ):
+            self._device_datasets.move_to_end(key)
+            return cached.dataset
+
         local_start = datetime.combine(query.start_date, datetime.min.time(), tzinfo=local_tz)
         local_end = datetime.combine(
             query.end_date + timedelta(days=1), datetime.min.time(), tzinfo=local_tz
         )
-        price_config = service.grid_import_price_config()
         history = await read_span_history(
             self._hass,
             meter_ids=meters,
@@ -1432,18 +1510,18 @@ class HelmanCoordinator:
             newest = await query_newest_hour_end(self._hass, meters.house)
             if newest is not None:
                 history.compiled_until[meters.house] = newest
-        dataset = build_device_dataset(tree, history, local_tz=local_tz, now=now)
-        floor = await service.async_history_floor(now)
-        return build_report(
-            report,
-            dataset,
-            query,
-            currency=await service.async_resolve_span_currency(price_config),
-            navigation_range={
-                "minDate": floor.isoformat(),
-                "maxDate": now.date().isoformat(),
-            },
+        dataset = await self._hass.async_add_executor_job(
+            functools.partial(
+                build_device_dataset, tree, history, local_tz=local_tz, now=now
+            )
         )
+        self._device_datasets[key] = _CachedDeviceDataset(
+            tree=tree, dataset=dataset, fetched_at=now, generation=generation
+        )
+        self._device_datasets.move_to_end(key)
+        while len(self._device_datasets) > _DEVICE_DATASET_CACHE_SIZE:
+            self._device_datasets.popitem(last=False)
+        return dataset
 
     def _get_house_energy_entity_id(self) -> str | None:
         energy_nodes = ConsumptionForecastBuilder._read_dict(

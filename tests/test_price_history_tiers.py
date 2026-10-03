@@ -175,7 +175,11 @@ def _hass():
     Fresh per call on purpose: the oldest-state probe caches its answer in
     ``hass.data``, and every case here is about what a *cold* read resolves.
     """
-    return SimpleNamespace(data={})
+    return SimpleNamespace(data={}, async_add_executor_job=_executor_job)
+
+
+async def _executor_job(func, *args):
+    return func(*args)
 
 
 async def _resolve(

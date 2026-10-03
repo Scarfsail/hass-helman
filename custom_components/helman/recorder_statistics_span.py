@@ -84,6 +84,8 @@ containing hour's ``mean`` for every slot they do not.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -98,6 +100,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .recorder_hourly_series import query_cumulative_hourly_energy_changes
+from .span_buckets import add_months
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,6 +270,76 @@ TAIL_PERIOD = "5minute"
 _MAX_TAIL_SPAN = timedelta(hours=6)
 
 
+#: Where the closed-month row cache lives inside ``hass.data[DOMAIN]``.
+#:
+#: Beside :data:`_OLDEST_STATE_CACHE_KEY` and for the same reason: a reload
+#: drops it through :func:`clear_month_rows_cache`. The value is an LRU of
+#: ``{(statistic_id, utc_month_start): rows}``, the rows exactly as
+#: ``statistics_during_period`` returned them -- raw rows rather than energy,
+#: because the unwrap carries a running segment maximum across the whole
+#: series, so an hour's energy is not local to its month.
+_MONTH_ROWS_CACHE_KEY = "closed_month_statistics"
+
+#: Bumped by every :func:`forget_cached_month_rows`, beside the cache rather
+#: than in it so that clearing the cache on unload cannot rewind it.
+_MONTH_ROWS_GENERATION_KEY = "closed_month_statistics_generation"
+
+#: How many id-months the row cache holds: about a year and a half of a large
+#: tree's ids, so a year view and the year before it both stay warm.
+_MONTH_ROWS_CACHE_SIZE = 1500
+
+#: How long after a UTC month ends before its rows are trusted not to change.
+#: The day absorbs a late compile of the month's last hours.
+_MONTH_CLOSE_MARGIN = timedelta(days=1)
+
+
+def _month_rows_cache(
+    hass: HomeAssistant,
+) -> OrderedDict[tuple[str, datetime], list[dict[str, Any]]]:
+    """The closed-month row cache for this Home Assistant instance."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault(
+        _MONTH_ROWS_CACHE_KEY, OrderedDict()
+    )
+
+
+def clear_month_rows_cache(hass: HomeAssistant) -> None:
+    """Forget every cached month, so a reload reads the recorder again."""
+    hass.data.get(DOMAIN, {}).pop(_MONTH_ROWS_CACHE_KEY, None)
+
+
+def month_rows_generation(hass: HomeAssistant) -> int:
+    """How many times cached months have been forgotten in this instance.
+
+    A read that started under one generation must not cache what it read once
+    the generation has moved on, and neither may anything built from it.
+    """
+    return hass.data.get(DOMAIN, {}).get(_MONTH_ROWS_GENERATION_KEY, 0)
+
+
+def forget_cached_month_rows(hass: HomeAssistant, statistic_id: str) -> None:
+    """Drop one id's cached months, after something wrote into its past."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data[_MONTH_ROWS_GENERATION_KEY] = month_rows_generation(hass) + 1
+    cache = domain_data.get(_MONTH_ROWS_CACHE_KEY)
+    if not cache:
+        return
+    for key in [key for key in cache if key[0] == statistic_id]:
+        del cache[key]
+
+
+async def async_forget_imported_statistics(
+    hass: HomeAssistant, statistic_id: str
+) -> None:
+    """Drop one id's cached months once the imports queued for it are committed.
+
+    For a backfill that has written into ``statistic_id``'s past: the imports
+    are queued on the recorder, so wait for them to land before the next read
+    can cache those months again.
+    """
+    await get_instance(hass).async_block_till_done()
+    forget_cached_month_rows(hass, statistic_id)
+
+
 @dataclass(frozen=True)
 class SpanStatistics:
     """One span read's results, already split by how each column must be used.
@@ -326,7 +399,12 @@ async def query_hourly_statistics(
     has nothing for maps to an empty map rather than going missing.
 
     ``statistics_during_period`` is synchronous and touches the database, so it
-    runs on the recorder's own executor.
+    runs on the recorder's own executor. Whole UTC months that have closed
+    never change, so their rows are kept in memory and only the rest of the
+    window is read: the edges, the open month and anything not cached yet, each
+    contiguous range one call, all in one recorder job. The rows are then
+    concatenated per id and go through the same post-processing a single read
+    would, on the general executor, since a year of it is seconds of Python.
 
     ``period="hour"`` is deliberate even when the caller wants days or months:
     ``_statistics_during_period_with_session`` always selects the hourly table
@@ -367,15 +445,174 @@ async def query_hourly_statistics(
             STATISTICS_TYPES,
         )
 
-    executor = get_instance(hass).async_add_executor_job
-    raw = await executor(_query, utc_start, utc_end, "hour")
-
+    # Closed months come from the cache, and only when every id asked for has
+    # the month: re-reading it for all of them is one query either way, and it
+    # keeps every fresh range a single call. Their rows are taken here, before
+    # any await, so an eviction meanwhile cannot take them away.
+    cache = _month_rows_cache(hass)
+    generation = month_rows_generation(hass)
+    segments = _month_segments(utc_start, utc_end, dt_util.as_utc(dt_util.now()))
+    cached: dict[datetime, dict[str, list[dict[str, Any]]]] = {}
+    for segment_start, _segment_end, closed in segments:
+        if closed and all((sid, segment_start) in cache for sid in unique_ids):
+            for sid in unique_ids:
+                cache.move_to_end((sid, segment_start))
+            cached[segment_start] = {
+                sid: cache[(sid, segment_start)] for sid in unique_ids
+            }
+    fresh_ranges = _fresh_ranges(segments, cached)
     utc_tail_start = _tail_window_start(tail_start, utc_end)
+
+    def _read() -> tuple[list[dict[str, list[dict[str, Any]]]], Any]:
+        # Every fresh range and the tail in one recorder job, so the database
+        # thread sees one job however many gaps the cache left.
+        fresh = [
+            _query(range_start, range_end, "hour") or {}
+            for range_start, range_end in fresh_ranges
+        ]
+        tail = (
+            None
+            if utc_tail_start is None
+            else _query(utc_tail_start, utc_end, TAIL_PERIOD)
+        )
+        return fresh, tail
+
+    fresh, raw_tail = await get_instance(hass).async_add_executor_job(_read)
+
+    # The window's pieces in time order: a cached month, or a fresh range's
+    # whole result at the segment that opens it.
+    fresh_by_start = dict(zip((start for start, _end in fresh_ranges), fresh))
+    parts = [
+        cached[segment_start] if segment_start in cached else fresh_by_start[segment_start]
+        for segment_start, _segment_end, _closed in segments
+        if segment_start in cached or segment_start in fresh_by_start
+    ]
+    to_cache = [
+        segment_start
+        for segment_start, _segment_end, closed in segments
+        if closed and segment_start not in cached
+    ]
+    statistics, month_rows = await hass.async_add_executor_job(
+        _assemble_span_statistics,
+        unique_ids,
+        parts,
+        to_cache,
+        raw_tail,
+        local_start,
+        local_end,
+    )
+    # A backfill that committed while this read was in flight has forgotten
+    # months these rows may predate, so they are returned but not kept.
+    if month_rows_generation(hass) != generation:
+        return statistics
+    for key, rows in month_rows.items():
+        cache[key] = rows
+        cache.move_to_end(key)
+    while len(cache) > _MONTH_ROWS_CACHE_SIZE:
+        cache.popitem(last=False)
+    return statistics
+
+
+def _month_segments(
+    utc_start: datetime, utc_end: datetime, now: datetime
+) -> list[tuple[datetime, datetime, bool]]:
+    """``[utc_start, utc_end)`` cut at every UTC month start, in order.
+
+    Each segment is ``(start, end, closed)``. ``closed`` marks a whole UTC
+    calendar month that ended at least :data:`_MONTH_CLOSE_MARGIN` before
+    ``now`` -- the only segments the row cache may hold. The partial months at
+    either edge, and any month still open, are never closed.
+    """
+    segments: list[tuple[datetime, datetime, bool]] = []
+    cursor = utc_start
+    while cursor < utc_end:
+        month_start = cursor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = _next_month(month_start)
+        end = min(month_end, utc_end)
+        closed = (
+            cursor == month_start
+            and end == month_end
+            and month_end + _MONTH_CLOSE_MARGIN <= now
+        )
+        segments.append((cursor, end, closed))
+        cursor = end
+    return segments
+
+
+def _next_month(month_start: datetime) -> datetime:
+    return datetime.combine(
+        add_months(month_start.date(), 1), time.min, tzinfo=month_start.tzinfo
+    )
+
+
+def _fresh_ranges(
+    segments: list[tuple[datetime, datetime, bool]],
+    cached: dict[datetime, Any],
+) -> list[tuple[datetime, datetime]]:
+    """The segments the cache does not serve, merged into contiguous ranges."""
+    ranges: list[tuple[datetime, datetime]] = []
+    for segment_start, segment_end, _closed in segments:
+        if segment_start in cached:
+            continue
+        if ranges and ranges[-1][1] == segment_start:
+            ranges[-1] = (ranges[-1][0], segment_end)
+        else:
+            ranges.append((segment_start, segment_end))
+    return ranges
+
+
+def _assemble_span_statistics(
+    unique_ids: list[str],
+    parts: list[dict[str, list[dict[str, Any]]]],
+    to_cache: list[datetime],
+    raw_tail: dict[str, list[dict[str, Any]]] | None,
+    local_start: datetime,
+    local_end: datetime,
+) -> tuple[SpanStatistics, dict[tuple[str, datetime], list[dict[str, Any]]]]:
+    """The span read's result, and the closed months it read fresh, per id.
+
+    Pure, over plain data, so it runs on the general executor rather than the
+    event loop. ``parts`` are concatenated per id in time order -- the rows a
+    single read of the whole window would have returned -- and fed to the same
+    post-processing a single read always went through.
+
+    Each month in ``to_cache`` is cut out of the concatenated rows by its
+    ``start`` bounds, which relies on the recorder's own ordering by ``start``
+    -- the order the energy differencing already depends on. An id with no rows
+    in the month is cached as an empty list: "nothing compiled" is an answer.
+    """
+    raw: dict[str, list[dict[str, Any]]] = {}
+    for statistic_id in unique_ids:
+        rows = [row for part in parts for row in part.get(statistic_id) or []]
+        if rows:
+            raw[statistic_id] = rows
+
+    month_rows: dict[tuple[str, datetime], list[dict[str, Any]]] = {}
+    for statistic_id in unique_ids:
+        rows = raw.get(statistic_id) or []
+        starts = [row["start"] for row in rows]
+        for month_start in to_cache:
+            lower = bisect_left(starts, month_start.timestamp())
+            upper = bisect_left(starts, _next_month(month_start).timestamp())
+            month_rows[(statistic_id, month_start)] = rows[lower:upper]
+
+    return (
+        _span_statistics(unique_ids, raw, raw_tail, local_start, local_end),
+        month_rows,
+    )
+
+
+def _span_statistics(
+    unique_ids: list[str],
+    raw: dict[str, list[dict[str, Any]]],
+    raw_tail: dict[str, list[dict[str, Any]]] | None,
+    local_start: datetime,
+    local_end: datetime,
+) -> SpanStatistics:
+    """Hourly rows and energy from the raw hourly and tail rows."""
     tail_by_hour: dict[str, dict[datetime, dict[str, Any]]] = {}
-    if utc_tail_start is not None:
-        raw_tail = await executor(_query, utc_tail_start, utc_end, TAIL_PERIOD)
-        for statistic_id, entity_rows in (raw_tail or {}).items():
-            tail_by_hour[statistic_id] = _fold_to_hours(entity_rows or [])
+    for statistic_id, entity_rows in (raw_tail or {}).items():
+        tail_by_hour[statistic_id] = _fold_to_hours(entity_rows or [])
 
     rows: dict[str, dict[datetime, dict[str, Any]]] = {
         statistic_id: {} for statistic_id in unique_ids

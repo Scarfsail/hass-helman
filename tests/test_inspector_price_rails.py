@@ -641,6 +641,8 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 config=SimpleNamespace(time_zone="Europe/Prague"),
                 bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+                data={},
+                async_add_executor_job=_Recorder.async_add_executor_job,
             ),
             _DummyStore(),
             _make_cfg(),
