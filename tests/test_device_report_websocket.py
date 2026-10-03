@@ -449,6 +449,17 @@ class TestDatasetCache(DeviceReportTestCase):
         await self.report(now, "2026-09-07", "2026-09-08")
         self.assertGreater(len(self.hourly_calls()), reads)
 
+    async def test_a_time_zone_change_rebuilds_the_dataset(self):
+        now = _local(2026, 9, 15, 14, 0)
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 6, 23), _local(2026, 9, 8, 23))
+        await self.report(now, "2026-09-07", "2026-09-08")
+        reads = len(self.hourly_calls())
+
+        # A core setting: it moves the dates' UTC bounds without a reload.
+        self.coordinator._hass.config.time_zone = "Europe/London"
+        await self.report(now, "2026-09-07", "2026-09-08")
+        self.assertGreater(len(self.hourly_calls()), reads)
+
     async def test_an_open_periods_dataset_expires_after_five_minutes(self):
         now = _local(2026, 9, 15, 14, 0)
         self.recorder.hourly(HOUSE_METER, _local(2026, 9, 14, 23), _local(2026, 9, 15, 12))

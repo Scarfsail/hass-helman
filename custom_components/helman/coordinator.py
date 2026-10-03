@@ -691,9 +691,9 @@ class HelmanCoordinator:
         self._hass = hass
         self._storage = storage
         self._cached_tree: dict | None = None
-        self._device_datasets: OrderedDict[tuple[date, date], _CachedDeviceDataset] = (
-            OrderedDict()
-        )
+        self._device_datasets: OrderedDict[
+            tuple[date, date, ZoneInfo], _CachedDeviceDataset
+        ] = OrderedDict()
         self._unsub_listeners: list = []
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
@@ -1474,7 +1474,9 @@ class HelmanCoordinator:
         )
         from .span_history import read_span_history
 
-        key = (query.start_date, query.end_date)
+        # The zone is in the key: the dates' UTC bounds and every local bucket
+        # follow it, and a core time-zone change does not reload this entry.
+        key = (query.start_date, query.end_date, local_tz)
         generation = month_rows_generation(self._hass)
         cached = self._device_datasets.get(key)
         if (
