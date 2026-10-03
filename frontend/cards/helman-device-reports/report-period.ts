@@ -6,6 +6,7 @@ export const PERIOD_PRESETS = [
     "last_7",
     "last_30",
     "last_90",
+    "last_365",
     "this_month",
     "last_month",
     "this_year",
@@ -45,6 +46,8 @@ export function presetQuery(preset: PeriodPreset, today: string): DeviceReportQu
             return { start_date: addDays(today, -29), end_date: today };
         case "last_90":
             return { start_date: addDays(today, -89), end_date: today };
+        case "last_365":
+            return { start_date: addDays(today, -364), end_date: today };
         case "this_month":
             return { start_date: `${today.slice(0, 7)}-01`, end_date: today };
         case "last_month": {
