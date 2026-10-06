@@ -805,3 +805,24 @@ test("the house embed's pills draw actual against predicted house energy", async
     expect(result.tick).toBe(true);
     expect(result.todayUnavailable).toBe(true);
 });
+
+test("the house embed does not warn about a missing solar profile", async ({ page }) => {
+    const noProfileNote = async (config: Record<string, unknown>) => {
+        await mountCard(page, config);
+        await seedEverySeries(page);
+        return page.evaluate(async () => {
+            const root = (window as unknown as {
+                __inspectorRoot: () => ShadowRoot | null | undefined;
+            }).__inspectorRoot();
+            const el = root?.host as any;
+            el._payload = { ...el._payload, availability: { ...el._payload.availability, hasProfile: false } };
+            el.requestUpdate();
+            await el.updateComplete;
+            return [...(root?.querySelectorAll(".note") ?? [])]
+                .some((note) => note.textContent?.includes("No trained profile"));
+        });
+    };
+
+    expect(await noProfileNote(SOLAR_ONLY)).toBe(true);
+    expect(await noProfileNote(HOUSE_ONLY)).toBe(false);
+});

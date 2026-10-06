@@ -2130,7 +2130,7 @@ export class HelmanSolarInspector extends LitElement {
       ${this._payloadGranularity(payload) > 15
         ? html`<div class="note">${this._t("bias_correction.inspector.hourly_only")}</div>`
         : ""}
-      ${!view.availability.hasProfile
+      ${!view.availability.hasProfile && !this.houseFocus
         ? html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`
         : ""}
       ${hasAnySeries && stacks && layout
