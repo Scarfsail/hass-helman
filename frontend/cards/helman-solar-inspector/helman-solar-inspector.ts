@@ -4910,8 +4910,8 @@ export class HelmanSolarInspector extends LitElement {
           )}
           ${this.houseFocus && payload.date < this._todayIso()
             ? this._renderHouseForecastErrorMetric(
-              negateWh(payload.totals.houseForecastWh),
-              negateWh(payload.totals.houseActualWh),
+              payload.totals.houseForecastWh,
+              payload.totals.houseActualWh,
               [this._partialTotalNote("houseForecast"), this._partialTotalNote("houseActual")]
                 .filter((note) => note !== null).join(" · ") || null,
             )
@@ -5083,7 +5083,7 @@ export class HelmanSolarInspector extends LitElement {
             "houseActual",
           )}
           ${this.houseFocus && this._everySlotHasActual(payload.series.houseActual, slots)
-            ? this._renderHouseForecastErrorMetric(negateWh(houseFcWh), negateWh(houseAcWh))
+            ? this._renderHouseForecastErrorMetric(houseFcWh, houseAcWh)
             : ""}
           ${showDiagnostics
             ? this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)

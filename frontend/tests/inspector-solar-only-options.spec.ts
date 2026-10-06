@@ -100,8 +100,9 @@ async function seedEverySeries(page: Page): Promise<void> {
         payload.series.corrected = wh(500);
         payload.series.raw = wh(400);
         payload.series.actual = wh(450);
-        payload.series.houseForecast = wh(-300);
-        payload.series.houseActual = wh(-320);
+        // Consumption-positive, as the backend sends it; the card flips it.
+        payload.series.houseForecast = wh(300);
+        payload.series.houseActual = wh(320);
         payload.series.gridForecast = wh(-100);
         payload.series.gridActual = wh(-120);
         payload.series.batteryForecast = wh(-80);
@@ -109,8 +110,8 @@ async function seedEverySeries(page: Page): Promise<void> {
         payload.series.batterySocForecast = pct(50);
         payload.series.batterySocActual = pct(55);
         payload.totals.rawWh = 9600;
-        payload.totals.houseForecastWh = -7200;
-        payload.totals.houseActualWh = -7680;
+        payload.totals.houseForecastWh = 7200;
+        payload.totals.houseActualWh = 7680;
         payload.totals.gridForecastWh = -2400;
         payload.totals.gridActualWh = -2880;
         payload.totals.batteryForecastWh = -1920;
@@ -747,7 +748,7 @@ test("the house embed shows the forecast error for a past day, not for today", a
     });
     // 7.68 kWh measured against 7.2 kWh predicted: under-predicted by 0.48 kWh.
     expect(totals).not.toBeNull();
-    expect(totals).toContain("+");
+    expect(totals).toMatch(/^\+480 Wh/);
     expect(totals).toContain("(+6.3 %)");
 });
 
