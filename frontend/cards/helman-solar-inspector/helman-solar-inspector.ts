@@ -3225,7 +3225,8 @@ export class HelmanSolarInspector extends LitElement {
       const hasAnySeries = view.availability.hasRawForecast
         || view.availability.hasCorrectedForecast
         || view.availability.hasActuals
-        || view.availability.hasInvalidated;
+        || view.availability.hasInvalidated
+        || (this.houseFocus && (view.availability.hasHouseForecast || view.availability.hasHouseActual));
       this._stacks = hasAnySeries ? this._buildStacks(view) : null;
       this._forecastFillFromMinutes = this._stacks === null
         ? Number.NEGATIVE_INFINITY

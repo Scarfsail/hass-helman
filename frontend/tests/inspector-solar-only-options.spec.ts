@@ -826,3 +826,29 @@ test("the house embed does not warn about a missing solar profile", async ({ pag
     expect(await noProfileNote(SOLAR_ONLY)).toBe(true);
     expect(await noProfileNote(HOUSE_ONLY)).toBe(false);
 });
+
+test("the house embed draws a day that has house data but no solar", async ({ page }) => {
+    const noData = async (config: Record<string, unknown>) => {
+        await mountCard(page, config);
+        await seedEverySeries(page);
+        return page.evaluate(async () => {
+            const root = (window as unknown as {
+                __inspectorRoot: () => ShadowRoot | null | undefined;
+            }).__inspectorRoot();
+            const el = root?.host as any;
+            const payload = JSON.parse(JSON.stringify(el._payload));
+            for (const key of ["raw", "corrected", "actual", "invalidated"]) payload.series[key] = [];
+            Object.assign(payload.availability, {
+                hasRawForecast: false, hasCorrectedForecast: false, hasActuals: false, hasInvalidated: false,
+            });
+            el._payload = payload;
+            el.requestUpdate();
+            await el.updateComplete;
+            return [...(root?.querySelectorAll(".note") ?? [])]
+                .some((note) => note.textContent?.includes("No data is available"));
+        });
+    };
+
+    expect(await noData(SOLAR_ONLY)).toBe(true);
+    expect(await noData(HOUSE_ONLY)).toBe(false);
+});
