@@ -887,3 +887,24 @@ test("the house embed's slot detail drops the forecast error over a partial buck
 
     expect(await metricLabels(page)).not.toContain("Forecast error");
 });
+
+test("the house embed's health banner keeps only the house forecast", async ({ page }) => {
+    const bannerLabels = async (config: Record<string, unknown>) => {
+        await mountCard(page, config);
+        return page.evaluate(async () => {
+            const root = (window as unknown as {
+                __inspectorRoot: () => ShadowRoot | null | undefined;
+            }).__inspectorRoot();
+            const el = root?.host as any;
+            const stale = { generatedAt: null, isStale: true, reason: "stale_forecast", hint: null };
+            el._forecast = { ...el._forecast, solar: { staleness: stale }, house_consumption: { staleness: stale } };
+            el.requestUpdate();
+            await el.updateComplete;
+            const banner = root?.querySelector("helman-forecast-health-banner") as any;
+            return (banner?.items ?? []).map((item: { label: string }) => item.label);
+        });
+    };
+
+    expect(await bannerLabels(SOLAR_ONLY)).toHaveLength(2);
+    expect(await bannerLabels(HOUSE_ONLY)).toEqual(["House consumption forecast"]);
+});

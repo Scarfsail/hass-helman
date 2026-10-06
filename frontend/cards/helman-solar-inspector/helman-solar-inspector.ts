@@ -1938,9 +1938,11 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
-             it is drawn here rather than inside either strip. -->
+             it is drawn here rather than inside either strip. The house
+             embed judges the house forecast alone, so it keeps that half. -->
         <helman-forecast-health-banner
-          .items=${buildForecastHealthItems(this._forecast, this._localize)}
+          .items=${buildForecastHealthItems(this._forecast, this._localize).filter((item) =>
+            !this.houseFocus || item.label === this._localize("forecast_health.source.house"))}
           .localize=${this._localize}
         ></helman-forecast-health-banner>
         ${error ? html`<div class="note">${error}</div>` : ""}
