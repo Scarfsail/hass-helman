@@ -112,3 +112,27 @@ export function resolveSelectedTrainingDate(
 
 export type BatterySocPoint = { slot: string; pct: number };
 
+
+export type HouseForecastError = { errorWh: number; errorPct: number };
+
+/**
+ * How far the house forecast missed: actual minus predicted, so a positive
+ * error is an under-prediction, and that as a share of the actual.
+ *
+ * Both inputs are consumption magnitudes (positive Wh); the day payload carries
+ * house series negated, so callers flip them before asking. Null when either
+ * side is unknown or nothing was consumed, where a percentage means nothing.
+ */
+export function houseForecastError(
+  forecastWh: number | null,
+  actualWh: number | null,
+): HouseForecastError | null {
+  if (forecastWh === null || actualWh === null || actualWh === 0) return null;
+  const errorWh = actualWh - forecastWh;
+  return { errorWh, errorPct: (errorWh / actualWh) * 100 };
+}
+
+/** The error's share of the actual, signed so an under-prediction reads "+". */
+export function formatHouseForecastErrorPct(error: HouseForecastError): string {
+  return `${error.errorPct > 0 ? "+" : ""}${error.errorPct.toFixed(1)} %`;
+}

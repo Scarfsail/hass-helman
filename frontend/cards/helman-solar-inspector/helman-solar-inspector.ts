@@ -96,6 +96,8 @@ import "../helman-simple/node-detail-dialog";
 import { TreeItem } from "../helman/tree-item";
 import {
   findTrainingSlot,
+  formatHouseForecastErrorPct,
+  houseForecastError,
   resolveSelectedTrainingDate,
   resolveSelectedImpactSlot,
   type BatterySocPoint,
@@ -131,6 +133,7 @@ import {
   minutesToSlot,
   sampleBounds,
   socBarAtSelectionEnd,
+  slotKey,
   sumWhOverSlots,
   sampleBucketEndOnGrid,
   sampleOnGrid,
@@ -598,6 +601,13 @@ export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) hidePriceStrip = false;
   /** Whether the money rails and the money tiles are dropped entirely. */
   @property({ attribute: false }) hideMoneyStrip = false;
+  /** Whether the "D" and "M" aggregate view stops are dropped entirely. */
+  @property({ attribute: false }) hideAggregateViews = false;
+  /**
+   * Whether the card judges the house forecast: house day pills (actual vs
+   * predicted) and the forecast-error tiles in the totals and slot detail.
+   */
+  @property({ attribute: false }) houseFocus = false;
 
   @state() private _selectedDate = "";
   /**
@@ -2026,6 +2036,7 @@ export class HelmanSolarInspector extends LitElement {
             .selectedBuckets=${this._shapedKeys("day")}
             .selectsSlot=${this._correlatedRow() === "day"}
             .historyDays=${this._historyDays}
+            .houseFocus=${this.houseFocus}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @day-pill-open=${this._handleDayPillOpen}
@@ -2052,7 +2063,7 @@ export class HelmanSolarInspector extends LitElement {
             @click=${() => { this._navExpanded = !this._navExpanded; }}
           ><ha-icon icon="mdi:calendar-month"></ha-icon></button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
-            ${VIEW_STOP_GROUPS.map((group) => html`
+            ${this._viewStopGroups().map((group) => html`
               <div class="stop-group">${group.map((stop) => {
                 const active = stop.minutes === undefined
                   ? this._viewMode === stop.mode
@@ -2186,6 +2197,13 @@ export class HelmanSolarInspector extends LitElement {
       this._slotSelection,
       (slot) => snapSlotToGrid(slot, minutes),
     ));
+  }
+
+  /** The toggle's stop groups, without the aggregate ones where the config hides them. */
+  private _viewStopGroups(): readonly (readonly ViewStop[])[] {
+    return this.hideAggregateViews
+      ? VIEW_STOP_GROUPS.filter((group) => group.every((stop) => stop.mode === "day"))
+      : VIEW_STOP_GROUPS;
   }
 
   /**
@@ -4890,6 +4908,14 @@ export class HelmanSolarInspector extends LitElement {
             "houseForecast",
             "houseActual",
           )}
+          ${this.houseFocus && payload.date < this._todayIso()
+            ? this._renderHouseForecastErrorMetric(
+              negateWh(payload.totals.houseForecastWh),
+              negateWh(payload.totals.houseActualWh),
+              [this._partialTotalNote("houseForecast"), this._partialTotalNote("houseActual")]
+                .filter((note) => note !== null).join(" · ") || null,
+            )
+            : ""}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.grid"),
             CHART_COLORS.grid,
@@ -5056,6 +5082,9 @@ export class HelmanSolarInspector extends LitElement {
             "houseForecast",
             "houseActual",
           )}
+          ${this.houseFocus && this._everySlotHasActual(payload.series.houseActual, slots)
+            ? this._renderHouseForecastErrorMetric(negateWh(houseFcWh), negateWh(houseAcWh))
+            : ""}
           ${showDiagnostics
             ? this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)
             : ""}
@@ -5694,6 +5723,39 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
+  /**
+   * The house forecast's miss, actual minus predicted, in energy and as a share
+   * of the actual. Takes consumption magnitudes (the payload's house series are
+   * negative). Absent where either side is missing, so it never claims a miss
+   * it cannot measure.
+   */
+  /**
+   * Whether the actual covers the whole selection. A selection running past now
+   * sums the forecast over every slot and the actual only over the elapsed
+   * ones, which would read as a miss the forecast never made.
+   */
+  private _everySlotHasActual(points: readonly InspectorPoint[], slots: readonly string[]): boolean {
+    const measured = new Set(points.map((point) => slotKey(point.timestamp)));
+    return slots.every((slot) => measured.has(slot));
+  }
+
+  private _renderHouseForecastErrorMetric(
+    forecastWh: number | null,
+    actualWh: number | null,
+    incomplete: string | null = null,
+  ) {
+    const error = houseForecastError(forecastWh, actualWh);
+    if (error === null) return "";
+    return this._renderMetric(
+      this._t("bias_correction.inspector.house_forecast_error"),
+      `${this._formatSignedWh(error.errorWh)} (${formatHouseForecastErrorPct(error)})`,
+      CHART_COLORS.house,
+      false,
+      undefined,
+      incomplete,
+    );
+  }
+
   private _renderMetric(
     label: string,
     value: string,
@@ -5989,6 +6051,16 @@ export class HelmanSolarInspector extends LitElement {
         this._viewMode === "day" ? selected : (this._focusBucket() ?? selected),
       );
     }
+    if (this.houseFocus) {
+      // House pills only carry elapsed days, so the row is a seven-day block
+      // ending today rather than one starting there -- otherwise the panel
+      // opens on a row of unavailable gauges.
+      const daysBack = Math.max(0, Math.round(
+        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
+      ));
+      const end = this._addDays(today, -7 * Math.floor(daysBack / 7));
+      return { start: this._addDays(end, -6), end };
+    }
     if (selected >= today) {
       return { start: today, end: this._dayRange?.maxDate ?? today };
     }
@@ -6038,7 +6110,9 @@ export class HelmanSolarInspector extends LitElement {
     const floor = this._viewMode === "day" ? this._dayRange?.minDate : this._spanRange?.minDate;
     if (floor && start < floor) start = floor;
     const measuredEnd = end > this._todayKey ? this._todayKey : end;
-    const key = `${start}..${measuredEnd}`;
+    // The house focus asks for a field the plain pills do not, so it is part of
+    // what the answer is for.
+    const key = `${start}..${measuredEnd}${this.houseFocus ? ":house" : ""}`;
     if (this._historyDaysFor === key) {
       return;
     }
@@ -6063,6 +6137,7 @@ export class HelmanSolarInspector extends LitElement {
         type: "helman/solar_bias/day_aggregates",
         start_date: start,
         end_date: measuredEnd,
+        ...(this.houseFocus ? { house_forecast: true } : {}),
       });
       if (this._historyDaysFor !== key || requestId !== this._historyRequestId) {
         return;

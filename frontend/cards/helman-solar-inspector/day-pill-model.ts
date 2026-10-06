@@ -67,6 +67,16 @@ export interface SolarInspectorDayPillAvailability {
 
 export type SolarInspectorDayState = "measured" | "mixed" | "forecast";
 
+/**
+ * A past day's house energy: what the meter measured and what the house
+ * forecast had predicted for it. Kept off the shared day aggregate, which the
+ * schedule card reads too and which has no per-day house figure.
+ */
+export interface SolarInspectorDayHouse {
+    actualWh: number | null;
+    forecastWh: number | null;
+}
+
 export interface SolarInspectorDayPill {
     /** Local ISO date; the same string the inspector selects days by. */
     dayKey: string;
@@ -87,6 +97,8 @@ export interface SolarInspectorDayPill {
     dayState: SolarInspectorDayState;
     /** The measured half of a mixed day; null on any other day. */
     measuredSolarWh: number | null;
+    /** The house's actual vs predicted energy; only on a fully elapsed day. */
+    house: SolarInspectorDayHouse | null;
 }
 
 /** A past day, rebuilt from what the inspector measured for it. */
@@ -94,16 +106,20 @@ export interface SolarInspectorHistoryDay {
     dayKey: string;
     aggregate: ScheduleTableDayAggregateModel | null;
     availability: SolarInspectorDayPillAvailability;
+    house: SolarInspectorDayHouse | null;
 }
 
 export interface SolarInspectorDayPillModel {
     pills: readonly SolarInspectorDayPill[];
     scale: ScheduleTableDayAggregateScale;
+    /** The largest house figure, actual or predicted, across the pills. */
+    houseMaxWh: number;
 }
 
 export const EMPTY_DAY_PILL_MODEL: SolarInspectorDayPillModel = {
     pills: [],
     scale: { solarMaxWh: 0, gridMaxKwh: 0, priceMaxAbs: 0 },
+    houseMaxWh: 0,
 };
 
 /** Every local date from `startDayKey` to `endDayKey`, inclusive. */
@@ -264,6 +280,7 @@ export function buildSolarInspectorDayPills({
         availability,
         dayState: "forecast",
         measuredSolarWh: null,
+        house: null,
     }));
 
     // The schedule and the forecast only reach forward, so a past day's pill
@@ -274,6 +291,7 @@ export function buildSolarInspectorDayPills({
     // only say what was measured. Those days take their measurements in place;
     // a measured day the row does not offer is simply not drawn.
     let scale = forecast.dayAggregateScale;
+    let houseMaxWh = 0;
     const pillIndexByDayKey = new Map(pills.map((pill, index) => [pill.dayKey, index]));
     for (const historyDay of historyDays) {
         const index = pillIndexByDayKey.get(historyDay.dayKey);
@@ -281,11 +299,22 @@ export function buildSolarInspectorDayPills({
             continue;
         }
         const forecastPill = pills[index];
+        // Only a day that is over: today's forecast covers the whole day and
+        // its actual only the part lived through, so the two do not compare.
+        const house = currentDayKey !== null && historyDay.dayKey < currentDayKey
+            ? historyDay.house
+            : null;
+        houseMaxWh = Math.max(houseMaxWh, house?.actualWh ?? 0, house?.forecastWh ?? 0);
+        // A day measured for its house alone leaves the rest of the pill to the
+        // forecast, exactly as if it had not been measured at all.
+        if (historyDay.aggregate === null) {
+            pills[index] = { ...forecastPill, house };
+            continue;
+        }
         // Only today mixes, and only when both halves are actually there: a
         // measured day behind the row has no forecast left to add, and a today
         // the schedule does not reach is a measurement and nothing more.
         const mixed = historyDay.dayKey === currentDayKey
-            && historyDay.aggregate !== null
             && forecastPill.aggregate !== null;
         const aggregate = mixed
             ? _mergeMeasuredWithForecast(historyDay.aggregate!, forecastPill.aggregate!)
@@ -303,6 +332,7 @@ export function buildSolarInspectorDayPills({
                 : historyDay.availability,
             dayState: mixed ? "mixed" : "measured",
             measuredSolarWh: mixed ? historyDay.aggregate!.solarWh : null,
+            house,
         };
         // What was measured belongs on the same scale as what is forecast:
         // yesterday's sun is only worth showing next to tomorrow's if the two
@@ -312,7 +342,7 @@ export function buildSolarInspectorDayPills({
         scale = _extendScaleWithAggregate(scale, aggregate);
     }
 
-    return { pills, scale };
+    return { pills, scale, houseMaxWh };
 }
 
 /** One day of `helman/solar_bias/day_aggregates`. */
@@ -323,6 +353,9 @@ export interface SolarInspectorDayAggregateRow {
     gridExportKwh: number | null;
     batteryMinSocPct: number | null;
     batteryMaxSocPct: number | null;
+    houseWh?: number | null;
+    /** Only when the request asked for `house_forecast`. */
+    houseForecastWh?: number | null;
 }
 
 /**
@@ -345,13 +378,18 @@ export function buildHistoryDaysFromAggregates(
         const hasSolar = row.solarWh !== null && Number.isFinite(row.solarWh);
         const hasBattery = row.batteryMinSocPct !== null && row.batteryMaxSocPct !== null;
         const hasGrid = row.gridImportKwh !== null || row.gridExportKwh !== null;
-        if (!hasSolar && !hasBattery && !hasGrid) {
+        const houseActualWh = _finiteOrNull(row.houseWh);
+        const houseForecastWh = _finiteOrNull(row.houseForecastWh);
+        const hasHouse = houseActualWh !== null || houseForecastWh !== null;
+        if (!hasSolar && !hasBattery && !hasGrid && !hasHouse) {
             continue;
         }
 
         days.push({
             dayKey: row.date,
-            aggregate: {
+            // A day with house figures alone is kept for its house gauge; the
+            // pill builder leaves the rest of such a day to the forecast.
+            aggregate: !hasSolar && !hasBattery && !hasGrid ? null : {
                 batteryMinSocPct: hasBattery ? row.batteryMinSocPct : null,
                 batteryMaxSocPct: hasBattery ? row.batteryMaxSocPct : null,
                 solarWh: hasSolar ? row.solarWh : null,
@@ -365,6 +403,7 @@ export function buildHistoryDaysFromAggregates(
                 priceNegativeMax: null,
             },
             availability: { battery: hasBattery, solar: hasSolar, grid: hasGrid },
+            house: hasHouse ? { actualWh: houseActualWh, forecastWh: houseForecastWh } : null,
         });
     }
     return days;
@@ -468,6 +507,10 @@ function _extendScaleWithAggregate(
             }),
         ),
     };
+}
+
+function _finiteOrNull(value: number | null | undefined): number | null {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function _isDayKey(value: string): boolean {

@@ -37,6 +37,8 @@ import {
 } from "./day-pill-model";
 import type { ScheduleTableDayAggregateScale } from "../shared/schedule/schedule-table-types";
 import { helmanColorVars } from "../color-vars";
+import { formatSolarGaugeTitle, formatSolarGaugeValue } from "../shared/forecast-value-format";
+import { formatHouseForecastErrorPct, houseForecastError } from "./solar-inspector-model";
 
 /**
  * The inspector's day picker: one pill per day from today to the end of the
@@ -293,6 +295,29 @@ export class HelmanSolarDayPills extends LitElement {
             font-size: 0.58rem;
         }
 
+        /* The house-focused pill: one bar, the measured day solid, with a tick
+           where the forecast had put it -- so an under-prediction is a fill
+           running past its tick and an over-prediction one stopping short. */
+        .day-aggregate-gauge.house {
+            background: color-mix(in srgb, var(--helman-house) 8%, transparent);
+            color: color-mix(in srgb, var(--helman-house) 30%, var(--primary-text-color));
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-house) 14%, var(--divider-color));
+        }
+
+        .day-aggregate-gauge.house .day-aggregate-gauge-fill {
+            background: color-mix(in srgb, var(--helman-house) 34%, transparent);
+        }
+
+        .day-aggregate-gauge.house .house-forecast-tick {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            z-index: 1;
+            background: var(--helman-house);
+            transform: translateX(-50%);
+        }
+
     `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
@@ -359,6 +384,8 @@ export class HelmanSolarDayPills extends LitElement {
      */
     @property({ type: Boolean }) public selectsSlot = false;
     @property({ type: Boolean }) public continuous = false;
+    /** One house gauge (actual vs predicted) in place of the solar and battery ones. */
+    @property({ type: Boolean }) public houseFocus = false;
     @property({ type: String }) public browsedMonth = "";
     @property({ type: String }) public revealMonth = "";
     @property({ type: Number }) public revealVersion = 0;
@@ -371,6 +398,7 @@ export class HelmanSolarDayPills extends LitElement {
      * already is this one.
      */
     @state() private _visibleScale: ScheduleTableDayAggregateScale | null = null;
+    @state() private _visibleHouseMaxWh: number | null = null;
     private _frame = 0;
     private _resize?: ResizeObserver;
     private _observedRow?: HTMLElement;
@@ -426,6 +454,7 @@ export class HelmanSolarDayPills extends LitElement {
             this._revealed = -1;
             this._restore = undefined;
             this._visibleScale = null;
+            this._visibleHouseMaxWh = null;
             this._revealSelectedPill();
             return;
         }
@@ -502,6 +531,13 @@ export class HelmanSolarDayPills extends LitElement {
         if (scale.solarMaxWh !== this._visibleScale?.solarMaxWh
             || scale.gridMaxKwh !== this._visibleScale?.gridMaxKwh) {
             this._visibleScale = scale;
+        }
+        if (this.houseFocus) {
+            const days = new Set(visible.map((pill) => pill.dataset.day!));
+            const houseMaxWh = Math.max(0, ...this._model.pills
+                .filter((pill) => days.has(pill.dayKey))
+                .flatMap((pill) => [pill.house?.actualWh ?? 0, pill.house?.forecastWh ?? 0]));
+            if (houseMaxWh !== this._visibleHouseMaxWh) this._visibleHouseMaxWh = houseMaxWh;
         }
         // Only replace the buffer close to an edge. A visible date's offset is
         // captured before Lit changes the keyed cells and restored afterwards.
@@ -632,7 +668,7 @@ export class HelmanSolarDayPills extends LitElement {
                 @mouseleave=${() => this._hover(null)}
             >
                 <span class="pill-label">${pill.label}</span>
-                ${renderDayAggregateGauge({
+                ${this.houseFocus ? this._renderHouseGauge(pill) : html`${renderDayAggregateGauge({
                     kind: "solar",
                     aggregate: pill.aggregate,
                     scale: this._scale(),
@@ -651,8 +687,51 @@ export class HelmanSolarDayPills extends LitElement {
                     // a measured claim even though half of it was measured.
                     forecast: pill.dayState !== "measured",
                     localize: this._localize,
-                })}
+                })}`}
             </button>
+        `;
+    }
+
+    /**
+     * A past day's house energy: the actual as the fill, the prediction as a
+     * tick, both on the row's house scale. Any day without an actual -- today
+     * and later among them, which the model gives no house figures -- reads
+     * unavailable, the same as the other gauges on a day they have nothing for.
+     */
+    private _renderHouseGauge(pill: SolarInspectorDayPill) {
+        const actualWh = pill.house?.actualWh ?? null;
+        if (actualWh === null) {
+            return html`<div class="day-aggregate-gauge house unavailable" aria-hidden="true"></div>`;
+        }
+        const forecastWh = pill.house?.forecastWh ?? null;
+        // Rescaled to the viewport in the calendar, as `_scale()` is.
+        const maxWh = this.continuous ? this._visibleHouseMaxWh ?? this._model.houseMaxWh : this._model.houseMaxWh;
+        const scalePct = (wh: number) => maxWh > 0 ? Math.min(Math.max(wh / maxWh, 0) * 100, 100) : 0;
+        const widthPct = scalePct(actualWh);
+        const error = houseForecastError(forecastWh, actualWh);
+        const title = [
+            forecastWh === null
+                ? null
+                : `${this._localize("bias_correction.inspector.house_pill_predicted")} ${formatSolarGaugeTitle(forecastWh)}`,
+            `${this._localize("bias_correction.inspector.house_pill_actual")} ${formatSolarGaugeTitle(actualWh)}`,
+            error === null
+                ? null
+                : `${this._localize("bias_correction.inspector.house_pill_error")} ${formatHouseForecastErrorPct(error)}`,
+        ].filter((part) => part !== null).join(" · ");
+        return html`
+            <div class="day-aggregate-gauge house" role="img" aria-label=${title} title=${title}>
+                ${widthPct > 0 ? html`<span
+                    class="day-aggregate-gauge-fill"
+                    style=${`width:${widthPct}%;`}
+                    aria-hidden="true"
+                ></span>` : nothing}
+                ${forecastWh === null ? nothing : html`<span
+                    class="house-forecast-tick"
+                    style=${`left:${scalePct(forecastWh)}%;`}
+                    aria-hidden="true"
+                ></span>`}
+                <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(actualWh)}</span>
+            </div>
         `;
     }
 

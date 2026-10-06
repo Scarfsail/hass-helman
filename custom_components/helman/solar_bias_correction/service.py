@@ -36,7 +36,10 @@ from .forecast_history import (
     load_archived_forecast_points,
     load_trainer_samples,
 )
-from .house_forecast_history import load_house_forecast_points_for_day
+from .house_forecast_history import (
+    HOUSE_FORECAST_CURRENT_ENTITY,
+    load_house_forecast_points_for_day,
+)
 from .models import (
     BatterySocBoundsPoint,
     BatterySocPoint,
@@ -64,7 +67,12 @@ from .models import (
     navigation_range_payload,
     training_explainability_to_payload,
 )
-from .statistics_day import HOUR_MINUTES, StatisticsDay, load_statistics_day
+from .statistics_day import (
+    HOUR_MINUTES,
+    StatisticsDay,
+    _mean_of,
+    load_statistics_day,
+)
 from .trainer import compute_fingerprint, train
 
 if TYPE_CHECKING:
@@ -398,6 +406,7 @@ class SolarBiasCorrectionService:
         bucket: str = "day",
         *,
         house_breakdown: bool = False,
+        house_forecast: bool = False,
     ) -> dict[str, Any]:
         """Measured figures for a span of history, bucketed into local days or months.
 
@@ -422,6 +431,11 @@ class SolarBiasCorrectionService:
         ``bucket`` is ``"day"`` (one row per local day, what the pills ask for)
         or ``"month"`` (one row per local month, with the span snapped outward to
         whole months first). Both walk the same fold; only the key differs.
+
+        ``house_forecast`` adds ``houseForecastWh`` to every row: what the house
+        forecast predicted for the bucket, folded from the forecast sensor's
+        hourly means. It joins the one read rather than adding a second, which
+        is why the pills can carry it for a month of days.
 
         Note that the DST hazard :func:`_money_points` documents does *not* carry
         over. That one is about repeated ``"HH:MM"`` slot labels colliding on the
@@ -523,10 +537,11 @@ class SolarBiasCorrectionService:
         # every span view shares, with the import rate already resolved per
         # hour -- recorded first, today's window table where nothing was
         # recorded. See :func:`_money_by_bucket` for why per hour.
+        house_forecast_entity = HOUSE_FORECAST_CURRENT_ENTITY if house_forecast else None
         history = await read_span_history(
             self._hass,
             meter_ids=meters,
-            extra_ids=[soc_entity, *consumer_entities],
+            extra_ids=[soc_entity, *consumer_entities, house_forecast_entity],
             local_start=local_start,
             local_end=local_end,
             tail_start=tail_start,
@@ -551,6 +566,9 @@ class SolarBiasCorrectionService:
         )
         soc_by_bucket = _soc_bounds_by_bucket(
             history.rows_for(soc_entity), bucket, local_tz
+        )
+        house_forecast_kwh = _house_forecast_by_bucket(
+            history.rows_for(house_forecast_entity), bucket, local_tz
         )
         # One fold per consumer through the same helper the six meters use, so a
         # consumer's bucket total is arrived at exactly as the house total it is
@@ -579,27 +597,28 @@ class SolarBiasCorrectionService:
         for key in bucket_keys(start_date, end_date, bucket):
             min_pct, max_pct = soc_by_bucket.get(key, (None, None))
             cost, gain = money_by_bucket.get(key, (None, None))
-            days.append(
-                {
-                    "date": key,
-                    "solarWh": _round_wh(solar_kwh.get(key)),
-                    "gridImportKwh": _round_kwh(imported_kwh.get(key)),
-                    "gridExportKwh": _round_kwh(exported_kwh.get(key)),
-                    "batteryMinSocPct": min_pct,
-                    "batteryMaxSocPct": max_pct,
-                    "houseWh": _round_wh(house_kwh.get(key)),
-                    "batteryChargeWh": _round_wh(charged_kwh.get(key)),
-                    "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
-                    "moneyCost": None if cost is None else round(cost, 3),
-                    "moneyGain": None if gain is None else round(gain, 3),
-                    "houseBreakdown": _bucket_house_breakdown(
-                        breakdown_consumers,
-                        consumer_kwh_by_entity,
-                        key,
-                        _round_wh(house_kwh.get(key)),
-                    ),
-                }
-            )
+            row: dict[str, Any] = {
+                "date": key,
+                "solarWh": _round_wh(solar_kwh.get(key)),
+                "gridImportKwh": _round_kwh(imported_kwh.get(key)),
+                "gridExportKwh": _round_kwh(exported_kwh.get(key)),
+                "batteryMinSocPct": min_pct,
+                "batteryMaxSocPct": max_pct,
+                "houseWh": _round_wh(house_kwh.get(key)),
+                "batteryChargeWh": _round_wh(charged_kwh.get(key)),
+                "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
+                "moneyCost": None if cost is None else round(cost, 3),
+                "moneyGain": None if gain is None else round(gain, 3),
+                "houseBreakdown": _bucket_house_breakdown(
+                    breakdown_consumers,
+                    consumer_kwh_by_entity,
+                    key,
+                    _round_wh(house_kwh.get(key)),
+                ),
+            }
+            if house_forecast:
+                row["houseForecastWh"] = _round_wh(house_forecast_kwh.get(key))
+            days.append(row)
 
         return {
             "bucket": bucket,
@@ -3321,6 +3340,28 @@ def _money_by_bucket(
         gain[key] = gain.get(key, 0.0) + kwh * rate
 
     return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
+
+
+def _house_forecast_by_bucket(
+    rows: dict[datetime, dict[str, Any]],
+    bucket: str,
+    local_tz: ZoneInfo,
+) -> dict[str, float]:
+    """The house forecast predicted per bucket, in kWh.
+
+    The sensor publishes power, so an hour's mean W *is* that hour's Wh -- the
+    arithmetic :func:`statistics_day._house_forecast_points` does for the day
+    view past raw retention. A bucket with no hour carrying a mean is absent,
+    which the payload reports as ``None`` rather than as a zero forecast.
+    """
+    by_bucket: dict[str, float] = {}
+    for utc_hour, row in rows.items():
+        mean_w = _mean_of(row)
+        if mean_w is None:
+            continue
+        key = bucket_key(utc_hour, bucket, local_tz)
+        by_bucket[key] = by_bucket.get(key, 0.0) + mean_w / 1000.0
+    return by_bucket
 
 
 def _round_wh(value_kwh: float | None) -> float | None:

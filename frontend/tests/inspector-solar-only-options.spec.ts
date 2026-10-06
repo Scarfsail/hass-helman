@@ -1,7 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
-import { SOLAR_INSPECTOR_EMBED_CONFIG } from "../config-editor/solar-inspector-embed";
+import {
+    HOUSE_INSPECTOR_EMBED_CONFIG,
+    SOLAR_INSPECTOR_EMBED_CONFIG,
+} from "../config-editor/solar-inspector-embed";
 
 /**
  * The solar-only options on `helman-solar-inspector-card`:
@@ -13,6 +16,10 @@ import { SOLAR_INSPECTOR_EMBED_CONFIG } from "../config-editor/solar-inspector-e
  * not drawn, and the tile that would toggle it is gone rather than dimmed. A
  * card configured down to the three solar series has to read as a solar chart,
  * not as the dashboard card with four rows switched off.
+ *
+ * The house consumption Diagnostics embed rides the same options plus two of
+ * its own, `hide_aggregate_views` and `house_focus`; its config is covered at
+ * the end of this file, for the same reason the solar one is covered here.
  */
 
 const BUNDLE = resolve(
@@ -28,6 +35,9 @@ const BUNDLE = resolve(
  * coverage with it.
  */
 const SOLAR_ONLY = SOLAR_INSPECTOR_EMBED_CONFIG;
+
+/** The config the Training tab's house consumption Diagnostics mounts the card with. */
+const HOUSE_ONLY = HOUSE_INSPECTOR_EMBED_CONFIG;
 
 const SOLAR_COLOR = "#facc15";
 const RAW_COLOR = "#64748b";
@@ -629,4 +639,168 @@ test("a solar series that is allowed but not drawn does not crop the day", async
     await reconfigure(page, { chart_series: ["raw", "houseActual"], show_bias_ratio: true });
     const drawn = await chartWindow(page);
     expect(drawn.end - drawn.start).toBeLessThan(1440);
+});
+
+/** The width toggle's stops, as labelled. */
+function viewStops(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        return [...(root?.querySelectorAll(".slot-size-button") ?? [])]
+            .map((node) => node.textContent?.trim() ?? "");
+    });
+}
+
+/** Move the loaded day to `offset` days from today, as a reload of it would. */
+async function redateDay(page: Page, offset: number): Promise<void> {
+    await page.evaluate(async (days) => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        const today = Date.parse(`${el._todayIso()}T00:00:00Z`);
+        payload.date = new Date(today + days * 86_400_000).toISOString().slice(0, 10);
+        // The day view draws a payload only for the day it has selected.
+        el._selectedDate = payload.date;
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    }, offset);
+}
+
+test("the house embed config draws the house series alone, day view only", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    await seedEverySeries(page);
+
+    expect(await rowsPresent(page)).toMatchObject({
+        soc: false,
+        price: false,
+        money: false,
+        schedule: false,
+    });
+    for (const series of ["houseForecast", "houseActual"]) {
+        expect(await seriesEnabled(page, series)).toBe(true);
+    }
+    for (const series of [
+        "raw",
+        "corrected",
+        "actual",
+        "gridForecast",
+        "gridActual",
+        "batteryForecast",
+        "batteryActual",
+        "batterySocForecast",
+        "batterySocActual",
+    ]) {
+        expect(await seriesEnabled(page, series)).toBe(false);
+    }
+
+    const labels = await metricLabels(page);
+    expect(labels).toContain("House");
+    expect(labels).not.toContain("Solar production");
+    expect(labels).not.toContain("Raw forecast");
+    expect(labels).not.toContain("Grid");
+    expect(labels).not.toContain("Battery");
+    expect(labels).not.toContain("Battery SoC");
+
+    const colors = await chartColors(page);
+    expect(colors).not.toContain(SOLAR_COLOR);
+    expect(colors).not.toContain(GRID_COLOR);
+    expect(colors).not.toContain(BATT_COLOR);
+
+    // The month and year views ignore chart_series, so they are not offered.
+    expect(await viewStops(page)).toEqual(["15", "30", "60"]);
+});
+
+test("a default card keeps the D and M stops and shows no forecast error", async ({ page }) => {
+    await mountCard(page, {});
+    await redateDay(page, -1);
+    await seedEverySeries(page);
+
+    expect(await viewStops(page)).toEqual(["15", "30", "60", "D", "M"]);
+    const labels = await metricLabels(page);
+    // The house totals are drawn, so the missing tile is the flag's doing.
+    expect(labels).toContain("House");
+    expect(labels).not.toContain("Forecast error");
+});
+
+test("the house embed shows the forecast error for a past day, not for today", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    await seedEverySeries(page);
+
+    // Today: the forecast covers the whole day and the actual only part of it.
+    expect(await metricLabels(page)).not.toContain("Forecast error");
+
+    // Re-seeded after the move: the seeded series are stamped with the day.
+    await redateDay(page, -1);
+    await seedEverySeries(page);
+    const totals = await page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const card = [...(root?.querySelectorAll(".metric-card") ?? [])].find(
+            (node) => node.querySelector(".metric-label")?.textContent?.trim() === "Forecast error",
+        );
+        return card?.querySelector(".metric-value")?.textContent?.trim() ?? null;
+    });
+    // 7.68 kWh measured against 7.2 kWh predicted: under-predicted by 0.48 kWh.
+    expect(totals).not.toBeNull();
+    expect(totals).toContain("+");
+    expect(totals).toContain("(+6.3 %)");
+});
+
+test("the house embed's slot detail carries the forecast error", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    await seedEverySeries(page);
+    await selectSlot(page, "12:00");
+
+    // Today's totals carry none, so the one tile is the slot detail's.
+    const labels = await metricLabels(page);
+    expect(labels.filter((label) => label === "Forecast error")).toHaveLength(1);
+});
+
+test("the house embed's pills draw actual against predicted house energy", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    // The expanded calendar reaches the past days the measured gauges are for.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        el._navExpanded = true;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+    await page.waitForFunction(() => !!(window as unknown as {
+        __inspectorRoot: () => ShadowRoot | null | undefined;
+    }).__inspectorRoot()?.querySelector("helman-solar-day-pills")?.shadowRoot
+        ?.querySelector(".day-aggregate-gauge.house:not(.unavailable)"));
+
+    const result = await page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot()?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        const today = (root?.host as any).currentDate as string;
+        const pills = [...(root?.querySelectorAll(".pill[data-day]") ?? [])];
+        const past = pills.find((pill) => (pill.getAttribute("data-day") ?? "") < today
+            && pill.querySelector(".day-aggregate-gauge.house:not(.unavailable)"));
+        const todayPill = pills.find((pill) => pill.getAttribute("data-day") === today);
+        return {
+            solarOrBattery: !!root?.querySelector(".day-aggregate-gauge.solar, .day-aggregate-gauge.battery"),
+            title: past?.querySelector(".day-aggregate-gauge.house")?.getAttribute("title") ?? "",
+            value: past?.querySelector(".day-aggregate-gauge-value")?.textContent?.trim() ?? "",
+            tick: !!past?.querySelector(".house-forecast-tick"),
+            todayUnavailable: !!todayPill?.querySelector(".day-aggregate-gauge.house.unavailable"),
+        };
+    });
+
+    expect(result.solarOrBattery).toBe(false);
+    expect(result.title).toContain("predicted 7.2 kWh");
+    expect(result.title).toContain("actual 7.7 kWh");
+    expect(result.title).toContain("error +6.3 %");
+    expect(result.value).toBe("7.7");
+    expect(result.tick).toBe(true);
+    expect(result.todayUnavailable).toBe(true);
 });

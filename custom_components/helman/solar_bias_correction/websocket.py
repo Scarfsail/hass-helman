@@ -152,6 +152,7 @@ async def ws_get_solar_bias_inspector(
         vol.Required("end_date"): str,
         vol.Optional("bucket", default="day"): vol.In(("day", "month")),
         vol.Optional("house_breakdown", default=False): bool,
+        vol.Optional("house_forecast", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -172,6 +173,11 @@ async def ws_get_solar_bias_day_aggregates(
     default because the two callers want different things from the same
     endpoint: the aggregate views draw the composition, the day pills read six
     scalars a day and would pay for a field they never look at.
+
+    ``house_forecast`` asks for each bucket's predicted house energy
+    (``houseForecastWh``), read from the house forecast sensor's hourly means in
+    the same statistics read. Off by default for the same reason: only the
+    house-focused inspector's pills look at it.
     """
     raw_start = msg.get("start_date")
     raw_end = msg.get("end_date")
@@ -193,6 +199,7 @@ async def ws_get_solar_bias_day_aggregates(
             raw_end,
             msg.get("bucket", "day"),
             house_breakdown=bool(msg.get("house_breakdown", False)),
+            house_forecast=bool(msg.get("house_forecast", False)),
         )
     except Exception:
         _LOGGER.exception("Unexpected solar bias day aggregates failure")

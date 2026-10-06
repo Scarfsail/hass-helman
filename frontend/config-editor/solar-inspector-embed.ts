@@ -1,5 +1,6 @@
 /**
- * The solar inspector, embedded in the Training tab's solar Diagnostics.
+ * The solar inspector, embedded in the Training tab's solar and house
+ * consumption Diagnostics.
  *
  * The inspector is *not* compiled into this bundle. `helman-card.js` and
  * `helman-config-editor.js` are two vite entry points over one source tree, and
@@ -42,6 +43,35 @@ export const SOLAR_INSPECTOR_EMBED_CONFIG: HelmanSolarInspectorCardConfig = {
   hide_price_strip: true,
   hide_money_strip: true,
   chart_series: ["actual", "corrected", "raw"],
+};
+
+/**
+ * The card config the house consumption Diagnostics mounts with: predicted vs
+ * actual house consumption, browsed day by day. Exported for
+ * `frontend/tests/inspector-solar-only-options.spec.ts`, as the solar one is.
+ */
+export const HOUSE_INSPECTOR_EMBED_CONFIG: HelmanSolarInspectorCardConfig = {
+  type: `custom:${INSPECTOR_CARD_TAG}`,
+  transparent_background: true,
+  hide_schedule_strip: true,
+  hide_price_strip: true,
+  hide_money_strip: true,
+  // The learned profile is judged a day at a time; the month and year views
+  // ignore chart_series and would bring every other series back.
+  hide_aggregate_views: true,
+  house_focus: true,
+  // The house draws all day, so cropping to the sunlit hours would hide most
+  // of what is being judged.
+  daylight_only_default: false,
+  chart_series: ["houseForecast", "houseActual"],
+};
+
+/** The Training tab's two embeds, by the Diagnostics panel each sits in. */
+export type InspectorEmbed = "solar" | "house";
+
+export const INSPECTOR_EMBED_CONFIGS: Record<InspectorEmbed, HelmanSolarInspectorCardConfig> = {
+  solar: SOLAR_INSPECTOR_EMBED_CONFIG,
+  house: HOUSE_INSPECTOR_EMBED_CONFIG,
 };
 
 /** The card element, with the two members the embed drives it through. */

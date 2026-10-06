@@ -158,9 +158,10 @@ import {
 } from "./training-status";
 import {
   INSPECTOR_CARD_TAG,
-  SOLAR_INSPECTOR_EMBED_CONFIG,
+  INSPECTOR_EMBED_CONFIGS,
   inspectorCardLoader,
   nodeDetailDialogLoader,
+  type InspectorEmbed,
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
 import type { HomeAssistant } from "../hass-frontend/src/types";
@@ -1063,17 +1064,19 @@ export class HelmanConfigEditorPanel
   // answer, and kept on a failed tick like the entity poll's last reading.
   private _trainingStatus: TrainingStatus | null = null;
   /**
-   * The one-shot loader for the card artifact, and the one card built from it.
+   * The one-shot loader for the card artifact, and the cards built from it --
+   * one per embed (the solar and the house Diagnostics), sharing the loader
+   * because they are one artifact.
    *
    * Both survive the section being collapsed and reopened: the loader so the
-   * artifact is fetched and evaluated once, the element so reopening shows the
+   * artifact is fetched and evaluated once, each element so reopening shows the
    * day the reader had paged to rather than refetching it. Created on the first
-   * open of the solar Diagnostics panel and never on a `hass` tick -- see
-   * `_handleSolarDiagnosticsToggle`.
+   * open of a Diagnostics panel that embeds one and never on a `hass` tick --
+   * see `_handleInspectorDiagnosticsToggle`.
    */
   private _inspectorCardLoad?: () => Promise<void>;
   /**
-   * Whether the reader has opened the panel at all.
+   * Whether the reader has opened each embed's panel at all.
    *
    * Separate from the loader, because the loader can be a no-op: Home Assistant
    * loads every Lovelace resource the first time any dashboard renders, so on the
@@ -1083,8 +1086,8 @@ export class HelmanConfigEditorPanel
    * clock, its listeners and a day fetch, which is the whole thing this is lazy
    * to avoid. The open is the signal; loading is only what may follow it.
    */
-  private _inspectorRequested = false;
-  private _inspectorCard?: SolarInspectorCardElement;
+  private _inspectorRequested: Record<InspectorEmbed, boolean> = { solar: false, house: false };
+  private _inspectorCard: Partial<Record<InspectorEmbed, SolarInspectorCardElement>> = {};
   private _inspectorCardError: string | null = null;
   /**
    * The saved device tree's items by `_deviceTreeKey`, as helman-card
@@ -2408,9 +2411,9 @@ export class HelmanConfigEditorPanel
             .job=${this._trainingJob("solar_bias")}
             .configRevision=${this._configBaseline}
           ></helman-solar-bias-diagnostics>
-          ${this._renderSolarInspectorCard()}
+          ${this._renderInspectorCard("solar")}
         `,
-        (open) => this._handleSolarDiagnosticsToggle(open),
+        (open) => this._handleInspectorDiagnosticsToggle("solar", open),
       )}
 
       ${this._renderTrainingJobSection(
@@ -2441,6 +2444,8 @@ export class HelmanConfigEditorPanel
           { initialOpen: false },
         ),
         this._houseConsumptionDepthRows(),
+        html`${this._renderInspectorCard("house")}`,
+        (open) => this._handleInspectorDiagnosticsToggle("house", open),
       )}
 
       ${this._renderTrainingJobSection(
@@ -2535,10 +2540,10 @@ export class HelmanConfigEditorPanel
    * day, before anyone asked to see it. Hence the toggle: the load starts on the
    * open and then never again, because the loader is the record of having asked.
    */
-  private _handleSolarDiagnosticsToggle(open: boolean): void {
+  private _handleInspectorDiagnosticsToggle(embed: InspectorEmbed, open: boolean): void {
     if (!open) return;
-    if (!this._inspectorRequested) {
-      this._inspectorRequested = true;
+    if (!this._inspectorRequested[embed]) {
+      this._inspectorRequested[embed] = true;
       // Not reactive on its own: the render is otherwise driven by the load
       // settling, and an already-registered tag settles it in a microtask.
       this.requestUpdate();
@@ -2585,19 +2590,20 @@ export class HelmanConfigEditorPanel
    * set properties but cannot call a method. Built once and kept, so `setConfig`
    * runs once too; `hass` is assigned on every render, the way a dashboard does it.
    */
-  private _renderSolarInspectorCard(): TemplateResult | typeof nothing {
-    if (!this._inspectorRequested) return nothing;
+  private _renderInspectorCard(embed: InspectorEmbed): TemplateResult | typeof nothing {
+    if (!this._inspectorRequested[embed]) return nothing;
     if (this._inspectorCardError) {
       return html`<div class="message error">${this._inspectorCardError}</div>`;
     }
     if (!customElements.get(INSPECTOR_CARD_TAG)) return nothing;
-    if (!this._inspectorCard) {
-      const card = document.createElement(INSPECTOR_CARD_TAG) as SolarInspectorCardElement;
-      card.setConfig(SOLAR_INSPECTOR_EMBED_CONFIG);
-      this._inspectorCard = card;
+    let card = this._inspectorCard[embed];
+    if (!card) {
+      card = document.createElement(INSPECTOR_CARD_TAG) as SolarInspectorCardElement;
+      card.setConfig(INSPECTOR_EMBED_CONFIGS[embed]);
+      this._inspectorCard[embed] = card;
     }
-    this._inspectorCard.hass = this.hass;
-    return html`${this._inspectorCard}`;
+    card.hass = this.hass;
+    return html`${card}`;
   }
 
   private _trainingJob(id: string) {
