@@ -3177,6 +3177,11 @@ export class HelmanConfigEditorPanel
       }
     } catch (error) {
       console.error("Helman: failed to load the device tree", error);
+      if (sequence !== this._deviceTreeSequence) return;
+      // The previous tree may no longer match the saved config, so no name
+      // opens it; the table's next render asks again.
+      this._deviceTreeItems = null;
+      this._deviceTreeRequested = false;
     }
   }
 
