@@ -824,6 +824,7 @@ export class HelmanSolarInspector extends LitElement {
         view: InspectorPayload;
         hidden: ReadonlySet<SeriesKey>;
         enabled: readonly SeriesKey[] | undefined;
+        houseFocus: boolean;
       }
     | null = null;
   /**
@@ -3220,8 +3221,9 @@ export class HelmanSolarInspector extends LitElement {
     if (this._stacksFor === null
       || this._stacksFor.view !== view
       || this._stacksFor.hidden !== hidden
-      || this._stacksFor.enabled !== enabled) {
-      this._stacksFor = { view, hidden, enabled };
+      || this._stacksFor.enabled !== enabled
+      || this._stacksFor.houseFocus !== this.houseFocus) {
+      this._stacksFor = { view, hidden, enabled, houseFocus: this.houseFocus };
       // "Nothing to draw" is a fact about the view alone, so it is decided
       // here with the stacks rather than beside them in the render.
       const hasAnySeries = view.availability.hasRawForecast
