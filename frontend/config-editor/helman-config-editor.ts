@@ -160,8 +160,17 @@ import {
   INSPECTOR_CARD_TAG,
   SOLAR_INSPECTOR_EMBED_CONFIG,
   inspectorCardLoader,
+  nodeDetailDialogLoader,
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
+import type { HomeAssistant } from "../hass-frontend/src/types";
+import { HelmanClient } from "../cards/helman/client";
+import type { TreeItem } from "../cards/helman/tree-item";
+import { hydrateItem } from "../cards/helman/tree-item-hydrator";
+import {
+  getLocalizeFunction as getCardLocalizeFunction,
+  type LocalizeFunction as CardLocalizeFunction,
+} from "../cards/localize/localize";
 import "./info-callout";
 import "../cards/shared/config/entity-group";
 import {
@@ -341,6 +350,8 @@ export class HelmanConfigEditorPanel
     _inverterOpenSections: { state: true },
     _trainingStatus: { state: true },
     _inspectorCardError: { state: true },
+    _deviceTreeItems: { state: true },
+    _deviceDetail: { state: true },
   };
 
   static styles = [
@@ -1075,6 +1086,21 @@ export class HelmanConfigEditorPanel
   private _inspectorRequested = false;
   private _inspectorCard?: SolarInspectorCardElement;
   private _inspectorCardError: string | null = null;
+  /**
+   * The saved device tree's items by `_deviceTreeKey`, as helman-card
+   * hydrates them: what the appliance-energy table's device names open.
+   * Fetched on the table's first render and again whenever the saved config
+   * is re-read; `null` until then.
+   */
+  private _deviceTreeItems: Map<string, TreeItem> | null = null;
+  private _deviceTreeRequested = false;
+  private _deviceTreeSequence = 0;
+  /** One loader for the dialog, so concurrent clicks share its import. */
+  private _deviceDetailLoad?: () => Promise<void>;
+  /** The device whose detail dialog is open. */
+  private _deviceDetail: TreeItem | null = null;
+  /** The card's own localize: the device detail dialog reads `node_detail.*` keys. */
+  private _cardLocalize?: CardLocalizeFunction;
   private _trainingStatusTimer?: ReturnType<typeof setInterval>;
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
@@ -1088,6 +1114,7 @@ export class HelmanConfigEditorPanel
     this._hass = hass;
     if (hass && !this._localize) {
       this._localize = getLocalizeFunction(hass);
+      this._cardLocalize = getCardLocalizeFunction(hass as unknown as HomeAssistant);
     }
     // Reused HA components (e.g. the condition builder) localize via
     // hass.localize, but the "config" fragment is only lazy-loaded on the
@@ -1345,6 +1372,19 @@ export class HelmanConfigEditorPanel
         ${this._config ? this._renderDocumentBody(issueCounts) : nothing}
       </div>
       ${this._renderHelpDialog()}
+      ${this._deviceDetail
+        ? html`
+            <node-detail-dialog
+              .hass=${this.hass}
+              .localize=${this._cardLocalize}
+              .open=${true}
+              .params=${{ nodeType: "device", item: this._deviceDetail }}
+              @closed=${() => {
+                this._deviceDetail = null;
+              }}
+            ></node-detail-dialog>
+          `
+        : nothing}
     `;
   }
 
@@ -2803,7 +2843,7 @@ export class HelmanConfigEditorPanel
   private _deviceEnergyEstimate(device: JsonObject): DeviceEnergyInput {
     const job = this._trainingJob("appliance_energy");
     const id = this._stringValue(device.id);
-    const recordKey = ownMeter(device) || id;
+    const recordKey = this._deviceKey(device);
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
     // An EV charger is scheduled but never projected, so it headlines its
@@ -2993,6 +3033,10 @@ export class HelmanConfigEditorPanel
     devices: ApplianceEnergyDepthDevice[],
   ): TemplateResult | typeof nothing {
     if (devices.length === 0) return nothing;
+    if (!this._deviceTreeRequested) {
+      this._deviceTreeRequested = true;
+      void this._loadDeviceTree();
+    }
     return html`
       <div class="training-depth-table-wrap">
         <table class="training-depth-table">
@@ -3023,10 +3067,27 @@ export class HelmanConfigEditorPanel
     );
     const known = depths.every((depth) => typeof depth === "number");
     const short = device.entities.some((row) => this._isTrainingDepthRowShort(row));
+    const label = html`<div class="training-depth-label">${device.name}</div>`;
+    // Clickable only when the saved tree holds the device: an unsaved one, or
+    // a tree that never loaded, has no detail to open.
+    const item = this._savedDeviceUnchanged(device.device)
+      ? this._deviceTreeItems?.get(this._deviceTreeKey(device.device))
+      : undefined;
     return html`
       <tr class=${short ? "training-depth-warn" : ""}>
         <td>
-          <div class="training-depth-label">${device.name}</div>
+          ${item
+            ? html`<button
+                type="button"
+                class="training-depth-entity-button"
+                aria-label=${this._tFormat("editor.training_depth.device_detail_aria", {
+                  device: device.name,
+                })}
+                @click=${() => void this._showDeviceDetail(item)}
+              >
+                ${label}
+              </button>`
+            : label}
           ${device.entities.map((row) => this._renderTrainingDepthEntity(row, nothing))}
         </td>
         <td class="training-depth-role">${this._renderApplianceEnergyValue(device)}</td>
@@ -3043,6 +3104,105 @@ export class HelmanConfigEditorPanel
         </td>
       </tr>
     `;
+  }
+
+  /**
+   * A device's key in the training records: its own meter, else its id --
+   * also the hydrator's deviceKey, which `_deviceTreeKey` qualifies.
+   */
+  private _deviceKey(device: JsonObject): string {
+    return ownMeter(device) || this._stringValue(device.id);
+  }
+
+  /**
+   * The tree's key for a device: its deviceKey qualified by which kind it is,
+   * since a meter and a device id are each unique only among their own kind.
+   */
+  private _deviceTreeKey(device: JsonObject): string {
+    return `${ownMeter(device) ? "meter" : "id"}:${this._deviceKey(device)}`;
+  }
+
+  private _treeItemKey(item: TreeItem): string {
+    return `${item.deviceKeyIsMeter ? "meter" : "id"}:${item.deviceKey}`;
+  }
+
+  /**
+   * Whether the saved config holds this draft device as it is: same key, id
+   * and name. The tree is the saved one, so a draft that swapped meters or
+   * reused a removed device's key must not open what the saved key names.
+   */
+  private _savedDeviceUnchanged(device: JsonObject): boolean {
+    const key = this._deviceTreeKey(device);
+    const id = this._stringValue(device.id);
+    const name = this._stringValue(device.name);
+    return iterDevices(this._savedConfig ?? {}).some(
+      ({ device: saved }) =>
+        this._deviceTreeKey(saved) === key &&
+        this._stringValue(saved.id) === id &&
+        this._stringValue(saved.name) === name,
+    );
+  }
+
+  /**
+   * Fetch the saved device tree and index it by `_deviceTreeKey`.
+   *
+   * The same command and hydration helman-card builds its items from, so the
+   * dialog shows what the card would. Skipped without a card URL, since the
+   * dialog could not be loaded anyway; a failed fetch leaves the names plain.
+   */
+  private async _loadDeviceTree(): Promise<void> {
+    if (!this.hass || !this._cardLocalize || !this.panel?.config?.card_module_url) {
+      // Not ready yet: let the table's next render ask again.
+      this._deviceTreeRequested = false;
+      return;
+    }
+    const sequence = ++this._deviceTreeSequence;
+    try {
+      const payload = await new HelmanClient(this.hass as unknown as HomeAssistant).getDeviceTree();
+      // A later fetch has been asked for; its tree is the newer one.
+      if (sequence !== this._deviceTreeSequence) return;
+      const items = new Map<string, TreeItem>();
+      const walk = (item: TreeItem): void => {
+        if (item.deviceKey) items.set(this._treeItemKey(item), item);
+        item.children.forEach(walk);
+      };
+      for (const dto of [...payload.sources, ...payload.consumers]) {
+        walk(hydrateItem(dto, payload.uiConfig.history_buckets, this._cardLocalize));
+      }
+      this._deviceTreeItems = items;
+      // An open detail follows the re-read tree, so a rename or re-wiring
+      // saved meanwhile shows; a device that is gone closes it.
+      if (this._deviceDetail) {
+        this._deviceDetail = items.get(this._treeItemKey(this._deviceDetail)) ?? null;
+      }
+    } catch (error) {
+      console.error("Helman: failed to load the device tree", error);
+      if (sequence !== this._deviceTreeSequence) return;
+      // The previous tree may no longer match the saved config, so no name
+      // opens it; the table's next render asks again.
+      this._deviceTreeItems = null;
+      this._deviceTreeRequested = false;
+    }
+  }
+
+  /** Open the card's device detail for `item`, loading the card artifact first. */
+  private async _showDeviceDetail(item: TreeItem): Promise<void> {
+    const url = this.panel?.config?.card_module_url;
+    if (!url) return;
+    try {
+      this._deviceDetailLoad ??= nodeDetailDialogLoader(url);
+      await this._deviceDetailLoad();
+    } catch (error) {
+      // Both halves, as for the inspector: the import error names only a URL.
+      this._message = {
+        kind: "error",
+        text: [this._t("editor.messages.load_device_detail_failed"), this._formatError(error, "")]
+          .filter(Boolean)
+          .join(" "),
+      };
+      return;
+    }
+    this._deviceDetail = item;
   }
 
   /** The Energy cell, read from `_deviceEnergyEstimate`. */
@@ -4557,6 +4717,9 @@ export class HelmanConfigEditorPanel
       // The same document the baseline is taken from, kept whole: it is what a
       // group's revert restores, and what the backend compares a draft against.
       this._savedConfig = loadedConfig ? cloneJson(loadedConfig) : {};
+      // The tree is the saved config's too: a reload, an announced change or
+      // a save from the device detail's own editor re-reads it.
+      if (this._deviceTreeRequested) void this._loadDeviceTree();
       // Whatever changed elsewhere is now in hand, however the reload was asked
       // for -- the button, the announcement, or the first load.
       this._staleConfigNotice = false;
@@ -4650,6 +4813,9 @@ export class HelmanConfigEditorPanel
         await this._rebaselineConfig();
         this._staleConfigNotice = false;
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
+        // The tree is built from the saved config, so a device just added or
+        // re-metered only becomes clickable once it is re-read.
+        if (this._deviceTreeRequested) void this._loadDeviceTree();
         this._dirty = this._config
           ? this._normalizeApplianceOptimizerTargets(this._config)
           : false;

@@ -50,16 +50,29 @@ export type SolarInspectorCardElement = HTMLElement & {
   hass: unknown;
 };
 
+/** The card's device detail dialog, opened from the appliance-energy table. */
+export const NODE_DETAIL_DIALOG_TAG = "node-detail-dialog";
+
 /**
- * Load the card artifact at `url`, at most once per returned loader.
+ * Load the card artifact at `url` until `tag` is defined, at most once per
+ * returned loader.
  *
  * `@vite-ignore` is load-bearing: without it the bundler treats the import as a
- * module to resolve at build time and pulls the inspector graph in after all,
+ * module to resolve at build time and pulls the card graph in after all,
  * which is exactly what this file exists to avoid. The URL is a runtime value
  * and must stay one.
  */
-export function inspectorCardLoader(url: string): () => Promise<void> {
-  return loadOnce([INSPECTOR_CARD_TAG], async () => {
+function cardArtifactLoader(tag: string, url: string): () => Promise<void> {
+  return loadOnce([tag], async () => {
     await import(/* @vite-ignore */ url);
   });
+}
+
+export function inspectorCardLoader(url: string): () => Promise<void> {
+  return cardArtifactLoader(INSPECTOR_CARD_TAG, url);
+}
+
+/** The same artifact, by the same URL, so a card already loaded is not loaded again. */
+export function nodeDetailDialogLoader(url: string): () => Promise<void> {
+  return cardArtifactLoader(NODE_DETAIL_DIALOG_TAG, url);
 }
