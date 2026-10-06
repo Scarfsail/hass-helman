@@ -5083,7 +5083,10 @@ export class HelmanSolarInspector extends LitElement {
             "houseForecast",
             "houseActual",
           )}
-          ${this.houseFocus && this._everySlotHasActual(payload.series.houseActual, slots)
+          ${this.houseFocus
+            && this._everySlotHasActual(payload.series.houseActual, slots)
+            && !missingInSelection.has("houseActual")
+            && !missingInSelection.has("houseForecast")
             ? this._renderHouseForecastErrorMetric(houseFcWh, houseAcWh)
             : ""}
           ${showDiagnostics
@@ -5733,7 +5736,9 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * Whether the actual covers the whole selection. A selection running past now
    * sums the forecast over every slot and the actual only over the elapsed
-   * ones, which would read as a miss the forecast never made.
+   * ones, which would read as a miss the forecast never made. A wider bucket
+   * with native holes still has a point, so the caller also checks
+   * `_partialBuckets`.
    */
   private _everySlotHasActual(points: readonly InspectorPoint[], slots: readonly string[]): boolean {
     const measured = new Set(points.map((point) => slotKey(point.timestamp)));

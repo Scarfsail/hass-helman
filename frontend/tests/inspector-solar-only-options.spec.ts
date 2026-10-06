@@ -755,6 +755,24 @@ test("the house embed shows the forecast error for a past day, not for today", a
 test("the house embed's slot detail carries the forecast error", async ({ page }) => {
     await mountCard(page, HOUSE_ONLY);
     await seedEverySeries(page);
+    // The shared seed is hourly, so every 30-minute bucket is short a native
+    // slot; give the house series the full 15-minute grid this tile asks for.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        const quarters = (valueWh: number) => Array.from({ length: 96 }, (_, i) => ({
+            timestamp: `${payload.date}T${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}:00`,
+            valueWh,
+        }));
+        payload.series.houseForecast = quarters(75);
+        payload.series.houseActual = quarters(80);
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
     await selectSlot(page, "12:00");
 
     // Today's totals carry none, so the one tile is the slot detail's.
@@ -851,4 +869,21 @@ test("the house embed draws a day that has house data but no solar", async ({ pa
 
     expect(await noData(SOLAR_ONLY)).toBe(true);
     expect(await noData(HOUSE_ONLY)).toBe(false);
+});
+
+test("the house embed's slot detail drops the forecast error over a partial bucket", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    await seedEverySeries(page);
+    // A bucket missing native house-actual samples still carries a point once
+    // aggregated; the coverage record is what says it is incomplete.
+    await page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        el._partialBuckets = new Map([[12 * 60, new Map([["houseActual", 2]])]]);
+    });
+    await selectSlot(page, "12:00");
+
+    expect(await metricLabels(page)).not.toContain("Forecast error");
 });
