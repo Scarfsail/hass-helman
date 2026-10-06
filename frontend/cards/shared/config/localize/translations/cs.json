@@ -138,6 +138,7 @@
       "grid_power": "Výkon sítě",
       "controllable_fallback_name": "Spotřebič",
       "no_entity": "Nenastaveno",
+      "device_detail_aria": "Zobrazit podrobnosti zařízení {device}",
       "attention": "Něco zde vyžaduje pozornost",
       "column_role": "Co z ní trenér bere",
       "battery_soc": "Stav nabití baterie",
@@ -393,6 +394,7 @@
       "fix_descendant_yaml_errors": "Před přepnutím této úrovně do YAML opravte chyby v YAML v podřízených částech.",
       "enter_yaml_failed": "Nepodařilo se otevřít YAML editor pro tuto část.",
       "load_inspector_card_failed": "Načtení karty solárního inspektoru selhalo. Zkuste to znovu po obnovení stránky.",
+      "load_device_detail_failed": "Načtení podrobností zařízení selhalo. Zkuste to znovu po obnovení stránky.",
       "card_module_url_missing": "Graf solárního inspektoru zde není dostupný: potřebuje prostředek karty, který tato integrace registruje do Lovelace a který se na této instalaci nepoužívá."
     },
     "confirm": {

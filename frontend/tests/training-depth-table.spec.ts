@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 
 /**
  * The Training tab's per-entity depth table (issue #172).
@@ -17,6 +19,15 @@ const BUNDLE = resolve(
     __dirname,
     "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
 );
+
+const CARD_BUNDLE = resolve(
+    __dirname,
+    "../../custom_components/helman/frontend_compiled/helman-card.js",
+);
+// Served over http, as the solar inspector embed's spec does: the device
+// detail dialog is loaded from the card artifact by this URL, never bundled.
+const ORIGIN = "http://helman.test";
+const CARD_MODULE_URL = "/helman_frontend/helman-card.js?v=9.9.9";
 
 const HOUSE_PATH = ["energy_nodes", "house", "forecast", "total_energy_entity_id"];
 const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
@@ -110,13 +121,29 @@ async function mountEditor(
     page: Page,
     configOverride?: unknown,
     depthsOverride?: Record<string, { raw_states: number; statistics: number }>,
+    deviceTree?: unknown,
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
+    if (deviceTree === undefined) {
+        await page.setContent("<!doctype html><html><body></body></html>");
+    } else {
+        const card = readFileSync(CARD_BUNDLE, "utf8");
+        await page.route(`${ORIGIN}/`, (route) =>
+            route.fulfill({
+                contentType: "text/html",
+                body: "<!doctype html><html><body></body></html>",
+            }),
+        );
+        await page.route(`${ORIGIN}/helman_frontend/*`, (route) =>
+            route.fulfill({ contentType: "text/javascript", body: card }),
+        );
+        await page.goto(`${ORIGIN}/`);
+        await page.addScriptTag({ content: HA_DIALOG_STUB });
+    }
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, depths, requiredByKey }) => {
+        ({ config, depths, requiredByKey, deviceTree, cardModuleUrl }) => {
             // The backend derives each fact's `required` from the window that
             // governs that entity, so the stub does too: a house-consumption
             // entity is judged against 14, a solar-bias one against 10.
@@ -139,6 +166,7 @@ async function mountEditor(
                         return { version: 2, kinds: [] };
                     }
                     if (request.type === "helman/get_appliances") return { appliances: [] };
+                    if (request.type === "helman/get_device_tree") return deviceTree;
                     if (request.type === "helman/inspect_entities") {
                         requests.push(JSON.parse(JSON.stringify(request)));
                         return {
@@ -191,12 +219,15 @@ async function mountEditor(
                     return {};
                 },
             };
+            if (deviceTree) element.panel = { config: { card_module_url: cardModuleUrl } };
             document.body.appendChild(element);
         },
         {
             config: configOverride ?? CONFIG,
             depths: depthsOverride ?? DEPTHS,
             requiredByKey: REQUIRED_BY_KEY,
+            deviceTree: deviceTree ?? null,
+            cardModuleUrl: CARD_MODULE_URL,
         },
     );
 
@@ -821,4 +852,97 @@ test("a learner on a shared meter also lists its metered siblings' meters", asyn
     // The shallow sub-meter is what marks the row.
     await expect(heater).toHaveClass(/training-depth-warn/);
     await expect(heater.locator("td").nth(3)).toContainText("sub-meter 4 d");
+});
+
+/** A house child DTO with the defaults the backend fills in. */
+function dto(overrides: Record<string, unknown>) {
+    return {
+        powerSensorId: null,
+        switchEntityId: null,
+        sourceType: null,
+        sourceConfig: null,
+        valueType: "default",
+        isSource: false,
+        isUnmeasured: false,
+        isEstimated: false,
+        groups: {},
+        groupBadgeTexts: [],
+        icon: null,
+        compact: false,
+        showAdditionalInfo: false,
+        childrenFullWidth: true,
+        hideChildren: false,
+        hideChildrenIndicator: false,
+        sortChildrenByPower: false,
+        deferrable: false,
+        controllableIds: [],
+        energyEntityId: null,
+        ratioSensorId: null,
+        children: [],
+        ...overrides,
+    };
+}
+
+/** The saved tree, holding the base config's dishwasher under its meter. */
+const DEVICE_TREE = {
+    sources: [],
+    consumers: [
+        dto({
+            id: "house",
+            displayName: "House",
+            children: [
+                dto({
+                    id: "sensor.dishwasher_energy",
+                    displayName: "Dishwasher",
+                    energyEntityId: "sensor.dishwasher_energy",
+                }),
+            ],
+        }),
+    ],
+    consumptionTotalSensorId: null,
+    productionTotalSensorId: null,
+    uiConfig: { history_buckets: 3, history_bucket_duration: 5 },
+};
+
+test("a device name opens the card's device detail, loaded from the card artifact", async ({
+    page,
+}) => {
+    await mountEditor(page, undefined, undefined, DEVICE_TREE);
+
+    // The panel is collapsed, so the button is found by its label rather than
+    // by role, and clicked in the page.
+    const name = applianceRows(page).first().locator('button[aria-label="Show details of Dishwasher"]');
+    await expect(name).toContainText("Dishwasher");
+    await name.evaluate((button: HTMLButtonElement) => button.click());
+
+    // The editor bundle does not define the dialog; the card artifact did.
+    const dialog = page.locator("helman-config-editor-panel node-detail-dialog");
+    await expect(dialog).toHaveCount(1);
+    const opened = await dialog.evaluate((element: any) => ({
+        heading: element.shadowRoot.querySelector("ha-dialog")?.heading,
+        deviceKey: element.params.item.deviceKey,
+    }));
+    expect(opened).toEqual({ heading: "Dishwasher", deviceKey: "sensor.dishwasher_energy" });
+
+    // Closing the dialog unmounts it.
+    await dialog.evaluate((element: any) => element.shadowRoot.querySelector("ha-dialog").close());
+    await expect(dialog).toHaveCount(0);
+});
+
+test("a device the saved tree lacks keeps its name as plain text", async ({ page }) => {
+    // Added in the draft, not yet saved: the tree has nothing to open for it.
+    const config = JSON.parse(JSON.stringify(CONFIG));
+    config.devices.consumers.push({
+        id: "pool",
+        name: "Pool",
+        consumption: { energy_entity_id: "sensor.pool_energy" },
+    });
+    await mountEditor(page, config, undefined, DEVICE_TREE);
+
+    const rows = applianceRows(page);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first().locator('button[aria-label="Show details of Dishwasher"]')).toHaveCount(1);
+    const pool = rows.filter({ hasText: "Pool" });
+    await expect(pool.locator(".training-depth-label")).toHaveText("Pool");
+    await expect(pool.locator('button[aria-label*="Pool"]')).toHaveCount(0);
 });
