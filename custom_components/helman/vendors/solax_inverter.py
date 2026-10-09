@@ -10,6 +10,11 @@ Min SoC is the Self Use discharge floor, read-only. It does not flip with the
 use mode Helman itself writes, and Self Use is the mode in which Helman lets
 the battery discharge on its own.
 
+Helman's inverter modes are a port of the writes the hand-made automation
+behind ``input_select.rezim_fv`` made on prod: the use mode first, then, in
+Manual Mode, the manual mode. The export limit follows every mode; its value
+is the user's grid contract, never the profile's.
+
 Site facts (``max_power``, the ``forecast`` blocks other than the house total,
 prices, efficiencies) are deliberately absent: they are the user's config,
 whatever hardware sits behind them.
@@ -17,8 +22,19 @@ whatever hardware sits behind them.
 
 from __future__ import annotations
 
+from ..const import (
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
+)
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .profile import VendorProfile
+
+_USE_MODE = "{name}_charger_use_mode"
+_MANUAL_MODE = "{name}_manual_mode_select"
 
 PROFILE = VendorProfile(
     id="solax_inverter",
@@ -61,4 +77,22 @@ PROFILE = VendorProfile(
         "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
         "energy_nodes.grid.entities.power_polarity": "positive_is_import",
     },
+    modes={
+        SCHEDULE_ACTION_NORMAL: ((_USE_MODE, "Self Use Mode"),),
+        SCHEDULE_ACTION_STOP_CHARGING: ((_USE_MODE, "Feedin Priority"),),
+        SCHEDULE_ACTION_STOP_DISCHARGING: (
+            (_USE_MODE, "Manual Mode"),
+            (_MANUAL_MODE, "Stop Charge and Discharge"),
+        ),
+        SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: (
+            (_USE_MODE, "Manual Mode"),
+            (_MANUAL_MODE, "Force Charge"),
+        ),
+        SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: (
+            (_USE_MODE, "Manual Mode"),
+            (_MANUAL_MODE, "Force Discharge"),
+        ),
+        SCHEDULE_ACTION_STOP_EXPORT: ((_USE_MODE, "Self Use Mode"),),
+    },
+    export_limit="{name}_export_control_user_limit",
 )

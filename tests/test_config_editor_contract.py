@@ -204,6 +204,17 @@ def _install_import_stubs() -> None:
     storage_mod.Store = DummyStore
     helpers_pkg.storage = storage_mod
 
+    # A hardware profile with a mode table looks Helman's own mode select up
+    # by unique id; an empty registry leaves it at its suggested entity id.
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
+        async_get_entity_id=lambda domain, platform, unique_id: None
+    )
+    helpers_pkg.entity_registry = entity_registry_mod
+
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:
         util_pkg = types.ModuleType("homeassistant.util")
@@ -552,7 +563,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                     "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
                 }
             ]},
-            "energy_nodes": {"house": {"entities": {"power": "sensor.house"}}},
+            "energy_nodes": {
+                "house": {"entities": {"power": "sensor.house"}},
+                "grid": {"max_allowed_export_power": 9900},
+            },
         }
 
         ws_validate_config(

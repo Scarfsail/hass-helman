@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
 /**
- * The inverter's hardware profile picker, and what it hides (#429).
+ * The inverter's hardware profile picker, and what it hides (#429, #430).
  *
  * Which paths a profile owns is the backend's answer to `helman/get_vendors`,
  * so the stub below plays that part: the editor must hide exactly the paths
@@ -36,12 +36,18 @@ const RESOLVED: Record<string, string | null> = {
     "energy_nodes.battery.entities.max_soc": null,
 };
 
+/** The inverter's mode control, owned on the device: Helman's own select. */
+const MODE_PATH = "devices.system[0].controls.mode.entity_id";
+const MODE_RESOLVED = { [MODE_PATH]: "select.helman_inverter_mode" };
+/** The same path as an entity group's key. */
+const MODE_GROUP = "devices.system.0.controls.mode.entity_id";
+
 const PROFILE = {
     id: "solax_inverter",
     label: "SolaX inverter",
     deviceKind: "inverter",
     ownedConfigPaths: OWNED,
-    ownedDevicePaths: [],
+    ownedDevicePaths: ["controls.mode"],
     entries: [{ entryId: "solax-entry", title: "SolaX" }],
 };
 
@@ -68,7 +74,19 @@ const CUSTOM_CONFIG = {
         },
     },
     devices: {
-        system: [{ kind: "inverter", id: "inverter", name: "Inverter" }],
+        system: [
+            {
+                kind: "inverter",
+                id: "inverter",
+                name: "Inverter",
+                controls: {
+                    mode: {
+                        entity_id: "input_select.rezim_fv",
+                        options: { normal: "Standardní", stop_charging: "Zákaz nabíjení" },
+                    },
+                },
+            },
+        ],
     },
 };
 
@@ -128,7 +146,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                                           "devices.system[0]": {
                                               profile: profile.id,
                                               ownedConfigPaths: profile.ownedConfigPaths,
-                                              ownedDevicePaths: [],
+                                              ownedDevicePaths: profile.ownedDevicePaths,
                                               resolved,
                                           },
                                       }
@@ -140,7 +158,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
             };
             document.body.appendChild(element);
         },
-        { config, profile, resolved: RESOLVED },
+        { config, profile, resolved: { ...RESOLVED, ...MODE_RESOLVED } },
     );
 }
 
@@ -242,7 +260,7 @@ test("the inverter's hardware section lists every resolved entity", async ({ pag
                 return root?.querySelectorAll(".vendor-resolved li").length ?? 0;
             });
         })
-        .toBe(Object.keys(RESOLVED).length);
+        .toBe(Object.keys(RESOLVED).length + 1);
 
     const section = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -278,6 +296,52 @@ test("the inverter's hardware section lists every resolved entity", async ({ pag
         text: "Not found in the chosen integration entry",
         unresolved: true,
     });
+});
+
+test("under the SolaX profile the inverter's mode control is provided, not configured", async ({
+    page,
+}) => {
+    await mountEditor(page, SOLAX_CONFIG);
+    await openTab(page, "Devices");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return (await energyFields(page)).provided[MODE_PATH] ?? null;
+        })
+        .toEqual({ text: "select.helman_inverter_mode", unresolved: false });
+
+    const { groups } = await energyFields(page);
+    expect(groups).not.toContain(MODE_GROUP);
+    const sections = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll(".inverter-card summary") ?? []).map(
+            (summary) => summary.textContent?.trim() ?? "",
+        );
+    });
+    expect(sections.some((text) => text.startsWith("Controls"))).toBe(true);
+    // Every action maps onto the select itself: there is nothing to map.
+    expect(sections.some((text) => text.startsWith("Action options"))).toBe(false);
+});
+
+test("under Custom the inverter's mode control stays editable", async ({ page }) => {
+    await mountEditor(page, CUSTOM_CONFIG);
+    await openTab(page, "Devices");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return (await energyFields(page)).groups;
+        })
+        .toContain(MODE_GROUP);
+    const sections = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll(".inverter-card summary") ?? []).map(
+            (summary) => summary.textContent?.trim() ?? "",
+        );
+    });
+    expect(sections.some((text) => text.startsWith("Action options"))).toBe(true);
+    expect((await energyFields(page)).provided).toEqual({});
 });
 
 test("picking the profile deletes the owned keys and keeps the site settings", async ({
@@ -323,6 +387,8 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         solar: { forecast: { total_energy_entity_id: "sensor.solar_total" } },
         battery: { forecast: { charge_efficiency: 0.95 } },
     });
+    // The mode control is the profile's too: the hand-made helper goes.
+    expect(draft.devices.system[0].controls?.mode).toBeUndefined();
 
     await openTab(page, "Energy nodes");
     await expect

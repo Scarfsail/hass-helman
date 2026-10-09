@@ -10,9 +10,15 @@ from unittest.mock import patch
 import pytest
 
 from custom_components.helman.config_validation import validate_config_document
-from custom_components.helman.vendors import describe_vendors, resolve_vendor_config
+from custom_components.helman.controllables.spec import CONTROLLABLE_SPECS
+from custom_components.helman.vendors import (
+    PROFILES,
+    describe_vendors,
+    resolve_vendor_config,
+)
 
 ENTRY_ID = "solax-entry"
+INVERTER_ACTION_KINDS = list(CONTROLLABLE_SPECS["inverter"].action_option_attrs)
 
 #: The issue's table, as the prod registry had it on 2026-10-09: config path →
 #: (unique id, entity id).
@@ -132,10 +138,22 @@ def fake_hass(entries):
 
 @contextmanager
 def registry(entries):
+    def async_get_entity_id(domain, platform, unique_id):
+        return next(
+            (
+                e.entity_id
+                for e in entries
+                if e.platform == platform
+                and e.unique_id == unique_id
+                and e.entity_id.startswith(f"{domain}.")
+            ),
+            None,
+        )
+
     with (
         patch(
             "homeassistant.helpers.entity_registry.async_get",
-            return_value=NS(),
+            return_value=NS(async_get_entity_id=async_get_entity_id),
         ),
         patch(
             "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
@@ -187,12 +205,19 @@ def test_every_row_of_the_solax_table_resolves():
     assert value_at(resolved, "energy_nodes.grid.entities.power_polarity") == (
         "positive_is_import"
     )
+    # Helman's own mode select, under its suggested id until it is registered.
+    assert resolved["devices"]["system"][0]["controls"]["mode"] == {
+        "entity_id": "select.helman_inverter_mode",
+        "options": {kind: kind for kind in INVERTER_ACTION_KINDS},
+    }
     # Site settings stay the user's.
     assert value_at(resolved, "energy_nodes.battery.forecast.charge_efficiency") == 0.95
 
 
 def test_resolved_document_validates():
-    resolved, _issues = resolve(solax_document())
+    document = solax_document()
+    document["energy_nodes"]["grid"] = {"max_allowed_export_power": 9900}
+    resolved, _issues = resolve(document)
 
     report = validate_config_document(resolved)
 
@@ -305,6 +330,40 @@ def test_a_stored_owned_key_is_refused():
     )
 
 
+def test_the_mode_table_covers_every_inverter_action():
+    assert list(PROFILES["solax_inverter"].modes) == INVERTER_ACTION_KINDS
+
+
+def test_a_renamed_mode_select_still_resolves():
+    entries = solax_registry() + [
+        registry_entry(
+            "helman_inverter_mode", "select.my_inverter_mode", platform="helman"
+        )
+    ]
+
+    resolved, issues = resolve(solax_document(), entries=entries)
+
+    assert issues == []
+    assert resolved["devices"]["system"][0]["controls"]["mode"]["entity_id"] == (
+        "select.my_inverter_mode"
+    )
+
+
+def test_a_stored_mode_control_is_refused():
+    document = solax_document(
+        controls={"mode": {"entity_id": "input_select.rezim_fv", "options": {}}}
+    )
+
+    resolved, issues = resolve(document)
+
+    assert [(i.code, i.path, i.error) for i in issues] == [
+        ("vendor_owned_key", "devices.system[0].controls.mode", True)
+    ]
+    assert resolved["devices"]["system"][0]["controls"]["mode"]["entity_id"] == (
+        "select.helman_inverter_mode"
+    )
+
+
 def test_a_config_without_a_vendor_resolves_to_itself():
     document = {
         "devices": {"system": [{"kind": "inverter", "id": "inverter"}]},
@@ -378,7 +437,7 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert profile["entries"] == [{"entryId": ENTRY_ID, "title": "SolaX"}]
     device = payload["devices"]["devices.system[0]"]
     assert device["profile"] == "solax_inverter"
-    assert device["ownedDevicePaths"] == []
+    assert device["ownedDevicePaths"] == ["controls.mode"]
     assert set(device["ownedConfigPaths"]) == set(SOLAX_ROWS) | {
         "energy_nodes.battery.entities.power_polarity",
         "energy_nodes.grid.entities.power_polarity",
@@ -386,6 +445,9 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert device["resolved"]["energy_nodes.battery.entities.capacity"] is None
     assert device["resolved"]["energy_nodes.solar.entities.power"] == (
         "sensor.solax_pv_power_total"
+    )
+    assert device["resolved"]["devices.system[0].controls.mode.entity_id"] == (
+        "select.helman_inverter_mode"
     )
 
 

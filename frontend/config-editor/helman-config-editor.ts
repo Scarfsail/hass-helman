@@ -2208,6 +2208,13 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.grid_power_entity",
             )}
+            ${this._renderOptionalNumberField(
+              ["energy_nodes", "grid", "max_allowed_export_power"],
+              "editor.fields.max_allowed_export_power",
+              undefined,
+              "editor.help.grid_max_allowed_export_power",
+              { min: 0, suffix: "W" },
+            )}
           </div>
 
           ${this._renderSectionScope(
@@ -4263,6 +4270,9 @@ export class HelmanConfigEditorPanel
       (option) => this._stringValue(options[option.key]) !== "",
     ).length;
     const profileLabel = this._vendorProfile(inverter)?.label ?? "";
+    // A profile that owns the mode control maps every action itself: only the
+    // entity it points at is shown, read-only, in the controls section.
+    const modeProvided = this._vendorProvision([...modePath, "options"]) !== null;
 
     return html`
       <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
@@ -4321,27 +4331,29 @@ export class HelmanConfigEditorPanel
                   ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
                   : [],
               )}
-              ${this._renderInverterSection(
-                "action_options",
-                html`<div class="field-grid">
-                  ${INVERTER_ACTION_OPTIONS.map((option) =>
-                    this._renderOptionalTextField(
-                      [...modePath, "options", option.key],
-                      option.labelKey,
-                      undefined,
-                      "editor.help.inverter_action_option",
-                    ),
+              ${modeProvided
+                ? nothing
+                : this._renderInverterSection(
+                    "action_options",
+                    html`<div class="field-grid">
+                      ${INVERTER_ACTION_OPTIONS.map((option) =>
+                        this._renderOptionalTextField(
+                          [...modePath, "options", option.key],
+                          option.labelKey,
+                          undefined,
+                          "editor.help.inverter_action_option",
+                        ),
+                      )}
+                    </div>`,
+                    optionCount > 0
+                      ? [
+                          {
+                            key: "count",
+                            text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                          },
+                        ]
+                      : [],
                   )}
-                </div>`,
-                optionCount > 0
-                  ? [
-                      {
-                        key: "count",
-                        text: this._tFormat("editor.section_badges.count", { count: optionCount }),
-                      },
-                    ]
-                  : [],
-              )}
             `}
         </div>
       </details>
@@ -4457,15 +4469,22 @@ export class HelmanConfigEditorPanel
   /**
    * Which profile provides a config path, and the entity it resolves to.
    *
-   * `null` when no draft device's profile owns the path, which is every path
+   * A path under one of a device's owned paths counts too, such as the
+   * inverter's `controls.mode.entity_id`. `null` when no draft device's profile owns the path, which is every path
    * under "Custom".
    */
   private _vendorProvision(
     path: PathSegment[],
   ): { label: string; entityId: string | null } | null {
     const dotted = validationPath(path);
-    for (const device of Object.values(this._vendors?.devices ?? {})) {
-      if (!device.ownedConfigPaths?.includes(dotted)) continue;
+    for (const [devicePath, device] of Object.entries(this._vendors?.devices ?? {})) {
+      const owned =
+        device.ownedConfigPaths?.includes(dotted) ||
+        device.ownedDevicePaths?.some((relative) => {
+          const ownedPath = `${devicePath}.${relative}`;
+          return dotted === ownedPath || dotted.startsWith(`${ownedPath}.`);
+        });
+      if (!owned) continue;
       const profile = this._vendors?.profiles?.find((option) => option.id === device.profile);
       return {
         label: profile?.label ?? device.profile,

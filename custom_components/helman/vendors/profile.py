@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+#: The device path a profile with ``modes`` owns: the inverter mode control.
+MODE_DEVICE_PATH = "controls.mode"
+
+
 @dataclass(frozen=True)
 class VendorProfile:
     """One piece of hardware, described as the config it fills in.
@@ -18,6 +22,9 @@ class VendorProfile:
     relative to the device carrying the ``vendor`` key, such as
     ``controls.mode``. Every path a profile fills is owned: the stored config
     may not also set it.
+
+    A profile with ``modes`` is driven through Helman's own inverter mode
+    select, so it owns the device's ``controls.mode`` and points it there.
     """
 
     id: str
@@ -28,7 +35,18 @@ class VendorProfile:
     platform: str
     entities: Mapping[str, str]
     values: Mapping[str, Any] = field(default_factory=dict)
-    device_paths: tuple[str, ...] = ()
+    #: Each inverter action kind → the vendor writes that apply it, in order:
+    #: ``(unique-id template of a select, option)``.
+    modes: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    #: The unique-id template of the export limit number written after a mode:
+    #: ``0`` for ``stop_export``, the grid's ``max_allowed_export_power``
+    #: otherwise.
+    export_limit: str | None = None
+
+    @property
+    def device_paths(self) -> tuple[str, ...]:
+        """The paths, relative to the device, the profile owns there."""
+        return (MODE_DEVICE_PATH,) if self.modes else ()
 
     @property
     def owned_config_paths(self) -> list[str]:
