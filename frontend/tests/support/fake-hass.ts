@@ -214,8 +214,9 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
 
         // Measured days for every past day in reach of the pill row. A past
         // week's pills then carry real aggregates, which is what gives
-        // `historyDays` an identity worth asserting on.
-        const dayAggregates = (start: string, end: string) => ({
+        // `historyDays` an identity worth asserting on. `houseForecastWh` only
+        // where the read asked for it, as the backend does.
+        const dayAggregates = (start: string, end: string, houseForecast: boolean) => ({
             days: Array.from({ length: 31 }, (_, index) => isoDay(index - 30))
                 .filter((date) => date >= start && date <= end && date < isoDay(0))
                 .map((date) => ({
@@ -225,6 +226,8 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     gridExportKwh: 2,
                     batteryMinSocPct: 20,
                     batteryMaxSocPct: 90,
+                    houseWh: 7680,
+                    ...(houseForecast ? { houseForecastWh: 7200 } : {}),
                 })),
         });
 
@@ -276,6 +279,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 start_date?: string;
                 end_date?: string;
                 bucket?: string;
+                house_forecast?: boolean;
             }) => {
                 if (msg.type === "helman/get_schedule") {
                     return schedule;
@@ -285,7 +289,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     const end = msg.end_date ?? "";
                     window.__aggregateRequests.push({ start, end, bucket: msg.bucket ?? null });
                     return {
-                        ...dayAggregates(start, end),
+                        ...dayAggregates(start, end, msg.house_forecast === true),
                         bucket: msg.bucket ?? "day",
                         currency: "CZK",
                         // The span views navigate off the payload's own bounds,

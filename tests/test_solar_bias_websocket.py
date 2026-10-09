@@ -771,7 +771,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         # and no breakdown either, which is what keeps their read from widening
         # by a meter per configured consumer for a field they never draw.
         service.async_get_span_aggregates.assert_awaited_once_with(
-            "2026-04-19", "2026-04-25", "day", house_breakdown=False
+            "2026-04-19", "2026-04-25", "day", house_breakdown=False, house_forecast=False
         )
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
@@ -797,7 +797,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
         service.async_get_span_aggregates.assert_awaited_once_with(
-            "2025-06-01", "2026-05-31", "month", house_breakdown=False
+            "2025-06-01", "2026-05-31", "month", house_breakdown=False, house_forecast=False
         )
         self.assertEqual(connection.results, [(1, payload)])
 
@@ -827,7 +827,37 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
         service.async_get_span_aggregates.assert_awaited_once_with(
-            "2025-06-01", "2026-05-31", "month", house_breakdown=True
+            "2025-06-01", "2026-05-31", "month", house_breakdown=True, house_forecast=False
+        )
+        self.assertEqual(connection.results, [(1, payload)])
+
+    async def test_day_aggregates_passes_the_house_forecast_request_through(
+        self,
+    ) -> None:
+        # The house-focused inspector's pills compare each day's actual house
+        # energy with what was predicted for it; the flag is how they ask for the
+        # prediction, so it has to reach the service.
+        payload = {"bucket": "day", "currency": None, "days": []}
+        service = SimpleNamespace(
+            async_get_span_aggregates=AsyncMock(return_value=payload)
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+            FakeHass(coordinator),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/solar_bias/day_aggregates",
+                "start_date": "2026-04-19",
+                "end_date": "2026-04-25",
+                "house_forecast": True,
+            },
+        )
+
+        service.async_get_span_aggregates.assert_awaited_once_with(
+            "2026-04-19", "2026-04-25", "day", house_breakdown=False, house_forecast=True
         )
         self.assertEqual(connection.results, [(1, payload)])
 

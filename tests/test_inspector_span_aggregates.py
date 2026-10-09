@@ -224,6 +224,7 @@ BATTERY_SOC = "sensor.batt_soc"
 IMPORT_PRICE = "sensor.helman_grid_import_price"
 EXPORT_PRICE = "sensor.spot_sell_price"
 HELMAN_EXPORT_PRICE = "sensor.helman_grid_export_price"
+HOUSE_FORECAST_ENTITY = "sensor.helman_house_consumption_forecast_current"
 
 
 def _row(local_hour: datetime, **fields) -> dict:
@@ -896,6 +897,57 @@ class TestBreakdownIsAskedFor(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row["houseBreakdown"])
         self.assertNotIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
         self.assertNotIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
+
+
+class TestHouseForecast(unittest.IsolatedAsyncioTestCase):
+    """What the house forecast predicted per day, for the house-focused pills.
+
+    Read from the forecast sensor's hourly means in the same statistics read:
+    the sensor publishes W, so an hour's mean W is that hour's Wh, and a day is
+    the sum of its hours.
+    """
+
+    async def test_without_the_flag_the_forecast_is_neither_read_nor_reported(self):
+        _set_rows(
+            {
+                HOUSE_FORECAST_ENTITY: [
+                    _row(_hour("2026-04-23T08:00:00+02:00"), mean=400.0),
+                ],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        (row,) = payload["days"]
+        self.assertNotIn("houseForecastWh", row)
+        self.assertNotIn(HOUSE_FORECAST_ENTITY, _calls("hour")[0]["statistic_ids"])
+
+    async def test_with_the_flag_each_day_sums_its_hourly_means(self):
+        _set_rows(
+            {
+                HOUSE_FORECAST_ENTITY: [
+                    _row(_hour("2026-04-23T00:00:00+02:00"), mean=400.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), mean=1250.5),
+                    # An hour present but without a mean is not a reading.
+                    _row(_hour("2026-04-23T09:00:00+02:00")),
+                    _row(_hour("2026-04-23T23:00:00+02:00"), mean=349.5),
+                ],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates(
+            "2026-04-23", "2026-04-24", house_forecast=True
+        )
+
+        first, second = payload["days"]
+        self.assertEqual(first["houseForecastWh"], 2000.0)
+        # A day with no forecast hours is unknown, not a zero prediction.
+        self.assertIsNone(second["houseForecastWh"])
+        # Still one read: the forecast joined the entity list.
+        self.assertEqual(len(_calls("hour")), 1)
+        self.assertIn(HOUSE_FORECAST_ENTITY, _calls("hour")[0]["statistic_ids"])
 
 
 class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):

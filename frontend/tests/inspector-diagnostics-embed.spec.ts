@@ -170,6 +170,8 @@ async function mountEditor(page: Page, options: { cardUrl?: string } = {}): Prom
 declare global {
     function solarDiagnosticsDetails(): HTMLDetailsElement | null;
     function embeddedCard(): (HTMLElement & { _latestHass?: unknown }) | null;
+    function houseDiagnosticsDetails(): HTMLDetailsElement | null;
+    function houseEmbeddedCard(): (HTMLElement & { _config?: Record<string, unknown> }) | null;
     interface Window {
         __fakeHass: Record<string, unknown>;
         __requestedDates: string[];
@@ -184,6 +186,15 @@ async function installWalkers(page: Page): Promise<void> {
             root()?.querySelector("helman-solar-bias-diagnostics")?.closest("details") ?? null;
         (window as unknown as Record<string, unknown>).embeddedCard = () =>
             solarDiagnosticsDetails()?.querySelector("helman-solar-inspector-card") ?? null;
+        // The house job's Diagnostics: the panel holding the issues list inside
+        // the section its status element names.
+        (window as unknown as Record<string, unknown>).houseDiagnosticsDetails = () =>
+            root()?.querySelector('helman-training-job-status[data-job="house_consumption"]')
+                ?.closest("details")
+                ?.querySelector("helman-training-issues")
+                ?.closest("details") ?? null;
+        (window as unknown as Record<string, unknown>).houseEmbeddedCard = () =>
+            houseDiagnosticsDetails()?.querySelector("helman-solar-inspector-card") ?? null;
     });
 }
 
@@ -426,4 +437,44 @@ test("a panel config without the card URL still explains itself", async ({ page 
     await expect.poll(() => errorText(page)).toContain("card resource");
     expect(served.cardRequests()).toBe(0);
     expect(errors).toEqual([]);
+});
+
+test("the house Diagnostics mounts its own card from the same artifact", async ({ page }) => {
+    const served = await serve(page);
+    const errors = await mountEditor(page);
+    await page.waitForFunction(() => !!houseDiagnosticsDetails());
+    expect(await page.evaluate(() => houseDiagnosticsDetails() === solarDiagnosticsDetails()))
+        .toBe(false);
+
+    await setDiagnosticsOpen(page, true);
+    await waitForCard(page);
+    // Opening the solar panel mounts nothing in the house one.
+    expect(await page.evaluate(() => !!houseEmbeddedCard())).toBe(false);
+
+    await page.evaluate(() => {
+        houseDiagnosticsDetails()!.open = true;
+    });
+    await page.waitForFunction(() => !!houseEmbeddedCard());
+
+    // A second card, not a second module: one fetch, one set of card types.
+    expect(served.cardRequests()).toBe(1);
+    expect(errors).toEqual([]);
+    expect(await page.evaluate((types) => types.map((type) =>
+        ((window as unknown as { customCards: { type: string }[] }).customCards ?? [])
+            .filter((card) => card.type === type).length), CARD_TYPES),
+    ).toEqual(CARD_TYPES.map(() => 1));
+
+    const configs = await page.evaluate(() => ({
+        distinct: houseEmbeddedCard() !== embeddedCard(),
+        solar: (embeddedCard() as unknown as { _config: Record<string, unknown> })._config,
+        house: houseEmbeddedCard()!._config!,
+    }));
+    expect(configs.distinct).toBe(true);
+    // The solar embed is untouched by the house one's options.
+    expect(configs.solar.house_focus).toBe(false);
+    expect(configs.solar.hide_aggregate_views).toBe(false);
+    expect(configs.solar.chart_series).toEqual(["actual", "corrected", "raw"]);
+    expect(configs.house.house_focus).toBe(true);
+    expect(configs.house.hide_aggregate_views).toBe(true);
+    expect(configs.house.chart_series).toEqual(["houseForecast", "houseActual"]);
 });

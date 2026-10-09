@@ -61,6 +61,19 @@ export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
      */
     hide_money_strip?: boolean;
     /**
+     * When true, the month-of-days ("D") and year-of-months ("M") view stops are
+     * not rendered; the 15/30/60 day-view stops stay. A hard hide: there is no
+     * runtime control that brings them back. Default: false.
+     */
+    hide_aggregate_views?: boolean;
+    /**
+     * When true, the card is set up to judge the house consumption forecast:
+     * the day pills compare each past day's actual house energy with what was
+     * predicted for it, and the daily totals and the selected-slot detail show
+     * the forecast error (actual minus predicted). Default: false.
+     */
+    house_focus?: boolean;
+    /**
      * The day-chart series the card may draw. When unset every series is drawn.
      * A series left out is not drawn, has no legend tile and no metric tile, and
      * no runtime control brings it back — so a card listing only the solar

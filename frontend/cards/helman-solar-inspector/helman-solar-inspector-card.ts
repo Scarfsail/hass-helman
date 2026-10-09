@@ -66,6 +66,14 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                     selector: { boolean: {} },
                 },
                 {
+                    name: "hide_aggregate_views",
+                    selector: { boolean: {} },
+                },
+                {
+                    name: "house_focus",
+                    selector: { boolean: {} },
+                },
+                {
                     name: "chart_series",
                     selector: {
                         select: {
@@ -178,6 +186,8 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
             hide_schedule_strip: false,
             hide_price_strip: false,
             hide_money_strip: false,
+            hide_aggregate_views: false,
+            house_focus: false,
             ...config,
         };
     }
@@ -204,6 +214,8 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                         .hidePriceStrip=${this._config?.hide_price_strip ?? false}
                         .hideMoneyStrip=${this._config?.hide_money_strip ?? false}
                         .chartSeries=${this._config?.chart_series}
+                        .hideAggregateViews=${this._config?.hide_aggregate_views ?? false}
+                        .houseFocus=${this._config?.house_focus ?? false}
                     ></helman-solar-inspector>
                 </div>
             </ha-card>
