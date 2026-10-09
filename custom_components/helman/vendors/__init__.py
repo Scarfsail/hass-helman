@@ -238,11 +238,13 @@ def _iter_vendor_devices(
             )
         else:
             entry = hass.config_entries.async_get_entry(entry_id)
-            # A disabled entry keeps its registry rows, but none has a state.
+            # A disabled entry keeps its registry rows, but none has a state;
+            # an ignored discovery has no entities at all.
             if (
                 entry is None
                 or entry.domain != profile.platform
                 or entry.disabled_by is not None
+                or entry.source == "ignore"
             ):
                 entry = None
                 issues.append(

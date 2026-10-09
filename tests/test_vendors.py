@@ -7,6 +7,8 @@ from copy import deepcopy
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
+import pytest
+
 from custom_components.helman.config_validation import validate_config_document
 from custom_components.helman.vendors import describe_vendors, resolve_vendor_config
 
@@ -99,7 +101,13 @@ def solax_registry():
 
 
 def config_entry(
-    *, title="SolaX", data=None, options=None, domain="solax_modbus", disabled_by=None
+    *,
+    title="SolaX",
+    data=None,
+    options=None,
+    domain="solax_modbus",
+    disabled_by=None,
+    source="user",
 ):
     return NS(
         entry_id=ENTRY_ID,
@@ -108,6 +116,7 @@ def config_entry(
         data=data or {},
         options=options or {},
         disabled_by=disabled_by,
+        source=source,
     )
 
 
@@ -235,10 +244,11 @@ def test_only_the_chosen_entry_on_the_vendor_platform_is_read():
     ]
 
 
-def test_a_disabled_config_entry_is_refused():
-    resolved, issues = resolve(
-        solax_document(), hass_entries=[config_entry(disabled_by="user")]
-    )
+@pytest.mark.parametrize(
+    "entry", [config_entry(disabled_by="user"), config_entry(source="ignore")]
+)
+def test_a_disabled_or_ignored_config_entry_is_refused(entry):
+    resolved, issues = resolve(solax_document(), hass_entries=[entry])
 
     assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
     assert [(i.code, i.path) for i in issues] == [
