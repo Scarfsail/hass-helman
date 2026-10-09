@@ -1727,6 +1727,11 @@ export class HelmanSolarInspector extends LitElement {
    */
   protected willUpdate(_changed: PropertyValues<this>) {
     this._todayKey = this._todayIso();
+    // Hidden while the reader is in one, the aggregate view would leave no
+    // stop to get back out by.
+    if (_changed.has("hideAggregateViews") && this.hideAggregateViews && this._viewMode !== "day") {
+      this._selectViewStop({ mode: "day", minutes: this._slotMinutes });
+    }
     const open = this._viewMode === "day" && this._navExpanded;
     if (open && (!this._calendarWasOpen || this._calendarSelection !== this._selectedDate)) {
       this._slideDayCalendar(this._selectedDate || this._todayKey);
@@ -3852,7 +3857,9 @@ export class HelmanSolarInspector extends LitElement {
         const forecastDeferrableWh = forecastSplit
           ? sumWhOverSlots(forecast.deferrable, slots)
           : null;
-        if (!actualDeferrableWh && !forecastDeferrableWh) {
+        // The house embed judges the forecast's total, which it always has --
+        // and over elapsed slots the split would leave its column empty.
+        if (this.houseFocus || (!actualDeferrableWh && !forecastDeferrableWh)) {
           return [
             this._powerRow(
               this._t("bias_correction.inspector.merged.house"),

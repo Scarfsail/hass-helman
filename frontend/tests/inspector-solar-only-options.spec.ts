@@ -908,3 +908,54 @@ test("the house embed's health banner keeps only the house forecast", async ({ p
     expect(await bannerLabels(SOLAR_ONLY)).toHaveLength(2);
     expect(await bannerLabels(HOUSE_ONLY)).toEqual(["House consumption forecast"]);
 });
+
+test("the house popup quotes the forecast over a slot where something deferrable ran", async ({ page }) => {
+    await mountCard(page, HOUSE_ONLY);
+    await seedEverySeries(page);
+    // An elapsed slot: the actual is itemised and a deferrable appliance ran,
+    // while the forecast carries only its recorded scalar -- no composition.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        payload.series.houseActualBreakdown = [{
+            slot: "12:00",
+            unmeasuredWh: 220,
+            appliances: [{
+                entityId: "sensor.boiler", label: "Boiler", wh: 100, switchEntityId: null,
+                powerEntityId: null, deferrable: true, controllableIds: [],
+            }],
+        }];
+        payload.series.houseForecastBreakdown = [];
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+
+    expect(await tooltipRows(page, "12:00")).toEqual([{ label: "House", actual: true, forecast: true }]);
+});
+
+test("hiding the aggregate views from inside one returns the card to the day view", async ({ page }) => {
+    await mountCard(page, {});
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        el._selectViewStop({ mode: "month" });
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+
+    await reconfigure(page, { hide_aggregate_views: true });
+
+    const mode = await page.evaluate(() => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        return (root?.host as any)._viewMode;
+    });
+    expect(mode).toBe("day");
+});
