@@ -17,7 +17,7 @@ telemetry — are out of scope; install the integration and point the config at 
 > signed grid power sensors it already reads (§3), so there is nothing to build
 > ([issue #71](https://github.com/Scarfsail/hass-helman/issues/71)).
 
-> Not needed with the SolaX inverter profile: the house energy helpers (§1.2 `sensor.house_load_total`, §1.3 `sensor.solax_today_house_load`) and the battery SoC bound templates (§2). The profile reads the SolaX entities they were built from directly. See [Hardware profiles](../README.md#hardware-profiles).
+> Not needed with the SolaX inverter profile: the house energy helpers (§1.2 `sensor.house_load_total`, §1.3 `sensor.solax_today_house_load`), the battery SoC bound templates (§2), and the inverter mode selector with its automation (§4). The profile reads the SolaX entities they were built from directly, and drives the inverter through Helman's own `select.helman_inverter_mode`. See [Hardware profiles](../README.md#hardware-profiles).
 
 ## About the examples
 
@@ -294,6 +294,8 @@ is now never the right answer — that is what this setting replaces.
 
 ### `input_select.rezim_fv` — inverter mode selector
 
+> Not needed with the SolaX inverter profile, nor is the automation behind it: Helman creates its own `select.helman_inverter_mode`, points the inverter's `controls.mode` at it, and applies each option's SolaX writes itself (the use mode, then in Manual Mode the manual mode, then `number.solax_export_control_user_limit`: `0` for `stop_export`, `energy_nodes.grid.max_allowed_export_power` otherwise). Set `select.helman_inverter_mode` by hand to override, the same way you set the `input_select` today. Set `energy_nodes.grid.max_allowed_export_power` from your grid contract first: the profile requires it.
+
 **Purpose.** The **single write-point** through which helman executes its battery schedule.
 Everything the optimizer decides about the battery is expressed by selecting an option here.
 
@@ -453,7 +455,7 @@ In dependency order:
 3. `sensor.solax_today_house_load` — daily utility meter (optional, display only). Not needed with the SolaX inverter profile.
 4. `sensor.solax_battery_min_soc` / `max_soc` — templates over the mode-specific inverter limits. Not needed with the SolaX inverter profile.
 5. `sensor.solax_grid` — template, only if your integration reports import and export separately.
-6. `input_select.rezim_fv` + the automation behind it — required before scheduling can execute.
+6. `input_select.rezim_fv` + the automation behind it — required before scheduling can execute. Not needed with the SolaX inverter profile.
 7. `switch.ev_nabijeni` — only if you have an EV charger to schedule.
 
 To audit an existing install, fetch the config with the `helman/get_config` WebSocket command,

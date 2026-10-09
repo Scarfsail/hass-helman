@@ -15,13 +15,14 @@ and the chosen config entry, so a renamed entity id still resolves.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from ..const import DOMAIN, INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
 from ..controllables.config import iter_device_paths, peek_controllable_kind
-from .profile import VendorProfile
+from .profile import MODE_DEVICE_PATH, VendorProfile
 from .solax_inverter import PROFILE as SOLAX_INVERTER
 
 #: Every profile, by id. Adding hardware is adding a module here.
@@ -69,7 +70,9 @@ def resolve_vendor_config(
     """
     resolved = deepcopy(dict(config))
     issues: list[VendorIssue] = []
-    for vendor_device in _iter_vendor_devices(hass, config, issues):
+    # Walks the copy, so a device path is filled on the device itself; each
+    # stored value is read before the profile writes over it.
+    for vendor_device in _iter_vendor_devices(hass, resolved, issues):
         profile = vendor_device.profile
         owned = [
             (path, _value_at(config, path)) for path in profile.owned_config_paths
@@ -94,6 +97,16 @@ def resolve_vendor_config(
 
         for path, value in profile.values.items():
             _set_value_at(resolved, path, value)
+        if profile.modes:
+            # Helman's own select exists whatever the vendor entry's state.
+            _set_value_at(
+                vendor_device.device,
+                MODE_DEVICE_PATH,
+                {
+                    "entity_id": inverter_mode_entity_id(hass),
+                    "options": {kind: kind for kind in profile.modes},
+                },
+            )
         if vendor_device.entry is None:
             continue
         for path, entity_id in resolve_profile_entities(
@@ -109,7 +122,7 @@ def resolve_vendor_config(
                     code="vendor_entity_unresolved",
                     message=(
                         f"{path}: no {profile.platform} entity with unique id "
-                        f"{_unique_id(profile, path, vendor_device.entry)!r} in "
+                        f"{_unique_id(profile.entities[path], vendor_device.entry)!r} in "
                         f"config entry {vendor_device.entry.entry_id!r}"
                     ),
                     error=False,
@@ -122,8 +135,16 @@ def resolve_profile_entities(
     hass: Any, profile: VendorProfile, entry: Any | None
 ) -> dict[str, str | None]:
     """Each of the profile's entity paths → the entity id it resolves to."""
+    by_template = resolve_unique_ids(hass, profile, entry, profile.entities.values())
+    return {path: by_template[template] for path, template in profile.entities.items()}
+
+
+def resolve_unique_ids(
+    hass: Any, profile: VendorProfile, entry: Any | None, templates: Iterable[str]
+) -> dict[str, str | None]:
+    """Each unique-id template → the entity id it resolves to in ``entry``."""
     if entry is None:
-        return dict.fromkeys(profile.entities)
+        return dict.fromkeys(templates)
     # Imported here so the modules that import this package can still be
     # loaded under the trimmed Home Assistant stubs of the websocket tests.
     from homeassistant.helpers import entity_registry as er
@@ -140,9 +161,39 @@ def resolve_profile_entities(
         and registry_entry.disabled_by is None
     }
     return {
-        path: by_unique_id.get(_unique_id(profile, path, entry))
-        for path in profile.entities
+        template: by_unique_id.get(_unique_id(template, entry))
+        for template in templates
     }
+
+
+def inverter_mode_entity_id(hass: Any) -> str:
+    """Helman's own inverter mode select, by unique id.
+
+    Before the select is first registered, the id it is created under.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    return (
+        er.async_get(hass).async_get_entity_id(
+            "select", DOMAIN, INVERTER_MODE_UNIQUE_ID
+        )
+        or INVERTER_MODE_ENTITY_ID
+    )
+
+
+def find_mode_vendor(
+    hass: Any, config: Mapping[str, Any]
+) -> tuple[VendorProfile, Any | None] | None:
+    """The profile with a mode table on a device, and its config entry.
+
+    ``None`` when no device carries one: Helman's mode select is not created.
+    The entry is ``None`` when it is missing or unknown, already reported by
+    :func:`resolve_vendor_config`; the select then fails every write.
+    """
+    for vendor_device in _iter_vendor_devices(hass, config, []):
+        if vendor_device.profile.modes:
+            return vendor_device.profile, vendor_device.entry
+    return None
 
 
 def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
@@ -150,8 +201,10 @@ def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
 
     The profiles with their candidate config entries, and for each device of
     the draft that carries a valid ``vendor``, what that profile owns there
-    and what it resolves to. This is the editor's only source for which paths
-    a profile owns, so each list lives once, in its profile module.
+    and what it resolves to, keyed by absolute path (the mode control's
+    entity included, as ``devices.system[0].controls.mode.entity_id``). This
+    is the editor's only source for which paths a profile owns, so each list
+    lives once, in its profile module.
     """
     return {
         "profiles": [
@@ -177,9 +230,20 @@ def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
                 "profile": vendor_device.profile.id,
                 "ownedConfigPaths": vendor_device.profile.owned_config_paths,
                 "ownedDevicePaths": list(vendor_device.profile.device_paths),
-                "resolved": resolve_profile_entities(
-                    hass, vendor_device.profile, vendor_device.entry
-                ),
+                "resolved": {
+                    **resolve_profile_entities(
+                        hass, vendor_device.profile, vendor_device.entry
+                    ),
+                    **(
+                        {
+                            f"{vendor_device.path}.{MODE_DEVICE_PATH}.entity_id": (
+                                inverter_mode_entity_id(hass)
+                            )
+                        }
+                        if vendor_device.profile.modes
+                        else {}
+                    ),
+                },
             }
             for vendor_device in _iter_vendor_devices(hass, config, [])
         },
@@ -263,15 +327,15 @@ def _device_error(path: str, code: str, message: str) -> VendorIssue:
     return VendorIssue(section="devices", path=path, code=code, message=message, error=True)
 
 
-def _unique_id(profile: VendorProfile, path: str, entry: Any) -> str:
-    """The unique id the profile's entity at ``path`` is registered under.
+def _unique_id(template: str, entry: Any) -> str:
+    """The unique id a profile's entity template is registered under.
 
     ``{name}`` is the entry's configured name: integrations built on options
     flows keep it in ``options``, older ones in ``data``, and the entry title
     is what both default it to.
     """
     name = entry.options.get("name") or entry.data.get("name") or entry.title
-    return profile.entities[path].format(name=name)
+    return template.format(name=name)
 
 
 def _value_at(document: Any, dotted_path: str) -> Any:

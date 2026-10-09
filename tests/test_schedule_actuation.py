@@ -214,10 +214,18 @@ class ActuationChokePointTests(unittest.TestCase):
 
     def test_only_the_actuation_module_calls_hass_services(self) -> None:
         pattern = re.compile(r"services\s*\.\s*async_call")
+        # The inverter mode select is the entity the executor writes through
+        # the gate, standing in for a user's own automation: it writes the
+        # vendor entities only when someone selects one of its options, never
+        # on its own, so a closed gate still leaves the hardware untouched.
+        allowed = {
+            HELMAN_ROOT / "scheduling" / "actuation.py",
+            HELMAN_ROOT / "select.py",
+        }
         offenders = [
             str(path.relative_to(ROOT))
             for path in HELMAN_ROOT.rglob("*.py")
-            if path.name != "actuation.py"
+            if path not in allowed
             and "__pycache__" not in path.parts
             and pattern.search(path.read_text())
         ]

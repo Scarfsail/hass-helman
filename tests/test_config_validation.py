@@ -316,11 +316,46 @@ class ConfigValidationTests(unittest.TestCase):
         config.get("training", {}).get("solar_bias", {}).pop(
             "total_energy_entity_id", None
         )
+        config["energy_nodes"]["grid"]["max_allowed_export_power"] = 9900
 
         report = validate_config_document(config)
 
         self.assertEqual(report.errors, [])
         self.assertEqual(report.warnings, [])
+
+    def _export_cap_errors(self, *, vendor: bool, **grid) -> list[tuple[str, str]]:
+        config = _valid_config()
+        if vendor:
+            config["devices"]["system"][0]["vendor"] = {
+                "profile": "solax_inverter",
+                "entry_id": "solax-entry",
+            }
+        config["energy_nodes"]["grid"].update(grid)
+        return [
+            (issue.path, issue.code)
+            for issue in validate_config_document(config).errors
+            if issue.path == "energy_nodes.grid.max_allowed_export_power"
+        ]
+
+    def test_export_cap_is_required_with_the_solax_profile(self) -> None:
+        self.assertEqual(
+            self._export_cap_errors(vendor=True),
+            [("energy_nodes.grid.max_allowed_export_power", "required")],
+        )
+
+    def test_export_cap_must_not_be_negative(self) -> None:
+        self.assertEqual(
+            self._export_cap_errors(vendor=True, max_allowed_export_power=-1),
+            [("energy_nodes.grid.max_allowed_export_power", "invalid_non_negative_number")],
+        )
+
+    def test_export_cap_of_zero_is_a_no_export_contract(self) -> None:
+        self.assertEqual(
+            self._export_cap_errors(vendor=True, max_allowed_export_power=0), []
+        )
+
+    def test_export_cap_is_optional_without_a_profile(self) -> None:
+        self.assertEqual(self._export_cap_errors(vendor=False), [])
 
     def test_unknown_controllable_kind_is_warning_only(self) -> None:
         config = _valid_config()

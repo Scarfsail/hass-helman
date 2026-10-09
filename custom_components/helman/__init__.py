@@ -16,7 +16,7 @@ from .coordinator import HelmanCoordinator
 from .storage import HelmanStorage
 from .websockets import async_register_websocket_commands
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "select"]
 _LOGGER = logging.getLogger(__name__)
 
 

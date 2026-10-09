@@ -188,12 +188,33 @@ class TranslationStringsCompletenessTests(unittest.TestCase):
         en = json.loads((HELMAN_DIR / "translations" / "en.json").read_text())
         cs = json.loads((HELMAN_DIR / "translations" / "cs.json").read_text())
 
-        strings_keys = set(strings["entity"]["sensor"].keys())
-        en_keys = set(en["entity"]["sensor"].keys())
-        cs_keys = set(cs["entity"]["sensor"].keys())
+        for platform in ("sensor", "select"):
+            strings_keys = set(strings["entity"][platform].keys())
+            en_keys = set(en["entity"][platform].keys())
+            cs_keys = set(cs["entity"][platform].keys())
 
-        self.assertEqual(strings_keys, en_keys, "en.json has drifted from strings.json")
-        self.assertEqual(strings_keys, cs_keys, "cs.json has drifted from strings.json")
+            self.assertEqual(strings_keys, en_keys, "en.json has drifted from strings.json")
+            self.assertEqual(strings_keys, cs_keys, "cs.json has drifted from strings.json")
+
+    def test_every_inverter_mode_option_has_a_state_name(self) -> None:
+        # The select's options are the inverter's action kinds.
+        kinds = {
+            "normal",
+            "stop_charging",
+            "stop_discharging",
+            "charge_to_target_soc",
+            "discharge_to_target_soc",
+            "stop_export",
+        }
+        for path in (
+            HELMAN_DIR / "strings.json",
+            HELMAN_DIR / "translations" / "en.json",
+            HELMAN_DIR / "translations" / "cs.json",
+        ):
+            states = json.loads(path.read_text())["entity"]["select"]["inverter_mode"][
+                "state"
+            ]
+            self.assertEqual(set(states), kinds, path.name)
 
 
 if __name__ == "__main__":

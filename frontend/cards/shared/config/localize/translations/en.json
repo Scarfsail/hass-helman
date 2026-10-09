@@ -299,7 +299,8 @@
       "add_device_entity": "Energy meter of the new device",
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child",
       "hardware_profile": "Hardware profile",
-      "vendor_entry": "Integration entry"
+      "vendor_entry": "Integration entry",
+      "max_allowed_export_power": "Max allowed export power"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -582,7 +583,8 @@
       "schedulable": "Helman may plan and run this device, and optimizers can target it. A schedulable device's energy is carved out of the house baseline and added back as planned demand. Leave it off for a device you only want measured — its load then stays inside the baseline.",
       "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it.",
       "hardware_profile": "The hardware this device is. A profile is defined in Helman, so it knows which entity of the vendor integration feeds each setting; renaming those entities does not break it. Picking one removes the entities it provides from this config. Site settings, such as maximum power, prices or efficiencies, stay yours to set.",
-      "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services."
+      "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services.",
+      "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise."
     },
     "device_filter": {
       "label": "Show devices",

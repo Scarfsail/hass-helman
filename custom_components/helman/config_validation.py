@@ -21,6 +21,7 @@ from .grid_price_forecast_builder import (
 from .controllables.config import (
     CONTROLLABLE_ID_INVERTER,
     device_children,
+    find_inverter_device,
     is_schedulable,
     iter_device_paths,
     own_meter,
@@ -45,6 +46,7 @@ from .const import (
     SOLAR_BIAS_AGGREGATION_METHODS,
 )
 from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
+from .vendors import PROFILES as VENDOR_PROFILES
 
 #: The config keys config versions 7 and 20 retired. Named here so the save path
 #: can refuse them by name instead of silently ignoring a user's hand-edited
@@ -954,6 +956,9 @@ def _validate_grid_config(
     report: ValidationReport,
 ) -> None:
     section = "energy_nodes"
+    _validate_max_allowed_export_power(
+        config, raw_grid if isinstance(raw_grid, Mapping) else {}, report
+    )
     if raw_grid is None:
         return
     grid = _require_mapping(raw_grid, "energy_nodes.grid", section, report)
@@ -1006,6 +1011,43 @@ def _validate_grid_config(
                 code="invalid_import_price_config",
                 message=str(err),
             )
+
+
+def _validate_max_allowed_export_power(
+    config: Mapping[str, Any], grid: Mapping[str, Any], report: ValidationReport
+) -> None:
+    """The export cap of the user's grid contract, in W.
+
+    A site fact, so it has no default anywhere. Required when the inverter's
+    hardware profile has a mode table, whose mode select restores the export
+    limit to it after ``stop_export``; otherwise optional and unused.
+    """
+    path = "energy_nodes.grid.max_allowed_export_power"
+    value = grid.get("max_allowed_export_power")
+    if value is None:
+        vendor = find_inverter_device(config).get("vendor")
+        profile_id = vendor.get("profile") if isinstance(vendor, Mapping) else None
+        profile = (
+            VENDOR_PROFILES.get(profile_id) if isinstance(profile_id, str) else None
+        )
+        if profile is not None and profile.modes:
+            report.add_error(
+                section="energy_nodes",
+                path=path,
+                code="required",
+                message=(
+                    f"{path} is required with the {profile.label} profile: its "
+                    "mode select restores the inverter's export limit to it"
+                ),
+            )
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        report.add_error(
+            section="energy_nodes",
+            path=path,
+            code="invalid_non_negative_number",
+            message=f"{path} must be a number >= 0",
+        )
 
 
 def _validate_controllables_config(

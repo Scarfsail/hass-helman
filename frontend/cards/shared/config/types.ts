@@ -85,6 +85,7 @@ export interface VendorDeviceInfo {
   profile: string;
   ownedConfigPaths: string[];
   ownedDevicePaths: string[];
+  /** Absolute path → entity id, a device's owned mode control entity included. */
   resolved: Record<string, string | null>;
 }
 

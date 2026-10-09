@@ -90,6 +90,19 @@
       "grid_export_price": {
         "name": "Grid export price"
       }
+    },
+    "select": {
+      "inverter_mode": {
+        "name": "Inverter mode",
+        "state": {
+          "normal": "Normal",
+          "stop_charging": "Stop charging",
+          "stop_discharging": "Stop discharging",
+          "charge_to_target_soc": "Force charge",
+          "discharge_to_target_soc": "Force discharge",
+          "stop_export": "Stop export"
+        }
+      }
     }
   },
   "services": {

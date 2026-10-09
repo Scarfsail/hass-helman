@@ -90,6 +90,19 @@
       "grid_export_price": {
         "name": "Prodejní cena elektřiny"
       }
+    },
+    "select": {
+      "inverter_mode": {
+        "name": "Režim střídače",
+        "state": {
+          "normal": "Standardní",
+          "stop_charging": "Zákaz nabíjení",
+          "stop_discharging": "Zákaz vybíjení",
+          "charge_to_target_soc": "Nucené nabíjení",
+          "discharge_to_target_soc": "Nucené vybíjení",
+          "stop_export": "Zákaz exportu"
+        }
+      }
     }
   },
   "services": {

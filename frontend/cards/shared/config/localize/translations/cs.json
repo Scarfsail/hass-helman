@@ -300,7 +300,8 @@
       "add_device_entity": "Elektroměr nového zařízení",
       "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení",
       "hardware_profile": "Hardwarový profil",
-      "vendor_entry": "Položka integrace"
+      "vendor_entry": "Položka integrace",
+      "max_allowed_export_power": "Max. povolený výkon exportu"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -583,7 +584,8 @@
       "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži.",
       "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím.",
       "hardware_profile": "Hardware, kterým toto zařízení je. Profil je definovaný v Helmanu, takže ví, která entita integrace výrobce plní které nastavení; přejmenování těchto entit ho nerozbije. Výběr profilu odstraní z této konfigurace entity, které poskytuje. Nastavení místa, jako maximální výkon, ceny nebo účinnosti, zůstávají na vás.",
-      "vendor_entry": "Položka konfigurace integrace výrobce, kterou toto zařízení je, v Nastavení > Zařízení a služby."
+      "vendor_entry": "Položka konfigurace integrace výrobce, kterou toto zařízení je, v Nastavení > Zařízení a služby.",
+      "grid_max_allowed_export_power": "Nejvyšší výkon exportu do sítě, který vám dovoluje smlouva s distributorem, ve wattech; 0 pro smlouvu bez exportu. Hodnotu vezměte ze smlouvy: je to vlastnost vašeho odběrného místa, ne hardwaru. Povinné s hardwarovým profilem, který řídí režimy střídače; ten na ni po slotu se zákazem exportu vrací limit exportu střídače. Jinak se nepoužívá."
     },
     "device_filter": {
       "label": "Zobrazit zařízení",

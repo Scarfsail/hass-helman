@@ -100,6 +100,12 @@ GRID_EXPORT_PRICE_ENTITY_ID = "sensor.helman_grid_export_price"
 #: whose single correct value was Helman's own output. The card reads it back
 #: by this id, so it is pinned here rather than left to entity-id slugging.
 SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_solar_forecast_today_remaining"
+#: Helman's own inverter mode select, created when the inverter's hardware
+#: profile carries a mode table. The profile points ``controls.mode`` at it,
+#: found in the registry by this unique id (a renamed entity id still
+#: resolves), and by the suggested id before it is first registered.
+INVERTER_MODE_UNIQUE_ID = "helman_inverter_mode"
+INVERTER_MODE_ENTITY_ID = "select.helman_inverter_mode"
 
 #: Single source of truth for the sensor-platform entity registry migration
 #: (``__init__.async_migrate_entry``) run when a config entry upgrades from
