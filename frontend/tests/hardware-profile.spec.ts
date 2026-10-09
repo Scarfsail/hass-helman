@@ -90,7 +90,7 @@ const SOLAX_CONFIG = {
     },
 };
 
-async function mountEditor(page: Page, config: unknown): Promise<void> {
+async function mountEditor(page: Page, config: unknown, profile = PROFILE): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
@@ -140,7 +140,7 @@ async function mountEditor(page: Page, config: unknown): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config, profile: PROFILE, resolved: RESOLVED },
+        { config, profile, resolved: RESOLVED },
     );
 }
 
@@ -225,7 +225,7 @@ test("under the SolaX profile the owned pickers are replaced by what they resolv
         unresolved: false,
     });
     expect(provided["energy_nodes.battery.entities.max_soc"]).toEqual({
-        text: "Not found in SolaX inverter",
+        text: "Not found in the chosen integration entry",
         unresolved: true,
     });
 });
@@ -275,7 +275,7 @@ test("the inverter's hardware section lists every resolved entity", async ({ pag
     });
     expect(section.rows).toContainEqual({
         path: "energy_nodes.battery.entities.max_soc",
-        text: "Not found in SolaX inverter",
+        text: "Not found in the chosen integration entry",
         unresolved: true,
     });
 });
@@ -362,4 +362,26 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
             };
         })
         .toEqual({ provided: 0, minSocPicker: true });
+});
+
+test("without an integration entry the section says so instead of offering an empty select", async ({
+    page,
+}) => {
+    await mountEditor(page, SOLAX_CONFIG, { ...PROFILE, entries: [] });
+    await openTab(page, "Devices");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return page.evaluate(() => {
+                const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+                return root?.querySelector('[data-field="vendor-no-entries"]')?.textContent?.trim() ?? "";
+            });
+        })
+        .toContain("No integration entry for SolaX inverter is set up");
+    const entrySelectHidden = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return root?.querySelector<HTMLSelectElement>('select[data-field="vendor-entry"]')?.hidden;
+    });
+    expect(entrySelectHidden).toBe(true);
 });

@@ -4403,7 +4403,15 @@ export class HelmanConfigEditorPanel
                   <label>${this._t("editor.fields.vendor_entry")}</label>
                   ${this._renderHelpIcon("editor.fields.vendor_entry", "editor.help.vendor_entry")}
                 </div>
+                ${profile.entries.length === 0
+                  ? html`
+                      <div class="vendor-provided-entity unresolved" data-field="vendor-no-entries">
+                        ${this._tFormat("editor.dynamic.vendor_no_entries", { profile: profile.label })}
+                      </div>
+                    `
+                  : nothing}
                 <select
+                  ?hidden=${profile.entries.length === 0}
                   data-field="vendor-entry"
                   @change=${(event: Event) =>
                     this._setDeviceVendorEntry(path, (event.currentTarget as HTMLSelectElement).value)}
@@ -4434,9 +4442,7 @@ export class HelmanConfigEditorPanel
                       <code>${configPath}</code>
                       <span>
                         ${entityId ??
-                        this._tFormat("editor.dynamic.vendor_entity_unresolved", {
-                          profile: profile.label,
-                        })}
+                        this._t("editor.dynamic.vendor_entity_unresolved")}
                       </span>
                     </li>
                   `,
@@ -4484,7 +4490,7 @@ export class HelmanConfigEditorPanel
         </div>
         <div class=${provision.entityId ? "vendor-provided-entity" : "vendor-provided-entity unresolved"}>
           ${provision.entityId ??
-          this._tFormat("editor.dynamic.vendor_entity_unresolved", { profile: provision.label })}
+          this._t("editor.dynamic.vendor_entity_unresolved")}
         </div>
         ${slotted}
       </div>

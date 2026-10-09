@@ -479,7 +479,8 @@
       "inverter": "Inverter",
       "condition_group": "Group {index}",
       "provided_by": "Provided by {profile}",
-      "vendor_entity_unresolved": "Not found in {profile}"
+      "vendor_entity_unresolved": "Not found in the chosen integration entry",
+      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
     },
     "help": {
       "aria_label": "Field help",

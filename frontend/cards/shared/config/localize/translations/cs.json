@@ -480,7 +480,8 @@
       "inverter": "Střídač",
       "condition_group": "Skupina {index}",
       "provided_by": "Poskytuje {profile}",
-      "vendor_entity_unresolved": "V profilu {profile} nenalezeno"
+      "vendor_entity_unresolved": "Ve zvolené položce integrace nenalezeno",
+      "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní."
     },
     "help": {
       "aria_label": "Nápověda k poli",
