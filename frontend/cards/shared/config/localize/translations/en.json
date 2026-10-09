@@ -85,7 +85,8 @@
       "system_devices": "System",
       "measurements": "Measurements",
       "projection": "Projection",
-      "children": "Children"
+      "children": "Children",
+      "hardware": "Hardware profile"
     },
     "notes": {
       "device_groupings": "Group devices by breaker box, room or mode. Each grouping is a chip on the card; a device is in at most one group per grouping: drag it between the groups and \"Unassigned\". A device is in a group only through its own assignment, which its editor's \"Groups\" section also sets. The short name is the badge a member device shows. Removing a group or grouping also removes it from every device. The id is what devices and the helman.group_action / helman.get_group_entities actions refer to; devices follow an id change, automations using the old id do not.",
@@ -106,7 +107,8 @@
       "training_solar_bias_slot_invalidation": "Not every recorded slot is honest evidence about the forecast. With a full battery and nothing being exported the inverter throttles the array, so production reads low although the forecast was right, and a meter glitch can spike or zero a single slot the same way. These thresholds decide which slots are thrown out before the fit, so the correction learns from the weather rather than from clipping and bad data.",
       "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction.",
       "devices": "Every energy-consuming device in the house, as a tree: a device can hold children that either have their own meter or draw from its meter. Schedulable devices are planned and run by Helman; the rest are only measured.",
-      "system_devices": "Devices that control the site rather than draw power; today the battery inverter."
+      "system_devices": "Devices that control the site rather than draw power; today the battery inverter.",
+      "hardware_profile": "A hardware profile fills in the entities of this device itself, found by the vendor integration's own entity ids. The fields it provides are read-only elsewhere in the editor. Custom keeps every entity picked by hand."
     },
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
@@ -295,7 +297,9 @@
       "children_distribute_all": "Distribute all energy to children",
       "children_tolerance_percent": "Children tolerance %",
       "add_device_entity": "Energy meter of the new device",
-      "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child"
+      "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child",
+      "hardware_profile": "Hardware profile",
+      "vendor_entry": "Integration entry"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -429,7 +433,8 @@
       "top_level": "None (top level)",
       "kind_generic": "Generic",
       "kind_climate": "Climate",
-      "kind_ev_charger": "EV charger"
+      "kind_ev_charger": "EV charger",
+      "profile_custom": "Custom"
     },
     "toggles": {
       "entities_only": "Entities only"
@@ -472,7 +477,10 @@
       "unsupported_optimizer_kind": "Unsupported optimizer kind: {kind}",
       "unsupported_appliance_kind": "Unsupported controllable kind: {kind}",
       "inverter": "Inverter",
-      "condition_group": "Group {index}"
+      "condition_group": "Group {index}",
+      "provided_by": "Provided by {profile}",
+      "vendor_entity_unresolved": "Not found in the chosen integration entry",
+      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
     },
     "help": {
       "aria_label": "Field help",
@@ -572,7 +580,9 @@
       "children_distribute_all": "This device's children without a meter of their own get a share of its own power (its reading minus its metered children's) while they run. Helman learns each one's power from the meter's history and shares in that ratio; until it has learned, the share is even. With this on, all own power goes to whichever children are running. Turn it off to cap each child at its learned power plus a tolerance: what exceeds the caps is then left on this device's unmeasured row, and the children's forecast figures leave it out too.",
       "children_tolerance_percent": "How far above its learned power a child's share may go, in percent. At 0 a child is never given more than it has learned to draw; anything above goes to the unmeasured row. A child not learned yet is never capped.",
       "schedulable": "Helman may plan and run this device, and optimizers can target it. A schedulable device's energy is carved out of the house baseline and added back as planned demand. Leave it off for a device you only want measured — its load then stays inside the baseline.",
-      "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it."
+      "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it.",
+      "hardware_profile": "The hardware this device is. A profile is defined in Helman, so it knows which entity of the vendor integration feeds each setting; renaming those entities does not break it. Picking one removes the entities it provides from this config. Site settings, such as maximum power, prices or efficiencies, stay yours to set.",
+      "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services."
     },
     "device_filter": {
       "label": "Show devices",

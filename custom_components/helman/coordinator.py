@@ -211,6 +211,7 @@ from .training.house_consumption import (
 from .training.house_consumption import health_for as house_consumption_health_for
 from .span_history_model import SpanMeters, recorder_tail_start
 from .tree_builder import HelmanTreeBuilder
+from .vendors import resolve_vendor_config
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -707,7 +708,11 @@ class HelmanCoordinator:
         self._share_sensor_factory: Callable | None = None
         self._entry: Any = None
         self._removing_entity_ids: set[str] = set()
-        self._active_config: dict[str, Any] = deepcopy(storage.config)
+        # The hardware profiles fill the slots they own here, so nothing
+        # downstream knows they exist. `async_setup` re-reads and logs.
+        self._active_config: dict[str, Any] = resolve_vendor_config(
+            hass, storage.config
+        )[0]
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
@@ -1112,7 +1117,13 @@ class HelmanCoordinator:
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
-        self._active_config = deepcopy(self._storage.config)
+        self._active_config, vendor_issues = resolve_vendor_config(
+            self._hass, self._storage.config
+        )
+        # An unresolved entity leaves its slot unset; anything else here got
+        # past save only by a hand edit. Either way, say so and start anyway.
+        for issue in vendor_issues:
+            _LOGGER.warning("Hardware profile (%s): %s", issue.code, issue.message)
         from .storage import SolarBiasCorrectionStore
 
         self._solar_bias_store = SolarBiasCorrectionStore(self._hass)
@@ -1320,6 +1331,16 @@ class HelmanCoordinator:
         entity_id = event.data.get("entity_id", "")
         if entity_id in self._removing_entity_ids:
             self._removing_entity_ids.discard(entity_id)
+            return
+        # A rename, a disable or a new entity can change what a hardware profile
+        # resolves to. Services copy their config at setup, so the change is
+        # applied the way a save applies one: by reloading the entry.
+        if (
+            self._entry is not None
+            and resolve_vendor_config(self._hass, self._storage.config)[0]
+            != self._active_config
+        ):
+            self._hass.config_entries.async_schedule_reload(self._entry.entry_id)
             return
         self._cached_tree = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())

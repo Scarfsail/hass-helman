@@ -405,6 +405,7 @@ test("the inverter's sections start collapsed, with chips summarizing them", asy
     await mountEditor(page, [HEATER], VALID, [INVERTER]);
     expect(await inverterSections(page)).toEqual([
         { label: "Identity", open: false, chips: ["Inverter"] },
+        { label: "Hardware profile", open: false, chips: [] },
         { label: "Controls", open: false, chips: ["Mode"] },
         { label: "Action options", open: false, chips: ["2"] },
     ]);
@@ -414,7 +415,7 @@ test("an inverter issue opens its section, and a closed one reopens only for a n
     await mountEditor(page, [HEATER], VALID, [{ ...INVERTER, controls: { mode: { options: {} } } }]);
     const open = async () =>
         (await inverterSections(page)).filter((section) => section.open).map((section) => section.label);
-    expect((await inverterSections(page)).map((section) => section.chips)).toEqual([["Inverter"], [], []]);
+    expect((await inverterSections(page)).map((section) => section.chips)).toEqual([["Inverter"], [], [], []]);
 
     const mode = {
         section: "devices",
@@ -448,5 +449,5 @@ test("an inverter added after a removed one starts with its sections collapsed",
     await expect(panel(page).locator("details.inverter-card")).toHaveCount(0);
     await panel(page).locator(".section-footer .add-button", { hasText: "Add inverter" }).dispatchEvent("click");
     await expect(panel(page).locator("details.inverter-card")).toHaveCount(1);
-    expect((await inverterSections(page)).map((section) => section.open)).toEqual([false, false, false]);
+    expect((await inverterSections(page)).map((section) => section.open)).toEqual([false, false, false, false]);
 });

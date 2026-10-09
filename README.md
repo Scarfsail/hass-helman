@@ -39,6 +39,16 @@ executed through, and an EV charging switch.
 See [docs/supporting-entities.md](docs/supporting-entities.md) for what each one is for, where in the
 config and code it is consumed, and a ready-to-adapt Solax example.
 
+## Hardware profiles
+
+A hardware profile describes one piece of hardware, and you pick it on the device it describes: one per device, chosen in the config editor in that device's **Hardware profile** section. With a profile, Helman finds the device's entities itself, in the entity registry of the vendor integration, by the unique ids that integration registers them under. Renaming an entity doesn't break it, and the fields the profile provides are shown read-only in the editor, each with the entity it resolved to.
+
+Profiles are defined in Helman's code, never in your config: supporting another vendor or model is a code change. Site facts stay yours to set whatever the hardware is, such as maximum power, prices, efficiencies and the solar forecast. A device without a profile ("Custom") keeps every entity picked by hand, exactly as before.
+
+Available today:
+
+- **SolaX inverter** (`solax_modbus`, built against the X3-Hybrid), on the inverter system device. It provides the solar, battery, grid and house power and energy entities, the battery SoC bounds (the Self Use discharge floor and the charge ceiling), the house consumption total the forecast trains on, and the solar total the bias correction trains on. In the stored config it is `devices.system[0].vendor: {profile: solax_inverter, entry_id: <solax_modbus config entry id>}`. Picking it in the editor removes the entities it provides from your config, and the save refuses a config that still sets one of them (`vendor_owned_key`). An entity the integration doesn't have is reported (`vendor_entity_unresolved`) and leaves its slot unset.
+
 ## Cards
 
 ### `custom:helman-card`
