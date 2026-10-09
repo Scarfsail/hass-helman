@@ -3825,7 +3825,10 @@ export class HelmanSolarInspector extends LitElement {
           this._powerRow(
             this._t("bias_correction.inspector.merged.solar"),
             CHART_COLORS.actual,
-            sumWhOverSlots(payload.series.actual, slots),
+            // An invalidated slot is still a measurement -- the chart draws it
+            // -- only one training ignores. The backend moves it out of
+            // `actual`, so the two never overlap.
+            sumWhOverSlots([...payload.series.actual, ...payload.series.invalidated], slots),
             sumWhOverSlots(payload.series.corrected, slots),
           ),
         ];
@@ -3837,10 +3840,12 @@ export class HelmanSolarInspector extends LitElement {
         // house row it always was, rather than growing a permanent zero row.
         //
         // Over elapsed slots the forecast has no composition to split by -- only
-        // its scalar survives in the recorder -- so neither forecast cell is
-        // filled there. The band above draws that stretch wholly non-deferrable
-        // because it must draw it somewhere; quoting the same silence as a
-        // figure would understate one row by what it overstates the other.
+        // its scalar survives in the recorder. Splitting the actual there would
+        // leave the forecast column empty under a drawn forecast line, and
+        // quoting that scalar as the non-deferrable half would understate one
+        // row by what it overstates the other; so the pair collapses to the two
+        // totals. The house embed always quotes the totals: they are what it
+        // judges.
         const actual = splitHouseByDeferrable(
           payload.series.houseActual,
           payload.series.houseActualBreakdown,
@@ -3857,15 +3862,16 @@ export class HelmanSolarInspector extends LitElement {
         const forecastDeferrableWh = forecastSplit
           ? sumWhOverSlots(forecast.deferrable, slots)
           : null;
-        // The house embed judges the forecast's total, which it always has --
-        // and over elapsed slots the split would leave its column empty.
-        if (this.houseFocus || (!actualDeferrableWh && !forecastDeferrableWh)) {
+        const forecastWh = sumWhOverSlots(payload.series.houseForecast, slots);
+        if (this.houseFocus
+          || (forecastWh !== null && !forecastSplit)
+          || (!actualDeferrableWh && !forecastDeferrableWh)) {
           return [
             this._powerRow(
               this._t("bias_correction.inspector.merged.house"),
               CHART_COLORS.house,
               negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
-              negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+              negateWh(forecastWh),
             ),
           ];
         }

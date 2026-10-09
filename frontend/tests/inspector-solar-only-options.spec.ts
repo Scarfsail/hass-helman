@@ -909,11 +909,11 @@ test("the house embed's health banner keeps only the house forecast", async ({ p
     expect(await bannerLabels(HOUSE_ONLY)).toEqual(["House consumption forecast"]);
 });
 
-test("the house popup quotes the forecast over a slot where something deferrable ran", async ({ page }) => {
-    await mountCard(page, HOUSE_ONLY);
-    await seedEverySeries(page);
-    // An elapsed slot: the actual is itemised and a deferrable appliance ran,
-    // while the forecast carries only its recorded scalar -- no composition.
+/**
+ * An elapsed slot where the actual is itemised and a deferrable appliance ran,
+ * while the forecast carries only its recorded scalar -- no composition.
+ */
+async function seedDeferrableElapsedSlot(page: Page): Promise<void> {
     await page.evaluate(async () => {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
@@ -933,9 +933,42 @@ test("the house popup quotes the forecast over a slot where something deferrable
         el.requestUpdate();
         await el.updateComplete;
     });
+}
 
-    expect(await tooltipRows(page, "12:00")).toEqual([{ label: "House", actual: true, forecast: true }]);
+for (const [name, config] of [["house embed", HOUSE_ONLY], ["dashboard card", {}]] as const) {
+    test(`the ${name} popup quotes the forecast over a slot where something deferrable ran`, async ({ page }) => {
+        await mountCard(page, config);
+        await seedEverySeries(page);
+        await seedDeferrableElapsedSlot(page);
+
+        const house = (await tooltipRows(page, "12:00")).filter((row) => row.label.startsWith("House"));
+        expect(house).toEqual([{ label: "House", actual: true, forecast: true }]);
+    });
+}
+
+test("the popup quotes an invalidated solar slot as measured", async ({ page }) => {
+    await mountCard(page, {});
+    await seedEverySeries(page);
+    // The backend moves a thrown-out slot from `actual` into `invalidated`.
+    await page.evaluate(async () => {
+        const root = (window as unknown as {
+            __inspectorRoot: () => ShadowRoot | null | undefined;
+        }).__inspectorRoot();
+        const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        const moved = payload.series.actual.filter((p: any) => p.timestamp.slice(11, 16) === "12:00");
+        payload.series.actual = payload.series.actual.filter((p: any) => p.timestamp.slice(11, 16) !== "12:00");
+        payload.series.invalidated = moved;
+        payload.availability.hasInvalidated = true;
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
+    });
+
+    const solar = (await tooltipRows(page, "12:00")).find((row) => row.label === "Solar production");
+    expect(solar).toEqual({ label: "Solar production", actual: true, forecast: true });
 });
+
 
 test("hiding the aggregate views from inside one returns the card to the day view", async ({ page }) => {
     await mountCard(page, {});

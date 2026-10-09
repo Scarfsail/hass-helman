@@ -1233,7 +1233,7 @@ test.describe("solar inspector deferrable house load", () => {
         ]);
     });
 
-    test("an uncomposed stretch of forecast reports no split at all", async ({ page }) => {
+    test("an uncomposed stretch of forecast collapses the popup to the totals", async ({ page }) => {
         await loadCardBundle(page);
         // The composition starts at 18:00, as it does on today: everything before
         // is the recorder's archive of the forecast sensor, a scalar whose parts
@@ -1251,11 +1251,10 @@ test.describe("solar inspector deferrable house load", () => {
 
         // The hovered hour is noon, well inside the uncomposed stretch. Quoting
         // its deferrable forecast as 0 Wh would understate it by exactly what it
-        // overstates the row above by, so both cells stay empty — while the
-        // actual half, which is composed throughout, still splits.
+        // overstates the row above by, and leaving both cells empty hides a
+        // forecast the chart draws -- so the pair is quoted as the two totals.
         expect(await houseTooltipRows(page)).toEqual([
-            { label: "House (non-deferrable)", actual: "-520 Wh", forecast: "—" },
-            { label: "House (deferrable)", actual: "-200 Wh", forecast: "—" },
+            { label: "House", actual: "-720 Wh", forecast: "-480 Wh" },
         ]);
     });
 
