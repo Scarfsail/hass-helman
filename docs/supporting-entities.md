@@ -17,6 +17,8 @@ telemetry — are out of scope; install the integration and point the config at 
 > signed grid power sensors it already reads (§3), so there is nothing to build
 > ([issue #71](https://github.com/Scarfsail/hass-helman/issues/71)).
 
+> Not needed with the SolaX inverter profile: the house energy helpers (§1.2 `sensor.house_load_total`, §1.3 `sensor.solax_today_house_load`) and the battery SoC bound templates (§2). The profile reads the SolaX entities they were built from directly. See [Hardware profiles](../README.md#hardware-profiles).
+
 ## About the examples
 
 The examples are written as YAML (`configuration.yaml`), which is the clearest way to show what a
@@ -91,6 +93,8 @@ integral below — get permanently written into the forecast's training history.
 
 ### 1.2 `sensor.house_load_total` — cumulative house energy (kWh)
 
+> Not needed with the SolaX inverter profile: it reads `sensor.solax_energy_dashboard_solax_home_consumption_energy` (unique id `<entry name> Energy Dashboard_solax_home_consumption_energy`) for the forecast's house total instead.
+
 **Purpose.** The **history source for the house consumption forecast**. Helman needs a cumulative
 counter, not a power trace, because it reads per-slot deltas from Recorder's hourly statistics.
 
@@ -129,6 +133,8 @@ resets the forecast's memory, and there is no way to backfill.
 
 ### 1.3 `sensor.solax_today_house_load` — today's house consumption (kWh)
 
+> Not needed with the SolaX inverter profile: the same consumption-energy sensor feeds the House node's today figure.
+
 **Purpose.** The "consumed today" figure on the House node. Display only
 (`forecast_builder.py:255`); it does not feed training.
 
@@ -150,6 +156,8 @@ utility_meter:
 ## 2. Battery SOC bounds
 
 ### `sensor.solax_battery_min_soc` and `sensor.solax_battery_max_soc`
+
+> Not needed with the SolaX inverter profile: it reads `number.solax_battery_charge_upper_soc` as the ceiling and `number.solax_selfuse_discharge_min_soc`, the Self Use floor, as the floor. The floor does not follow the use mode: Self Use is the mode in which Helman lets the battery discharge on its own, and Helman's own mode writes would otherwise move the floor under it.
 
 **Purpose.** The usable SOC window of the battery, in percent (reference deployment: 10 % / 100 %).
 The inverter exposes current SOC, but the reserve floor and charge ceiling live in *mode-specific*
@@ -441,9 +449,9 @@ In dependency order:
 
 1. `sensor.house_load` — template, the power balance. Nothing else works properly without it.
 2. `sensor.house_load_total` — Riemann integration over it. Start this early; forecast quality is
-   bounded by how much history it has.
-3. `sensor.solax_today_house_load` — daily utility meter (optional, display only).
-4. `sensor.solax_battery_min_soc` / `max_soc` — templates over the mode-specific inverter limits.
+   bounded by how much history it has. Not needed with the SolaX inverter profile.
+3. `sensor.solax_today_house_load` — daily utility meter (optional, display only). Not needed with the SolaX inverter profile.
+4. `sensor.solax_battery_min_soc` / `max_soc` — templates over the mode-specific inverter limits. Not needed with the SolaX inverter profile.
 5. `sensor.solax_grid` — template, only if your integration reports import and export separately.
 6. `input_select.rezim_fv` + the automation behind it — required before scheduling can execute.
 7. `switch.ev_nabijeni` — only if you have an EV charger to schedule.

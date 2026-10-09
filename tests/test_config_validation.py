@@ -301,6 +301,27 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.errors, [])
         self.assertEqual(report.warnings, [])
 
+    def test_solax_profile_document_without_entity_slots_passes(self) -> None:
+        # The stored shape under the SolaX inverter profile: the profile owns
+        # every energy entity slot, so none is written, and the `vendor` key on
+        # the inverter is a config key like any other.
+        config = _valid_config()
+        config["devices"]["system"][0]["vendor"] = {
+            "profile": "solax_inverter",
+            "entry_id": "solax-entry",
+        }
+        for node in config["energy_nodes"].values():
+            node.pop("entities", None)
+        del config["energy_nodes"]["house"]["forecast"]["total_energy_entity_id"]
+        config.get("training", {}).get("solar_bias", {}).pop(
+            "total_energy_entity_id", None
+        )
+
+        report = validate_config_document(config)
+
+        self.assertEqual(report.errors, [])
+        self.assertEqual(report.warnings, [])
+
     def test_unknown_controllable_kind_is_warning_only(self) -> None:
         config = _valid_config()
         config["devices"]["consumers"] = [{"kind": "heat_pump"}]
