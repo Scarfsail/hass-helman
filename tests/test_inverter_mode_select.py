@@ -148,6 +148,22 @@ def test_a_failed_write_surfaces_and_keeps_the_last_option():
     entity.async_write_ha_state.assert_not_called()
 
 
+def test_a_stalled_write_times_out_and_releases_the_lock():
+    entity, _calls = build()
+
+    async def stall(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    entity.hass.services.async_call = AsyncMock(side_effect=stall)
+
+    with patch.object(select_module, "SERVICE_CALL_TIMEOUT_SECONDS", 0.01), pytest.raises(
+        HomeAssistantError, match="Timed out"
+    ):
+        select(entity, "stop_charging")
+
+    assert not entity._lock.locked()
+
+
 def test_without_an_export_cap_nothing_is_written():
     entity, calls = build(grid={})
 
