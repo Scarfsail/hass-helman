@@ -134,7 +134,10 @@ def resolve_profile_entities(
         for registry_entry in er.async_entries_for_config_entry(
             registry, entry.entry_id
         )
+        # A disabled entity is never added to the state machine, so it would
+        # resolve to an id nobody can read; report it as unresolved instead.
         if registry_entry.platform == profile.platform
+        and registry_entry.disabled_by is None
     }
     return {
         path: by_unique_id.get(_unique_id(profile, path, entry))

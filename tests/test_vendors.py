@@ -82,12 +82,15 @@ SOLAX_ROWS = {
 }
 
 
-def registry_entry(unique_id, entity_id, *, platform="solax_modbus", entry_id=ENTRY_ID):
+def registry_entry(
+    unique_id, entity_id, *, platform="solax_modbus", entry_id=ENTRY_ID, disabled_by=None
+):
     return NS(
         unique_id=unique_id,
         entity_id=entity_id,
         platform=platform,
         config_entry_id=entry_id,
+        disabled_by=disabled_by,
     )
 
 
@@ -227,6 +230,21 @@ def test_only_the_chosen_entry_on_the_vendor_platform_is_read():
     assert [(i.code, i.path) for i in issues] == [
         ("vendor_entity_unresolved", "devices.system[0].vendor")
     ]
+
+
+def test_a_disabled_entity_is_unresolved():
+    entries = [
+        e for e in solax_registry() if e.unique_id != "SolaX_battery_capacity"
+    ] + [
+        registry_entry(
+            "SolaX_battery_capacity", "sensor.solax_battery_capacity", disabled_by="user"
+        ),
+    ]
+
+    resolved, issues = resolve(solax_document(), entries=entries)
+
+    assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
+    assert [i.code for i in issues] == ["vendor_entity_unresolved"]
 
 
 def test_an_unresolved_key_is_reported_and_leaves_the_slot_unset():
