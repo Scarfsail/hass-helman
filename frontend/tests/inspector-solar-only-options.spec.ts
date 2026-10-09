@@ -992,3 +992,13 @@ test("hiding the aggregate views from inside one returns the card to the day vie
     });
     expect(mode).toBe("day");
 });
+
+test("the forecast error needs both house series in the allowlist", async ({ page }) => {
+    await mountCard(page, { ...HOUSE_ONLY, chart_series: ["houseActual"] });
+    await seedEverySeries(page);
+    await redateDay(page, -1);
+    await seedEverySeries(page);
+    await selectSlot(page, "12:00");
+
+    expect(await metricLabels(page)).not.toContain("Forecast error");
+});

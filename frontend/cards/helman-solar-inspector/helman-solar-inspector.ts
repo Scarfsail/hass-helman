@@ -5767,6 +5767,8 @@ export class HelmanSolarInspector extends LitElement {
     actualWh: number | null,
     incomplete: string | null = null,
   ) {
+    // Read off both series, so the allowlist has to let both through.
+    if (!this._isSeriesEnabled("houseForecast") || !this._isSeriesEnabled("houseActual")) return "";
     const error = houseForecastError(forecastWh, actualWh);
     if (error === null) return "";
     return this._renderMetric(
