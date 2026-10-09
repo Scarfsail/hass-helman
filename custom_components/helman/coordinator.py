@@ -1332,14 +1332,16 @@ class HelmanCoordinator:
         if entity_id in self._removing_entity_ids:
             self._removing_entity_ids.discard(entity_id)
             return
-        if event.data.get("action") == "update" and "entity_id" in event.data.get(
-            "changes", {}
+        # A rename, a disable or a new entity can change what a hardware profile
+        # resolves to. Services copy their config at setup, so the change is
+        # applied the way a save applies one: by reloading the entry.
+        if (
+            self._entry is not None
+            and resolve_vendor_config(self._hass, self._storage.config)[0]
+            != self._active_config
         ):
-            # A hardware profile resolves by unique id, so a renamed vendor
-            # entity resolves to its new id; nothing to log, setup already did.
-            self._active_config = resolve_vendor_config(
-                self._hass, self._storage.config
-            )[0]
+            self._hass.config_entries.async_schedule_reload(self._entry.entry_id)
+            return
         self._cached_tree = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
 

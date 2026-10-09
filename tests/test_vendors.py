@@ -98,13 +98,16 @@ def solax_registry():
     return [registry_entry(*row) for row in dict(SOLAX_ROWS.values()).items()]
 
 
-def config_entry(*, title="SolaX", data=None, options=None, domain="solax_modbus"):
+def config_entry(
+    *, title="SolaX", data=None, options=None, domain="solax_modbus", disabled_by=None
+):
     return NS(
         entry_id=ENTRY_ID,
         domain=domain,
         title=title,
         data=data or {},
         options=options or {},
+        disabled_by=disabled_by,
     )
 
 
@@ -229,6 +232,17 @@ def test_only_the_chosen_entry_on_the_vendor_platform_is_read():
     assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
     assert [(i.code, i.path) for i in issues] == [
         ("vendor_entity_unresolved", "devices.system[0].vendor")
+    ]
+
+
+def test_a_disabled_config_entry_is_refused():
+    resolved, issues = resolve(
+        solax_document(), hass_entries=[config_entry(disabled_by="user")]
+    )
+
+    assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
+    assert [(i.code, i.path) for i in issues] == [
+        ("invalid_choice", "devices.system[0].vendor.entry_id")
     ]
 
 

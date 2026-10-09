@@ -238,7 +238,12 @@ def _iter_vendor_devices(
             )
         else:
             entry = hass.config_entries.async_get_entry(entry_id)
-            if entry is None or entry.domain != profile.platform:
+            # A disabled entry keeps its registry rows, but none has a state.
+            if (
+                entry is None
+                or entry.domain != profile.platform
+                or entry.disabled_by is not None
+            ):
                 entry = None
                 issues.append(
                     _device_error(
