@@ -117,11 +117,7 @@ class HelmanEvChargingSwitch(SwitchEntity):
             self.hass,
             vendor_device.profile,
             vendor_device.entry,
-            [
-                charging.state[0],
-                charging.command,
-                *(template for template, _option in charging.after_off),
-            ],
+            charging.templates,
             device_id=vendor_device.device_id,
         )
         self._async_untrack()

@@ -27,6 +27,15 @@ export function findInverter(config: JsonObject | null | undefined): JsonObject 
   return inverter && Object.keys(inverter).length > 0 ? inverter : null;
 }
 
+/** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
+export function validationPath(path: readonly PathSegment[]): string {
+  return path
+    .map((segment, index) =>
+      typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
+    )
+    .join("");
+}
+
 /** One device, with its parent and where it sits in the document. */
 export interface DeviceEntry {
   device: JsonObject;

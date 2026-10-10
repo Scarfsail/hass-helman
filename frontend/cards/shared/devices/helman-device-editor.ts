@@ -33,6 +33,7 @@ import {
     ownGroup,
     ownMeter,
     SWITCH_CONTROL_DOMAINS,
+    validationPath,
 } from "../config/devices";
 import {
     entityGroupKey,
@@ -63,7 +64,9 @@ import type {
     PathSegment,
     ValidationIssue,
     ValidationReport,
+    VendorsResponse,
 } from "../config/types";
+import { resolvedDraft } from "../config/resolved-draft";
 import { defineOnce } from "../define-once";
 import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
 import { haDeviceEntityFilter, sharedHaDevice } from "./device-scope";
@@ -74,6 +77,13 @@ import {
     renderDeviceEnergyValue,
     type DeviceEnergyInput,
 } from "./device-energy";
+import {
+    deviceProfile,
+    renderHardwareProfile,
+    renderProvidedField,
+    deviceProvision,
+    type HardwareProfileHost,
+} from "./hardware-profile";
 import "../config/entity-group";
 
 /** The kinds the device form edits; anything else is shown read-only. */
@@ -108,6 +118,7 @@ const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 type SectionKey =
     | "identity"
     | "groups"
+    | "hardware"
     | "measurements"
     | "controls"
     | "projection"
@@ -134,15 +145,6 @@ export interface DeviceConfigChangedDetail {
 /** A number as a depth-table cell, or a dash while it is unknown. */
 export function trainingDepthCell(value: unknown): string {
     return typeof value === "number" && Number.isFinite(value) ? String(value) : "—";
-}
-
-/** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
-export function validationPath(path: readonly PathSegment[]): string {
-    return path
-        .map((segment, index) =>
-            typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
-        )
-        .join("");
 }
 
 /**
@@ -178,6 +180,7 @@ function sectionOfIssue(devicePath: readonly PathSegment[], issuePath: string): 
     const under = (prefix: string) =>
         rest === prefix || rest.startsWith(`${prefix}.`) || rest.startsWith(`${prefix}[`);
     if (under("children")) return "children";
+    if (under("profile")) return "hardware";
     if (under("consumption.projection")) return "projection";
     if (under("consumption")) return "measurements";
     if (under("controls.use_mode.values")) return "use_modes";
@@ -456,7 +459,7 @@ export const deviceEditorStyles = css`
  * they are list- and document-level state the panel already keeps, and the
  * dialog passes none of them.
  */
-export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
+export class HelmanDeviceEditor extends LitElement implements HardwareProfileHost {
     /** The whole config document. Not mutated -- edits are reported, not applied. */
     @property({ attribute: false }) config: JsonObject | null = null;
 
@@ -474,6 +477,12 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     @property({ type: Boolean }) expanded = false;
 
     @property({ attribute: false }) localize: (key: string) => string = (key) => key;
+
+    /**
+     * The hardware profiles, and what each draft device's profile owns: the
+     * host's `VendorsController` answer, or `null` for none.
+     */
+    @property({ attribute: false }) vendors: VendorsResponse | null = null;
 
     /** The last validation report; the card shows the issues under its own path. */
     @property({ attribute: false }) validation: ValidationReport | null = null;
@@ -605,17 +614,24 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         const device = asJsonObject(this.getValue(this.path));
         if (!device) return nothing;
         const path = this.path;
-        const parent = this.parent;
+        // Structural reads see the meter and values a profile fills in; edits
+        // stay on the stored draft.
+        const resolved = this._resolvedDevice(path) ?? device;
+        const parent = this.parent ? (this._resolvedDevice(path.slice(0, -2)) ?? this.parent) : null;
+        const profile = deviceProfile(this.vendors, device, deviceKind(device));
+        // Only a stored profile id locks the card; a malformed `profile` stays
+        // repairable from the form.
+        const profiled = stringValue(asJsonObject(device.profile)?.id) !== "";
         const kind = deviceKind(device);
         const id = stringValue(device.id);
         const schedulable = isSchedulable(device);
-        const meterless = parent !== null && !ownMeter(device);
+        const meterless = parent !== null && !ownMeter(resolved);
         const icon = stringValue(device.icon) || devicePlaceholder(this.inspections, path, "icon");
         const issues = deviceIssues(this.validation, path);
         const yaml = this.renderYaml?.(path) ?? null;
         // The HA device the device's own meters and controls sit under; unless
         // the reader lifted it, its anchor pickers are narrowed to it.
-        const anchors = suggestionAnchors(device);
+        const anchors = suggestionAnchors(resolved);
         const haDevice = sharedHaDevice(this.hass, anchors);
         const showAll = this._showAllDevicesFor === id;
         const scope = haDevice && !showAll ? anchors : null;
@@ -637,7 +653,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                             </div>
                         </div>
                         <div class="device-badges">
-                            ${this._renderDeviceBadges(device)}${renderIssueCountBadge(this, this.validation, issues)}
+                            ${this._renderDeviceBadges(resolved)}${renderIssueCountBadge(this, this.validation, issues)}
                         </div>
                         ${this.listActions?.(path) ?? nothing}
                     </div>
@@ -645,7 +661,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                 <div class="appliance-body">
                     ${renderDeviceIssues(this.validation, issues)}
                     ${yaml ?? html`
-                        ${this._renderSuggestions(device, path)}
+                        ${profiled ? nothing : this._renderSuggestions(device, path)}
                         ${this._renameError
                             ? html`<div class="message error">${this._renameError}</div>`
                             : nothing}
@@ -673,13 +689,18 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                     </div>
                                     <input class="device-id" .value=${id} readonly />
                                 </div>
-                                ${this._renderDeviceKindField(kind)}
+                                ${this._renderDeviceKindField(profile?.deviceKind ?? kind, profiled)}
                                 ${this._renderDeviceParentField()}
                                 ${haDevice || showAll ? this._renderHaDeviceField(haDevice, id) : nothing}
                             </div>`,
                             [{ key: "kind", text: this.t(`editor.values.kind_${kind}`) }],
                         )}
                         ${this._renderGroupsSection(device)}
+                        ${this._renderSection(
+                            "hardware",
+                            renderHardwareProfile(this, this.vendors, path, kind),
+                            profile ? [{ key: "profile", text: profile.label }] : [],
+                        )}
                         ${this._renderSection(
                             "measurements",
                             html`<div class="field-grid">
@@ -708,7 +729,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                         helperKey: "editor.helpers.consumption_power_entity",
                                     },
                                 )}
-                                ${this._renderChildrenToleranceField(device)}
+                                ${this._renderChildrenToleranceField(resolved)}
                             </div>
                             ${this.energyEstimate && deviceEnergyFigure(this.energyEstimate.record, this.energyEstimate.schedulable) &&
                             !(schedulable && kind !== "ev_charger" && this._projectionStrategy() === "history_average")
@@ -718,22 +739,22 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 ...(meterless
                                     ? [{ key: "parent_meter", text: this.t("editor.section_badges.parent_meter") }]
                                     : []),
-                                ...this._deviceChips(device, ["energy", "power"]),
+                                ...this._deviceChips(resolved, ["energy", "power"]),
                             ],
                         )}
                         ${this._renderSection(
                             "controls",
                             html`<div class="field-grid">
-                                ${this._renderSchedulableField(device)}
+                                ${this._renderSchedulableField(resolved, parent)}
                                 ${this._renderDeviceControls(kind, schedulable || meterless, scope)}
                             </div>`,
-                            this._deviceChips(device, ["switch", "schedulable"]),
+                            this._deviceChips(resolved, ["switch", "schedulable"]),
                         )}
                         ${schedulable && kind !== "ev_charger"
                             ? this._renderProjectionSection(kind)
                             : nothing}
-                        ${kind === "ev_charger" ? this._renderEvChargerSections() : nothing}
-                        ${this._renderChildrenSection(device)}
+                        ${kind === "ev_charger" ? this._renderEvChargerSections(resolved) : nothing}
+                        ${this._renderChildrenSection(resolved)}
                     `}
                 </div>
             </details>
@@ -759,6 +780,15 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
             .map((key) => ({ key, text: this.t(`editor.device_badges.${key}`) }));
     }
 
+    /**
+     * The device at `path` in the resolved draft, where a profile's meter and
+     * values are filled in -- see `resolvedDraft`.
+     */
+    private _resolvedDevice(path: PathSegment[]): JsonObject | null {
+        const resolved = resolvedDraft(this.config, this.vendors);
+        return (resolved && asJsonObject(getValueAtPath(resolved, path))) ?? null;
+    }
+
     /** The host's children list, in a section of the card; none where the host has none. */
     private _renderChildrenSection(device: JsonObject): TemplateResult | typeof nothing {
         const children = this.renderChildren?.(device, this.path) ?? nothing;
@@ -771,6 +801,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         labelKey: string,
         options: EntityGroupOptions = {},
     ): TemplateResult {
+        const device = asJsonObject(this.getValue(this.path)) ?? {};
+        const provision = deviceProvision(this.vendors, device, this.path, path);
+        if (provision) return renderProvidedField(this, path, labelKey, provision);
         return renderEntityGroup(this, this.inspections, path, labelKey, options);
     }
 
@@ -854,12 +887,14 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         try {
             const suggestions = await fetchDeviceSuggestions(hass, anchors, draft);
             if (this.config !== draft || request !== this._suggestionRequest) return;
-            const current = iterDevices(draft).find((entry) => entry.device.id === id);
+            // A profile device's meter counts, though the draft stores none.
+            const resolved = resolvedDraft(draft, this.vendors);
+            const current = iterDevices(resolved).find((entry) => entry.device.id === id);
             if (!current) return;
             // A selected meter already belongs to one device.
             suggestions.energy = suggestions.energy.filter(
                 (candidate) =>
-                    !iterDevices(draft).some(
+                    !iterDevices(resolved).some(
                         (entry) =>
                             entry.device.id !== id && ownMeter(entry.device) === candidate.entityId,
                     ),
@@ -998,13 +1033,15 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         );
     }
 
-    private _renderDeviceKindField(kind: string): TemplateResult {
+    /** The device's kind; a hardware profile fixes it, so under one it is locked. */
+    private _renderDeviceKindField(kind: string, locked: boolean): TemplateResult {
         const path = this.path;
         return html`
             <div class="field">
                 <label>${this.t("editor.fields.kind")}</label>
                 <select
                     class="device-kind"
+                    ?disabled=${locked}
                     @change=${(event: Event) =>
                         this._mutate(path, (draft) => {
                             const nextKind = (event.currentTarget as HTMLSelectElement).value;
@@ -1036,7 +1073,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         const path = this.path;
         const key = entityGroupKey(path);
         const parentKey = this.parent ? entityGroupKey(path.slice(0, -2)) : "";
-        const candidates = iterDevices(this.config).filter((entry) => {
+        const candidates = iterDevices(resolvedDraft(this.config, this.vendors)).filter((entry) => {
             // A system device never nests or holds children.
             if (entry.path[1] !== "consumers") return false;
             const candidateKey = entityGroupKey(entry.path);
@@ -1104,8 +1141,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
      * schedulable (a schedulable device is a leaf), so there it is disabled --
      * unless it is on, which only a hand edit can do, and then it may be turned off.
      */
-    private _renderSchedulableField(device: JsonObject): TemplateResult {
-        const parent = this.parent;
+    private _renderSchedulableField(device: JsonObject, parent: JsonObject | null): TemplateResult {
         const checked = isSchedulable(device);
         const hasChildren = deviceChildren(device).length > 0;
         const meterless = parent !== null && !ownMeter(device);
@@ -1188,8 +1224,9 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
     private _setSchedulable(meterless: boolean, value: boolean): void {
         const path = this.path;
         const listPath = path.slice(0, -1);
+        const resolved = resolvedDraft(this.config, this.vendors);
         const targets = meterless
-            ? (asJsonArray(this.getValue(listPath)) ?? []).flatMap((sibling, index) => {
+            ? (asJsonArray(resolved && getValueAtPath(resolved, listPath)) ?? []).flatMap((sibling, index) => {
                   const object = asJsonObject(sibling);
                   return object && !ownMeter(object) ? [[...listPath, index]] : [];
               })
@@ -1251,31 +1288,42 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         );
     }
 
-    /** The EV charger's own lists: use modes, eco gears and vehicles. */
-    private _renderEvChargerSections(): TemplateResult {
+    /**
+     * The EV charger's own lists: use modes, eco gears and vehicles. `device`
+     * is the resolved one, so a list a hardware profile fills is listed,
+     * read-only.
+     */
+    private _renderEvChargerSections(device: JsonObject): TemplateResult {
         const path = this.path;
-        const useModes = objectEntries(this.getValue([...path, "controls", "use_mode", "values"]));
-        const ecoGears = objectEntries(this.getValue([...path, "controls", "eco_gear", "values"]));
+        const controls = asJsonObject(device.controls) ?? {};
+        const useModes = objectEntries(asJsonObject(controls.use_mode)?.values);
+        const ecoGears = objectEntries(asJsonObject(controls.eco_gear)?.values);
+        const useModesOwned = deviceProvision(this.vendors, device, path, [...path, "controls", "use_mode", "values"]) !== null;
+        const ecoGearsOwned = deviceProvision(this.vendors, device, path, [...path, "controls", "eco_gear", "values"]) !== null;
         const vehicles = asJsonArray(this.getValue([...path, "vehicles"])) ?? [];
         return html`
             ${this._renderSection(
                 "use_modes",
                 html`<div class="list-stack">
-                    ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(modeKey, modeConfig))}
+                    ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(modeKey, modeConfig, useModesOwned))}
                 </div>
-                <div class="section-footer">
-                    <button type="button" class="add-button" @click=${() => this._addUseMode()}>${this.t("editor.actions.add_use_mode")}</button>
-                </div>`,
+                ${useModesOwned
+                    ? nothing
+                    : html`<div class="section-footer">
+                          <button type="button" class="add-button" @click=${() => this._addUseMode()}>${this.t("editor.actions.add_use_mode")}</button>
+                      </div>`}`,
                 this._countChips(useModes.length),
             )}
             ${this._renderSection(
                 "eco_gears",
                 html`<div class="list-stack">
-                    ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(gearKey, gearConfig))}
+                    ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(gearKey, gearConfig, ecoGearsOwned))}
                 </div>
-                <div class="section-footer">
-                    <button type="button" class="add-button" @click=${() => this._addEcoGear()}>${this.t("editor.actions.add_eco_gear")}</button>
-                </div>`,
+                ${ecoGearsOwned
+                    ? nothing
+                    : html`<div class="section-footer">
+                          <button type="button" class="add-button" @click=${() => this._addEcoGear()}>${this.t("editor.actions.add_eco_gear")}</button>
+                      </div>`}`,
                 this._countChips(ecoGears.length),
             )}
             ${this._renderSection(
@@ -1416,7 +1464,8 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         </p>`;
     }
 
-    private _renderUseMode(modeKey: string, modeConfig: unknown): TemplateResult {
+    /** One use mode; a profile's is shown read-only, without its remove. */
+    private _renderUseMode(modeKey: string, modeConfig: unknown, owned: boolean): TemplateResult {
         const modeObject = asJsonObject(modeConfig) ?? {};
         const valuesPath: PathSegment[] = [...this.path, "controls", "use_mode", "values"];
         return html`
@@ -1426,21 +1475,24 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         <strong>${modeKey}</strong>
                         <span class="card-subtitle">${this.t("editor.card.use_mode_mapping")}</span>
                     </div>
-                    <div class="inline-actions">
-                        <button
-                            type="button"
-                            class="danger"
-                            @click=${() => this.setValue([...valuesPath, modeKey], undefined)}
-                        >
-                            ${this.t("editor.actions.remove")}
-                        </button>
-                    </div>
+                    ${owned
+                        ? nothing
+                        : html`<div class="inline-actions">
+                              <button
+                                  type="button"
+                                  class="danger"
+                                  @click=${() => this.setValue([...valuesPath, modeKey], undefined)}
+                              >
+                                  ${this.t("editor.actions.remove")}
+                              </button>
+                          </div>`}
                 </div>
                 <div class="field-grid">
                     <div class="field">
                         <label>${this.t("editor.fields.mode_id")}</label>
                         <input
                             .value=${modeKey}
+                            ?readonly=${owned}
                             @change=${(event: Event) =>
                                 this._renameKey(
                                     valuesPath,
@@ -1452,6 +1504,7 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                     <div class="field">
                         <label>${this.t("editor.fields.behavior")}</label>
                         <select
+                            ?disabled=${owned}
                             @change=${(event: Event) =>
                                 setRequiredString(
                                     this,
@@ -1475,7 +1528,8 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         `;
     }
 
-    private _renderEcoGear(gearKey: string, gearConfig: unknown): TemplateResult {
+    /** One eco gear; a profile's is shown read-only, without its remove. */
+    private _renderEcoGear(gearKey: string, gearConfig: unknown, owned: boolean): TemplateResult {
         const gearObject = asJsonObject(gearConfig) ?? {};
         const valuesPath: PathSegment[] = [...this.path, "controls", "eco_gear", "values"];
         return html`
@@ -1485,21 +1539,24 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                         <strong>${gearKey}</strong>
                         <span class="card-subtitle">${this.t("editor.card.eco_gear_mapping")}</span>
                     </div>
-                    <div class="inline-actions">
-                        <button
-                            type="button"
-                            class="danger"
-                            @click=${() => this.setValue([...valuesPath, gearKey], undefined)}
-                        >
-                            ${this.t("editor.actions.remove")}
-                        </button>
-                    </div>
+                    ${owned
+                        ? nothing
+                        : html`<div class="inline-actions">
+                              <button
+                                  type="button"
+                                  class="danger"
+                                  @click=${() => this.setValue([...valuesPath, gearKey], undefined)}
+                              >
+                                  ${this.t("editor.actions.remove")}
+                              </button>
+                          </div>`}
                 </div>
                 <div class="field-grid">
                     <div class="field">
                         <label>${this.t("editor.fields.gear_id")}</label>
                         <input
                             .value=${gearKey}
+                            ?readonly=${owned}
                             @change=${(event: Event) =>
                                 this._renameKey(
                                     valuesPath,
@@ -1508,12 +1565,17 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
                                 )}
                         />
                     </div>
-                    ${renderRequiredNumberField(
-                        this,
-                        [...valuesPath, gearKey, "min_power_kw"],
-                        "editor.fields.min_power_kw",
-                        gearObject.min_power_kw,
-                    )}
+                    ${owned
+                        ? html`<div class="field">
+                              <label>${this.t("editor.fields.min_power_kw")}</label>
+                              <input .value=${stringValue(gearObject.min_power_kw)} readonly />
+                          </div>`
+                        : renderRequiredNumberField(
+                              this,
+                              [...valuesPath, gearKey, "min_power_kw"],
+                              "editor.fields.min_power_kw",
+                              gearObject.min_power_kw,
+                          )}
                 </div>
             </div>
         `;
@@ -1653,10 +1715,18 @@ export class HelmanDeviceEditor extends LitElement implements FormFieldHost {
         );
     }
 
-    // --- FormFieldHost -------------------------------------------------------
+    // --- HardwareProfileHost -------------------------------------------------
 
     t(key: string): string {
         return this.localize(key);
+    }
+
+    /**
+     * A hardware profile edit. A consumer's profile owns only paths on the
+     * device itself, so the device is what is reported.
+     */
+    mutateDraft(mutator: (draft: JsonObject) => void): void {
+        this._mutate(this.path, mutator);
     }
 
     private _tFormat(key: string, values: Record<string, string | number>): string {
