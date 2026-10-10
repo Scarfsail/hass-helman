@@ -308,6 +308,11 @@ export function renderHardwareProfile(
     `;
 }
 
+/** How an HA device a profile can bind to is listed: its name and its integration entry. */
+export function candidateLabel(candidate: NonNullable<VendorProfileInfo["candidates"]>[number]): string {
+    return `${candidate.name} (${candidate.entryTitle})`;
+}
+
 /**
  * What the profile binds to: the "Config entry" select of an entry-bound
  * profile, the "Device" select of a device-bound one. With nothing to offer,
@@ -326,7 +331,7 @@ function renderBinding(
     const options = byDevice
         ? freeCandidates(host, profile, path).map((candidate) => ({
               value: candidate.deviceId,
-              label: `${candidate.name} (${candidate.entryTitle})`,
+              label: candidateLabel(candidate),
           }))
         : (profile.entries ?? []).map((entry) => ({ value: entry.entryId, label: entry.title }));
     return html`
@@ -369,8 +374,12 @@ function renderBinding(
     `;
 }
 
-/** A device-bound profile's candidates, minus the HA devices another draft device binds under it. */
-function freeCandidates(
+/**
+ * A device-bound profile's candidates, minus the HA devices another draft
+ * device binds under it: any but the one at `path`, which for a device yet to
+ * be added is the path it will get.
+ */
+export function freeCandidates(
     host: FormFieldHost,
     profile: VendorProfileInfo,
     path: PathSegment[],

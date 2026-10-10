@@ -296,6 +296,8 @@
       "children_tolerance_percent": "Children tolerance %",
       "add_device_entity": "Energy meter of the new device",
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child",
+      "add_device_profile": "Hardware profile of the new device",
+      "add_device_vendor_device": "HA device of the new device",
       "hardware_profile": "Hardware profile",
       "vendor_entry": "Integration entry",
       "vendor_device": "Device",
@@ -375,6 +377,7 @@
       "children_distribute_all": "On: the running children share all of this device's own power, in the ratio of their learned power. Off: each is capped at its learned power plus the tolerance below, and the rest shows as unmeasured.",
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",
       "add_device": "Its id is generated from the entity once and never changes.",
+      "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
     },
     "messages": {
