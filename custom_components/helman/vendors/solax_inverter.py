@@ -172,7 +172,20 @@ PROFILE = VendorProfile(
         "lock_state": ("select", "{name}_lock_state"),
         "grid_mode_runtime": ("sensor", "{name}_grid_mode_runtime"),
         "eps_mode_runtime": ("sensor", "{name}_eps_mode_runtime"),
+        # The grid detail: the meter's per-phase power and import/export power,
+        # and the grid frequency the inverter reads.
+        **{
+            f"grid_power_l{phase}": ("sensor", f"{{name}}_measured_power_l{phase}")
+            for phase in (1, 2, 3)
+        },
+        "grid_import": ("sensor", "{name}_grid_import"),
+        "grid_export": ("sensor", "{name}_grid_export"),
+        "grid_frequency": ("sensor", "{name}_grid_frequency"),
     },
+    # ``measured_power_l*`` reads positive while feeding in: on the dev mirror
+    # (2026-10-10) ``measured_power`` +405 W sat beside the energy dashboard's
+    # grid power -405 W, whose own polarity is positive_is_import.
+    grid_phase_power_polarity="positive_is_export",
     # Gen4+ run_mode strings (solax_modbus plugin_solax.py, register 0x9).
     run_mode_conditions={
         "Off-Grid": "off_grid",

@@ -32,6 +32,7 @@ import "../../shared/node-question";
 import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
 import type { InverterDetailParams } from "./node-detail-types";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
@@ -297,6 +298,11 @@ export class NodeDetailInverterContent extends LitElement {
             if (request !== this._overviewRequest) return;
             if (!previous) this._comparedStates = this._comparedSignature(payload);
             this._overview = { status: "ready", payload };
+            announceWatchedEntities(this, [
+                payload.mode?.entityId,
+                ...Object.values(payload.entities),
+                ...payload.agreement.registers.map((register) => register.entityId),
+            ]);
         } catch (error) {
             if (request !== this._overviewRequest) return;
             console.error("node-detail-inverter: failed to load the overview", error);
@@ -801,19 +807,11 @@ export class NodeDetailInverterContent extends LitElement {
 
     /** A reading as shown: its state and unit, `null` when missing or unavailable. */
     private _reading(overview: InverterDetailPayload, key: string): string | null {
-        const entityId = overview.entities[key];
-        const stateObj = entityId ? this.hass.states[entityId] : undefined;
-        if (!stateObj || stateObj.state === "unavailable" || stateObj.state === "unknown") return null;
-        if (stateObj.state === "on" || stateObj.state === "off") return this._t(stateObj.state === "on" ? "on" : "off");
-        const unit = stateObj.attributes.unit_of_measurement as string | undefined;
-        return unit ? stateObj.state + " " + unit : stateObj.state;
+        return readingText(this.hass, overview.entities[key], (on) => this._t(on ? "on" : "off"));
     }
 
     private _number(overview: InverterDetailPayload, key: string): number | null {
-        const entityId = overview.entities[key];
-        const raw = entityId ? this.hass.states[entityId]?.state : undefined;
-        const value = raw === undefined ? NaN : parseFloat(raw);
-        return Number.isFinite(value) ? value : null;
+        return readingNumber(this.hass, overview.entities[key]);
     }
 
     /** The phases' AC power summed, only when every phase reads. */

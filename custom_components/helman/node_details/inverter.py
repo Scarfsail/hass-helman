@@ -95,7 +95,7 @@ def build_inverter_overview(
             "max_allowed_export_power"
         ),
         "agreement": agreement,
-        "condition": _run_mode_condition(hass, telemetry),
+        "condition": run_mode_condition(hass, telemetry),
         "sections": ["temperature"] if entities.get("inverter_temperature") else [],
     }
 
@@ -127,7 +127,7 @@ async def async_inverter_section(
     }
 
 
-def _run_mode_condition(hass: Any, telemetry: Any) -> dict[str, str] | None:
+def run_mode_condition(hass: Any, telemetry: Any) -> dict[str, str] | None:
     """An off-grid or fault run mode the profile names, as the hardware reports it."""
     if telemetry is None:
         return None

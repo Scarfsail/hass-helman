@@ -407,6 +407,8 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     "batteryDischargeWh": None,
                     "moneyCost": None,
                     "moneyGain": None,
+                    "moneyCostKwh": None,
+                    "moneyGainKwh": None,
                     # No consumers configured here, so there is nothing to split
                     # the house by and the panel is simply absent.
                     "houseBreakdown": None,
@@ -423,6 +425,8 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     "batteryDischargeWh": 1000.0,
                     "moneyCost": None,
                     "moneyGain": None,
+                    "moneyCostKwh": None,
+                    "moneyGainKwh": None,
                     # No consumers configured here, so there is nothing to split
                     # the house by and the panel is simply absent.
                     "houseBreakdown": None,
@@ -1074,6 +1078,12 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["moneyCost"], 2.0)
         # Exported nothing rather than earned nothing.
         self.assertIsNone(second["moneyGain"])
+        # The kWh each side priced, beside the direction's whole: the 13:00
+        # export had no rate, so the gain covers part of the day's export.
+        self.assertEqual(first["moneyCostKwh"], first["gridImportKwh"])
+        self.assertEqual(first["moneyGainKwh"], 3.0)
+        self.assertEqual(first["gridExportKwh"], 4.0)
+        self.assertIsNone(second["moneyGainKwh"])
 
     async def test_the_export_rate_reads_helmans_entity_alone(self):
         """The configured sell-price entity is ingestion, and no longer history.

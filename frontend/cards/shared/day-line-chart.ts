@@ -28,12 +28,19 @@ export interface DayLineReference {
     label: string;
 }
 
+/** A labeled range of values, shaded behind the lines. */
+export interface DayLineBand {
+    from: number;
+    to: number;
+    label: string;
+}
+
 const HEIGHT = 160;
 const PAD = { top: 10, right: 12, bottom: 22, left: 54 };
 
 /**
  * A day of one or more readings as lines over local time, with optional
- * labeled reference lines and a text summary.
+ * labeled reference lines and bands, and a text summary.
  *
  * Gaps stay gaps: a line breaks wherever two points are further apart than
  * `bucketMs`, so missing history is never drawn as a straight run. Every point
@@ -77,6 +84,10 @@ export class HelmanDayLineChart extends LitElement {
             stroke-width: 1;
             stroke-dasharray: 4 3;
         }
+        .band {
+            fill: var(--secondary-text-color);
+            opacity: 0.08;
+        }
         .reference-label {
             fill: var(--secondary-text-color);
             font-size: 10px;
@@ -117,6 +128,8 @@ export class HelmanDayLineChart extends LitElement {
 
     @property({ attribute: false }) public series: DayLineSeries[] = [];
     @property({ attribute: false }) public references: DayLineReference[] = [];
+    /** Always inside the drawn range, so a reading's place against a band shows. */
+    @property({ attribute: false }) public bands: DayLineBand[] = [];
     /** The window drawn, epoch ms: a whole local day, in the reading's time zone. */
     @property({ type: Number }) public start = 0;
     @property({ type: Number }) public end = 0;
@@ -188,7 +201,10 @@ export class HelmanDayLineChart extends LitElement {
     }
 
     private _scales() {
-        const values: number[] = this.references.map((reference) => reference.value);
+        const values: number[] = [
+            ...this.references.map((reference) => reference.value),
+            ...this.bands.flatMap((band) => [band.from, band.to]),
+        ];
         for (const series of this.series) {
             for (const point of series.points) {
                 values.push(point.min ?? point.v, point.max ?? point.v);
@@ -224,6 +240,11 @@ export class HelmanDayLineChart extends LitElement {
         const selectedT = this._selected !== null ? this._times[this._selected] : null;
         return html`
             <svg viewBox="0 0 ${this._width} ${HEIGHT}" aria-hidden="true">
+                ${this.bands.map((band) => svg`
+                    <rect class="band" x=${PAD.left} width=${Math.max(0, this._width - PAD.left - PAD.right)}
+                        y=${y(Math.max(band.from, band.to))} height=${Math.abs(y(band.from) - y(band.to))}></rect>
+                    <text class="reference-label" x=${PAD.left + 4} y=${y(Math.max(band.from, band.to)) + 11}>${band.label}</text>
+                `)}
                 ${ticks.map((value) => svg`
                     <line class="grid" x1=${PAD.left} x2=${this._width - PAD.right} y1=${y(value)} y2=${y(value)}></line>
                     <text class="axis-label" x=${PAD.left - 4} y=${y(value) + 3} text-anchor="end">${this.formatValue(value)}</text>

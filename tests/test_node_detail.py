@@ -460,3 +460,242 @@ def test_websocket_errors_carry_the_registry_code():
     )
 
     assert sent == [("error", "unknown_node")]
+
+
+# --- The grid detail ----------------------------------------------------------------
+
+VOLTAGES = {phase: f"sensor.solax_inverter_voltage_l{phase}" for phase in (1, 2, 3)}
+GRID_TELEMETRY = {
+    "run_mode": RUN_MODE,
+    **{f"ac_voltage_l{phase}": entity_id for phase, entity_id in VOLTAGES.items()},
+    **{f"grid_power_l{phase}": f"sensor.solax_measured_power_l{phase}" for phase in (1, 2, 3)},
+    "main_breaker_limit": "number.solax_main_breaker_current_limit",
+}
+NOW = datetime(2026, 10, 10, 14, 0, tzinfo=PRAGUE)
+
+
+def grid_config(*, profile=True):
+    cfg = config(profile=profile)
+    cfg["energy_nodes"]["grid"]["entities"] = {
+        "today_import": "sensor.today_import",
+        "today_export": "sensor.today_export",
+    }
+    return cfg
+
+
+def grid_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, states=None):
+    calls = []
+
+    async def fake_day_stats(hass, entity_ids, *, start, end, now):
+        calls.append(list(entity_ids))
+        return day_stats_result or {}
+
+    with (
+        patch(
+            "custom_components.helman.node_details.grid.resolve_vendor_telemetry",
+            return_value=telemetry(GRID_TELEMETRY) if tele is None else tele,
+        ),
+        patch(
+            "custom_components.helman.node_details.grid.async_day_stats",
+            side_effect=fake_day_stats,
+        ),
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                fake_hass(states or {}),
+                grid_config() if cfg is None else cfg,
+                node="grid",
+                device_id=None,
+                section=section,
+                now=NOW,
+            )
+        )
+    return payload, calls
+
+
+def test_the_grid_overview_carries_its_mappings_and_reads_no_history():
+    payload, calls = grid_detail(states={RUN_MODE: "Off-Grid"})
+
+    assert calls == []
+    assert payload["node"] == "grid"
+    assert payload["entities"]["grid_power_l2"] == "sensor.solax_measured_power_l2"
+    assert payload["entities"]["ac_voltage_l1"] == VOLTAGES[1]
+    # A key the profile has but the registry lacks is a typed null.
+    assert payload["entities"]["grid_frequency"] is None
+    assert payload["entities"]["today_import"] == "sensor.today_import"
+    # Inverter-only telemetry stays with the inverter detail.
+    assert "inverter_temperature" not in payload["entities"]
+    assert payload["phasePowerPolarity"] == "positive_is_export"
+    assert payload["maxAllowedExportPower"] == 9900
+    assert payload["condition"] == {"kind": "off_grid", "runMode": "Off-Grid", "entityId": RUN_MODE}
+    assert payload["sections"] == ["voltage"]
+
+
+def test_a_custom_grid_has_no_telemetry_and_no_voltage_section():
+    payload, _ = grid_detail(cfg=grid_config(profile=False), tele={})
+
+    assert payload["profile"] is None
+    assert payload["phasePowerPolarity"] is None
+    assert payload["entities"] == {
+        "today_import": "sensor.today_import",
+        "today_export": "sensor.today_export",
+    }
+    assert payload["sections"] == []
+
+
+def test_the_grid_refuses_a_section_it_does_not_answer():
+    with pytest.raises(NodeDetailError) as raised:
+        grid_detail(section="temperature")
+    assert raised.value.code == "unknown_section"
+
+
+def day(points):
+    """A day_stats summary holding only what phase_spread reads.
+
+    A point is ``(start, mean)``, fully covered, or ``(start, mean, coverage)``.
+    """
+    return {
+        "points": [
+            {"start": point[0], "mean": point[1], "coverage": point[2] if len(point) > 2 else 1.0}
+            for point in points
+        ]
+    }
+
+
+def at(hour, minute=0):
+    return datetime(2026, 10, 10, hour, minute, tzinfo=PRAGUE).isoformat()
+
+
+def test_the_voltage_section_reads_the_phases_and_their_aligned_spread():
+    stats = {
+        VOLTAGES[1]: day([(at(10), 236.0), (at(10, 5), 238.0)]),
+        VOLTAGES[2]: day([(at(10), 241.0), (at(10, 5), 239.0)]),
+        VOLTAGES[3]: day([(at(10), 237.0), (at(10, 5), 238.5)]),
+    }
+    payload, calls = grid_detail(section="voltage", day_stats_result=stats)
+
+    assert calls == [[VOLTAGES[1], VOLTAGES[2], VOLTAGES[3]]]
+    assert payload["phases"]["2"] is stats[VOLTAGES[2]]
+    assert payload["spread"]["max"] == pytest.approx(5.0)
+    assert payload["spread"]["maxAt"] == at(10)
+    assert payload["spread"]["phases"] == [1, 2, 3]
+    assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
+
+
+def test_a_phase_without_its_sensor_is_a_typed_null_and_is_not_compared():
+    tele = telemetry({**GRID_TELEMETRY, "ac_voltage_l3": None})
+    stats = {
+        VOLTAGES[1]: day([(at(10), 236.0)]),
+        VOLTAGES[2]: day([(at(10), 240.0)]),
+    }
+    payload, calls = grid_detail(section="voltage", tele=tele, day_stats_result=stats)
+
+    assert calls == [[VOLTAGES[1], VOLTAGES[2], None]]
+    assert payload["phases"]["3"] is None
+    assert payload["spread"]["phases"] == [1, 2]
+    assert payload["spread"]["max"] == pytest.approx(4.0)
+
+
+def test_the_spread_never_subtracts_unrelated_extremes():
+    from custom_components.helman.node_details.grid import phase_spread
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 1, 0, tzinfo=PRAGUE)
+    # L1 peaks at 00:00 and L2 dips at 00:10: 250 - 230 would be 20 V, but at
+    # no moment were they that far apart.
+    spread = phase_spread(
+        {
+            "1": day([(at(0), 250.0), (at(0, 5), 240.0), (at(0, 10), 240.0)]),
+            "2": day([(at(0), 248.0), (at(0, 5), 239.0), (at(0, 10), 230.0)]),
+        },
+        start=start,
+        stop=stop,
+    )
+
+    assert spread["max"] == pytest.approx(10.0)
+    assert spread["maxAt"] == at(0, 10)
+
+
+def test_the_spread_compares_only_buckets_every_phase_knows():
+    from custom_components.helman.node_details.grid import phase_spread
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 0, 20, tzinfo=PRAGUE)
+    spread = phase_spread(
+        {
+            "1": day([(at(0), 230.0), (at(0, 5), 230.0), (at(0, 10), 230.0)]),
+            # L2 has a gap at 00:05, where L1 alone would make no spread.
+            "2": day([(at(0), 232.0), (at(0, 10), 231.0)]),
+            "3": None,
+        },
+        start=start,
+        stop=stop,
+    )
+
+    assert spread["phases"] == [1, 2]
+    assert spread["max"] == pytest.approx(2.0)
+    # Two aligned buckets of the four elapsed.
+    assert spread["coverage"] == pytest.approx(0.5)
+
+
+def test_spread_coverage_counts_each_bucket_at_its_least_known_phase():
+    from custom_components.helman.node_details.grid import phase_spread
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 0, 10, tzinfo=PRAGUE)
+    spread = phase_spread(
+        {
+            "1": day([(at(0), 230.0, 0.2), (at(0, 5), 230.0)]),
+            "2": day([(at(0), 232.0), (at(0, 5), 231.0, 0.6)]),
+        },
+        start=start,
+        stop=stop,
+    )
+
+    # 0.2 of the first bucket and 0.6 of the second, of two elapsed.
+    assert spread["coverage"] == pytest.approx(0.4)
+
+
+def test_a_null_grid_config_still_builds_an_overview():
+    for broken in ({"energy_nodes": None}, {"energy_nodes": {"grid": None}}):
+        payload, _ = grid_detail(cfg=broken)
+        assert payload["maxAllowedExportPower"] is None
+
+
+def test_one_known_phase_has_no_spread():
+    from custom_components.helman.node_details.grid import phase_spread
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    spread = phase_spread(
+        {"1": day([(at(0), 230.0)]), "2": day([]), "3": None},
+        start=start,
+        stop=start + timedelta(minutes=5),
+    )
+
+    assert spread == {"phases": [1], "max": None, "maxAt": None, "coverage": 0.0}
+
+
+def test_voltage_extrema_are_bucket_extrema_and_the_mean_is_duration_weighted():
+    voltage = VOLTAGES[1]
+    # Recorded states: 236 V for 4 minutes then a 1-minute dip to 221 V, then a
+    # 5-minute gap (unavailable), then 240 V.
+    states = [
+        state("236", T0),
+        state("221", T0 + timedelta(minutes=4)),
+        state("unavailable", T0 + timedelta(minutes=5)),
+        state("240", T0 + timedelta(minutes=10)),
+    ]
+    stop = T0 + timedelta(minutes=15)
+    summary = day_stats.summarize(
+        day_stats.buckets_from_states(states, T0, stop),
+        start=T0, stop=stop, source="history", unit="V", entity_id=voltage,
+    )
+
+    # The dip is the day's minimum though no bucket mean comes near it.
+    assert summary["min"] == 221
+    assert min(point["mean"] for point in summary["points"]) == pytest.approx((236 * 4 + 221) / 5)
+    assert summary["max"] == 240
+    # The gap is neither a zero nor integrated into the mean.
+    assert len(summary["points"]) == 2
+    assert summary["mean"] == pytest.approx((236 * 240 + 221 * 60 + 240 * 300) / 600)
+    assert summary["coverage"] == pytest.approx(600 / 900)

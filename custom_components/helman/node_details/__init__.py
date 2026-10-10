@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from .grid import async_grid_section, build_grid_overview
 from .inverter import async_inverter_section, build_inverter_overview
 
 
@@ -41,6 +42,11 @@ NODE_DETAILS: dict[str, NodeDetail] = {
         overview=build_inverter_overview,
         section=async_inverter_section,
         sections=frozenset({"temperature"}),
+    ),
+    "grid": NodeDetail(
+        overview=build_grid_overview,
+        section=async_grid_section,
+        sections=frozenset({"voltage"}),
     ),
 }
 

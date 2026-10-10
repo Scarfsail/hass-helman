@@ -27,15 +27,14 @@ export interface SolarDetailParams {
     historyRevision: number;
 }
 
+/**
+ * The grid. Its readings come from `helman/get_node_detail`; the total power is
+ * the card's own live figure, with the polarity the card already applied.
+ */
 export interface GridDetailParams {
     nodeType: "grid";
-    gridProducerNode: TreeItem | null;
-    gridConsumerNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    consumptionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
+    /** Grid power: positive imports, negative exports, W. */
+    gridPower: number;
 }
 
 export interface HouseDetailParams {

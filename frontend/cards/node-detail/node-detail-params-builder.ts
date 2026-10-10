@@ -10,8 +10,8 @@ export interface NodeDetailContext {
     batteryProducerNode: TreeItem | null;
     batteryConsumerNode: TreeItem | null;
     solarNode: TreeItem | null;
-    gridProducerNode: TreeItem | null;
-    gridConsumerNode: TreeItem | null;
+    /** Grid power: positive imports, negative exports, W. */
+    gridPower: number;
     productionNode: TreeItem | null;
     consumptionNode: TreeItem | null;
     housePower: number;
@@ -58,13 +58,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
         case "grid":
             return {
                 nodeType: "grid",
-                gridProducerNode: context.gridProducerNode,
-                gridConsumerNode: context.gridConsumerNode,
-                productionNode: context.productionNode,
-                consumptionNode: context.consumptionNode,
-                historyBuckets: context.historyBuckets,
-                historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
+                gridPower: context.gridPower,
             };
         case "house":
             return {

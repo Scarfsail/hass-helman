@@ -215,6 +215,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _localize?: LocalizeFunction;
     private _latestHass?: HomeAssistant;
     private _watchedEntityIds: Set<string> = new Set();
+    /** The readings the open node detail announced it reads live. */
+    private _detailEntityIds: string[] = [];
     private _solarDTO:           TreeItemDTO | null = null;
     private _gridDTO:            TreeItemDTO | null = null;
     private _batteryDTO:         TreeItemDTO | null = null;
@@ -409,13 +411,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     <div class="energy-grid" style=${gridStyle}>
 
                         <!-- ── Row 1: Solar  ─── connector ─── Grid ── -->
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'solar'}>
+                        <div class="node-cell" @click=${() => this._openNode("solar")}>
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
                             ${solarExportingToGrid ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, solarToGridT, 22.5, 33) : ""}
                         </div>
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'grid'}>
+                        <div class="node-cell" @click=${() => this._openNode("grid")}>
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
                         </div>
 
@@ -430,11 +432,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'house'}>
+                        <div class="node-cell" @click=${() => this._openNode("house")}>
                             <simple-card-house .power=${housePower} .sourceColor=${houseSourceColor}></simple-card-house>
                         </div>
                         <div class="connector-h"></div>
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'battery'}>
+                        <div class="node-cell" @click=${() => this._openNode("battery")}>
                             <simple-card-battery
                                 .power=${batteryPower}
                                 .soc=${batterySoc}
@@ -454,7 +456,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .localize=${this._localize!}
                     .open=${true}
                     .params=${this._buildDialogParams(this._dialogRequest)}
-                    @closed=${() => { this._dialogRequest = null; this._rebuildWatchedEntityIds(); }}
+                    @closed=${() => { this._dialogRequest = null; this._detailEntityIds = []; this._rebuildWatchedEntityIds(); }}
+                    @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
             ` : ''}
             <scheduling-day-editor-host
@@ -498,7 +501,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 class="inverter-cell"
                 aria-label=${ariaLabel}
                 title=${ariaLabel}
-                @click=${(event: Event) => { event.stopPropagation(); this._openInverter(); }}
+                @click=${(event: Event) => { event.stopPropagation(); this._openNode("inverter"); }}
             >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${mdiCurrentAc}></path></svg>
                 <span class="inverter-mode">${label}</span>
@@ -507,12 +510,19 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         `;
     }
 
-    private _openInverter(): void {
-        this._dialogRequest = "inverter";
+    private _openNode(node: NodeType): void {
+        this._dialogRequest = node;
+        this._detailEntityIds = [];
         this._rebuildWatchedEntityIds();
-        // Newly watched readings were not followed until now: hand the latest down.
-        this._hass = this._latestHass;
     }
+
+    /** The open detail's own readings: watched while it is open, the latest handed down now. */
+    private _onDetailWatch = (event: CustomEvent<string[]>): void => {
+        event.stopPropagation();
+        this._detailEntityIds = event.detail;
+        this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
+    };
 
     /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
     private async _loadInverter(obsolete: () => boolean): Promise<void> {
@@ -555,20 +565,12 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         addNode(this._batteryConsumerNode);
         addNode(this._gridConsumerNode);
         addNode(this._houseNode);
-        // The centre cell's mode and link cue; every inverter reading while
-        // its detail is open, so the detail reads them live.
+        for (const id of this._detailEntityIds) ids.add(id);
+        // The centre cell's mode and link cue.
         const inverter = this._inverter;
         if (inverter) {
             if (inverter.mode) ids.add(inverter.mode.entityId);
-            if (this._dialogRequest === "inverter") {
-                for (const register of inverter.agreement.registers) {
-                    if (register.entityId) ids.add(register.entityId);
-                }
-            }
-            const keys = this._dialogRequest === "inverter"
-                ? Object.keys(inverter.entities)
-                : ["link_success_rate", "link_quarantined_registers"];
-            for (const key of keys) {
+            for (const key of ["link_success_rate", "link_quarantined_registers"]) {
                 const entityId = inverter.entities[key];
                 if (entityId) ids.add(entityId);
             }
@@ -722,8 +724,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             batteryProducerNode: this._batteryProducerNode,
             batteryConsumerNode: this._batteryConsumerNode,
             solarNode: this._solarNode,
-            gridProducerNode: this._gridProducerNode,
-            gridConsumerNode: this._gridConsumerNode,
+            gridPower: this._energy.gridPower,
             productionNode: this._productionNode,
             consumptionNode: this._consumptionNode,
             housePower: this._energy.housePower,
