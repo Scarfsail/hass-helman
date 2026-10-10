@@ -299,6 +299,7 @@
       "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení",
       "hardware_profile": "Hardwarový profil",
       "vendor_entry": "Položka integrace",
+      "vendor_device": "Zařízení",
       "max_allowed_export_power": "Max. povolený výkon exportu"
     },
     "entity_status": {
@@ -480,7 +481,8 @@
       "condition_group": "Skupina {index}",
       "provided_by": "Poskytuje {profile}",
       "vendor_entity_unresolved": "Ve zvolené položce integrace nenalezeno",
-      "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní."
+      "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní.",
+      "vendor_no_devices": "Pro {profile} není v tomto Home Assistantu nastavené žádné zařízení, nebo každé už používá jiné zařízení, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní."
     },
     "help": {
       "aria_label": "Nápověda k poli",
@@ -583,6 +585,7 @@
       "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím.",
       "hardware_profile": "Hardware, kterým toto zařízení je. Profil je definovaný v Helmanu, takže ví, která entita integrace výrobce plní které nastavení; přejmenování těchto entit ho nerozbije. Výběr profilu odstraní z této konfigurace entity, které poskytuje. Nastavení místa, jako maximální výkon, ceny nebo účinnosti, zůstávají na vás.",
       "vendor_entry": "Položka konfigurace integrace výrobce, kterou toto zařízení je, v Nastavení > Zařízení a služby.",
+      "vendor_device": "Zařízení HA integrace výrobce, kterým toto zařízení je, v Nastavení > Zařízení a služby. Nabízí se jen zařízení, na kterých profil najde všechny potřebné entity, kromě těch, která už používá jiné zařízení.",
       "grid_max_allowed_export_power": "Nejvyšší výkon exportu do sítě, který vám dovoluje smlouva s distributorem, ve wattech; 0 pro smlouvu bez exportu. Hodnotu vezměte ze smlouvy: je to vlastnost vašeho odběrného místa, ne hardwaru. Povinné s hardwarovým profilem, který řídí režimy střídače; ten na ni po slotu se zákazem exportu vrací limit exportu střídače. Jinak se nepoužívá."
     },
     "device_filter": {

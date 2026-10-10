@@ -265,9 +265,11 @@ def find_charging_devices(
 def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
     """The ``helman/get_vendors`` payload for an editor draft.
 
-    The profiles with their candidate config entries, and for each device of
-    the draft that carries a valid ``profile``, what that profile owns there
-    and what it resolves to, keyed by absolute path (Helman's own controls
+    The profiles with what each can bind to: an entry-bound one its config
+    entries, a device-bound one its ``candidates``, the HA devices it fully
+    resolves on. For each device of the draft that carries a valid
+    ``profile``, what that profile owns there, what it resolves to and the
+    values it fills in, keyed by absolute path (Helman's own controls
     included, such as ``energy_nodes.inverter.controls.mode.entity_id``). This
     is the editor's only source for which paths a profile owns, so each list
     lives once, in its profile module.
@@ -278,29 +280,88 @@ def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
                 "id": profile.id,
                 "label": profile.label,
                 "deviceKind": profile.device_kind,
+                "binding": profile.binding,
                 "ownedConfigPaths": profile.owned_config_paths,
                 "ownedDevicePaths": list(profile.device_paths),
-                "entries": [
-                    {"entryId": entry.entry_id, "title": entry.title}
-                    # Not an ignored discovery or a disabled entry: the editor
-                    # preselects the first, and neither has entities.
-                    for entry in hass.config_entries.async_entries(
-                        profile.platform, include_ignore=False, include_disabled=False
-                    )
-                ],
+                **(
+                    {"candidates": _describe_candidates(hass, profile)}
+                    if profile.binding == "device"
+                    else {
+                        "entries": [
+                            {"entryId": entry.entry_id, "title": entry.title}
+                            for entry in _usable_entries(hass, profile)
+                        ]
+                    }
+                ),
             }
             for profile in PROFILES.values()
         ],
         "devices": {
             vendor_device.path: {
                 "profile": vendor_device.profile.id,
+                # What the answer was computed for, so the editor can tell a
+                # stale answer from one for the device it now shows.
+                "storedProfile": dict(vendor_device.device[PROFILE_KEY]),
                 "ownedConfigPaths": vendor_device.profile.owned_config_paths,
                 "ownedDevicePaths": list(vendor_device.profile.device_paths),
                 "resolved": _describe_resolved(hass, config, vendor_device),
+                "values": {
+                    **vendor_device.profile.values,
+                    **{
+                        f"{vendor_device.path}.{path}": value
+                        for path, value in vendor_device.profile.device_values.items()
+                    },
+                },
             }
             for vendor_device in _iter_vendor_devices(hass, config, [])
         },
     }
+
+
+def _usable_entries(hass: Any, profile: VendorProfile) -> list[Any]:
+    """The profile's config entries a device can bind to.
+
+    Not an ignored discovery or a disabled entry: the editor preselects the
+    first, and neither has entities.
+    """
+    return hass.config_entries.async_entries(
+        profile.platform, include_ignore=False, include_disabled=False
+    )
+
+
+def _describe_candidates(hass: Any, profile: VendorProfile) -> list[dict[str, str]]:
+    """The HA devices a device-bound profile fully resolves on.
+
+    Every HA device of a usable entry of the profile's platform on which each
+    of the profile's device entities, and its charging control's, resolves;
+    one that lacks any would leave an owned slot empty or the switch dead.
+    """
+    from homeassistant.helpers import device_registry as dr
+
+    registry = dr.async_get(hass)
+    candidates = []
+    for entry in _usable_entries(hass, profile):
+        for ha_device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+            entity_ids = resolve_unique_ids(
+                hass,
+                profile,
+                entry,
+                [
+                    *profile.device_entities.values(),
+                    *(profile.charging.templates if profile.charging else ()),
+                ],
+                device_id=ha_device.id,
+            )
+            if None in entity_ids.values():
+                continue
+            candidates.append(
+                {
+                    "deviceId": ha_device.id,
+                    "name": ha_device.name_by_user or ha_device.name or ha_device.id,
+                    "entryTitle": entry.title,
+                }
+            )
+    return candidates
 
 
 def _describe_resolved(

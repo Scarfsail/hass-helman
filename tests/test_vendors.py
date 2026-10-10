@@ -153,7 +153,12 @@ def fake_hass(entries):
 def registry(entries, devices=None):
     """The entity registry ``entries``, and HA devices ``{device id: entry ids}``."""
     ha_devices = {
-        device_id: NS(id=device_id, config_entries=set(entry_ids))
+        device_id: NS(
+            id=device_id,
+            config_entries=set(entry_ids),
+            name=f"{device_id} name",
+            name_by_user=None,
+        )
         for device_id, entry_ids in (devices or {}).items()
     }
 
@@ -189,6 +194,14 @@ def registry(entries, devices=None):
         patch(
             "homeassistant.helpers.device_registry.async_get",
             return_value=NS(async_get=ha_devices.get),
+        ),
+        patch(
+            "homeassistant.helpers.device_registry.async_entries_for_config_entry",
+            side_effect=lambda _registry, entry_id: [
+                device
+                for device in ha_devices.values()
+                if entry_id in device.config_entries
+            ],
         ),
     ):
         yield
@@ -466,6 +479,10 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert profile["entries"] == [{"entryId": ENTRY_ID, "title": "SolaX"}]
     device = payload["devices"]["energy_nodes.inverter"]
     assert device["profile"] == "solax_inverter"
+    assert device["values"] == {
+        "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
+        "energy_nodes.grid.entities.power_polarity": "positive_is_import",
+    }
     assert device["ownedDevicePaths"] == ["controls.mode"]
     assert set(device["ownedConfigPaths"]) == set(SOLAX_ROWS) | {
         "energy_nodes.battery.entities.power_polarity",
@@ -481,10 +498,13 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
 
 
 def test_get_vendors_without_a_profile_lists_only_the_profiles():
-    payload = describe_vendors(fake_hass([]), {"energy_nodes": {"inverter": {}}})
+    with registry([]):
+        payload = describe_vendors(fake_hass([]), {"energy_nodes": {"inverter": {}}})
 
     assert payload["devices"] == {}
-    assert payload["profiles"][0]["entries"] == []
+    profiles = {profile["id"]: profile for profile in payload["profiles"]}
+    assert profiles["solax_inverter"]["entries"] == []
+    assert profiles["solax_ev_charger"]["candidates"] == []
 
 
 # --- The SolaX EV charger: a device-bound profile -----------------------------
@@ -815,6 +835,7 @@ def test_get_vendors_describes_a_charger():
 
     device = payload["devices"]["devices.consumers[0]"]
     assert device["profile"] == "solax_ev_charger"
+    assert device["storedProfile"] == charger()["profile"]
     assert device["ownedConfigPaths"] == []
     assert device["resolved"] == {
         "devices.consumers[0].consumption.energy_entity_id": (
@@ -833,3 +854,60 @@ def test_get_vendors_describes_a_charger():
             "switch.helman_ev_charging_garage_ev"
         ),
     }
+
+
+def test_get_vendors_gives_the_charger_values_as_absolute_paths():
+    hass = fake_hass([charger_entry()])
+    document = {"devices": {"consumers": [{"id": "garage"}, charger()]}}
+    with registry(charger_rows(), {CHARGER_DEVICE_ID: [CHARGER_ENTRY_ID]}):
+        payload = describe_vendors(hass, document)
+
+    assert payload["devices"]["devices.consumers[1]"]["values"] == {
+        "devices.consumers[1].controls.use_mode.values": (
+            RESOLVED_CHARGER["controls"]["use_mode"]["values"]
+        ),
+        "devices.consumers[1].controls.eco_gear.values": (
+            RESOLVED_CHARGER["controls"]["eco_gear"]["values"]
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "select.solax_ev_charger_eco_gear",
+        # The charging switch's command select: the sensor of that unique id
+        # is still there.
+        "select.solax_ev_charger_control_command",
+    ],
+)
+def test_charger_candidates_are_the_ha_devices_it_fully_resolves_on(missing):
+    # The entry's dashboard device has only some of the charger's rows.
+    dashboard_rows = [
+        row
+        for row in charger_rows(device_id=DASHBOARD_DEVICE_ID)
+        if row.entity_id != missing
+    ]
+    hass = fake_hass([charger_entry(), config_entry()])
+    with registry(
+        charger_rows() + dashboard_rows,
+        {
+            CHARGER_DEVICE_ID: [CHARGER_ENTRY_ID],
+            DASHBOARD_DEVICE_ID: [CHARGER_ENTRY_ID],
+        },
+    ):
+        payload = describe_vendors(hass, {})
+
+    profiles = {profile["id"]: profile for profile in payload["profiles"]}
+    charger_profile = profiles["solax_ev_charger"]
+    assert charger_profile["binding"] == "device"
+    assert "entries" not in charger_profile
+    assert charger_profile["candidates"] == [
+        {
+            "deviceId": CHARGER_DEVICE_ID,
+            "name": f"{CHARGER_DEVICE_ID} name",
+            "entryTitle": "SolaX_EV_Charger",
+        }
+    ]
+    assert profiles["solax_inverter"]["binding"] == "entry"
+    assert "candidates" not in profiles["solax_inverter"]

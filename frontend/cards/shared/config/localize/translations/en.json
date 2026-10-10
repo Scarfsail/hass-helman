@@ -298,6 +298,7 @@
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child",
       "hardware_profile": "Hardware profile",
       "vendor_entry": "Integration entry",
+      "vendor_device": "Device",
       "max_allowed_export_power": "Max allowed export power"
     },
     "entity_status": {
@@ -479,7 +480,8 @@
       "condition_group": "Group {index}",
       "provided_by": "Provided by {profile}",
       "vendor_entity_unresolved": "Not found in the chosen integration entry",
-      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
+      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
+      "vendor_no_devices": "No device for {profile} is set up in this Home Assistant, or each one is already used by another device, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
     },
     "help": {
       "aria_label": "Field help",
@@ -582,6 +584,7 @@
       "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it.",
       "hardware_profile": "The hardware this device is. A profile is defined in Helman, so it knows which entity of the vendor integration feeds each setting; renaming those entities does not break it. Picking one removes the entities it provides from this config. Site settings, such as maximum power, prices or efficiencies, stay yours to set.",
       "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services.",
+      "vendor_device": "The vendor integration's HA device this device is, in Settings > Devices & services. Only devices on which the profile finds every entity it needs are offered, minus those another device already uses.",
       "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise."
     },
     "device_filter": {

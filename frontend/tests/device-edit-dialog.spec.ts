@@ -62,6 +62,8 @@ interface MountOptions {
     saveResponse?: unknown;
     /** Leave the save request unanswered, so the save stays in flight. */
     hangSave?: boolean;
+    /** The `helman/get_vendors` answer. */
+    vendors?: unknown;
 }
 
 async function mountDetail(page: Page, options: MountOptions = {}): Promise<void> {
@@ -70,6 +72,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
         config = CONFIG,
         saveResponse = { success: true, validation: VALID, reloadStarted: true },
         hangSave = false,
+        vendors = {},
     } = options;
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -77,7 +80,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
     await page.addScriptTag({ content: HA_DIALOG_STUB });
 
     await page.evaluate(
-        ({ config, key, save, hang, strings }) => {
+        ({ config, key, save, hang, strings, vendors }) => {
             const calls: { type: string; config?: unknown; targets?: { key: string }[] }[] = [];
             (window as any).__calls = calls;
             const content = document.createElement("node-detail-device-content") as any;
@@ -92,6 +95,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                     calls.push({ type: request.type, config: request.config, targets: request.targets });
                     if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
                     if (request.type === "helman/save_config") return hang ? new Promise(() => undefined) : save;
+                    if (request.type === "helman/get_vendors") return vendors;
                     if (request.type === "helman/inspect_entities") {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
@@ -116,7 +120,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
             };
             document.body.appendChild(content);
         },
-        { config, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS },
+        { config, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS, vendors },
     );
 }
 
@@ -317,5 +321,61 @@ test.describe("editing a device from its detail", () => {
             "devices.consumers.0.name",
             "devices.consumers.0.consumption.energy_entity_id",
         ]));
+    });
+});
+
+test.describe("editing a device on a hardware profile", () => {
+    const CHARGER = {
+        id: "garage-ev",
+        kind: "ev_charger",
+        name: "Garage EV",
+        profile: { id: "solax_ev_charger", device_id: "garage-charger" },
+    };
+    const METER = "sensor.solax_ev_charger_charge_added_total";
+    const PATH = "devices.consumers[0]";
+    const VENDORS = {
+        profiles: [
+            {
+                id: "solax_ev_charger",
+                label: "SolaX EV charger",
+                deviceKind: "ev_charger",
+                binding: "device",
+                ownedConfigPaths: [],
+                ownedDevicePaths: ["consumption.energy_entity_id", "controls.charge"],
+                candidates: [{ deviceId: "garage-charger", name: "Garage charger", entryTitle: "SolaX" }],
+            },
+        ],
+        devices: {
+            [PATH]: {
+                profile: "solax_ev_charger",
+                storedProfile: { id: "solax_ev_charger", device_id: "garage-charger" },
+                ownedConfigPaths: [],
+                ownedDevicePaths: ["consumption.energy_entity_id", "controls.charge"],
+                resolved: {
+                    [`${PATH}.consumption.energy_entity_id`]: METER,
+                    [`${PATH}.controls.charge.entity_id`]: "switch.helman_ev_charging_garage_ev",
+                },
+                values: {},
+            },
+        },
+    };
+
+    test("a profile charger opens by the meter its profile fills, with that meter read-only", async ({ page }) => {
+        await mountDetail(page, {
+            deviceKey: METER,
+            config: { ...CONFIG, devices: { consumers: [CHARGER] } },
+            vendors: VENDORS,
+        });
+        await openEdit(page);
+        await expect.poll(() => cardIds(page)).toEqual(["garage-ev"]);
+        await openSection(page, "Measurements");
+        await openSection(page, "Controls");
+
+        const provided = (path: string) =>
+            dialog(page).locator(`.vendor-provided[data-path="${PATH}.${path}"] .vendor-provided-entity`);
+        await expect(provided("consumption.energy_entity_id")).toHaveText(METER);
+        await expect(provided("controls.charge.entity_id")).toHaveText("switch.helman_ev_charging_garage_ev");
+        await expect(dialog(page).locator("select.device-kind")).toBeDisabled();
+        await expect(dialog(page).locator('details.device-card > summary .device-badge[data-badge="energy"]')).toHaveCount(1);
     });
 });

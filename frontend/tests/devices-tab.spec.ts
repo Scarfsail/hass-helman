@@ -970,6 +970,7 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
     );
     expect(sections).toEqual([
         "Identity",
+        "Hardware profile",
         "Measurements",
         "Controls",
         "Use modes",

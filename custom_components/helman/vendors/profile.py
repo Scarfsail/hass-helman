@@ -35,6 +35,15 @@ class ChargingControl:
     off_option: str
     after_off: tuple[tuple[EntityTemplate, str], ...] = ()
 
+    @property
+    def templates(self) -> list[EntityTemplate]:
+        """Every entity the switch reads or writes."""
+        return [
+            self.state[0],
+            self.command,
+            *(template for template, _option in self.after_off),
+        ]
+
 
 @dataclass(frozen=True)
 class VendorProfile:

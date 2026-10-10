@@ -74,19 +74,27 @@ export interface VendorProfileInfo {
   id: string;
   label: string;
   deviceKind: string;
+  /** What a device's `profile` names: a config entry, or one HA device. */
+  binding: "entry" | "device";
   ownedConfigPaths: string[];
   ownedDevicePaths: string[];
-  /** The vendor integration's config entries a device can be bound to. */
-  entries: { entryId: string; title: string }[];
+  /** An entry-bound profile's config entries a device can be bound to. */
+  entries?: { entryId: string; title: string }[];
+  /** A device-bound profile's HA devices: every one it fully resolves on. */
+  candidates?: { deviceId: string; name: string; entryTitle: string }[];
 }
 
 /** What a draft device's profile owns, and what each owned entity resolves to. */
 export interface VendorDeviceInfo {
   profile: string;
+  /** The device's stored `profile` the answer was computed for. */
+  storedProfile: JsonObject;
   ownedConfigPaths: string[];
   ownedDevicePaths: string[];
   /** Absolute path → entity id, a device's owned mode control entity included. */
   resolved: Record<string, string | null>;
+  /** Absolute path → the value the profile fills in, such as a use mode map. */
+  values: Record<string, JsonValue>;
 }
 
 export interface VendorsResponse {
