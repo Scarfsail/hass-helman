@@ -356,6 +356,7 @@ test.describe("editing a device on a hardware profile", () => {
                     [`${PATH}.controls.charge.entity_id`]: "switch.helman_ev_charging_garage_ev",
                 },
                 values: {},
+                helmanEntityPaths: [`${PATH}.controls.charge.entity_id`],
             },
         },
     };

@@ -15,6 +15,11 @@ import { resolve } from "node:path";
  * EV charger binds to an HA device rather than a config entry, and owns the
  * charger's meters, controls and value lists, which its card then shows
  * read-only.
+ *
+ * Converting (#442): a Custom device whose entities sit on a profile's HA
+ * device is offered that profile first and bound there, and switching a
+ * device back to Custom writes what its profile provided into the draft, but
+ * Helman's own entities.
  */
 
 const BUNDLE = resolve(
@@ -176,14 +181,28 @@ const GARAGE = "devices.consumers[0]";
 /** The same device as an entity group's key. */
 const GARAGE_GROUP = "devices.consumers.0";
 
-async function mountEditor(page: Page, config: unknown, profile = PROFILE): Promise<void> {
+/** What the stub answers beyond the defaults: the registry, and the inverter profile's answer. */
+interface StubOptions {
+    /** `hass.entities`: which HA device each entity sits on. */
+    entities?: Record<string, { device_id: string }>;
+    inverterResolved?: Record<string, string | null>;
+    inverterValues?: Record<string, unknown>;
+}
+
+async function mountEditor(
+    page: Page,
+    config: unknown,
+    profile = PROFILE,
+    { entities = {}, inverterResolved = RESOLVED, inverterValues = {} }: StubOptions = {},
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, profile, resolved, charger, chargerResolved, chargerValues }) => {
+        ({ config, profile, resolved, inverterValues, charger, chargerResolved, chargerValues, entities, modePath }) => {
             (window as any).__vendorRequests = [];
+            (window as any).__validation = { valid: true, errors: [], warnings: [] };
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
@@ -192,6 +211,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                 locale: { language: "en" },
                 user: { is_admin: true },
                 states: {},
+                entities,
                 connection: { subscribeMessage: async () => () => undefined },
                 callWS: async (request: any) => {
                     if (request.type === "helman/get_config") {
@@ -201,6 +221,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                         return { version: 2, kinds: [] };
                     }
                     if (request.type === "helman/get_appliances") return { appliances: [] };
+                    if (request.type === "helman/validate_config") return (window as any).__validation;
                     if (request.type === "helman/get_vendors") {
                         (window as any).__vendorRequests.push(
                             JSON.parse(JSON.stringify(request.config)),
@@ -214,7 +235,8 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                                 ownedConfigPaths: profile.ownedConfigPaths,
                                 ownedDevicePaths: profile.ownedDevicePaths,
                                 resolved,
-                                values: {},
+                                values: inverterValues,
+                                helmanEntityPaths: [modePath],
                             };
                         }
                         const consumers: any[] = request.config?.devices?.consumers ?? [];
@@ -233,6 +255,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                                 ownedDevicePaths: charger.ownedDevicePaths,
                                 resolved: absolute(chargerResolved),
                                 values: absolute(chargerValues),
+                                helmanEntityPaths: [`${path}.controls.charge.entity_id`],
                             };
                         });
                         return { profiles: [profile, charger], devices };
@@ -245,10 +268,13 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
         {
             config,
             profile,
-            resolved: { ...RESOLVED, ...MODE_RESOLVED },
+            resolved: { ...inverterResolved, ...MODE_RESOLVED },
+            inverterValues,
             charger: CHARGER_PROFILE,
             chargerResolved: CHARGER_RESOLVED,
             chargerValues: CHARGER_VALUES,
+            entities,
+            modePath: MODE_PATH,
         },
     );
 }
@@ -721,7 +747,120 @@ test("a charger on its profile shows what the profile fills in, read-only", asyn
     expect(card.addButtons).not.toContain("Add eco gear");
 });
 
-test("switching a charger back to Custom brings its empty pickers back", async ({ page }) => {
+/** A value in a draft by its validation path, such as `devices.consumers[0].controls`. */
+function valueAt(document: any, path: string): any {
+    return path
+        .replace(/\[(\d+)\]/g, ".$1")
+        .split(".")
+        .reduce((node, key) => node?.[key], document);
+}
+
+/** A hand-mapped garage charger whose meters and switch sit on the drive's HA device. */
+const MATCHING_CONFIG = {
+    config_version: 29,
+    devices: {
+        consumers: [
+            {
+                id: "garage-ev",
+                kind: "ev_charger",
+                name: "Garage EV",
+                limits: { max_charging_power_kw: 11 },
+                consumption: {
+                    energy_entity_id: "sensor.garage_ev_energy",
+                    power_entity_id: "sensor.garage_ev_power",
+                },
+                controls: { charge: { entity_id: "switch.garage_ev_charging" } },
+            },
+        ],
+    },
+};
+
+const ON_DRIVE_CHARGER = {
+    "sensor.garage_ev_energy": { device_id: "drive-charger" },
+    "sensor.garage_ev_power": { device_id: "drive-charger" },
+    "switch.garage_ev_charging": { device_id: "drive-charger" },
+};
+
+/** The meter-change note in the garage card's hardware section, or `null`. */
+function meterChangeNote(page: Page): Promise<string | null> {
+    return page.evaluate(
+        () =>
+            document
+                .querySelector("helman-config-editor-panel")
+                ?.shadowRoot?.querySelector(
+                    'details.device-card[data-device-id="garage-ev"] [data-field="profile-meter-change"]',
+                )
+                ?.textContent?.trim() ?? null,
+    );
+}
+
+test("a Custom charger whose entities sit on a candidate offers its profile first, as matching, and binds it there", async ({
+    page,
+}) => {
+    await mountEditor(page, MATCHING_CONFIG, PROFILE, { entities: ON_DRIVE_CHARGER });
+    await openTab(page, "Devices");
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return page.evaluate(() => {
+                const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+                const select = root?.querySelector<HTMLSelectElement>(
+                    'details.device-card[data-device-id="garage-ev"] select[data-field="hardware-profile"]',
+                );
+                return Array.from(select?.options ?? []).map((option) => option.textContent?.trim());
+            });
+        })
+        .toEqual(["Custom", "SolaX EV charger (matches this device's entities)"]);
+    // Nothing is said about the meter while the device stays Custom.
+    expect(await meterChangeNote(page)).toBeNull();
+
+    await pickGarageProfile(page, "solax_ev_charger");
+
+    // The HA device the entities sit on, not the first candidate.
+    await expect
+        .poll(async () => (await lastDraft(page))?.devices?.consumers?.[0]?.profile ?? null)
+        .toEqual({ id: "solax_ev_charger", device_id: "drive-charger" });
+    const { consumption: _meters, controls: _controls, ...rest } = MATCHING_CONFIG.devices.consumers[0];
+    expect((await lastDraft(page)).devices.consumers[0]).toEqual({
+        ...rest,
+        profile: { id: "solax_ev_charger", device_id: "drive-charger" },
+    });
+    // Its saved meter is not the one the profile resolves: the card says so.
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return meterChangeNote(page);
+        })
+        .toBe(
+            "The energy meter changes from sensor.garage_ev_energy to " +
+                "sensor.solax_ev_charger_charge_added_total. Learned usage and history are keyed by the meter.",
+        );
+});
+
+test("a profile resolving the meter the device already has says nothing about it", async ({ page }) => {
+    const same: any = structuredClone(MATCHING_CONFIG);
+    same.devices.consumers[0].consumption.energy_entity_id = CHARGER_RESOLVED["consumption.energy_entity_id"];
+    await mountEditor(page, same, PROFILE, {
+        entities: {
+            ...ON_DRIVE_CHARGER,
+            [CHARGER_RESOLVED["consumption.energy_entity_id"]]: { device_id: "drive-charger" },
+        },
+    });
+    await openTab(page, "Devices");
+    await pickGarageProfile(page, "solax_ev_charger");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return Object.keys((await garageCard(page)).provided).length;
+        })
+        .toBe(5);
+    expect(await meterChangeNote(page)).toBeNull();
+});
+
+test("switching a charger back to Custom writes what the profile provided, but its own switch", async ({
+    page,
+}) => {
     await mountEditor(page, GARAGE_ON_PROFILE);
     await openTab(page, "Devices");
     await expect
@@ -734,26 +873,112 @@ test("switching a charger back to Custom brings its empty pickers back", async (
     await pickGarageProfile(page, "");
 
     await expect.poll(async () => (await lastDraft(page))?.devices?.consumers?.[0]?.profile ?? null).toBeNull();
+    const { profile: _gone, ...garage } = GARAGE_ON_PROFILE.devices.consumers[0];
+    // Helman's charging switch exists only under the profile: its slot stays empty.
+    expect((await lastDraft(page)).devices.consumers[0]).toEqual({
+        ...garage,
+        consumption: {
+            energy_entity_id: CHARGER_RESOLVED["consumption.energy_entity_id"],
+            power_entity_id: CHARGER_RESOLVED["consumption.power_entity_id"],
+        },
+        controls: {
+            use_mode: {
+                entity_id: CHARGER_RESOLVED["controls.use_mode.entity_id"],
+                values: CHARGER_VALUES["controls.use_mode.values"],
+            },
+            eco_gear: {
+                entity_id: CHARGER_RESOLVED["controls.eco_gear.entity_id"],
+                values: CHARGER_VALUES["controls.eco_gear.values"],
+            },
+        },
+    });
     await expect
         .poll(async () => {
             await expandEverything(page);
             const card = await garageCard(page);
             return {
                 provided: Object.keys(card.provided).length,
-                meterPicker: card.groups.includes(`${GARAGE_GROUP}.consumption.energy_entity_id`),
+                chargePicker: card.groups.includes(`${GARAGE_GROUP}.controls.charge.entity_id`),
                 kind: card.kind,
-                badges: card.badges,
             };
         })
-        .toEqual({
-            provided: 0,
-            meterPicker: true,
-            kind: { value: "ev_charger", disabled: false },
-            badges: [],
-        });
-    // Nothing the profile filled was written into the draft.
-    const { profile: _gone, ...garage } = GARAGE_ON_PROFILE.devices.consumers[0];
-    expect((await lastDraft(page)).devices.consumers[0]).toEqual(garage);
+        .toEqual({ provided: 0, chargePicker: true, kind: { value: "ev_charger", disabled: false } });
+
+    // The existing validation asks for the switch.
+    const message = "devices.consumers[0].controls.charge must name a switch";
+    await page.evaluate(
+        (issue) => ((window as any).__validation = { valid: false, errors: [issue], warnings: [] }),
+        { section: "devices", path: `${GARAGE}.controls.charge`, code: "invalid_appliance", message },
+    );
+    await page.locator("helman-config-editor-panel").locator(".actions button", { hasText: "Validate" }).click();
+    await expect(
+        page.locator('helman-config-editor-panel details.device-card[data-device-id="garage-ev"] .device-issues'),
+    ).toContainText(message);
+});
+
+/** Every entity the SolaX inverter profile fills, as the backend lists them. */
+const INVERTER_ENTITIES: Record<string, string> = {
+    "energy_nodes.solar.entities.power": "sensor.solax_pv_power_total",
+    "energy_nodes.solar.entities.today_energy": "sensor.solax_today_s_solar_energy",
+    "training.solar_bias.total_energy_entity_id": "sensor.solax_total_solar_energy",
+    "energy_nodes.battery.entities.power": "sensor.solax_battery_power",
+    "energy_nodes.battery.entities.capacity": "sensor.solax_battery_capacity",
+    "energy_nodes.battery.entities.remaining_energy": "sensor.solax_remaining_battery_capacity",
+    "energy_nodes.battery.entities.min_soc": "number.solax_selfuse_discharge_min_soc",
+    "energy_nodes.battery.entities.max_soc": "number.solax_battery_charge_upper_soc",
+    "energy_nodes.battery.entities.today_charge_energy": "sensor.solax_battery_input_energy_today",
+    "energy_nodes.battery.entities.today_discharge_energy": "sensor.solax_battery_output_energy_today",
+    "energy_nodes.grid.entities.power": "sensor.solax_grid_power",
+    "energy_nodes.grid.entities.today_import": "sensor.solax_today_s_import_energy",
+    "energy_nodes.grid.entities.today_export": "sensor.solax_today_s_export_energy",
+    "energy_nodes.house.entities.power": "sensor.solax_home_consumption_power",
+    "energy_nodes.house.entities.today_energy": "sensor.solax_home_consumption_energy",
+    "energy_nodes.house.forecast.total_energy_entity_id": "sensor.solax_home_consumption_energy",
+};
+
+const INVERTER_VALUES = {
+    "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
+    "energy_nodes.grid.entities.power_polarity": "positive_is_import",
+};
+
+test("the inverter switched to Custom gets every entity and value its profile provided, but the mode select", async ({
+    page,
+}) => {
+    await mountEditor(
+        page,
+        SOLAX_CONFIG,
+        { ...PROFILE, ownedConfigPaths: [...Object.keys(INVERTER_ENTITIES), ...Object.keys(INVERTER_VALUES)] },
+        { inverterResolved: INVERTER_ENTITIES, inverterValues: INVERTER_VALUES },
+    );
+    await openTab(page, "Energy nodes");
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return page.evaluate(() => {
+                const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+                return root?.querySelectorAll(".vendor-resolved li").length ?? 0;
+            });
+        })
+        .toBe(Object.keys(INVERTER_ENTITIES).length + 1);
+
+    await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const select = root?.querySelector<HTMLSelectElement>('select[data-field="hardware-profile"]');
+        select!.value = "";
+        select!.dispatchEvent(new Event("change"));
+    });
+
+    await expect.poll(async () => (await lastDraft(page))?.energy_nodes?.inverter?.profile ?? null).toBeNull();
+    const draft = await lastDraft(page);
+    expect(Object.keys(INVERTER_ENTITIES)).toHaveLength(16);
+    for (const [path, value] of Object.entries({ ...INVERTER_ENTITIES, ...INVERTER_VALUES })) {
+        expect(valueAt(draft, path), path).toBe(value);
+    }
+    // Helman's own mode select exists only under the profile.
+    expect(draft.energy_nodes.inverter?.controls?.mode).toBeUndefined();
+    // The site settings stay as they were.
+    expect(draft.energy_nodes.solar.forecast).toEqual({ total_energy_entity_id: "sensor.solar_total" });
+    expect(draft.energy_nodes.battery.forecast).toEqual({ charge_efficiency: 0.95 });
 });
 
 for (const [stored, shown] of [

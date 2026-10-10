@@ -484,7 +484,9 @@
       "provided_by": "Provided by {profile}",
       "vendor_entity_unresolved": "Not found in the chosen integration entry",
       "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
-      "vendor_no_devices": "No device for {profile} is set up in this Home Assistant, or each one is already used by another device, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
+      "vendor_no_devices": "No device for {profile} is set up in this Home Assistant, or each one is already used by another device, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
+      "profile_matches": "{profile} (matches this device's entities)",
+      "profile_meter_change": "The energy meter changes from {from} to {to}. Learned usage and history are keyed by the meter."
     },
     "help": {
       "aria_label": "Field help",

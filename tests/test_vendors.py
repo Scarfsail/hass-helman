@@ -495,6 +495,9 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert device["resolved"]["energy_nodes.inverter.controls.mode.entity_id"] == (
         "select.helman_inverter_mode"
     )
+    assert device["helmanEntityPaths"] == [
+        "energy_nodes.inverter.controls.mode.entity_id"
+    ]
 
 
 def test_get_vendors_without_a_profile_lists_only_the_profiles():
@@ -854,6 +857,9 @@ def test_get_vendors_describes_a_charger():
             "switch.helman_ev_charging_garage_ev"
         ),
     }
+    assert device["helmanEntityPaths"] == [
+        "devices.consumers[0].controls.charge.entity_id"
+    ]
 
 
 def test_get_vendors_gives_the_charger_values_as_absolute_paths():

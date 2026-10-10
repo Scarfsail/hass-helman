@@ -26,6 +26,7 @@ import {
     canHaveChildren,
     deviceChildren,
     deviceKind,
+    findDeviceByKey,
     hasSwitch,
     isSchedulable,
     iterDevices,
@@ -69,7 +70,7 @@ import type {
 import { resolvedDraft } from "../config/resolved-draft";
 import { defineOnce } from "../define-once";
 import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
-import { haDeviceEntityFilter, sharedHaDevice } from "./device-scope";
+import { haDeviceEntityFilter, sharedHaDevice, suggestionAnchors } from "./device-scope";
 import { formatPower } from "../../power-format";
 import {
     deviceEnergyFigure,
@@ -356,27 +357,6 @@ function suggestionPath(path: PathSegment[], field: keyof DeviceSuggestions): Pa
 }
 
 /**
- * The entities suggestions may come from, most telling first; empty when
- * the device names none.
- *
- * The backend uses the first one with an HA device, so a helper meter never
- * blocks them. Only the meters and the control the device switches by
- * qualify: a mode or gear select may belong to another integration's device
- * (evcc, the car, the inverter's battery), whose sensors would then be
- * offered, or auto-filled, as this device's meter.
- */
-function suggestionAnchors(device: JsonObject): string[] {
-    const controls = asJsonObject(device.controls) ?? {};
-    const entity = (value: unknown) => stringValue(asJsonObject(value)?.entity_id).trim();
-    const anchors = [
-        ownMeter(device),
-        stringValue(asJsonObject(device.consumption)?.power_entity_id).trim(),
-        ...["switch", "charge", "climate"].map((key) => entity(controls[key])),
-    ].filter(Boolean);
-    return [...new Set(anchors)];
-}
-
-/**
  * The device form's own rules. The element renders into its host's tree
  * rather than a shadow root of its own, so a host adopts these next to
  * `configFormStyles`.
@@ -462,6 +442,9 @@ export const deviceEditorStyles = css`
 export class HelmanDeviceEditor extends LitElement implements HardwareProfileHost {
     /** The whole config document. Not mutated -- edits are reported, not applied. */
     @property({ attribute: false }) config: JsonObject | null = null;
+
+    /** The saved config document, whose meter of this device a hardware profile may change. */
+    @property({ attribute: false }) savedConfig: JsonObject | null = null;
 
     /** Where this device sits in the document: `["devices", "consumers", 1, ...]`. */
     @property({ attribute: false }) path: PathSegment[] = [];
@@ -698,7 +681,13 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                         ${this._renderGroupsSection(device)}
                         ${this._renderSection(
                             "hardware",
-                            renderHardwareProfile(this, this.vendors, path, kind),
+                            renderHardwareProfile(
+                                this,
+                                this.vendors,
+                                path,
+                                kind,
+                                ownMeter(findDeviceByKey(this.savedConfig, id, "id")?.device ?? {}),
+                            ),
                             profile ? [{ key: "profile", text: profile.label }] : [],
                         )}
                         ${this._renderSection(

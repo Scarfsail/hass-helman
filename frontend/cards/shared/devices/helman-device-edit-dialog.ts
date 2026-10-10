@@ -273,6 +273,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 return html`
                     <helman-device-editor
                         .config=${view.config}
+                        .savedConfig=${this._saved}
                         .path=${entry.path}
                         .parent=${entry.parent}
                         .expanded=${true}

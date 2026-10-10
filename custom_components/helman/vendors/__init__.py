@@ -297,22 +297,7 @@ def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
             for profile in PROFILES.values()
         ],
         "devices": {
-            vendor_device.path: {
-                "profile": vendor_device.profile.id,
-                # What the answer was computed for, so the editor can tell a
-                # stale answer from one for the device it now shows.
-                "storedProfile": dict(vendor_device.device[PROFILE_KEY]),
-                "ownedConfigPaths": vendor_device.profile.owned_config_paths,
-                "ownedDevicePaths": list(vendor_device.profile.device_paths),
-                "resolved": _describe_resolved(hass, config, vendor_device),
-                "values": {
-                    **vendor_device.profile.values,
-                    **{
-                        f"{vendor_device.path}.{path}": value
-                        for path, value in vendor_device.profile.device_values.items()
-                    },
-                },
-            }
+            vendor_device.path: _describe_device(hass, config, vendor_device)
             for vendor_device in _iter_vendor_devices(hass, config, [])
         },
     }
@@ -364,10 +349,42 @@ def _describe_candidates(hass: Any, profile: VendorProfile) -> list[dict[str, st
     return candidates
 
 
+def _describe_device(
+    hass: Any, config: Mapping[str, Any], vendor_device: VendorDevice
+) -> dict[str, Any]:
+    """What the profile owns on one draft device, and what it fills in there."""
+    # Helman's own entities, which exist only under the profile: a device
+    # switched to Custom must not point at them.
+    helman_entities = {
+        f"{vendor_device.path}.{path}.entity_id": control["entity_id"]
+        for path, control in _helman_controls(hass, vendor_device).items()
+    }
+    return {
+        "profile": vendor_device.profile.id,
+        # What the answer was computed for, so the editor can tell a stale
+        # answer from one for the device it now shows.
+        "storedProfile": dict(vendor_device.device[PROFILE_KEY]),
+        "ownedConfigPaths": vendor_device.profile.owned_config_paths,
+        "ownedDevicePaths": list(vendor_device.profile.device_paths),
+        "resolved": {
+            **_describe_resolved(hass, config, vendor_device),
+            **helman_entities,
+        },
+        "helmanEntityPaths": list(helman_entities),
+        "values": {
+            **vendor_device.profile.values,
+            **{
+                f"{vendor_device.path}.{path}": value
+                for path, value in vendor_device.profile.device_values.items()
+            },
+        },
+    }
+
+
 def _describe_resolved(
     hass: Any, config: Mapping[str, Any], vendor_device: VendorDevice
 ) -> dict[str, str | None]:
-    """Each entity path the profile fills on this device → its entity id."""
+    """Each vendor entity path the profile fills on this device → its entity id."""
     slots = _entity_slots(config, vendor_device)
     entity_ids = resolve_unique_ids(
         hass,
@@ -376,13 +393,7 @@ def _describe_resolved(
         [template for *_slot, template in slots],
         device_id=vendor_device.device_id,
     )
-    return {
-        **{path: entity_ids[template] for path, _target, _rel, template in slots},
-        **{
-            f"{vendor_device.path}.{path}.entity_id": control["entity_id"]
-            for path, control in _helman_controls(hass, vendor_device).items()
-        },
-    }
+    return {path: entity_ids[template] for path, _target, _rel, template in slots}
 
 
 def _entity_slots(

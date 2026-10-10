@@ -4416,6 +4416,7 @@ export class HelmanConfigEditorPanel
       <helman-device-editor
         ?hidden=${!this._deviceMatchesFilter(device)}
         .config=${this._config}
+        .savedConfig=${this._savedConfig}
         .path=${path}
         .parent=${parent}
         .hass=${this.hass}
