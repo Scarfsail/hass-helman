@@ -381,6 +381,8 @@ active.
 
 ### `switch.ev_nabijeni`
 
+> Not needed with the SolaX EV charger profile; `switch.helman_ev_charging_<device id>` replaces it. Helman creates that switch for a charger whose `profile` is `{id: solax_ev_charger, device_id: <HA device id>}` and points its `controls.charge` at it. It is on while `sensor.solax_ev_charger_run_mode` reads `Charging`; turning it on selects `Start Charging` on `select.solax_ev_charger_control_command`, turning it off selects `Stop Charging` and then sets the use mode back to `ECO`, and a command the select already shows is sent a second time. The profile also provides the use mode and eco gear selects with their values and the charger's meters. Re-point any automation that toggles `switch.ev_nabijeni` at the new switch. See [Hardware profiles](../README.md#hardware-profiles).
+
 **Purpose.** The on/off control helman actuates to start and stop EV charging. The appliance layer
 only needs something switchable — Solax exposes charging as a *mode select*, not a switch, so the
 switch has to be built.
@@ -453,7 +455,7 @@ In dependency order:
 4. `sensor.solax_battery_min_soc` / `max_soc` — templates over the mode-specific inverter limits. Not needed with the SolaX inverter profile.
 5. `sensor.solax_grid` — template, only if your integration reports import and export separately.
 6. `input_select.rezim_fv` + the automation behind it — required before scheduling can execute. Not needed with the SolaX inverter profile.
-7. `switch.ev_nabijeni` — only if you have an EV charger to schedule.
+7. `switch.ev_nabijeni` — only if you have an EV charger to schedule. Not needed with the SolaX EV charger profile.
 
 To audit an existing install, fetch the config with the `helman/get_config` WebSocket command,
 collect every entity id in it, and join against `config/entity_registry/list` to see each entity's

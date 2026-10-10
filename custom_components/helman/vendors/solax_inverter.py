@@ -1,7 +1,7 @@
 """The SolaX inverter profile, as data.
 
 Built against the X3-Hybrid-10kW behind ``solax_modbus``. Each entity is named
-by the unique id ``solax_modbus`` registers it under, with ``{name}`` standing
+by its domain and the unique id ``solax_modbus`` registers it under, with ``{name}`` standing
 for the config entry's configured name: plain entities are ``<name>_<key>``,
 the energy-dashboard ones ``<name> Energy Dashboard_<key>``. Resolving by
 unique id rather than entity id is what keeps a renamed entity working.
@@ -31,46 +31,77 @@ from ..const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
-from .profile import VendorProfile
+from .profile import MODE_DEVICE_PATH, VendorProfile
 
-_USE_MODE = "{name}_charger_use_mode"
-_MANUAL_MODE = "{name}_manual_mode_select"
+_USE_MODE = ("select", "{name}_charger_use_mode")
+_MANUAL_MODE = ("select", "{name}_manual_mode_select")
 
 PROFILE = VendorProfile(
     id="solax_inverter",
     label="SolaX inverter",
     device_kind=CONTROLLABLE_KIND_INVERTER,
     platform="solax_modbus",
+    # The follow-up moves it to device binding once the device-aware snapshot
+    # shows whether every entity sits on one HA device.
+    binding="entry",
     entities={
-        "energy_nodes.solar.entities.power": "{name}_pv_power_total",
-        "energy_nodes.solar.entities.today_energy": "{name}_today_s_solar_energy",
-        "training.solar_bias.total_energy_entity_id": "{name}_total_solar_energy",
+        "energy_nodes.solar.entities.power": ("sensor", "{name}_pv_power_total"),
+        "energy_nodes.solar.entities.today_energy": (
+            "sensor",
+            "{name}_today_s_solar_energy",
+        ),
+        "training.solar_bias.total_energy_entity_id": (
+            "sensor",
+            "{name}_total_solar_energy",
+        ),
         "energy_nodes.battery.entities.power": (
-            "{name} Energy Dashboard_solax_battery_power"
+            "sensor",
+            "{name} Energy Dashboard_solax_battery_power",
         ),
-        "energy_nodes.battery.entities.capacity": "{name}_battery_capacity",
+        "energy_nodes.battery.entities.capacity": ("sensor", "{name}_battery_capacity"),
         "energy_nodes.battery.entities.remaining_energy": (
-            "{name}_remaining_battery_capacity"
+            "sensor",
+            "{name}_remaining_battery_capacity",
         ),
-        "energy_nodes.battery.entities.min_soc": "{name}_selfuse_discharge_min_soc",
-        "energy_nodes.battery.entities.max_soc": "{name}_battery_charge_upper_soc",
+        "energy_nodes.battery.entities.min_soc": (
+            "number",
+            "{name}_selfuse_discharge_min_soc",
+        ),
+        "energy_nodes.battery.entities.max_soc": (
+            "number",
+            "{name}_battery_charge_upper_soc",
+        ),
         "energy_nodes.battery.entities.today_charge_energy": (
-            "{name}_battery_input_energy_today"
+            "sensor",
+            "{name}_battery_input_energy_today",
         ),
         "energy_nodes.battery.entities.today_discharge_energy": (
-            "{name}_battery_output_energy_today"
+            "sensor",
+            "{name}_battery_output_energy_today",
         ),
-        "energy_nodes.grid.entities.power": "{name} Energy Dashboard_solax_grid_power",
-        "energy_nodes.grid.entities.today_import": "{name}_today_s_import_energy",
-        "energy_nodes.grid.entities.today_export": "{name}_today_s_export_energy",
+        "energy_nodes.grid.entities.power": (
+            "sensor",
+            "{name} Energy Dashboard_solax_grid_power",
+        ),
+        "energy_nodes.grid.entities.today_import": (
+            "sensor",
+            "{name}_today_s_import_energy",
+        ),
+        "energy_nodes.grid.entities.today_export": (
+            "sensor",
+            "{name}_today_s_export_energy",
+        ),
         "energy_nodes.house.entities.power": (
-            "{name} Energy Dashboard_solax_home_consumption_power"
+            "sensor",
+            "{name} Energy Dashboard_solax_home_consumption_power",
         ),
         "energy_nodes.house.entities.today_energy": (
-            "{name} Energy Dashboard_solax_home_consumption_energy"
+            "sensor",
+            "{name} Energy Dashboard_solax_home_consumption_energy",
         ),
         "energy_nodes.house.forecast.total_energy_entity_id": (
-            "{name} Energy Dashboard_solax_home_consumption_energy"
+            "sensor",
+            "{name} Energy Dashboard_solax_home_consumption_energy",
         ),
     },
     values={
@@ -94,5 +125,6 @@ PROFILE = VendorProfile(
         ),
         SCHEDULE_ACTION_STOP_EXPORT: ((_USE_MODE, "Self Use Mode"),),
     },
-    export_limit="{name}_export_control_user_limit",
+    device_paths=(MODE_DEVICE_PATH,),
+    export_limit=("number", "{name}_export_control_user_limit"),
 )

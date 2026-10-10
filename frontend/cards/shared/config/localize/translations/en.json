@@ -296,8 +296,11 @@
       "children_tolerance_percent": "Children tolerance %",
       "add_device_entity": "Energy meter of the new device",
       "add_child_device_entity": "Energy meter, switch, light or climate entity of the new child",
+      "add_device_profile": "Hardware profile of the new device",
+      "add_device_vendor_device": "HA device of the new device",
       "hardware_profile": "Hardware profile",
       "vendor_entry": "Integration entry",
+      "vendor_device": "Device",
       "max_allowed_export_power": "Max allowed export power"
     },
     "entity_status": {
@@ -374,6 +377,7 @@
       "children_distribute_all": "On: the running children share all of this device's own power, in the ratio of their learned power. Off: each is capped at its learned power plus the tolerance below, and the rest shows as unmeasured.",
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",
       "add_device": "Its id is generated from the entity once and never changes.",
+      "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
     },
     "messages": {
@@ -479,7 +483,10 @@
       "condition_group": "Group {index}",
       "provided_by": "Provided by {profile}",
       "vendor_entity_unresolved": "Not found in the chosen integration entry",
-      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom."
+      "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
+      "vendor_no_devices": "No device for {profile} is set up in this Home Assistant, or each one is already used by another device, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
+      "profile_matches": "{profile} (matches this device's entities)",
+      "profile_meter_change": "The energy meter changes from {from} to {to}. Learned usage and history are keyed by the meter."
     },
     "help": {
       "aria_label": "Field help",
@@ -582,6 +589,7 @@
       "device_id": "Generated from the entity picked when the device was added, and never changed: schedules, optimizer targets and training refer to the device by it.",
       "hardware_profile": "The hardware this device is. A profile is defined in Helman, so it knows which entity of the vendor integration feeds each setting; renaming those entities does not break it. Picking one removes the entities it provides from this config. Site settings, such as maximum power, prices or efficiencies, stay yours to set.",
       "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services.",
+      "vendor_device": "The vendor integration's HA device this device is, in Settings > Devices & services. Only devices on which the profile finds every entity it needs are offered, minus those another device already uses.",
       "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise."
     },
     "device_filter": {

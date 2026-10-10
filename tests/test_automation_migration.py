@@ -2719,6 +2719,8 @@ class InverterRelocationMigrationTests(unittest.TestCase):
     """v27 -> v28: the inverter moves from ``devices.system`` to ``energy_nodes.inverter``."""
 
     VENDOR = {"profile": "solax_inverter", "entry_id": "solax-entry"}
+    #: ``VENDOR`` as v29 renames it.
+    PROFILE = {"id": "solax_inverter", "entry_id": "solax-entry"}
     WASHER = {"id": "washer", "consumption": {"energy_entity_id": "sensor.washer_energy"}}
 
     @staticmethod
@@ -2750,7 +2752,7 @@ class InverterRelocationMigrationTests(unittest.TestCase):
             {
                 "house": {"entities": {"power": "sensor.house"}},
                 "inverter": {
-                    "vendor": self.VENDOR,
+                    "profile": self.PROFILE,
                     "controls": {"mode": {"entity_id": "select.mode"}},
                 },
             },
@@ -2762,7 +2764,7 @@ class InverterRelocationMigrationTests(unittest.TestCase):
             {"devices": {"system": [{"kind": "inverter", "vendor": self.VENDOR}]}}
         )
 
-        self.assertEqual(migrated["energy_nodes"], {"inverter": {"vendor": self.VENDOR}})
+        self.assertEqual(migrated["energy_nodes"], {"inverter": {"profile": self.PROFILE}})
         self.assertEqual(migrated["devices"], {})
 
     def test_an_empty_system_list_is_removed(self) -> None:
@@ -2787,7 +2789,7 @@ class InverterRelocationMigrationTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(migrated["energy_nodes"], {"inverter": {"vendor": self.VENDOR}})
+        self.assertEqual(migrated["energy_nodes"], {"inverter": {"profile": self.PROFILE}})
         self.assertEqual(migrated["devices"], {"system": [self.WASHER, second]})
 
     def test_an_existing_energy_nodes_inverter_is_not_overwritten(self) -> None:
@@ -2842,6 +2844,109 @@ class InverterRelocationMigrationTests(unittest.TestCase):
         self.assertEqual(
             migrated["devices"]["consumers"],
             [{**self.WASHER, "groups": {"modes": "night"}}],
+        )
+
+
+class ProfileKeyMigrationTests(unittest.TestCase):
+    """v28 -> v29: a device's ``vendor: {profile, ...}`` becomes ``profile: {id, ...}``."""
+
+    @staticmethod
+    def _migrate_from_v28(document):
+        migrated, _ids = migrate_config_document({"config_version": 28, **deepcopy(document)})
+        return migrated
+
+    def test_the_inverter_and_nested_consumers_are_renamed(self) -> None:
+        charger = {"profile": "solax_ev_charger", "device_id": "charger-device"}
+        migrated = self._migrate_from_v28(
+            {
+                "energy_nodes": {
+                    "inverter": {
+                        "vendor": {"profile": "solax_inverter", "entry_id": "solax-entry"},
+                        "controls": {},
+                    }
+                },
+                "devices": {
+                    "consumers": [
+                        {
+                            "id": "garage",
+                            "children": [
+                                {"id": "garage-ev", "kind": "ev_charger", "vendor": charger}
+                            ],
+                        },
+                        {"id": "washer"},
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(
+            migrated["energy_nodes"]["inverter"],
+            {"profile": {"id": "solax_inverter", "entry_id": "solax-entry"}, "controls": {}},
+        )
+        self.assertEqual(
+            migrated["devices"]["consumers"],
+            [
+                {
+                    "id": "garage",
+                    "children": [
+                        {
+                            "id": "garage-ev",
+                            "kind": "ev_charger",
+                            "profile": {"id": "solax_ev_charger", "device_id": "charger-device"},
+                        }
+                    ],
+                },
+                {"id": "washer"},
+            ],
+        )
+
+    def test_a_device_with_both_keys_is_left_for_the_validator(self) -> None:
+        inverter = {
+            "vendor": {"profile": "solax_inverter"},
+            "profile": {"id": "solax_inverter", "entry_id": "solax-entry"},
+        }
+
+        migrated = self._migrate_from_v28({"energy_nodes": {"inverter": inverter}})
+
+        self.assertEqual(migrated["energy_nodes"]["inverter"], inverter)
+
+    def test_a_document_without_a_vendor_is_unchanged(self) -> None:
+        document = {"energy_nodes": {"inverter": {}}, "devices": {"consumers": [{"id": "a"}]}}
+
+        migrated = self._migrate_from_v28(document)
+
+        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
+
+    def test_a_v20_document_with_a_vendor_ends_up_with_a_profile(self) -> None:
+        """Through every step since the device tree: v28 moves the inverter, v29 renames."""
+        inverter = {
+            "kind": "inverter",
+            "id": "inverter",
+            "vendor": {"profile": "solax_inverter", "entry_id": "solax-entry"},
+        }
+        charger = {
+            "kind": "ev_charger",
+            "id": "garage-ev",
+            "vendor": {"profile": "solax_ev_charger", "device_id": "charger-device"},
+        }
+
+        migrated, _ids = migrate_config_document(
+            {"config_version": 20, "devices": [inverter, charger]},
+            None,
+            None,
+            lambda _entity_id: [],
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(
+            migrated["energy_nodes"]["inverter"],
+            {"profile": {"id": "solax_inverter", "entry_id": "solax-entry"}},
+        )
+        [migrated_charger] = migrated["devices"]["consumers"]
+        self.assertNotIn("vendor", migrated_charger)
+        self.assertEqual(
+            migrated_charger["profile"],
+            {"id": "solax_ev_charger", "device_id": "charger-device"},
         )
 
 

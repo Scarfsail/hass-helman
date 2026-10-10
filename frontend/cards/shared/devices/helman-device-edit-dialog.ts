@@ -16,6 +16,7 @@ import { findDeviceByKey } from "../config/devices";
 import { EntityInspectionController } from "../config/entity-inspection-controller";
 import { formatError, stringValue } from "../config/form-fields";
 import { configFormStyles } from "../config/form-styles";
+import { resolvedDraft } from "../config/resolved-draft";
 import {
     getLocalizeFunction,
     type LocalizeFunction as EditorLocalizeFunction,
@@ -31,6 +32,7 @@ import {
     deviceIdentityTargets,
     type DeviceConfigChangedDetail,
 } from "./helman-device-editor";
+import { hardwareProfileStyles, VendorsController } from "./hardware-profile";
 import "./helman-device-editor";
 
 const KEY_PREFIX = "node_detail.device.edit";
@@ -79,6 +81,7 @@ export class HelmanDeviceEditDialog extends LitElement {
     static styles = [
         configFormStyles,
         deviceEditorStyles,
+        hardwareProfileStyles,
         css`
             .dialog-content {
                 display: flex;
@@ -163,6 +166,12 @@ export class HelmanDeviceEditDialog extends LitElement {
             return path ? deviceIdentityTargets(path) : [];
         },
         mutate: (mutator) => this._applyToDraft(mutator),
+    });
+
+    /** The hardware profiles, and what the draft's profile devices own. */
+    private _vendors = new VendorsController(this, {
+        hass: () => this.hass,
+        config: () => (this._view.kind === "ready" ? this._view.config : null),
     });
 
     connectedCallback(): void {
@@ -264,6 +273,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 return html`
                     <helman-device-editor
                         .config=${view.config}
+                        .savedConfig=${this._saved}
                         .path=${entry.path}
                         .parent=${entry.parent}
                         .expanded=${true}
@@ -271,6 +281,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${(key: string) => this._editorText(key)}
                         .validation=${this._validation}
+                        .vendors=${this._vendors.vendors}
                         .inspections=${this._inspections.results}
                         @device-config-changed=${this._handleConfigChanged}
                     ></helman-device-editor>
@@ -303,7 +314,13 @@ export class HelmanDeviceEditDialog extends LitElement {
             }
             this._baseline = canonicalJson(document);
             this._saved = cloneJson(document);
-            const entry = findDeviceByKey(document, this.deviceKey, this.keyIsMeter ? "meter" : "id");
+            // The tree keys a device by the meter it runs on, which a hardware
+            // profile fills in: a meter key no stored device has is looked up
+            // in the resolved document.
+            const entry = this.keyIsMeter
+                ? (findDeviceByKey(document, this.deviceKey, "meter") ??
+                  findDeviceByKey(resolvedDraft(document, await this._vendors.load(document)), this.deviceKey, "meter"))
+                : findDeviceByKey(document, this.deviceKey, "id");
             const deviceId = stringValue(entry?.device.id);
             this._view = entry && deviceId
                 ? { kind: "ready", config: cloneJson(document), deviceId }

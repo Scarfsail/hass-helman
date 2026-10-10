@@ -556,7 +556,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         config = {
             "energy_nodes": {
                 "inverter": {
-                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
+                    "profile": {"id": "solax_inverter", "entry_id": "gone"},
                 },
                 "house": {"entities": {"power": "sensor.house"}},
                 "grid": {"max_allowed_export_power": 9900},
@@ -574,7 +574,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted((issue["code"], issue["path"]) for issue in report["errors"]),
             [
-                ("invalid_choice", "energy_nodes.inverter.vendor.entry_id"),
+                ("invalid_choice", "energy_nodes.inverter.profile.entry_id"),
                 ("vendor_owned_key", "energy_nodes.house.entities.power"),
             ],
         )
@@ -586,7 +586,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         config = {
             "energy_nodes": {
                 "inverter": {
-                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
+                    "profile": {"id": "solax_inverter", "entry_id": "gone"},
                 }
             },
             "training": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},

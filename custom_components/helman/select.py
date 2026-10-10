@@ -27,7 +27,7 @@ from .const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .controllables.spec import CONTROLLABLE_KIND_INVERTER, CONTROLLABLE_SPECS
-from .scheduling.actuation import SERVICE_CALL_TIMEOUT_SECONDS
+from .scheduling.actuation import async_write_vendor_entity
 from .vendors import VendorProfile, find_mode_vendor, resolve_unique_ids
 
 
@@ -106,7 +106,7 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         async with self._lock:
             for entity_id, target in self._writes(option):
                 if not self._in_target(entity_id, target):
-                    await self._async_write(entity_id, target)
+                    await async_write_vendor_entity(self.hass, entity_id, target)
             self._attr_current_option = option
             self.async_write_ha_state()
 
@@ -147,7 +147,13 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         entity_ids = resolve_unique_ids(
             self.hass, profile, self._vendor_entry, [template for template, _ in writes]
         )
-        missing = sorted({template for template, _ in writes if entity_ids[template] is None})
+        missing = sorted(
+            {
+                f"{domain} {template}"
+                for (domain, template), _ in writes
+                if entity_ids[(domain, template)] is None
+            }
+        )
         if missing:
             raise HomeAssistantError(
                 f"The {profile.label} profile cannot apply {option!r}: no "
@@ -162,37 +168,6 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         if entity_id.startswith("number."):
             return _as_float(state.state) == float(target)
         return state.state == target
-
-    async def _async_write(self, entity_id: str, target: str | float) -> None:
-        """Set one vendor entity."""
-        domain = entity_id.partition(".")[0]
-        if domain == "number":
-            service, data = "set_value", {"value": target}
-        else:
-            service, data = "select_option", {"option": target}
-        # Bounded like the executor's own writes: a stalled vendor call would
-        # otherwise hold the lock, and every later pick, indefinitely.
-        timeout = asyncio.timeout(SERVICE_CALL_TIMEOUT_SECONDS)
-        try:
-            async with timeout:
-                await self.hass.services.async_call(
-                    domain, service, {"entity_id": entity_id, **data}, blocking=True
-                )
-        except HomeAssistantError:
-            raise
-        except TimeoutError as err:
-            if not timeout.expired():
-                raise HomeAssistantError(
-                    f"Failed to set {entity_id} to {target!r}: {err}"
-                ) from err
-            raise HomeAssistantError(
-                f"Timed out setting {entity_id} to {target!r} after "
-                f"{SERVICE_CALL_TIMEOUT_SECONDS:g} seconds"
-            ) from err
-        except Exception as err:
-            raise HomeAssistantError(
-                f"Failed to set {entity_id} to {target!r}: {err}"
-            ) from err
 
 
 def _as_float(value: str) -> float | None:

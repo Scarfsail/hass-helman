@@ -89,6 +89,37 @@ const PLACEHOLDERS: Record<string, string> = {
     "devices.consumers.0.children.1.name": "Ložnice",
 };
 
+/**
+ * What `helman/get_vendors` answers: the inverter's profile, which no device
+ * card offers, and the SolaX EV charger, bound to one of two HA devices.
+ */
+const VENDORS = {
+    profiles: [
+        {
+            id: "solax_inverter",
+            label: "SolaX inverter",
+            deviceKind: "inverter",
+            binding: "entry",
+            ownedConfigPaths: [],
+            ownedDevicePaths: [],
+            entries: [{ entryId: "solax-entry", title: "SolaX" }],
+        },
+        {
+            id: "solax_ev_charger",
+            label: "SolaX EV charger",
+            deviceKind: "ev_charger",
+            binding: "device",
+            ownedConfigPaths: [],
+            ownedDevicePaths: ["consumption.energy_entity_id", "controls.charge"],
+            candidates: [
+                { deviceId: "garage-charger", name: "Garage charger", entryTitle: "SolaX_EV_Charger" },
+                { deviceId: "drive-charger", name: "Drive charger", entryTitle: "SolaX_EV_Charger_2" },
+            ],
+        },
+    ],
+    devices: {},
+};
+
 type Device = Record<string, any>;
 
 declare global {
@@ -106,13 +137,14 @@ async function mountEditor(
     devices: unknown[] = DEVICES,
     validation: unknown = { valid: true, errors: [], warnings: [] },
     inverter: unknown = INVERTER,
+    vendors: unknown = null,
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(
-        ({ config, placeholders, report }) => {
+        ({ config, placeholders, report, vendors }) => {
             // Stubbed so YAML mode can be entered; driven with the
             // `value-changed` the real editor fires.
             if (!customElements.get("ha-yaml-editor")) {
@@ -151,6 +183,7 @@ async function mountEditor(
                     }
                     if (request.type === "helman/get_appliances") return { appliances: [] };
                     if (request.type === "helman/validate_config") return window.__validation;
+                    if (request.type === "helman/get_vendors" && vendors) return vendors;
                     if (request.type === "helman/inspect_entities") {
                         return {
                             results: (request.targets ?? []).map((target: any) => {
@@ -188,6 +221,7 @@ async function mountEditor(
             },
             placeholders: PLACEHOLDERS,
             report: validation,
+            vendors,
         },
     );
 }
@@ -431,7 +465,8 @@ test("the filter shows schedulable or passive devices, keeping their parents", a
 });
 
 test("adding a device takes one entity and generates its id", async ({ page }) => {
-    await mountEditor(page);
+    // Hardware profiles on offer change nothing while Custom is picked.
+    await mountEditor(page, DEVICES, undefined, INVERTER, VENDORS);
     await openTab(page, "Devices");
     // The top-level button comes after every card, each of which may hold a
     // child button of its own.
@@ -464,6 +499,99 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
         schedulable: true,
         consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
+});
+
+/** The texts of an open "Add device" picker's select. */
+const addPickerOptions = (page: Page, field: string) =>
+    page
+        .locator("helman-config-editor-panel")
+        .locator(`.add-device-picker select[data-field="${field}"] option`)
+        .allTextContents()
+        .then((texts) => texts.map((text) => text.trim()));
+
+/**
+ * Set an open "Add device" picker's select, as a user would; a child's picker
+ * sits in a collapsed card, so not through the visible-only `selectOption`.
+ */
+async function pickInAdd(page: Page, field: string, value: string): Promise<void> {
+    await page
+        .locator("helman-config-editor-panel")
+        .locator(`.add-device-picker select[data-field="${field}"]`)
+        .evaluate((select: HTMLSelectElement, next) => {
+            select.value = next;
+            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        }, value);
+}
+
+/** Open an "Add device" picker, the `nth` button's, and pick a hardware profile in it. */
+async function openProfileAdd(page: Page, nth: number, profileId: string): Promise<void> {
+    const panel = page.locator("helman-config-editor-panel");
+    await panel.locator(".add-device").nth(nth).dispatchEvent("click");
+    await expect
+        .poll(() => addPickerOptions(page, "add-device-profile"))
+        .toEqual(["Custom", "SolaX EV charger"]);
+    await pickInAdd(page, "add-device-profile", profileId);
+}
+
+test("adding a device with a hardware profile binds an HA device and stores no entity", async ({ page }) => {
+    await mountEditor(page, DEVICES, undefined, INVERTER, VENDORS);
+    await openTab(page, "Devices");
+    const panel = page.locator("helman-config-editor-panel");
+
+    // The inverter's profile goes on no device card, so only the charger's is offered.
+    await openProfileAdd(page, -1, "solax_ev_charger");
+    await expect.poll(() => addPickerOptions(page, "add-device-vendor-device")).toEqual([
+        "",
+        "Garage charger (SolaX_EV_Charger)",
+        "Drive charger (SolaX_EV_Charger_2)",
+    ]);
+    await expect(panel.locator(".add-device-picker ha-entity-picker")).toHaveCount(0);
+    await pickInAdd(page, "add-device-vendor-device", "garage-charger");
+    await expect.poll(async () => (await config(page)).at(-1)).toEqual({
+        id: "garage_charger",
+        name: "Garage charger",
+        kind: "ev_charger",
+        profile: { id: "solax_ev_charger", device_id: "garage-charger" },
+    });
+    // The card opens on the new device, for what is left to set.
+    await expect.poll(() => page.evaluate(() => window.__card("garage_charger")?.open)).toBe(true);
+
+    // A second add no longer offers the charger now bound.
+    await openProfileAdd(page, -1, "solax_ev_charger");
+    await expect.poll(() => addPickerOptions(page, "add-device-vendor-device")).toEqual([
+        "",
+        "Drive charger (SolaX_EV_Charger_2)",
+    ]);
+    await pickInAdd(page, "add-device-vendor-device", "drive-charger");
+    await expect.poll(async () => (await config(page)).at(-1)?.id).toBe("drive_charger");
+
+    // With every charger bound, the picker says so instead of an empty select.
+    await openProfileAdd(page, -1, "solax_ev_charger");
+    await expect(panel.locator('.add-device-picker [data-field="vendor-no-devices"]')).toContainText(
+        "No device for SolaX EV charger",
+    );
+    await expect(panel.locator('.add-device-picker select[data-field="add-device-vendor-device"]')).toHaveCount(0);
+});
+
+test("a child added with a hardware profile binds an HA device the same way", async ({ page }) => {
+    await mountEditor(page, DEVICES, undefined, INVERTER, VENDORS);
+    await openTab(page, "Devices");
+
+    await openProfileAdd(page, 0, "solax_ev_charger");
+    await pickInAdd(page, "add-device-vendor-device", "garage-charger");
+    await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
+        id: "garage_charger",
+        name: "Garage charger",
+        kind: "ev_charger",
+        profile: { id: "solax_ev_charger", device_id: "garage-charger" },
+    });
+
+    // A charger bound under a parent is taken everywhere, the top level too.
+    await openProfileAdd(page, -1, "solax_ev_charger");
+    await expect.poll(() => addPickerOptions(page, "add-device-vendor-device")).toEqual([
+        "",
+        "Drive charger (SolaX_EV_Charger_2)",
+    ]);
 });
 
 test("new scheduling uses the displayed fixed projection without changing the selector", async ({ page }) => {
@@ -970,6 +1098,7 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
     );
     expect(sections).toEqual([
         "Identity",
+        "Hardware profile",
         "Measurements",
         "Controls",
         "Use modes",

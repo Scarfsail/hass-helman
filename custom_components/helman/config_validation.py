@@ -46,7 +46,7 @@ from .const import (
     SOLAR_BIAS_AGGREGATION_METHODS,
 )
 from .power_polarity import POWER_POLARITY_KEY, POWER_POLARITY_OPTIONS
-from .vendors import PROFILES as VENDOR_PROFILES
+from .vendors import PROFILE_KEY, PROFILES as VENDOR_PROFILES
 
 #: The config keys config versions 7 and 20 retired. Named here so the save path
 #: can refuse them by name instead of silently ignoring a user's hand-edited
@@ -280,7 +280,7 @@ def _validate_inverter_config(
     """``energy_nodes.inverter``: the site's one battery inverter, since v28.
 
     Its id and kind are implied by where it lives, so the mapping holds only
-    ``controls`` and ``vendor`` (the latter judged by the vendor resolver). It
+    ``controls`` and ``profile`` (the latter judged by the vendor resolver). It
     is not a consumer: it moves energy rather than drawing it, never nests, is
     always schedulable and belongs to no group.
     """
@@ -291,6 +291,7 @@ def _validate_inverter_config(
     inverter = _require_mapping(raw_inverter, path, section, report)
     if inverter is None:
         return
+    _report_relocated_vendor(inverter, path, section, report)
     for key in ("id", "kind", "name"):
         if key in inverter:
             report.add_error(
@@ -311,6 +312,25 @@ def _validate_inverter_config(
                 message=f"the inverter is not a consumer and takes no {key}",
             )
     _validate_inverter_controllable(config, inverter, path, section, report)
+
+
+def _report_relocated_vendor(
+    device: Mapping[str, Any], path: str, section: str, report: ValidationReport
+) -> None:
+    """A device's pre-v29 ``vendor`` key, renamed to ``profile``.
+
+    Load migrates it (v29); save refuses the old spelling.
+    """
+    if "vendor" in device:
+        report.add_error(
+            section=section,
+            path=f"{path}.vendor",
+            code="relocated_config_key",
+            message=(
+                f"{path}.vendor was renamed to {path}.{PROFILE_KEY}, its "
+                "profile key to id"
+            ),
+        )
 
 
 def _report_retired_ui_texts(
@@ -1066,8 +1086,8 @@ def _validate_max_allowed_export_power(
     path = "energy_nodes.grid.max_allowed_export_power"
     value = grid.get("max_allowed_export_power")
     if value is None:
-        vendor = find_inverter_device(config).get("vendor")
-        profile_id = vendor.get("profile") if isinstance(vendor, Mapping) else None
+        stored = find_inverter_device(config).get(PROFILE_KEY)
+        profile_id = stored.get("id") if isinstance(stored, Mapping) else None
         profile = (
             VENDOR_PROFILES.get(profile_id) if isinstance(profile_id, str) else None
         )
@@ -1219,6 +1239,7 @@ def _validate_controllables_config(
             )
             continue
 
+        _report_relocated_vendor(raw_device, path, section, report)
         kind = peek_controllable_kind(raw_device)
         if kind is None:
             report.add_error(

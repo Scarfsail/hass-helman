@@ -27,6 +27,15 @@ export function findInverter(config: JsonObject | null | undefined): JsonObject 
   return inverter && Object.keys(inverter).length > 0 ? inverter : null;
 }
 
+/** A device's document path as validation reports it: `devices.consumers[1].children[0]`. */
+export function validationPath(path: readonly PathSegment[]): string {
+  return path
+    .map((segment, index) =>
+      typeof segment === "number" ? `[${segment}]` : index === 0 ? segment : `.${segment}`,
+    )
+    .join("");
+}
+
 /** One device, with its parent and where it sits in the document. */
 export interface DeviceEntry {
   device: JsonObject;
@@ -169,6 +178,9 @@ export function hasSwitch(device: JsonObject): boolean {
 /** Lower-case, every other run of characters `_`, trimmed -- as `share_sensor_slug` does. */
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
+/** `name` folded to ASCII, then {@link slug}ged; empty when nothing is left. */
+export const nameSlug = (name: string) => slug(name.normalize("NFKD").replace(/[^\x00-\x7f]/g, ""));
+
 /**
  * A stable id slugged from `name`: folded to ASCII, then {@link slug}ged, with
  * `_2`, `_3`... on a clash and `fallback` when nothing is left (an emoji-only
@@ -178,7 +190,7 @@ const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_").
  */
 export function slugId(name: string, taken: Iterable<string>, fallback: string): string {
   const takenIds = new Set(taken);
-  const base = slug(name.normalize("NFKD").replace(/[^\x00-\x7f]/g, "")) || fallback;
+  const base = nameSlug(name) || fallback;
   let candidate = base;
   for (let suffix = 2; takenIds.has(candidate); suffix += 1) {
     candidate = `${base}_${suffix}`;
@@ -231,10 +243,21 @@ export function deviceIdFor(
   takenIds: Iterable<string>,
   meterlessIds: Iterable<string> = [],
 ): string {
+  return uniqueDeviceId(entityId.split(".").slice(1).join(".") || entityId, takenIds, meterlessIds);
+}
+
+/**
+ * `base` as a new device's id, or `base_2`, `base_3`... on a clash with a
+ * taken id or, slugged, with a meterless device's id.
+ */
+export function uniqueDeviceId(
+  base: string,
+  takenIds: Iterable<string>,
+  meterlessIds: Iterable<string> = [],
+): string {
   const taken = new Set(takenIds);
   // Share sensors normalize punctuation and case, just like share_sensor_slug.
   const takenSlugs = new Set(Array.from(meterlessIds, slug));
-  const base = entityId.split(".").slice(1).join(".") || entityId;
   let candidate = base;
   for (let suffix = 2; taken.has(candidate) || takenSlugs.has(slug(candidate)); suffix += 1) {
     candidate = `${base}_${suffix}`;
