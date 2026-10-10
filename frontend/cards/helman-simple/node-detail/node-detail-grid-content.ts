@@ -21,7 +21,7 @@ import { ForecastLoader } from "../../helman/forecast-loader";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
 import { formatScheduleTime } from "../../shared/schedule/model/schedule-time";
-import { todayIso } from "../../shared/today-iso";
+import { isoDateInTimeZone, todayIso } from "../../shared/today-iso";
 import {
     EVIDENCE_TOGGLE_EVENT,
     QUESTION_TOGGLE_EVENT,
@@ -46,8 +46,8 @@ const PHASE_COLORS: Record<Phase, string> = { 1: "#8e24aa", 2: "#fb8c00", 3: "#0
 const NOMINAL_VOLTAGE = 230;
 const REFERENCE_BAND = { from: 207, to: 253 };
 
-/** How stale today's money may get before a reading change re-reads it. */
-const MONEY_REFRESH_MS = 5 * 60_000;
+/** How stale today's money or open voltage history may get before it is re-read. */
+const TODAY_REFRESH_MS = 5 * 60_000;
 
 /** Below this many watts either way the grid counts as idle, as on the card. */
 const IDLE_W = 50;
@@ -331,6 +331,7 @@ export class NodeDetailGridContent extends LitElement {
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
     private _moneyRequestedAt = 0;
+    private _voltageRequestedAt = 0;
     private _voltageRequest = 0;
     /** The run mode the current overview's condition was computed from. */
     private _runModeState = "";
@@ -371,8 +372,13 @@ export class NodeDetailGridContent extends LitElement {
         // Today's statistics grow while the dialog is open: re-read them on a new
         // day, and otherwise at most every few minutes, only while the page is
         // visible. The now-clock brings an idle or returning dialog back here.
-        if (this._started && !document.hidden && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
+        if (this._started && !document.hidden && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > TODAY_REFRESH_MS)) {
             void this._loadMoney();
+        }
+        // The open voltage answer is "today so far": it follows the day the same way.
+        if (this._open === "voltage" && this._voltage?.status === "ready" && !document.hidden
+            && (!this._isToday(this._voltage.payload.period.start) || Date.now() - this._voltageRequestedAt > TODAY_REFRESH_MS)) {
+            void this._loadVoltage();
         }
     }
 
@@ -448,7 +454,11 @@ export class NodeDetailGridContent extends LitElement {
 
     private async _loadVoltage(): Promise<void> {
         const request = ++this._voltageRequest;
-        this._voltage = { status: "loading" };
+        // A refresh keeps the chart on screen until the new day's figures land.
+        if (this._voltage?.status !== "ready" || !this._isToday(this._voltage.payload.period.start)) {
+            this._voltage = { status: "loading" };
+        }
+        this._voltageRequestedAt = Date.now();
         try {
             const payload = await getSharedHelmanStore(this.hass)
                 .getNodeDetail<GridVoltageSectionPayload>({ node: "grid", section: "voltage" }, { fresh: true });
@@ -457,8 +467,13 @@ export class NodeDetailGridContent extends LitElement {
         } catch (error) {
             if (request !== this._voltageRequest) return;
             console.error("node-detail-grid: failed to load today's voltages", error);
-            this._voltage = { status: "error" };
+            if (this._voltage?.status !== "ready") this._voltage = { status: "error" };
         }
+    }
+
+    /** Whether a period that starts at `start` is today in HA's time zone. */
+    private _isToday(start: string): boolean {
+        return isoDateInTimeZone(new Date(start), this._timeZone) === todayIso(this._timeZone);
     }
 
     private _runModeOf(payload: GridDetailPayload): string {
@@ -837,9 +852,6 @@ export class NodeDetailGridContent extends LitElement {
         const side = (amount: number | null, kwh: number | null) => amount !== null ? amount : kwh === 0 ? 0 : null;
         const cost = side(day.moneyCost, day.gridImportKwh);
         const gain = side(day.moneyGain, day.gridExportKwh);
-        if (day.moneyCost === null && day.moneyGain === null) {
-            return { cost: null, gain: null, net: null, currency: "", importKwh: day.gridImportKwh, exportKwh: day.gridExportKwh, costKwh: null, gainKwh: null };
-        }
         return {
             cost,
             gain,
@@ -1023,7 +1035,7 @@ export class NodeDetailGridContent extends LitElement {
         const now = Date.now();
         // At least every few minutes, so a new day and today's money arrive
         // even when no reading or forecast boundary moves.
-        let next = now + MONEY_REFRESH_MS;
+        let next = now + TODAY_REFRESH_MS;
         for (const point of [...(grid?.importPricePoints ?? []), ...(grid?.exportPricePoints ?? [])]) {
             const at = Date.parse(point.timestamp);
             if (at > now && at < next) next = at;
