@@ -14,6 +14,8 @@ import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspecto
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { convertToKWh } from "../../helman/energy-unit-converter";
+import { startNowClock } from "../../shared/now-clock";
 import { getSharedHelmanStore } from "../../helman/store";
 import { ForecastLoader } from "../../helman/forecast-loader";
 import { formatPower } from "../../power-format";
@@ -322,7 +324,9 @@ export class NodeDetailGridContent extends LitElement {
     private _overviewRequest = 0;
     private _moneyRequest = 0;
     private _unsubscribeDataChanged?: () => void;
-    private _boundaryTimer?: ReturnType<typeof setTimeout>;
+    /** When the clock next moves something shown; the now-clock re-renders then. */
+    private _nextBoundary = Infinity;
+    private _stopClock?: () => void;
     private _forecastRequest = 0;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
@@ -342,7 +346,8 @@ export class NodeDetailGridContent extends LitElement {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
-        clearTimeout(this._boundaryTimer);
+        this._stopClock?.();
+        this._stopClock = undefined;
         this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this._started = false;
@@ -364,15 +369,19 @@ export class NodeDetailGridContent extends LitElement {
             for (const card of this._inspectors.values()) if (card.isConnected) card.hass = this.hass;
         }
         // Today's statistics grow while the dialog is open: re-read them on a new
-        // day, and otherwise at most every few minutes. The boundary timer in
-        // `updated()` brings an idle dialog back here at least that often.
-        if (this._started && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
+        // day, and otherwise at most every few minutes, only while the page is
+        // visible. The now-clock brings an idle or returning dialog back here.
+        if (this._started && !document.hidden && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
             void this._loadMoney();
         }
     }
 
     private _start(): void {
         this._started = true;
+        // Paused while the page is hidden; a returning reader catches up at once.
+        this._stopClock = startNowClock(() => {
+            if (Date.now() >= this._nextBoundary) this.requestUpdate();
+        });
         // A new plan or config (an optimizer run, another client) can change
         // everything shown: the feed's contract is to reload it all.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
@@ -1005,12 +1014,11 @@ export class NodeDetailGridContent extends LitElement {
 
     /**
      * The rate now, the next change and the planned flow are read off the
-     * clock: render again at the next price point or plan slot boundary, and
-     * at least every few minutes for the day's rollover and money.
+     * clock: the now-clock renders again once the next price point or plan slot
+     * boundary passes, and at least every few minutes for the day's rollover
+     * and money.
      */
     protected updated(): void {
-        clearTimeout(this._boundaryTimer);
-        if (!this.isConnected) return;
         const grid = this._forecast?.grid;
         const now = Date.now();
         // At least every few minutes, so a new day and today's money arrive
@@ -1024,7 +1032,7 @@ export class NodeDetailGridContent extends LitElement {
             const end = Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
             if (end > now && end < next) next = end;
         }
-        this._boundaryTimer = setTimeout(() => this.requestUpdate(), next - now + 50);
+        this._nextBoundary = next;
     }
 
     private _currentPlanSlot() {
@@ -1128,8 +1136,7 @@ export class NodeDetailGridContent extends LitElement {
     private _kwh(entityId: string | null | undefined): number | null {
         const value = readingNumber(this.hass, entityId);
         if (value === null) return null;
-        const unit = this.hass.states[entityId!]?.attributes.unit_of_measurement;
-        return unit === "Wh" ? value / 1000 : unit === "MWh" ? value * 1000 : value;
+        return convertToKWh(value, this.hass.states[entityId!]?.attributes.unit_of_measurement as string | undefined);
     }
 
     private _name(entityId: string): string {
