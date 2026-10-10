@@ -304,7 +304,7 @@ inverter register writes. Helman writes the option; your automation applies it. 
 deliberate — it keeps helman independent of any particular inverter integration, and lets you
 intervene by hand on the same entity.
 
-**Used in helman at** the inverter controllable's `controls.mode.entity_id` → parsed by
+**Used in helman at** `energy_nodes.inverter.controls.mode.entity_id` → parsed by
 `read_schedule_control_config` in `scheduling/schedule.py`, written by
 `scheduling/schedule_executor.py` via the shared `SelectEntityController`. Options are mapped
 explicitly through `controls.mode.options`, so they can be named in any language:
@@ -327,21 +327,18 @@ input_select:
 The matching helman config:
 
 ```yaml
-devices:
-  system:
-    - kind: inverter
-      id: inverter
-      name: Inverter
-      controls:
-        mode:
-          entity_id: input_select.rezim_fv
-          options:
-            normal: Standardní
-            charge_to_target_soc: Nucené nabíjení
-            discharge_to_target_soc: Nucené vybíjení
-            stop_charging: Zákaz nabíjení
-            stop_discharging: Zákaz vybíjení
-            stop_export: Zákaz exportu
+energy_nodes:
+  inverter:
+    controls:
+      mode:
+        entity_id: input_select.rezim_fv
+        options:
+          normal: Standardní
+          charge_to_target_soc: Nucené nabíjení
+          discharge_to_target_soc: Nucené vybíjení
+          stop_charging: Zákaz nabíjení
+          stop_discharging: Zákaz vybíjení
+          stop_export: Zákaz exportu
 ```
 
 Every action you map must be handled by your automation, or helman will select an option that does

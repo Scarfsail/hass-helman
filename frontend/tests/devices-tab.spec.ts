@@ -12,7 +12,8 @@ import { resolve } from "node:path";
  * The fixture is the live setup in miniature: an AC breaker whose climate
  * children draw from its meter, a study breaker with a sub-metered PC and a
  * passive lamp on its meter, and a schedulable boiler of its own. The inverter
- * sits in `devices.system`, edited in the tab's System section.
+ * is no device: it sits at `energy_nodes.inverter`, edited first on the Energy
+ * nodes tab.
  */
 
 const BUNDLE = resolve(
@@ -21,9 +22,6 @@ const BUNDLE = resolve(
 );
 
 const INVERTER = {
-    kind: "inverter",
-    id: "inverter",
-    name: "Inverter",
     controls: {
         mode: {
             entity_id: "select.solax_charger_use_mode",
@@ -95,7 +93,7 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { consumers: Device[]; system?: Device[] } };
+        __editorConfig: () => { devices: { consumers: Device[] }; energy_nodes?: { inverter?: Device } };
         __inspectKeys: string[];
         __validation: unknown;
         __card: (id: string) => HTMLDetailsElement | null;
@@ -107,7 +105,7 @@ async function mountEditor(
     page: Page,
     devices: unknown[] = DEVICES,
     validation: unknown = { valid: true, errors: [], warnings: [] },
-    system: unknown[] = [INVERTER],
+    inverter: unknown = INVERTER,
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -183,7 +181,11 @@ async function mountEditor(
             document.body.appendChild(element);
         },
         {
-            config: { config_version: 25, devices: { ...(system.length ? { system } : {}), consumers: devices } },
+            config: {
+                config_version: 28,
+                ...(inverter ? { energy_nodes: { inverter } } : {}),
+                devices: { consumers: devices },
+            },
             placeholders: PLACEHOLDERS,
             report: validation,
         },
@@ -199,7 +201,6 @@ test("the device settings sit above the list and the regex renames the cards", a
     const sections = page.locator("helman-config-editor-panel").locator("details.section-card");
     expect(await tabSections(page)).toEqual([
         { label: "Device settings", open: false },
-        { label: "System", open: false },
         { label: "Device groupings", open: false },
         { label: "Consumers", open: false },
     ]);
@@ -257,19 +258,22 @@ test("the Automation tab lists system optimizers first, every section collapsed"
 
 /**
  * Switch tabs. The Devices tab starts with every section collapsed, so its
- * System and Consumers sections are opened too unless `expand` is false.
+ * Consumers section is opened too unless `expand` is false.
  */
 async function openTab(page: Page, label: string, expand = label === "Devices"): Promise<void> {
     const panel = page.locator("helman-config-editor-panel");
     await panel.locator(".tabs").getByRole("button", { name: label, exact: true }).click();
-    if (!expand) return;
-    for (const section of ["System", "Consumers"]) {
-        await panel
-            .locator("details.section-card", {
-                has: page.locator(":scope > summary .section-summary-label", { hasText: section }),
-            })
-            .evaluate((details) => ((details as HTMLDetailsElement).open = true));
-    }
+    if (expand) await openTabSection(page, "Consumers");
+}
+
+/** Open one of the active tab's own sections. */
+async function openTabSection(page: Page, label: string): Promise<void> {
+    await page
+        .locator("helman-config-editor-panel")
+        .locator("details.section-card", {
+            has: page.locator(":scope > summary .section-summary-label", { hasText: label }),
+        })
+        .evaluate((details) => ((details as HTMLDetailsElement).open = true));
 }
 
 const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.consumers);
@@ -715,7 +719,7 @@ test("the tree round-trips through YAML, whole and per card", async ({ page }) =
     const tabYaml = await panel
         .locator("ha-yaml-editor")
         .evaluate((editor) => (editor as any).defaultValue);
-    expect(tabYaml).toEqual({ system: [INVERTER], consumers: DEVICES });
+    expect(tabYaml).toEqual({ consumers: DEVICES });
     await fire(tabYaml);
     await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "Visual" }).click();
     expect(await config(page)).toEqual(DEVICES);
@@ -771,7 +775,7 @@ for (const ancestor of ["card", "tab"] as const) {
         const nextStudy = { ...STUDY, children: [STUDY.children[1]] };
         const replacement = ancestor === "card"
             ? nextStudy
-            : { system: [INVERTER], consumers: [BREAKER, nextStudy, BOILER] };
+            : { consumers: [BREAKER, nextStudy, BOILER] };
         await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
             editor.dispatchEvent(new CustomEvent("value-changed", {
                 detail: { value, isValid: true }, bubbles: true, composed: true,
@@ -845,16 +849,30 @@ test("the empty state says nothing is imported and offers Add device", async ({ 
     await expect(panel.locator("details.device-card")).toHaveCount(0);
 });
 
-const system = (page: Page) => page.evaluate(() => window.__editorConfig().devices.system);
+const inverter = (page: Page) => page.evaluate(() => window.__editorConfig().energy_nodes?.inverter);
 
-test("the inverter is edited in the System section of the Devices tab", async ({ page }) => {
+test("the inverter is edited first on the Energy nodes tab", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
 
-    const inverter = panel.locator("details.inverter-card");
-    await expect(inverter.locator(".card-title strong")).toHaveText("Inverter");
-    await inverter.evaluate((card) => {
+    expect((await tabSections(page)).map((section) => section.label)).toEqual([
+        "Inverter",
+        "House",
+        "Solar",
+        "Battery",
+        "Grid",
+    ]);
+    await openTabSection(page, "Inverter");
+    // Laid out straight in its section: no card inside it repeats the title.
+    const card = panel.locator(".inverter-section");
+    await expect(card.locator("details.list-card, .card-title")).toHaveCount(0);
+    await expect(card.locator(":scope > details.section-card > summary .section-summary-label")).toHaveText([
+        "Hardware profile",
+        "Controls",
+        "Action options",
+    ]);
+    await card.evaluate((card) => {
         const field = Array.from(card.querySelectorAll(".field")).find(
             (candidate) => candidate.querySelector("label")?.textContent?.trim() === "Stop export option",
         );
@@ -863,40 +881,69 @@ test("the inverter is edited in the System section of the Devices tab", async ({
         input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     });
     await expect
-        .poll(async () => (await system(page))?.[0].controls.mode.options.stop_export)
+        .poll(async () => (await inverter(page))?.controls.mode.options.stop_export)
         .toBe("Feed-in Priority");
     await expect(
-        inverter.locator("helman-entity-group").evaluate((group: any) => group.path.join(".")),
-    ).resolves.toBe("devices.system.0.controls.mode.entity_id");
+        card.locator("helman-entity-group").evaluate((group: any) => group.path.join(".")),
+    ).resolves.toBe("energy_nodes.inverter.controls.mode.entity_id");
     // The consumer list never holds it.
     expect((await config(page)).map((device) => device.id)).toEqual([BREAKER.id, STUDY.id, BOILER.id]);
 });
 
-test("Add inverter is offered in the System section only while there is none", async ({
+test("the inverter section is always there, like House: no add or remove, and editing it creates the mapping", async ({
     page,
 }) => {
-    await mountEditor(page, [BOILER], undefined, []);
+    await mountEditor(page, [BOILER], undefined, null);
+    const panel = page.locator("helman-config-editor-panel");
+    await openTab(page, "Energy nodes");
+    await openTabSection(page, "Inverter");
+
+    const section = panel.locator(".inverter-section");
+    await expect(section).toHaveCount(1);
+    await expect(panel.locator(".add-button", { hasText: /inverter/i })).toHaveCount(0);
+    await expect(section.locator("button.danger")).toHaveCount(0);
+    expect(await inverter(page)).toBeUndefined();
+
+    await section.evaluate((card) => {
+        const field = Array.from(card.querySelectorAll(".field")).find(
+            (candidate) => candidate.querySelector("label")?.textContent?.trim() === "Stop export option",
+        );
+        const input = field?.querySelector("input") as HTMLInputElement;
+        input.value = "Feed-in Priority";
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    });
+    // A mapping, not a list entry: its id, kind and name are implied.
+    await expect
+        .poll(() => inverter(page))
+        .toEqual({ controls: { mode: { options: { stop_export: "Feed-in Priority" } } } });
+    expect((await config(page)).map((device) => device.kind)).toEqual(["generic"]);
+});
+
+test("clearing a custom inverter's settings deconfigures it, with no remove button needed", async ({ page }) => {
+    await mountEditor(page, [BOILER], undefined, {
+        controls: { mode: { entity_id: "select.solax_charger_use_mode" } },
+    });
+    const panel = page.locator("helman-config-editor-panel");
+    await openTab(page, "Energy nodes");
+    await openTabSection(page, "Inverter");
+
+    await panel.locator(".inverter-section helman-entity-group").evaluate((group) => {
+        group.shadowRoot?.querySelector("ha-entity-picker")?.dispatchEvent(new CustomEvent("value-changed", {
+            detail: { value: "" }, bubbles: true, composed: true,
+        }));
+    });
+    // Cleared, not written as "": the emptied mapping goes with it.
+    await expect.poll(() => inverter(page)).toBeUndefined();
+    await expect(panel.locator(".inverter-section")).toHaveCount(1);
+});
+
+test("the Devices tab has no inverter section", async ({ page }) => {
+    await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
     await openTab(page, "Devices");
 
-    const add = panel.locator(".section-footer .add-button", { hasText: "Add inverter" });
-    await expect(add).toHaveCount(1);
-    await add.dispatchEvent("click");
-    await expect.poll(async () => (await system(page))?.map((device) => device.kind)).toEqual([
-        "inverter",
-    ]);
-    expect((await config(page)).map((device) => device.kind)).toEqual(["generic"]);
-    await expect(add).toHaveCount(0);
-    await expect(panel.locator("details.inverter-card")).toHaveCount(1);
-});
-
-test("Energy nodes has no inverter section", async ({ page }) => {
-    await mountEditor(page);
-    const panel = page.locator("helman-config-editor-panel");
-    await openTab(page, "Energy nodes");
-
-    await expect(panel.locator("details.inverter-card")).toHaveCount(0);
-    await expect(panel.locator(".section-summary-label", { hasText: /^Inverter$/ })).toHaveCount(0);
+    await expect(panel.locator(".inverter-section")).toHaveCount(0);
+    await expect(panel.locator(".section-summary-label", { hasText: /^(System|Inverter)$/ })).toHaveCount(0);
 });
 
 test("the EV charger gets a meter and its lists but no projection", async ({ page }) => {

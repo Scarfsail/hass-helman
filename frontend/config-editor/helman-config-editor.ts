@@ -47,7 +47,6 @@ import {
   asJsonArray,
   asJsonObject,
   cloneJson,
-  createInverterControllableDraft,
   createDailyEnergyEntityDraft,
   createOptimizerDraft,
   createImportPriceWindowDraft,
@@ -66,6 +65,9 @@ import {
   deviceChildren,
   deviceIdFor,
   deviceKind,
+  CONTROLLABLE_ID_INVERTER,
+  findInverter,
+  INVERTER_PATH,
   isCarvedMeterOwner,
   isSchedulable,
   iterDevices,
@@ -219,9 +221,6 @@ import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
 
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
-const INVERTER_CONTROLLABLE_KIND = "inverter";
-/** Reserved for the inverter; mirrors `CONTROLLABLE_ID_INVERTER` in Python. */
-const CONTROLLABLE_ID_INVERTER = "inverter";
 
 /** The chevron of a collapsible card, as the device cards draw it. */
 const GROUPING_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
@@ -246,15 +245,14 @@ type OptimizerBucket = OptimizerConfigBucket;
  * the card lays them out. Mirrors `CONTROLLABLE_SPECS["inverter"]` in Python:
  * the backend owns the list, this is the editor's copy of it.
  */
-type InverterSectionKey = "identity" | "hardware" | "controls" | "action_options";
+type InverterSectionKey = "hardware" | "controls" | "action_options";
 
-/** The inverter card's section that holds the field an issue points at. */
+/** The inverter sub-section that holds the field an issue points at. */
 function inverterSectionOfIssue(path: readonly PathSegment[], issuePath: string): InverterSectionKey {
   const rest = issuePath.slice(validationPath(path).length).replace(/^\./, "");
   if (rest === "vendor" || rest.startsWith("vendor.")) return "hardware";
   if (rest.startsWith("controls.mode.options")) return "action_options";
-  if (rest === "controls" || rest.startsWith("controls.")) return "controls";
-  return "identity";
+  return "controls";
 }
 
 const INVERTER_ACTION_OPTIONS = [
@@ -1014,7 +1012,7 @@ export class HelmanConfigEditorPanel
   private _vendorsKey: string | null = null;
   private _vendorsSequence = 0;
   /**
-   * The inverter card's open sections. Like a consumer card's, all start
+   * The inverter section's open sub-sections. Like a consumer card's, all start
    * closed; a section that gains a validation issue is opened, and only the
    * reader closes one.
    */
@@ -1211,14 +1209,8 @@ export class HelmanConfigEditorPanel
 
   protected willUpdate(changedProperties: PropertyValues<this>): void {
     super.willUpdate(changedProperties);
-    // A removed inverter takes its section state with it, so the next one
-    // added starts collapsed like any freshly opened card.
-    if (changedProperties.has("_config") && !this._inverterPath()) {
-      this._inverterOpenSections = new Set();
-      this._inverterFlaggedIssues = new Set();
-    }
     if (changedProperties.has("_validation")) {
-      const path = this._inverterPath() ?? [];
+      const path = [...INVERTER_PATH];
       const { flagged, fresh } = newIssueSections(
         this._validation,
         path,
@@ -1240,11 +1232,13 @@ export class HelmanConfigEditorPanel
       void this._pollTrainingStatus();
     }
     if (this.hass && this._config) {
-      const vendorsKey = canonicalJson(
-        iterDevices(this._config)
-          .filter(({ device }) => device.vendor !== undefined)
-          .map(({ device, path }) => [validationPath(path), device.vendor]),
-      );
+      const inverter = findInverter(this._config);
+      const vendorsKey = canonicalJson([
+        ...(inverter ? [{ device: inverter, path: [...INVERTER_PATH] }] : []),
+        ...iterDevices(this._config),
+      ]
+        .filter(({ device }) => device.vendor !== undefined)
+        .map(({ device, path }) => [validationPath(path), device.vendor]));
       if (vendorsKey !== this._vendorsKey) {
         this._vendorsKey = vendorsKey;
         void this._loadVendors();
@@ -1672,7 +1666,7 @@ export class HelmanConfigEditorPanel
   private _renderSectionScope(
     scopeId: ScopeId,
     content: TemplateResult,
-    options: { initialOpen?: boolean } = {},
+    options: { initialOpen?: boolean; badge?: TemplateResult | typeof nothing } = {},
   ): TemplateResult {
     const scope = getScope(scopeId);
     const { initialOpen = true } = options;
@@ -1693,6 +1687,7 @@ export class HelmanConfigEditorPanel
               ${sectionIcon ? this._renderSvgIcon(sectionIcon, "section-icon") : nothing}
               <span class="section-summary-label">${this._t(scope.labelKey)}</span>
             </div>
+            ${options.badge ? html`<div class="device-badges">${options.badge}</div>` : nothing}
             <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
               ${this._renderModeToggle(scopeId, { inSummary: false })}
             </div>
@@ -2021,6 +2016,15 @@ export class HelmanConfigEditorPanel
       asJsonArray(this._getValue(["energy_nodes", "grid", "forecast", "import_price_windows"])) ?? [];
 
     return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.energy_nodes.inverter,
+        this._renderInverterSection(),
+        {
+          initialOpen: false,
+          badge: renderIssueCountBadge(this, this._validation, deviceIssues(this._validation, [...INVERTER_PATH])),
+        },
+      )}
+
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.energy_nodes.house,
         html`
@@ -2796,8 +2800,7 @@ export class HelmanConfigEditorPanel
    * kind of view `_houseConsumptionDepthRows` gives those meters.
    */
   private _applianceEnergyDepthDevices(): ApplianceEnergyDepthDevice[] {
-    const entries = iterDevices(this._config).filter(({ device }) => deviceKind(device) !== "inverter");
-    const items = entries.map(({ device, parent, path }, index) => {
+    const items = iterDevices(this._config).map(({ device, parent, path }, index) => {
       const consumption = asJsonObject(device.consumption) ?? {};
       const controls = asJsonObject(device.controls) ?? {};
       const projection = asJsonObject(consumption.projection) ?? {};
@@ -3562,9 +3565,8 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The Devices tab: the settings every device shares, then the
-   * `devices.system` list (the inverter) and the `devices.consumers` tree as
-   * nested cards. Every section starts collapsed, so the tab reads as an
+   * The Devices tab: the settings every device shares, the groupings, then
+   * the `devices.consumers` tree as nested cards. Every section starts collapsed, so the tab reads as an
    * overview first.
    *
    * A consumer card renders its `children` with the same card, recursively.
@@ -3593,15 +3595,6 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_switch_label",
             )}
           </div>
-        `,
-        { initialOpen: false },
-      )}
-
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.devices.system,
-        html`
-          <p class="inline-note">${this._t("editor.notes.system_devices")}</p>
-          ${this._renderSystemDevices()}
         `,
         { initialOpen: false },
       )}
@@ -4213,35 +4206,81 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * The `devices.system` list: the inverter's card, or "Add inverter" when
-   * there is none. No projection section: the inverter has no demand of its
-   * own. Validation allows only the inverter here, at most once.
+   * `energy_nodes.inverter`, laid out straight in its section: the hardware
+   * profile, the controls and the action options. Always shown, like House or
+   * Battery: an inverter with nothing set is simply not configured. First on the tab, because its hardware profile fills the nodes
+   * below. No projection section: the inverter has no demand of its own. The
+   * section's own YAML mode edits the mapping as a whole.
    */
-  private _renderSystemDevices(): TemplateResult {
-    const path = this._inverterPath();
-    return path
-      ? this._renderInverterCard(asJsonObject(this._getValue(path)) ?? {}, path)
-      : html`
-          <div class="message info">${this._t("editor.empty.no_inverter")}</div>
-          <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddInverter}>
-              ${this._t("editor.actions.add_inverter")}
-            </button>
-          </div>
-        `;
+  private _renderInverterSection(): TemplateResult {
+    const path: PathSegment[] = [...INVERTER_PATH];
+    const inverter = asJsonObject(this._getValue(path)) ?? {};
+    const modePath: PathSegment[] = [...path, "controls", "mode"];
+    const mode = asJsonObject(asJsonObject(inverter.controls)?.mode) ?? {};
+    const options = asJsonObject(mode.options) ?? {};
+    const optionCount = INVERTER_ACTION_OPTIONS.filter(
+      (option) => this._stringValue(options[option.key]) !== "",
+    ).length;
+    const profileLabel = this._vendorProfile(inverter)?.label ?? "";
+    // A profile that owns the mode control maps every action itself: only the
+    // entity it points at is shown, read-only, in the controls section.
+    const modeProvided = this._vendorProvision([...modePath, "options"]) !== null;
+
+    return html`
+      <p class="inline-note">${this._t("editor.notes.inverter")}</p>
+      <div class="inverter-section list-stack">
+        ${renderDeviceIssues(this._validation, deviceIssues(this._validation, path))}
+        ${this._renderInverterSubsection(
+          "hardware",
+          this._renderHardwareProfile(inverter, path),
+          profileLabel ? [{ key: "profile", text: profileLabel }] : [],
+        )}
+        ${this._renderInverterSubsection(
+          "controls",
+          html`<div class="field-grid">
+            ${this._renderEntityGroup(
+              [...modePath, "entity_id"],
+              "editor.fields.mode_entity",
+              {
+                includeDomains: ["input_select", "select"],
+                helperKey: "editor.helpers.mode_entity",
+                helpKey: "editor.help.inverter_mode_entity",
+              },
+            )}
+          </div>`,
+          this._stringValue(mode.entity_id)
+            ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
+            : [],
+        )}
+        ${modeProvided
+          ? nothing
+          : this._renderInverterSubsection(
+              "action_options",
+              html`<div class="field-grid">
+                ${INVERTER_ACTION_OPTIONS.map((option) =>
+                  this._renderOptionalTextField(
+                    [...modePath, "options", option.key],
+                    option.labelKey,
+                    undefined,
+                    "editor.help.inverter_action_option",
+                  ),
+                )}
+              </div>`,
+              optionCount > 0
+                ? [
+                    {
+                      key: "count",
+                      text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                    },
+                  ]
+                : [],
+            )}
+      </div>
+    `;
   }
 
-  /** Where the inverter sits in `devices.system`, or `null` when there is none. */
-  private _inverterPath(): PathSegment[] | null {
-    const devices = asJsonArray(this._getValue(["devices", "system"])) ?? [];
-    const index = devices.findIndex(
-      (device) => deviceKind(asJsonObject(device) ?? {}) === INVERTER_CONTROLLABLE_KIND,
-    );
-    return index >= 0 ? ["devices", "system", index] : null;
-  }
-
-  /** One of the inverter card's sections, open while the reader keeps it open. */
-  private _renderInverterSection(
+  /** One of the inverter's sub-sections, open while the reader keeps it open. */
+  private _renderInverterSubsection(
     key: InverterSectionKey,
     content: TemplateResult,
     chips: { key: string; text: string }[],
@@ -4254,110 +4293,6 @@ export class HelmanConfigEditorPanel
       this._inverterOpenSections,
       (next) => (this._inverterOpenSections = next),
     );
-  }
-
-  private _renderInverterCard(inverter: JsonObject, path: PathSegment[]): TemplateResult {
-    const modePath: PathSegment[] = [...path, "controls", "mode"];
-    const inverterName =
-      this._stringValue(inverter.name) || this._t("editor.dynamic.inverter");
-    const inverterId = this._stringValue(inverter.id) || this._t("editor.values.missing_id");
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getDeviceMode(path) === "yaml";
-    const issues = deviceIssues(this._validation, path);
-    const mode = asJsonObject(asJsonObject(inverter.controls)?.mode) ?? {};
-    const options = asJsonObject(mode.options) ?? {};
-    const optionCount = INVERTER_ACTION_OPTIONS.filter(
-      (option) => this._stringValue(options[option.key]) !== "",
-    ).length;
-    const profileLabel = this._vendorProfile(inverter)?.label ?? "";
-    // A profile that owns the mode control maps every action itself: only the
-    // entity it points at is shown, read-only, in the controls section.
-    const modeProvided = this._vendorProvision([...modePath, "options"]) !== null;
-
-    return html`
-      <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${inverterName}</strong>
-                <span class="card-subtitle">${inverterId}</span>
-              </div>
-            </div>
-            <div class="device-badges">${renderIssueCountBadge(this, this._validation, issues)}</div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderDeviceModeToggle(path)}
-              ${renderRemoveButton(this, {
-                onRemove: () => this._removeDevice(path),
-              })}
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          ${renderDeviceIssues(this._validation, issues)}
-          ${isYaml
-            ? this._renderDeviceYamlEditor(path)
-            : html`
-              ${this._renderInverterSection(
-                "identity",
-                html`<div class="field-grid">
-                  ${this._renderRequiredTextField([...path, "id"], "editor.fields.controllable_id", undefined, "editor.help.controllable_id")}
-                  ${this._renderRequiredTextField([...path, "name"], "editor.fields.controllable_name", undefined, "editor.help.controllable_name")}
-                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="inverter" disabled /></div>
-                </div>`,
-                [{ key: "kind", text: this._t("editor.dynamic.inverter") }],
-              )}
-              ${this._renderInverterSection(
-                "hardware",
-                this._renderHardwareProfile(inverter, path),
-                profileLabel ? [{ key: "profile", text: profileLabel }] : [],
-              )}
-              ${this._renderInverterSection(
-                "controls",
-                html`<div class="field-grid">
-                  ${this._renderEntityGroup(
-                    [...modePath, "entity_id"],
-                    "editor.fields.mode_entity",
-                    {
-                      includeDomains: ["input_select", "select"],
-                      helperKey: "editor.helpers.mode_entity",
-                      helpKey: "editor.help.inverter_mode_entity",
-                      required: true,
-                    },
-                  )}
-                </div>`,
-                this._stringValue(mode.entity_id)
-                  ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
-                  : [],
-              )}
-              ${modeProvided
-                ? nothing
-                : this._renderInverterSection(
-                    "action_options",
-                    html`<div class="field-grid">
-                      ${INVERTER_ACTION_OPTIONS.map((option) =>
-                        this._renderOptionalTextField(
-                          [...modePath, "options", option.key],
-                          option.labelKey,
-                          undefined,
-                          "editor.help.inverter_action_option",
-                        ),
-                      )}
-                    </div>`,
-                    optionCount > 0
-                      ? [
-                          {
-                            key: "count",
-                            text: this._tFormat("editor.section_badges.count", { count: optionCount }),
-                          },
-                        ]
-                      : [],
-                  )}
-            `}
-        </div>
-      </details>
-    `;
   }
 
   /** The known profile a device's `vendor` names, if any. */
@@ -4373,12 +4308,12 @@ export class HelmanConfigEditorPanel
    * every entity the profile fills in, read-only.
    *
    * "Custom" is the absence of `vendor`, so a device without one keeps every
-   * hand-mapped slot exactly as before.
+   * hand-mapped slot exactly as before. Only the inverter has profiles today,
+   * and its kind comes from its location, as the backend reads it.
    */
   private _renderHardwareProfile(device: JsonObject, path: PathSegment[]): TemplateResult {
-    const kind = deviceKind(device);
     const profiles = (this._vendors?.profiles ?? []).filter(
-      (profile) => profile.deviceKind === kind,
+      (profile) => profile.deviceKind === CONTROLLABLE_ID_INVERTER,
     );
     const vendor = asJsonObject(device.vendor);
     const profileId = this._stringValue(vendor?.profile);
@@ -5282,7 +5217,6 @@ export class HelmanConfigEditorPanel
       if (
         scopeId === DOCUMENT_SCOPE_ID ||
         scopeId === TAB_SCOPE_IDS.devices ||
-        scopeId === SECTION_SCOPE_IDS.devices.system ||
         scopeId === SECTION_SCOPE_IDS.devices.consumers
       ) {
         this._resetDeviceModes();
@@ -5515,16 +5449,6 @@ export class HelmanConfigEditorPanel
       .map(({ device }) => this._stringValue(device.id))
       .filter((value) => value.length > 0);
   }
-
-  private _handleAddInverter = (): void => {
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["devices", "system"],
-        createInverterControllableDraft(this._t("editor.dynamic.inverter")),
-      );
-    });
-  };
 
   private _moveListItem(path: PathSegment[], fromIndex: number, toIndex: number): void {
     this._applyMutation((draft) => {

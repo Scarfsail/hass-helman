@@ -319,10 +319,9 @@ def _v19_runtimes(document: dict) -> list:
 
 
 def _all_devices(document: dict) -> list:
-    """Both device lists of a migrated document, system first, in the order
-    the single pre-v25 ``items`` list held them."""
-    devices = document["devices"]
-    return list(devices.get("system", [])) + list(devices.get("consumers", []))
+    """The top-level consumers of a migrated document, in the order the single
+    pre-v25 ``items`` list held them; the inverter left them in v28."""
+    return list(document["devices"].get("consumers", []))
 
 
 def _house_fingerprint(consumers: list[dict]) -> str:
@@ -346,12 +345,13 @@ class LiveShapedMigrationTests(unittest.TestCase):
         old = self.before["controllables"]
 
         self.assertNotIn("controllables", self.migrated)
-        # The inverter moves unchanged and carries no flag.
-        self.assertEqual(devices[0], old[0])
+        # The inverter moves to energy_nodes with only its controls, no flag.
+        self.assertEqual(
+            self.migrated["energy_nodes"]["inverter"], {"controls": old[0]["controls"]}
+        )
         self.assertEqual(
             [device.get("id") for device in devices],
             [
-                "inverter",
                 "garage-ev",
                 "pool-filtration",
                 "climate-pool",
@@ -359,7 +359,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
                 "jistic_klimatizace_energy",
             ],
         )
-        breaker = devices[5]
+        breaker = devices[4]
         self.assertEqual(breaker["consumption"], {"energy_entity_id": _AC_METER})
         self.assertNotIn("kind", breaker)
         self.assertNotIn("schedulable", breaker)
@@ -376,7 +376,7 @@ class LiveShapedMigrationTests(unittest.TestCase):
         )
 
     def test_ids_projections_and_the_flag_are_preserved(self) -> None:
-        for old, new in zip(self.before["controllables"][1:5], _all_devices(self.migrated)[1:5]):
+        for old, new in zip(self.before["controllables"][1:5], _all_devices(self.migrated)[:4]):
             with self.subTest(device=old["id"]):
                 self.assertEqual(new["id"], old["id"])
                 self.assertIs(new["schedulable"], True)
@@ -486,12 +486,12 @@ class LiveEnergyImportTests(unittest.TestCase):
 
         # The P1 devices keep their place, ids and everything but a power sensor.
         self.assertEqual(
-            [d["id"] for d in devices[:6]],
+            [d["id"] for d in devices[:5]],
             [d["id"] for d in _all_devices(self.without_energy)],
         )
         # Every Energy row P1 did not own follows, top-level or nested as Energy nests it.
         self.assertEqual(
-            [(d["id"], [c["id"] for c in d.get("children", [])]) for d in devices[6:]],
+            [(d["id"], [c["id"] for c in d.get("children", [])]) for d in devices[5:]],
             [
                 ("jistic_indukce_energy", []),
                 ("jistic_kotel_energy", []),
@@ -504,7 +504,7 @@ class LiveEnergyImportTests(unittest.TestCase):
                 ("jistic_zasuvky_spiz_a_jidelna_energy", ["zasuvka_lednicka_energy"]),
             ],
         )
-        for device, _parent in iter_devices({"devices": {"consumers": devices[6:]}}):
+        for device, _parent in iter_devices({"devices": {"consumers": devices[5:]}}):
             meter = device["consumption"]["energy_entity_id"]
             with self.subTest(device=device["id"]):
                 self.assertEqual(
@@ -515,8 +515,8 @@ class LiveEnergyImportTests(unittest.TestCase):
                 self.assertNotIn("controls", device)
 
     def test_the_ac_breaker_gains_its_power_sensor_and_nothing_else(self) -> None:
-        before = _all_devices(self.without_energy)[5]
-        after = _all_devices(self.migrated)[5]
+        before = _all_devices(self.without_energy)[4]
+        after = _all_devices(self.migrated)[4]
 
         self.assertEqual(
             after,
@@ -530,8 +530,8 @@ class LiveEnergyImportTests(unittest.TestCase):
         )
 
     def test_a_schedulable_owner_keeps_identity_flags_and_controls(self) -> None:
-        before = _all_devices(self.without_energy)[2]
-        after = _all_devices(self.migrated)[2]
+        before = _all_devices(self.without_energy)[1]
+        after = _all_devices(self.migrated)[1]
 
         self.assertEqual(after["id"], "pool-filtration")
         self.assertEqual(

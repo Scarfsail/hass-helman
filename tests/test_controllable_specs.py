@@ -61,9 +61,11 @@ from custom_components.helman.controllables.config import (  # noqa: E402
     effective_meter,
     find_inverter_device,
     iter_devices,
+    peek_controllable_id,
     read_carved_meters,
     read_controllable_kinds_by_id,
     read_schedulable_consumers,
+    read_schedulable_ids,
     read_shared_meters,
     resolve_device_name,
 )
@@ -91,26 +93,22 @@ _RUNTIME_TYPE_BY_KIND = {
 def _config() -> dict:
     """One installation with an inverter and one appliance of every kind."""
     return {
-        "devices": {"system": [
-            {
-                "kind": "inverter",
-                "id": "inverter",
-                "name": "Inverter",
-                "controls": {
-                    "mode": {
-                        "entity_id": "select.solax_charger_use_mode",
-                        "options": {
-                            "normal": "Self Use",
-                            "stop_charging": "Manual",
-                            "stop_discharging": "Manual",
-                            "charge_to_target_soc": "Manual",
-                            "discharge_to_target_soc": "Manual",
-                            "stop_export": "Feedin Priority",
-                        },
-                    }
-                },
+        "energy_nodes": {"inverter": {
+            "controls": {
+                "mode": {
+                    "entity_id": "select.solax_charger_use_mode",
+                    "options": {
+                        "normal": "Self Use",
+                        "stop_charging": "Manual",
+                        "stop_discharging": "Manual",
+                        "charge_to_target_soc": "Manual",
+                        "discharge_to_target_soc": "Manual",
+                        "stop_export": "Feedin Priority",
+                    },
+                }
             },
-        ], "consumers": [
+        }},
+        "devices": {"consumers": [
             {
                 "kind": "climate",
                 "schedulable": True,
@@ -374,9 +372,9 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
     @staticmethod
     def _v6_config() -> dict:
         """The same installation as :func:`_config`, in the pre-v7 shape."""
-        devices = _config()["devices"]
-        (inverter,) = devices["system"]
-        appliances = devices["consumers"]
+        config = _config()
+        inverter = config["energy_nodes"]["inverter"]
+        appliances = config["devices"]["consumers"]
         mode = inverter["controls"]["mode"]
         return {
             "config_version": 6,
@@ -393,6 +391,7 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(self._v6_config())
 
         self.assertEqual(migrated["devices"], _config()["devices"])
+        self.assertEqual(migrated["energy_nodes"], _config()["energy_nodes"])
 
     def test_the_inverter_runtime_survives_the_migration(self) -> None:
         migrated, _ids = migrate_config_document(self._v6_config())
@@ -517,14 +516,32 @@ class DeviceTreeReaderTests(unittest.TestCase):
             {"study": "generic", "plug": "generic", "lamp": "generic"},
         )
 
-    def test_the_inverter_is_found_among_the_system_devices(self) -> None:
-        inverter = _device("inverter", kind="inverter")
+    def test_the_inverter_is_read_from_energy_nodes(self) -> None:
+        inverter = {"controls": {"mode": {"entity_id": "select.mode"}}}
 
         self.assertIs(
-            find_inverter_device({"devices": {"system": [inverter], "consumers": [_study()]}}),
+            find_inverter_device(
+                {"energy_nodes": {"inverter": inverter}, "devices": {"consumers": [_study()]}}
+            ),
             inverter,
         )
         self.assertEqual(find_inverter_device({"devices": {"consumers": [_study()]}}), {})
+        self.assertEqual(find_inverter_device({"energy_nodes": {"inverter": []}}), {})
+
+    def test_the_inverter_is_a_schedulable_controllable_but_not_a_device(self) -> None:
+        config = {
+            "energy_nodes": {"inverter": {"controls": {}}},
+            "devices": {"consumers": [_study()]},
+        }
+
+        self.assertNotIn("inverter", [peek_controllable_id(d) for d, _ in iter_devices(config)])
+        self.assertEqual(
+            read_controllable_kinds_by_id(config),
+            {"inverter": "inverter", "study": "generic", "plug": "generic", "lamp": "generic"},
+        )
+        self.assertEqual(read_schedulable_ids(config), {"inverter", "plug"})
+        self.assertNotIn("inverter", read_controllable_kinds_by_id({"devices": {}}))
+        self.assertEqual(read_schedulable_ids({"devices": {}}), set())
 
 
 class CarvedMeterReaderTests(unittest.TestCase):
@@ -604,7 +621,7 @@ class CarvedMeterReaderTests(unittest.TestCase):
         )
 
     def test_the_inverter_is_never_carved(self) -> None:
-        config = {"devices": {"system": [_device("inverter", kind="inverter", meter="sensor.x")]}}
+        config = {"energy_nodes": {"inverter": {"controls": {}}}}
 
         self.assertEqual(read_carved_meters(config), [])
 
@@ -687,7 +704,7 @@ class SchedulableConsumerReaderTests(unittest.TestCase):
         )
 
     def test_the_inverter_is_never_a_scheduled_consumer(self) -> None:
-        config = {"devices": {"system": [_device("inverter", kind="inverter", meter="sensor.x")]}}
+        config = {"energy_nodes": {"inverter": {"controls": {}}}}
 
         self.assertEqual(read_schedulable_consumers(config), [])
 

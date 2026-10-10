@@ -17,7 +17,6 @@ from .controllables.config import (
     iter_devices,
     own_meter,
     peek_controllable_id,
-    peek_controllable_kind,
     read_carved_meters,
     read_groupings,
     read_name_cleaner_regex,
@@ -27,7 +26,6 @@ from .controllables.config import (
     resolve_device_name,
     running_signal,
 )
-from .controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .power_polarity import consumer_value_type, source_value_type
 
 
@@ -319,8 +317,6 @@ class HelmanTreeBuilder:
         tree: list[TreeItemDTO] = []
         devices: dict[int, TreeItemDTO] = {}
         for device, parent in iter_devices(self._config):
-            if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-                continue
             parent_device = devices.get(id(parent)) if parent is not None else None
             meter = own_meter(device)
             if meter is None:

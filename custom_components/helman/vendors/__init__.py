@@ -21,7 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..const import DOMAIN, INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
-from ..controllables.config import iter_device_paths, peek_controllable_kind
+from ..controllables.config import (
+    find_inverter_device,
+    iter_device_paths,
+    peek_controllable_kind,
+)
+from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .profile import MODE_DEVICE_PATH, VendorProfile
 from .solax_inverter import PROFILE as SOLAX_INVERTER
 
@@ -84,7 +89,7 @@ def resolve_vendor_config(
             if value is not None:
                 issues.append(
                     VendorIssue(
-                        section=path.split(".", 1)[0],
+                        section=_section_of(path),
                         path=path,
                         code="vendor_owned_key",
                         message=(
@@ -115,10 +120,11 @@ def resolve_vendor_config(
             if entity_id is not None:
                 _set_value_at(resolved, path, entity_id)
                 continue
+            vendor_path = f"{vendor_device.path}.{VENDOR_KEY}"
             issues.append(
                 VendorIssue(
-                    section="devices",
-                    path=f"{vendor_device.path}.{VENDOR_KEY}",
+                    section=_section_of(vendor_path),
+                    path=vendor_path,
                     code="vendor_entity_unresolved",
                     message=(
                         f"{path}: no {profile.platform} entity with unique id "
@@ -202,7 +208,7 @@ def describe_vendors(hass: Any, config: Mapping[str, Any]) -> dict[str, Any]:
     The profiles with their candidate config entries, and for each device of
     the draft that carries a valid ``vendor``, what that profile owns there
     and what it resolves to, keyed by absolute path (the mode control's
-    entity included, as ``devices.system[0].controls.mode.entity_id``). This
+    entity included, as ``energy_nodes.inverter.controls.mode.entity_id``). This
     is the editor's only source for which paths a profile owns, so each list
     lives once, in its profile module.
     """
@@ -255,11 +261,17 @@ def _iter_vendor_devices(
 ) -> Iterator[_VendorDevice]:
     """Every device carrying a ``vendor`` whose profile applies to it.
 
-    A malformed ``vendor`` is reported and skipped; a missing or unknown config
-    entry is reported and yielded with ``entry=None``, so the profile still
-    owns its paths.
+    The inverter first, at ``energy_nodes.inverter`` and of kind ``inverter``
+    by location, then the consumers. A malformed ``vendor`` is reported and
+    skipped; a missing or unknown config entry is reported and yielded with
+    ``entry=None``, so the profile still owns its paths.
     """
-    for device_path, device, _parent in iter_device_paths(config):
+    inverter = find_inverter_device(config)
+    candidates = [("energy_nodes.inverter", inverter, CONTROLLABLE_KIND_INVERTER)] + [
+        (device_path, device, peek_controllable_kind(device))
+        for device_path, device, _parent in iter_device_paths(config)
+    ]
+    for device_path, device, kind in candidates:
         if not isinstance(device, Mapping) or VENDOR_KEY not in device:
             continue
         vendor_path = f"{device_path}.{VENDOR_KEY}"
@@ -273,11 +285,11 @@ def _iter_vendor_devices(
             continue
         profile_id = vendor.get("profile")
         profile = PROFILES.get(profile_id) if isinstance(profile_id, str) else None
-        if profile is None or profile.device_kind != peek_controllable_kind(device):
+        if profile is None or profile.device_kind != kind:
             choices = sorted(
                 profile_id
                 for profile_id, candidate in PROFILES.items()
-                if candidate.device_kind == peek_controllable_kind(device)
+                if candidate.device_kind == kind
             )
             issues.append(
                 _device_error(
@@ -324,7 +336,14 @@ def _iter_vendor_devices(
 
 
 def _device_error(path: str, code: str, message: str) -> VendorIssue:
-    return VendorIssue(section="devices", path=path, code=code, message=message, error=True)
+    return VendorIssue(
+        section=_section_of(path), path=path, code=code, message=message, error=True
+    )
+
+
+def _section_of(path: str) -> str:
+    """The editor section a device path belongs to: its first segment."""
+    return path.split(".", 1)[0]
 
 
 def _unique_id(template: str, entry: Any) -> str:

@@ -434,8 +434,8 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
+                energy_nodes: { inverter: { controls: {} } },
                 devices: {
-                    system: [{ kind: "inverter", id: "inverter", name: "Inverter" }],
                     consumers: [{ kind: "generic", schedulable: true, id: "boiler", name: "Boiler" }],
                 },
             },
@@ -598,8 +598,8 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
             config: {
                 ...CONFIG,
+                energy_nodes: { inverter: { controls: {} } },
                 devices: {
-                    system: [{ kind: "inverter", id: "inverter", name: "Inverter" }],
                     consumers: [
                         { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
                         { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },

@@ -73,6 +73,7 @@ const CONFIG = {
         ],
     },
     energy_nodes: {
+        inverter: { controls: { mode: { entity_id: "select.inverter_mode", options: {} } } },
         house: {
             entities: { power: "sensor.house_power" },
             forecast: { total_energy_entity_id: "sensor.house_energy" },
@@ -105,14 +106,7 @@ const CONFIG = {
         house_consumption: { min_history_days: 30 },
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
-    devices: { system: [
-        {
-            kind: "inverter",
-            id: "inverter",
-            name: "Inverter",
-            controls: { mode: { entity_id: "select.inverter_mode", options: {} } },
-        },
-    ], consumers: [
+    devices: { consumers: [
         {
             kind: "ev_charger",
             schedulable: true,

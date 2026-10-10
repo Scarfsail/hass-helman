@@ -21,7 +21,6 @@
       "add_group": "Add group",
       "add_daily_energy_entity": "Add daily energy entity",
       "add_import_price_window": "Add import price window",
-      "add_inverter": "Add inverter",
       "add_export_price_optimizer": "Add export price optimizer",
       "add_charge_hold_optimizer": "Add charge hold optimizer",
       "add_charge_from_grid_optimizer": "Add charge from grid optimizer",
@@ -82,7 +81,7 @@
       "diagnostics": "Diagnostics",
       "device_settings": "Device settings",
       "consumers": "Consumers",
-      "system_devices": "System",
+      "inverter": "Inverter",
       "measurements": "Measurements",
       "projection": "Projection",
       "children": "Children",
@@ -107,7 +106,7 @@
       "training_solar_bias_slot_invalidation": "Not every recorded slot is honest evidence about the forecast. With a full battery and nothing being exported the inverter throttles the array, so production reads low although the forecast was right, and a meter glitch can spike or zero a single slot the same way. These thresholds decide which slots are thrown out before the fit, so the correction learns from the weather rather than from clipping and bad data.",
       "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction.",
       "devices": "Every energy-consuming device in the house, as a tree: a device can hold children that either have their own meter or draw from its meter. Schedulable devices are planned and run by Helman; the rest are only measured.",
-      "system_devices": "Devices that control the site rather than draw power; today the battery inverter.",
+      "inverter": "The battery inverter Helman drives. Pick its hardware profile first: the profile fills in the House, Solar, Battery and Grid entities below.",
       "hardware_profile": "A hardware profile fills in the entities of this device itself, found by the vendor integration's own entity ids. The fields it provides are read-only elsewhere in the editor. Custom keeps every entity picked by hand."
     },
     "empty": {
@@ -115,8 +114,7 @@
       "no_system_optimizers": "No system optimizers configured yet.",
       "no_device_groupings": "No groupings configured.",
       "no_entities_on_tab": "This tab configures no entities.",
-      "no_devices": "No devices yet. Nothing is imported automatically after installation: add each device by picking its energy meter.",
-      "no_inverter": "No inverter configured."
+      "no_devices": "No devices yet. Nothing is imported automatically after installation: add each device by picking its energy meter."
     },
     "badges": {
       "optimizer_warning": "Ordering warning"

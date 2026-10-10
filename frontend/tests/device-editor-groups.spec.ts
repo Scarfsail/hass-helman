@@ -8,8 +8,8 @@ import { resolve } from "node:path";
  * badge per group the device is assigned to, and whose body holds one picker
  * per grouping: "None", then the grouping's groups. Picking writes the
  * device's own `groups.<grouping>`, "None" removes the key and a `groups` map
- * left empty. A system device is never grouped, and a config without
- * groupings has nothing to pick, so neither shows the section.
+ * left empty. A config without groupings has nothing to pick, so it shows
+ * no section.
  *
  * The fixture: an AC breaker in "Technická FV" with an ungrouped climate
  * child, a boiler in a group of each grouping, and a lamp naming a group the
@@ -63,7 +63,6 @@ const LAMP = {
     consumption: { energy_entity_id: "sensor.lamp_energy" },
     groups: { breakers: "gone" },
 };
-const INVERTER = { kind: "inverter", id: "inverter", name: "Inverter" };
 
 type Device = Record<string, any>;
 
@@ -115,7 +114,6 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
                 config_version: 26,
                 devices: {
                     ...(groupings.length ? { groupings } : {}),
-                    system: [INVERTER],
                     consumers: [AC, BOILER, LAMP],
                 },
             },
@@ -124,7 +122,7 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
 
     const panel = page.locator("helman-config-editor-panel");
     await panel.locator(".tabs").getByRole("button", { name: "Devices", exact: true }).click();
-    for (const label of ["System", "Consumers"]) {
+    for (const label of ["Consumers"]) {
         await panel
             .locator("details.section-card", {
                 has: page.locator(":scope > summary .section-summary-label", { hasText: label }),
@@ -220,10 +218,9 @@ test("picking adds, changes and removes the device's own group", async ({ page }
     await expect.poll(() => memberships(page)).toEqual({ ...INITIAL, boiler: { breakers: "technicka_sit" } });
 });
 
-test("a system device and a config without groupings show no Groups section", async ({ page }) => {
+test("a config without groupings shows no Groups section", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
-    await expect(panel.locator("details.inverter-card select.device-group")).toHaveCount(0);
     await expect(panel.locator("select.device-group")).toHaveCount(8);
 
     await mountEditor(page, []);

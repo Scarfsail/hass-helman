@@ -1,11 +1,13 @@
 """Reading the ``devices:`` tree — one entry point for every device reader.
 
 Config version 20 replaced the flat ``controllables:`` list with a tree of
-devices; since version 25 it is two lists: ``devices.system`` (the inverter)
-and ``devices.consumers`` (every energy-consuming device, schedulable or
-passive, with ``children`` for what sits behind a device's meter). Every reader
-walks both through :func:`iter_devices`, so "which devices are there" is one
-question asked once.
+devices; since version 28 it is ``devices.consumers`` alone (every
+energy-consuming device, schedulable or passive, with ``children`` for what
+sits behind a device's meter). Every reader walks it through
+:func:`iter_devices`, so "which devices are there" is one question asked once.
+The inverter is not a device: it lives at ``energy_nodes.inverter`` and is read
+through :func:`find_inverter_device` alone, though it stays a controllable
+under the reserved id :data:`CONTROLLABLE_ID_INVERTER`.
 
 What lives here is what would otherwise be derived twice: a device's kind and
 id, whether Helman may schedule it, which meter it draws from (its *effective
@@ -31,9 +33,9 @@ from .spec import (
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-#: The id the inverter entry is migrated to and the one the UI seeds. Reserved:
-#: config validation refuses it to every other kind, so an optimizer targeting
-#: ``inverter`` can only ever mean the inverter.
+#: The controllable id of the inverter, implied by ``energy_nodes.inverter``.
+#: Reserved: config validation refuses it to every consumer, so an optimizer
+#: targeting ``inverter`` can only ever mean the inverter.
 CONTROLLABLE_ID_INVERTER = "inverter"
 
 #: Device = one mapping of the tree; ``(device, parent)`` is what the flattening
@@ -44,8 +46,8 @@ Device = Mapping[str, Any]
 def read_devices_section(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """The ``devices:`` section object — ``{}`` when absent or not a mapping.
 
-    Since config version 25 it holds the device lists under ``consumers`` and
-    ``system`` next to the device-level settings (``name_cleaner_regex``,
+    It holds the device tree under ``consumers`` next to the device-level
+    settings (``name_cleaner_regex``,
     ``power_sensor_label``, ``power_switch_label``).
     """
     if not isinstance(config, Mapping):
@@ -125,8 +127,6 @@ def group_member_entities(
     entity_ids: list[str] = []
     skipped: list[str] = []
     for device, _parent in iter_devices(config):
-        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-            continue
         if device_groups(device).get(grouping_id) != group_id:
             continue
         signal = running_signal(device)
@@ -137,15 +137,6 @@ def group_member_entities(
         elif signal[0] not in entity_ids:
             entity_ids.append(signal[0])
     return entity_ids, skipped
-
-
-def read_system_devices(config: Mapping[str, Any] | None) -> Any:
-    """The raw ``devices.system`` value — ``None`` when absent.
-
-    Unvalidated, with the same "absent vs wrong" contract as
-    :func:`read_consumers`.
-    """
-    return read_devices_section(config).get("system")
 
 
 def read_name_cleaner_regex(config: Mapping[str, Any] | None) -> str | None:
@@ -177,8 +168,8 @@ def iter_devices(
 ) -> Iterator[tuple[Device, Device | None]]:
     """Every device as ``(device, parent)``, in document order.
 
-    The system devices first, then the consumer tree depth first, a parent
-    before its children, which is the order the document reads in. Anything
+    The consumer tree depth first, a parent before its children, which is the
+    order the document reads in. Anything
     that is not a mapping is skipped, and so is a ``children`` value that is
     not a list — the validator reports both.
     """
@@ -195,11 +186,6 @@ def iter_device_paths(
     For the readers that must say *where* something is — validation and the
     runtime registry's log lines: ``devices.consumers[1].children[0]``.
     """
-    system = read_system_devices(config)
-    if isinstance(system, list):
-        # Flat: a system device never nests, and validation refuses children.
-        for index, device in enumerate(system):
-            yield f"devices.system[{index}]", device, None
     consumers = read_consumers(config)
     if isinstance(consumers, list):
         yield from _iter_children(consumers, None, "devices.consumers")
@@ -255,11 +241,9 @@ def peek_controllable_id(value: Any) -> str | None:
 def is_schedulable(device: Device) -> bool:
     """Whether Helman may plan and execute this device.
 
-    The inverter always is and carries no flag; every other device only when it
-    says ``schedulable: true``.
+    Only when it says ``schedulable: true``; the inverter is not a device and
+    always is.
     """
-    if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-        return True
     return device.get("schedulable") is True
 
 
@@ -337,7 +321,7 @@ def is_active_state(value: Any, active_states: Collection[str]) -> bool:
 def read_controllable_kinds_by_id(
     config: Mapping[str, Any] | None,
 ) -> dict[str, str]:
-    """``device id -> kind`` for every device in the tree that names both.
+    """``device id -> kind`` for the inverter and every device naming both.
 
     The lookup an optimizer's ``target.controllable_id`` resolves against. It
     reads the raw document rather than a runtime registry on purpose: the
@@ -346,22 +330,18 @@ def read_controllable_kinds_by_id(
     object could be built from it — otherwise one bad appliance would be
     reported twice, once as itself and once as every optimizer aiming at it.
 
-    An inverter with no ``id`` is indexed under :data:`CONTROLLABLE_ID_INVERTER`
-    anyway. Validation reports the missing id on the device, where the fix is.
-
-    First wins on a duplicate id, matching :func:`find_inverter_device`;
-    validation rejects duplicates separately.
+    The inverter, when configured, is indexed under
+    :data:`CONTROLLABLE_ID_INVERTER`. First wins on a duplicate id; validation
+    rejects duplicates separately.
     """
     kinds_by_id: dict[str, str] = {}
+    if find_inverter_device(config):
+        kinds_by_id[CONTROLLABLE_ID_INVERTER] = CONTROLLABLE_KIND_INVERTER
     for device, _parent in iter_devices(config):
         kind = peek_controllable_kind(device)
-        if kind is None:
-            continue
         controllable_id = peek_controllable_id(device)
-        if controllable_id is None:
-            if kind != CONTROLLABLE_KIND_INVERTER:
-                continue
-            controllable_id = CONTROLLABLE_ID_INVERTER
+        if kind is None or controllable_id is None:
+            continue
         kinds_by_id.setdefault(controllable_id, kind)
     return kinds_by_id
 
@@ -369,18 +349,16 @@ def read_controllable_kinds_by_id(
 def read_schedulable_ids(config: Mapping[str, Any] | None) -> set[str]:
     """The ids of every schedulable device — what an optimizer may target.
 
-    The inverter is indexed under :data:`CONTROLLABLE_ID_INVERTER` even without
-    an id, as in :func:`read_controllable_kinds_by_id`.
+    The inverter, when configured, always is, under
+    :data:`CONTROLLABLE_ID_INVERTER`.
     """
     schedulable_ids: set[str] = set()
+    if find_inverter_device(config):
+        schedulable_ids.add(CONTROLLABLE_ID_INVERTER)
     for device, _parent in iter_devices(config):
         if not is_schedulable(device):
             continue
         controllable_id = peek_controllable_id(device)
-        if controllable_id is None and (
-            peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER
-        ):
-            controllable_id = CONTROLLABLE_ID_INVERTER
         if controllable_id is not None:
             schedulable_ids.add(controllable_id)
     return schedulable_ids
@@ -408,8 +386,6 @@ def read_schedulable_consumers(
     consumers: list[dict[str, Any]] = []
     seen: set[str] = set()
     for device, parent in iter_devices(config):
-        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-            continue
         if not is_schedulable(device):
             continue
         controllable_id = peek_controllable_id(device)
@@ -452,8 +428,6 @@ def read_carved_meters(
     carved: list[dict[str, Any]] = []
     seen: set[str] = set()
     for device, _parent in iter_devices(config):
-        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-            continue
         meter = own_meter(device)
         if meter is None or meter in seen:
             continue
@@ -542,20 +516,18 @@ def _metered_children(children: list[Device]) -> list[str]:
 
 
 def find_inverter_device(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    """The single ``kind: inverter`` device, or an empty mapping.
+    """``energy_nodes.inverter``, or an empty mapping when absent or not one.
 
-    Read from ``devices.system``: validation refuses an inverter anywhere else.
-    First wins if a hand-edited config declares two; validation rejects that
-    case, and picking the first keeps the runtime deterministic in the window
-    between a bad save and the user fixing it.
+    The only reader of the inverter's location: its id and kind are implied by
+    it, so the mapping holds just ``controls`` and ``vendor``.
     """
-    devices = read_system_devices(config)
-    if not isinstance(devices, list):
+    if not isinstance(config, Mapping):
         return {}
-    for device in devices:
-        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-            return device
-    return {}
+    energy_nodes = config.get("energy_nodes")
+    if not isinstance(energy_nodes, Mapping):
+        return {}
+    inverter = energy_nodes.get("inverter")
+    return inverter if isinstance(inverter, Mapping) else {}
 
 
 def resolve_device_name(

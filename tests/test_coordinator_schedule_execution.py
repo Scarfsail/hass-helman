@@ -1397,10 +1397,10 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(captured.output), 1)
         self.assertIn(
-            "devices.system[inverter].controls.mode.entity_id", captured.output[0]
+            "energy_nodes.inverter.controls.mode.entity_id", captured.output[0]
         )
         self.assertIn(
-            "devices.system[inverter].controls.mode.options.normal",
+            "energy_nodes.inverter.controls.mode.options.normal",
             captured.output[0],
         )
 
@@ -2414,13 +2414,11 @@ class SolaxProfileScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             config={
-                "devices": {"system": [
-                    {
-                        "kind": "inverter",
-                        "id": "inverter",
+                "energy_nodes": {
+                    "inverter": {
                         "vendor": {"profile": "solax_inverter", "entry_id": "solax"},
                     }
-                ]},
+                },
             },
         )
         hass = FakeHass(

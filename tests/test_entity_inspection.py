@@ -1512,7 +1512,6 @@ class TestDeviceFieldPlaceholders(unittest.TestCase):
             ("devices", "consumers", 0, "name"),
             ("devices", "consumers", 0, "children", 1, "icon"),
             ("devices", "consumers", 0, "children", 1, "children", 2, "name"),
-            ("devices", "system", 0, "name"),
         ]:
             with self.subTest(path=path):
                 self.assertIs(evaluator_for(path)[0], evaluate_device_field)
@@ -1522,6 +1521,7 @@ class TestDeviceFieldPlaceholders(unittest.TestCase):
             ("devices", "consumers", 0, "controls", 1, "name"),
             ("devices", 0, "name"),
             ("devices", "items", 0, "name"),
+            ("devices", "system", 0, "name"),
             ("energy_nodes", 0, "name"),
         ]:
             with self.subTest(path=path):

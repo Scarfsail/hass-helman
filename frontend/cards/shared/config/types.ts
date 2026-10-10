@@ -91,6 +91,6 @@ export interface VendorDeviceInfo {
 
 export interface VendorsResponse {
   profiles: VendorProfileInfo[];
-  /** Keyed by the device's validation path, e.g. `devices.system[0]`. */
+  /** Keyed by the device's validation path, e.g. `energy_nodes.inverter`. */
   devices: Record<string, VendorDeviceInfo>;
 }

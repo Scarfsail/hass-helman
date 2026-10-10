@@ -4,12 +4,28 @@ import type { JsonObject, JsonValue, PathSegment } from "./types";
 /**
  * The draft's devices, read the way the backend reads them.
  *
- * Mirrors `custom_components/helman/controllables/config.py`: the flat
- * `devices.system` list first, then the `devices.consumers` tree flattened
- * depth first in document order, `kind` defaults to `generic`, and only a
- * device that says `schedulable: true` (or the inverter) may be planned or
- * targeted. Kept to what the editor needs.
+ * Mirrors `custom_components/helman/controllables/config.py`: the
+ * `devices.consumers` tree flattened depth first in document order, `kind`
+ * defaults to `generic`, and only a device that says `schedulable: true` may
+ * be planned or targeted. The inverter is no device: it lives at
+ * {@link INVERTER_PATH} and is read through {@link findInverter}. Kept to what
+ * the editor needs.
  */
+
+/** The inverter's reserved controllable id, and its kind. Mirrors `CONTROLLABLE_ID_INVERTER`. */
+export const CONTROLLABLE_ID_INVERTER = "inverter";
+
+/** Where the inverter lives: one mapping, its id and kind implied. */
+export const INVERTER_PATH: readonly PathSegment[] = ["energy_nodes", "inverter"];
+
+/**
+ * The draft's inverter, or `null` without one. Mirrors `find_inverter_device`:
+ * an empty mapping is no inverter.
+ */
+export function findInverter(config: JsonObject | null | undefined): JsonObject | null {
+  const inverter = asJsonObject(config ? getValueAtPath(config, [...INVERTER_PATH]) : undefined);
+  return inverter && Object.keys(inverter).length > 0 ? inverter : null;
+}
 
 /** One device, with its parent and where it sits in the document. */
 export interface DeviceEntry {
@@ -29,13 +45,7 @@ export function iterDevices(config: JsonObject | null | undefined): DeviceEntry[
       walk(device.children, device, [...devicePath, "children"]);
     });
   };
-  const devices = asJsonObject(config?.devices);
-  // Flat: a system device never nests.
-  (asJsonArray(devices?.system) ?? []).forEach((value, index) => {
-    const device = asJsonObject(value);
-    if (device) entries.push({ device, parent: null, path: ["devices", "system", index] });
-  });
-  walk(devices?.consumers, null, ["devices", "consumers"]);
+  walk(asJsonObject(config?.devices)?.consumers, null, ["devices", "consumers"]);
   return entries;
 }
 
@@ -53,13 +63,10 @@ export function ownGroup(device: JsonObject, groupingId: string): string | undef
 /**
  * Every consumer, in {@link iterDevices} order, with its own group in
  * `groupingId`. Only a direct assignment counts: a child with none is
- * ungrouped, whatever its parent's group. System devices are never grouped,
- * so they are left out.
+ * ungrouped, whatever its parent's group.
  */
 export function consumerGroups(config: JsonObject | null | undefined, groupingId: string): GroupedDeviceEntry[] {
-  return iterDevices(config)
-    .filter((entry) => entry.path[1] === "consumers")
-    .map((entry) => ({ ...entry, group: ownGroup(entry.device, groupingId) ?? null }));
+  return iterDevices(config).map((entry) => ({ ...entry, group: ownGroup(entry.device, groupingId) ?? null }));
 }
 
 /** Sets or unsets `groups.<groupingId>`, dropping a `groups` map left empty. */
@@ -103,7 +110,7 @@ export function deviceKind(device: JsonObject): string {
 }
 
 export function isSchedulable(device: JsonObject): boolean {
-  return deviceKind(device) === "inverter" || device.schedulable === true;
+  return device.schedulable === true;
 }
 
 /** The device's own `consumption.energy_entity_id`, or `""`. */

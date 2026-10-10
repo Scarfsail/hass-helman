@@ -1129,10 +1129,12 @@ export class HelmanOptimizerEditor
 
     /** "Name (id)", or the bare id when the two are the same. */
     private _controllableOptionLabel(option: ControllableTargetOption): string {
-        return option.name === option.id
+        // The inverter has no name of its own; the picker names it.
+        const name = option.kind === "inverter" ? this.t("editor.dynamic.inverter") : option.name;
+        return name === option.id
             ? option.id
             : this._tFormat("editor.dynamic.appliance_option", {
-                  name: option.name,
+                  name,
                   id: option.id,
               });
     }
