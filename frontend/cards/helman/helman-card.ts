@@ -338,6 +338,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const batterySocEntityId = batteryConfig?.entities.capacity ?? null;
         const batterySocState = batterySocEntityId ? this._hass?.states[batterySocEntityId] : null;
         const rawBatterySoc = batterySocState ? parseFloat(batterySocState.state) : NaN;
+        const gridSensorId = gridProducerNode?.powerSensorId ?? gridConsumerNode?.powerSensorId;
+        const gridReadable = !!gridSensorId && Number.isFinite(parseFloat(this._hass?.states[gridSensorId]?.state ?? ""));
 
         return {
             batteryPower: (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0),
@@ -347,7 +349,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             batteryProducerNode,
             batteryConsumerNode,
             solarNode,
-            gridPower: (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0),
+            gridPower: gridReadable
+                ? (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0)
+                : null,
             productionNode: sourcesNode ?? null,
             consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,

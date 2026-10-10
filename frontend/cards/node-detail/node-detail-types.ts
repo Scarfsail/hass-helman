@@ -34,7 +34,8 @@ export interface SolarDetailParams {
 export interface GridDetailParams {
     nodeType: "grid";
     /** Grid power: positive imports, negative exports, W. */
-    gridPower: number;
+    /** Signed import-positive; `null` when the grid sensor has no reading. */
+    gridPower: number | null;
 }
 
 export interface HouseDetailParams {

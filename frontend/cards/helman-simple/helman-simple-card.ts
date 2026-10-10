@@ -65,7 +65,7 @@ interface EnergyValues {
      * only the source side (a `positive` grid node clamps export to zero) and
      * the card derives export from the balance; the grid detail reports the meter.
      */
-    gridPowerSigned: number;
+    gridPowerSigned: number | null;
     batteryPower: number;
     batterySoc:   number;
     batteryMinSoc:number;
@@ -73,7 +73,7 @@ interface EnergyValues {
 }
 
 const EMPTY_ENERGY: EnergyValues = {
-    solarPower: 0, gridPower: 0, gridPowerSigned: 0, batteryPower: 0,
+    solarPower: 0, gridPower: 0, gridPowerSigned: null, batteryPower: 0,
     batterySoc: 0, batteryMinSoc: 10,
     housePower: 0,
 };
@@ -760,13 +760,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             entityId ? parseFloat(hass.states[entityId]?.state ?? "0") || 0 : 0;
 
         const batterySoc = Math.max(0, Math.min(100, rawPower(map.batterySocEntityId)));
+        const gridRaw = map.gridPowerEntityId ? parseFloat(hass.states[map.gridPowerEntityId]?.state ?? "") : NaN;
+        const gridReading = Number.isFinite(gridRaw) ? gridRaw : null;
 
         return {
             solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
-            gridPowerSigned: map.gridValueType === "negative"
-                ? -rawPower(map.gridPowerEntityId)
-                : rawPower(map.gridPowerEntityId),
+            gridPowerSigned: gridReading === null ? null : map.gridValueType === "negative" ? -gridReading : gridReading,
             batteryPower: map.batteryInverted
                 ? -rawPower(map.batteryPowerEntityId)
                 : rawPower(map.batteryPowerEntityId),

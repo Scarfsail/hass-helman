@@ -67,7 +67,8 @@
       "status": {
         "importing": "Odebírá ze sítě {power}.",
         "exporting": "Dodává do sítě {power}.",
-        "idle": "Se sítí si teď téměř nic nevyměňuje ({power})."
+        "idle": "Se sítí si teď téměř nic nevyměňuje ({power}).",
+        "unavailable": "Výkon sítě teď není k dispozici."
       },
       "figure": {
         "net_import": "Čistý odběr dnes",

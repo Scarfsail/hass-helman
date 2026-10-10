@@ -33,6 +33,8 @@ type Variant = {
     staleCurrentPrice?: boolean;
     /** The grid source node is `positive`, as with a positive-is-import meter. */
     positiveGridNode?: boolean;
+    /** The grid power sensor reads unavailable. */
+    gridUnavailable?: boolean;
 };
 
 declare global {
@@ -84,7 +86,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             eps_mode_runtime: ["sensor.solax_eps_mode_runtime", "163.9", "h"],
         };
         const states: Record<string, unknown> = {
-            "sensor.solar": s("4200", "W"), "sensor.grid": s("-650", "W"), "sensor.battery": s("-500", "W"),
+            "sensor.solar": s("4200", "W"), "sensor.grid": s(v.gridUnavailable ? "unavailable" : "-650", "W"), "sensor.battery": s("-500", "W"),
             "sensor.house": s("1200", "W"),
             "sensor.today_import": s("8.4", "kWh"), "sensor.today_export": s("12600", "Wh"),
         };
@@ -222,6 +224,12 @@ test("a positive grid source node still reports the export the meter reads", asy
     await mount(page, { positiveGridNode: true });
     await openDetail(page);
     await expect(content(page).locator("[data-overview] .status")).toHaveText("Exporting 650 W to the grid.");
+});
+
+test("an unreadable grid sensor is no reading, never idle at 0 W", async ({ page }) => {
+    await mount(page, { gridUnavailable: true });
+    await openDetail(page);
+    await expect(content(page).locator("[data-overview] .status")).toHaveText("No grid power reading right now.");
 });
 
 test.describe("the grid overview", () => {

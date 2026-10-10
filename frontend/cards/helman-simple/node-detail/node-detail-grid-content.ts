@@ -360,13 +360,14 @@ export class NodeDetailGridContent extends LitElement {
             else if (this._overview.status === "ready" && this._runModeOf(this._overview.payload) !== this._runModeState) {
                 void this._loadOverview();
             }
-            // Today's statistics grow while the dialog is open: re-read them on a
-            // new day, and otherwise at most every few minutes as readings change.
-            if (this._started && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
-                void this._loadMoney();
-            }
             // Only the open evidence's embed is in the page; a closed one waits.
             for (const card of this._inspectors.values()) if (card.isConnected) card.hass = this.hass;
+        }
+        // Today's statistics grow while the dialog is open: re-read them on a new
+        // day, and otherwise at most every few minutes. The boundary timer in
+        // `updated()` brings an idle dialog back here at least that often.
+        if (this._started && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
+            void this._loadMoney();
         }
     }
 
@@ -540,7 +541,9 @@ export class NodeDetailGridContent extends LitElement {
 
     private _renderSummary(overview: GridDetailPayload) {
         const power = this.params.gridPower;
-        const status = Math.abs(power) <= IDLE_W
+        const status = power === null
+            ? this._t("status.unavailable")
+            : Math.abs(power) <= IDLE_W
             ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
             : fillTemplate(this._t(power > 0 ? "status.importing" : "status.exporting"), { power: formatPower(Math.abs(power)).display });
 
@@ -1002,23 +1005,26 @@ export class NodeDetailGridContent extends LitElement {
 
     /**
      * The rate now, the next change and the planned flow are read off the
-     * clock: render again at the next price point or plan slot boundary.
+     * clock: render again at the next price point or plan slot boundary, and
+     * at least every few minutes for the day's rollover and money.
      */
     protected updated(): void {
         clearTimeout(this._boundaryTimer);
+        if (!this.isConnected) return;
         const grid = this._forecast?.grid;
-        if (!grid || !this.isConnected) return;
         const now = Date.now();
-        let next = Infinity;
-        for (const point of [...grid.importPricePoints, ...grid.exportPricePoints]) {
+        // At least every few minutes, so a new day and today's money arrive
+        // even when no reading or forecast boundary moves.
+        let next = now + MONEY_REFRESH_MS;
+        for (const point of [...(grid?.importPricePoints ?? []), ...(grid?.exportPricePoints ?? [])]) {
             const at = Date.parse(point.timestamp);
             if (at > now && at < next) next = at;
         }
-        for (const slot of grid.series) {
+        for (const slot of grid?.series ?? []) {
             const end = Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
             if (end > now && end < next) next = end;
         }
-        if (next !== Infinity) this._boundaryTimer = setTimeout(() => this.requestUpdate(), next - now + 50);
+        this._boundaryTimer = setTimeout(() => this.requestUpdate(), next - now + 50);
     }
 
     private _currentPlanSlot() {

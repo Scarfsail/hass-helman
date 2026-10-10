@@ -341,7 +341,8 @@
       "status": {
         "importing": "Importing {power} from the grid.",
         "exporting": "Exporting {power} to the grid.",
-        "idle": "Hardly any grid flow right now ({power})."
+        "idle": "Hardly any grid flow right now ({power}).",
+        "unavailable": "No grid power reading right now."
       },
       "figure": {
         "net_import": "Net import today",

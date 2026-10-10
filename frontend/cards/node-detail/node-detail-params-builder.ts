@@ -11,7 +11,7 @@ export interface NodeDetailContext {
     batteryConsumerNode: TreeItem | null;
     solarNode: TreeItem | null;
     /** Grid power: positive imports, negative exports, W. */
-    gridPower: number;
+    gridPower: number | null;
     productionNode: TreeItem | null;
     consumptionNode: TreeItem | null;
     housePower: number;
