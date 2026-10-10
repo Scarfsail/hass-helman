@@ -28,7 +28,6 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 
 from .schedule import ScheduleError, ScheduleExecutionUnavailableError
 
@@ -119,6 +118,10 @@ async def async_write_vendor_entity(
     hass: HomeAssistant, entity_id: str, target: str | float
 ) -> None:
     """Set one vendor entity: a number to a value, a select to an option."""
+    # Imported here so this module still loads under the trimmed Home
+    # Assistant stubs of the pipeline tests, as the vendors package does.
+    from homeassistant.exceptions import HomeAssistantError
+
     domain = entity_id.partition(".")[0]
     if domain == "number":
         service, data = "set_value", {"value": target}
