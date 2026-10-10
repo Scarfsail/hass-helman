@@ -1,5 +1,5 @@
 import { asJsonObject, canonicalJson, cloneJson, getValueAtPath, setValueAtPath } from "./config-document";
-import type { JsonObject, JsonValue, PathSegment, VendorsResponse } from "./types";
+import type { JsonObject, JsonValue, PathSegment, VendorDeviceInfo, VendorsResponse } from "./types";
 
 /**
  * The draft as the backend runs it: every hardware profile's owned entities
@@ -36,18 +36,30 @@ export function resolvedDraft<T extends JsonObject | null | undefined>(
     resolved = cloneJson(config);
     for (const [devicePath, info] of Object.entries(vendors.devices)) {
       const device = asJsonObject(getValueAtPath(config, parseValidationPath(devicePath)));
-      if (!device?.profile || canonicalJson(device.profile) !== canonicalJson(info.storedProfile)) continue;
-      const entries: [string, JsonValue | null][] = [
-        ...Object.entries(info.resolved ?? {}),
-        ...Object.entries(info.values ?? {}),
-      ];
-      for (const [path, value] of entries) {
-        if (value !== null) setValueAtPath(resolved, parseValidationPath(path), cloneJson(value));
-      }
+      if (device && answersFor(info, device)) writeProvided(resolved, info);
     }
     byVendors.set(vendors, resolved);
   }
   return resolved as T;
+}
+
+/** Whether `info` was computed for `device` as it now stores its `profile`, binding included. */
+export function answersFor(info: VendorDeviceInfo, device: JsonObject): boolean {
+  return !!device.profile && canonicalJson(device.profile) === canonicalJson(info.storedProfile);
+}
+
+/**
+ * Write each `resolved` entity that is not `null` and each `values` entry of
+ * one device's answer into `config`, but for the absolute paths in `skip`.
+ */
+export function writeProvided(config: JsonObject, info: VendorDeviceInfo, skip: readonly string[] = []): void {
+  const entries: [string, JsonValue | null][] = [
+    ...Object.entries(info.resolved ?? {}),
+    ...Object.entries(info.values ?? {}),
+  ];
+  for (const [path, value] of entries) {
+    if (value !== null && !skip.includes(path)) setValueAtPath(config, parseValidationPath(path), cloneJson(value));
+  }
 }
 
 /** `devices.consumers[1].consumption.energy_entity_id` as path segments. */

@@ -95,6 +95,8 @@ export interface VendorDeviceInfo {
   resolved: Record<string, string | null>;
   /** Absolute path → the value the profile fills in, such as a use mode map. */
   values: Record<string, JsonValue>;
+  /** The `resolved` paths that are Helman's own entities, which exist only under the profile. */
+  helmanEntityPaths: string[];
 }
 
 export interface VendorsResponse {

@@ -485,7 +485,9 @@
       "provided_by": "Poskytuje {profile}",
       "vendor_entity_unresolved": "Ve zvolené položce integrace nenalezeno",
       "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní.",
-      "vendor_no_devices": "Pro {profile} není v tomto Home Assistantu nastavené žádné zařízení, nebo každé už používá jiné zařízení, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní."
+      "vendor_no_devices": "Pro {profile} není v tomto Home Assistantu nastavené žádné zařízení, nebo každé už používá jiné zařízení, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní.",
+      "profile_matches": "{profile} (odpovídá entitám tohoto zařízení)",
+      "profile_meter_change": "Elektroměr se změní z {from} na {to}. Naučená spotřeba a historie jsou vázané na elektroměr."
     },
     "help": {
       "aria_label": "Nápověda k poli",

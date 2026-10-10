@@ -10,6 +10,7 @@ import {
 import { asJsonObject, canonicalJson, setValueAtPath, unsetValueAtPath } from "../config/config-document";
 import { deviceKind, findInverter, INVERTER_PATH, iterDevices, validationPath } from "../config/devices";
 import { renderHelpIcon, stringValue, type FormFieldHost } from "../config/form-fields";
+import { answersFor, writeProvided } from "../config/resolved-draft";
 import type {
     HomeAssistantLike,
     JsonObject,
@@ -17,6 +18,7 @@ import type {
     VendorProfileInfo,
     VendorsResponse,
 } from "../config/types";
+import { sharedHaDevice, suggestionAnchors } from "./device-scope";
 
 /**
  * A device's hardware profile, as the editor shows it: one implementation for
@@ -31,6 +33,7 @@ import type {
 
 /** What the hardware profile UI needs of its host, beyond the form primitives. */
 export interface HardwareProfileHost extends FormFieldHost {
+    hass?: HomeAssistantLike;
     /** Apply one edit to the host's draft. */
     mutateDraft(mutator: (draft: JsonObject) => void): void;
 }
@@ -249,19 +252,35 @@ export function renderProvidedField(
  *
  * Only the profiles of the device's `kind` are offered besides Custom. An
  * entry-bound profile binds to a config entry of its integration, a
- * device-bound one to an HA device, picked in the same place.
+ * device-bound one to an HA device, picked in the same place. On a Custom
+ * device, a profile one of whose free HA devices holds the device's own
+ * entities is offered first, as matching them.
+ *
+ * `storedMeter` is the device's energy meter in the saved config: once the
+ * answer for the draft is in, a profile resolving another one says so, as
+ * learned usage and history are keyed by the meter.
  */
 export function renderHardwareProfile(
     host: HardwareProfileHost,
     vendors: VendorsResponse | null | undefined,
     path: PathSegment[],
     kind: string,
+    storedMeter = "",
 ): TemplateResult {
     const device = asJsonObject(host.getValue(path)) ?? {};
-    const profiles = (vendors?.profiles ?? []).filter((profile) => profile.deviceKind === kind);
+    const ofKind = (vendors?.profiles ?? []).filter((profile) => profile.deviceKind === kind);
+    const matchingIds = new Set(
+        ofKind.filter((option) => matchingCandidate(host, option, path) !== null).map((option) => option.id),
+    );
+    const matching = (option: VendorProfileInfo) => matchingIds.has(option.id);
+    const profiles = ofKind.sort((a, b) => Number(matching(b)) - Number(matching(a)));
     const profileId = stringValue(asJsonObject(device.profile)?.id);
     const profile = deviceProfile(vendors, device, kind);
-    const info = vendors?.devices?.[validationPath(path)];
+    const candidateInfo = vendors?.devices?.[validationPath(path)];
+    // Only the answer for what the device stores now: a stale one would name
+    // another binding's meter, or write it in on switching to Custom.
+    const info = candidateInfo && answersFor(candidateInfo, device) ? candidateInfo : undefined;
+    const meter = info?.resolved[`${validationPath(path)}.consumption.energy_entity_id`];
     return html`
         <p class="inline-note">${host.t("editor.notes.hardware_profile")}</p>
         <div class="field-grid">
@@ -272,6 +291,7 @@ export function renderHardwareProfile(
                 </div>
                 <select
                     data-field="hardware-profile"
+                    ?disabled=${profile !== undefined && info === undefined}
                     @change=${(event: Event) =>
                         setDeviceProfile(host, vendors, path, (event.currentTarget as HTMLSelectElement).value)}
                 >
@@ -281,13 +301,24 @@ export function renderHardwareProfile(
                         : nothing}
                     ${profiles.map(
                         (option) => html`
-                            <option value=${option.id} ?selected=${option.id === profileId}>${option.label}</option>
+                            <option value=${option.id} ?selected=${option.id === profileId}>
+                                ${matching(option)
+                                    ? tFormat(host, "editor.dynamic.profile_matches", { profile: option.label })
+                                    : option.label}
+                            </option>
                         `,
                     )}
                 </select>
             </div>
             ${profile ? renderBinding(host, profile, device, path) : nothing}
         </div>
+        ${profile && storedMeter && meter && meter !== storedMeter
+            ? html`
+                  <p class="inline-note" data-field="profile-meter-change">
+                      ${tFormat(host, "editor.dynamic.profile_meter_change", { from: storedMeter, to: meter })}
+                  </p>
+              `
+            : nothing}
         ${profile && info
             ? html`
                   <div class="vendor-resolved">
@@ -396,11 +427,28 @@ export function freeCandidates(
 }
 
 /**
+ * The free HA device of a device-bound profile that a Custom device's own
+ * meters and switch sit on, or `null`.
+ */
+function matchingCandidate(host: HardwareProfileHost, profile: VendorProfileInfo, path: PathSegment[]): string | null {
+    const device = asJsonObject(host.getValue(path));
+    if (!device || device.profile !== undefined || profile.binding !== "device") return null;
+    const haDevice = sharedHaDevice(host.hass, suggestionAnchors(device));
+    return freeCandidates(host, profile, path).some((candidate) => candidate.deviceId === haDevice) ? haDevice : null;
+}
+
+/**
  * Pick a device's hardware profile, or "Custom" for none.
  *
  * Picking one deletes the paths it owns from the draft: they are its now, and
- * a stored copy would be refused on save. The first config entry, or the
- * first HA device no other device binds, is preselected.
+ * a stored copy would be refused on save. The first config entry is
+ * preselected, or the HA device the device's entities sit on, else the first
+ * one no other device binds.
+ *
+ * Picking Custom writes what the profile provided into the draft, from the
+ * answer in hand, so a working setup stays working. Helman's own entities
+ * are left out: they exist only under the profile, and validation asks for
+ * the slots they leave empty.
  */
 function setDeviceProfile(
     host: HardwareProfileHost,
@@ -411,10 +459,13 @@ function setDeviceProfile(
     const profile = vendors?.profiles?.find((option) => option.id === profileId);
     const [key, first] =
         profile?.binding === "device"
-            ? ["device_id", freeCandidates(host, profile, path)[0]?.deviceId]
+            ? ["device_id", matchingCandidate(host, profile, path) ?? freeCandidates(host, profile, path)[0]?.deviceId]
             : ["entry_id", profile?.entries?.[0]?.entryId];
+    const device = asJsonObject(host.getValue(path));
+    const info = vendors?.devices?.[validationPath(path)];
     host.mutateDraft((draft) => {
         if (!profile) {
+            if (info && device && answersFor(info, device)) writeProvided(draft, info, info.helmanEntityPaths);
             unsetValueAtPath(draft, [...path, "profile"]);
             return;
         }
