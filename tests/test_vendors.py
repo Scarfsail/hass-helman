@@ -237,6 +237,12 @@ def test_every_row_of_the_solax_table_resolves():
     assert issues == []
     for path, (_unique_id, entity_id) in SOLAX_ROWS.items():
         assert value_at(resolved, path) == entity_id, path
+    assert value_at(resolved, "energy_nodes.solar.entities.power_polarity") == (
+        "positive_is_production"
+    )
+    assert value_at(resolved, "energy_nodes.house.entities.power_polarity") == (
+        "positive_is_consumption"
+    )
     assert value_at(resolved, "energy_nodes.battery.entities.power_polarity") == (
         "positive_is_discharging"
     )
@@ -480,11 +486,15 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     device = payload["devices"]["energy_nodes.inverter"]
     assert device["profile"] == "solax_inverter"
     assert device["values"] == {
+        "energy_nodes.solar.entities.power_polarity": "positive_is_production",
+        "energy_nodes.house.entities.power_polarity": "positive_is_consumption",
         "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
         "energy_nodes.grid.entities.power_polarity": "positive_is_import",
     }
     assert device["ownedDevicePaths"] == ["controls.mode"]
     assert set(device["ownedConfigPaths"]) == set(SOLAX_ROWS) | {
+        "energy_nodes.solar.entities.power_polarity",
+        "energy_nodes.house.entities.power_polarity",
         "energy_nodes.battery.entities.power_polarity",
         "energy_nodes.grid.entities.power_polarity",
     }

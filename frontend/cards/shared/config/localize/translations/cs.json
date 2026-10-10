@@ -85,8 +85,7 @@
       "inverter": "Střídač",
       "measurements": "Měření",
       "projection": "Odhad spotřeby",
-      "children": "Podřízená zařízení",
-      "hardware": "Hardwarový profil"
+      "children": "Podřízená zařízení"
     },
     "notes": {
       "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne.",
@@ -487,7 +486,9 @@
       "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní.",
       "vendor_no_devices": "Pro {profile} není v tomto Home Assistantu nastavené žádné zařízení, nebo každé už používá jiné zařízení, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní.",
       "profile_matches": "{profile} (odpovídá entitám tohoto zařízení)",
-      "profile_meter_change": "Elektroměr se změní z {from} na {to}. Naučená spotřeba a historie jsou vázané na elektroměr."
+      "profile_meter_change": "Elektroměr se změní z {from} na {to}. Naučená spotřeba a historie jsou vázané na elektroměr.",
+      "profile_entities": "Mapované entity ({count})",
+      "profile_entities_unmapped": "· nenamapováno: {count}"
     },
     "help": {
       "aria_label": "Nápověda k poli",

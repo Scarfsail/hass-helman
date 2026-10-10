@@ -208,7 +208,8 @@ import {
   freeCandidates,
   type HardwareProfileHost,
   hardwareProfileStyles,
-  renderHardwareProfile,
+  renderHardwareProfileFields,
+  renderProfileEntities,
   renderProvidedField,
   vendorProvision,
 } from "../cards/shared/devices/hardware-profile";
@@ -258,12 +259,12 @@ type OptimizerBucket = OptimizerConfigBucket;
  * the card lays them out. Mirrors `CONTROLLABLE_SPECS["inverter"]` in Python:
  * the backend owns the list, this is the editor's copy of it.
  */
-type InverterSectionKey = "hardware" | "controls" | "action_options";
+type InverterSectionKey = "identity" | "controls" | "action_options";
 
 /** The inverter sub-section that holds the field an issue points at. */
 function inverterSectionOfIssue(path: readonly PathSegment[], issuePath: string): InverterSectionKey {
   const rest = issuePath.slice(validationPath(path).length).replace(/^\./, "");
-  if (rest === "profile" || rest.startsWith("profile.")) return "hardware";
+  if (rest === "profile" || rest.startsWith("profile.")) return "identity";
   if (rest.startsWith("controls.mode.options")) return "action_options";
   return "controls";
 }
@@ -4277,8 +4278,8 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * `energy_nodes.inverter`, laid out straight in its section: the hardware
-   * profile, the controls and the action options. Always shown, like House or
+   * `energy_nodes.inverter`, laid out straight in its section: its Identity
+   * (the hardware profile), the controls and the action options. Always shown, like House or
    * Battery: an inverter with nothing set is simply not configured. First on the tab, because its hardware profile fills the nodes
    * below. No projection section: the inverter has no demand of its own. The
    * section's own YAML mode edits the mapping as a whole.
@@ -4302,8 +4303,11 @@ export class HelmanConfigEditorPanel
       <div class="inverter-section list-stack">
         ${renderDeviceIssues(this._validation, deviceIssues(this._validation, path))}
         ${this._renderInverterSubsection(
-          "hardware",
-          renderHardwareProfile(this, this._vendors.vendors, path, CONTROLLABLE_ID_INVERTER),
+          "identity",
+          html`<div class="field-grid">
+              ${renderHardwareProfileFields(this, this._vendors.vendors, path, CONTROLLABLE_ID_INVERTER)}
+            </div>
+            ${renderProfileEntities(this, this._vendors.vendors, path, CONTROLLABLE_ID_INVERTER)}`,
           profileLabel ? [{ key: "profile", text: profileLabel }] : [],
         )}
         ${this._renderInverterSubsection(
@@ -4549,13 +4553,27 @@ export class HelmanConfigEditorPanel
    * force either way, and a blank select would hide which.
    */
   private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
-    const options = POWER_POLARITY_OPTIONS[device].map((value) => ({
-      value,
-      label: this._optionLabel(`editor.fields.power_polarity_${value}`, POWER_POLARITY_FALLBACK_LABELS[value]),
-    }));
+    const path: PathSegment[] = ["energy_nodes", device, "entities", "power_polarity"];
+    const label = (value: string) =>
+      this._optionLabel(`editor.fields.power_polarity_${value}`, POWER_POLARITY_FALLBACK_LABELS[value]);
+    // A profile that owns the polarity fixes it: shown read-only, as an owned
+    // entity is. One that owns only the entity leaves the user's in force.
+    const provision = vendorProvision(this._vendors.vendors, path);
+    if (provision) {
+      const value = provision.value;
+      return renderProvidedField(
+        this,
+        path,
+        "editor.fields.power_polarity",
+        provision,
+        nothing,
+        typeof value === "string" ? label(value) : null,
+      );
+    }
+    const options = POWER_POLARITY_OPTIONS[device].map((value) => ({ value, label: label(value) }));
     return renderSelectFieldWithDefault(
       this,
-      ["energy_nodes", device, "entities", "power_polarity"],
+      path,
       "editor.fields.power_polarity",
       options,
       POWER_POLARITY_OPTIONS[device][0],
@@ -4672,11 +4690,7 @@ export class HelmanConfigEditorPanel
         helpKey,
         required,
       },
-      // A profile that owns the polarity fixes it; one that owns only the
-      // entity leaves the user's polarity in force, so it stays editable.
-      vendorProvision(this._vendors.vendors, ["energy_nodes", device, "entities", "power_polarity"])
-        ? nothing
-        : this._renderPolarityField(device),
+      this._renderPolarityField(device),
     );
   }
 

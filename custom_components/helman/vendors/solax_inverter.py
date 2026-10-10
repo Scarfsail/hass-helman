@@ -105,6 +105,8 @@ PROFILE = VendorProfile(
         ),
     },
     values={
+        "energy_nodes.solar.entities.power_polarity": "positive_is_production",
+        "energy_nodes.house.entities.power_polarity": "positive_is_consumption",
         "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
         "energy_nodes.grid.entities.power_polarity": "positive_is_import",
     },
