@@ -1,7 +1,7 @@
 import type { TreeItem } from "../helman/tree-item";
 import type { HelmanUiConfig } from "../helman-api";
 
-export type NodeType = "solar" | "battery" | "grid" | "house";
+export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 
 export interface BatteryDetailParams {
     nodeType: "battery";
@@ -52,6 +52,19 @@ export interface HouseDetailParams {
 }
 
 /**
+ * The inverter, opened from the card's centre. Its readings come from
+ * `helman/get_node_detail`; the DC context is the card's own live figures, so
+ * the detail reads them with the polarity the card already applied.
+ */
+export interface InverterDetailParams {
+    nodeType: "inverter";
+    /** Solar production, W. */
+    solarPower: number;
+    /** Battery power on the house convention: positive charges, W. */
+    batteryPower: number;
+}
+
+/**
  * One config device, opened from its name. Not a `NodeType`: that union is also
  * the animated-icon vocabulary, and a device has no animated icon.
  */
@@ -65,4 +78,5 @@ export type NodeDetailParams =
     | SolarDetailParams
     | GridDetailParams
     | HouseDetailParams
+    | InverterDetailParams
     | DeviceDetailParams;

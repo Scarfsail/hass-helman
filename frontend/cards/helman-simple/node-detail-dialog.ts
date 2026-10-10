@@ -8,6 +8,7 @@ import "./node-detail/node-detail-battery-content";
 import "./node-detail/node-detail-solar-content";
 import "./node-detail/node-detail-grid-content";
 import "./node-detail/node-detail-house-content";
+import "./node-detail/node-detail-inverter-content";
 import type { NodeDetailDeviceContent } from "./node-detail/node-detail-device-content";
 import "./node-detail/node-detail-device-content";
 
@@ -139,6 +140,14 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .params=${this.params}
                     ></node-detail-house-content>
+                `;
+            case "inverter":
+                return html`
+                    <node-detail-inverter-content
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .params=${this.params}
+                    ></node-detail-inverter-content>
                 `;
             case "device":
                 return html`

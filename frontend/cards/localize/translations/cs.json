@@ -30,7 +30,8 @@
       "solar": "Solární panely",
       "battery": "Baterie",
       "grid": "Síť",
-      "house": "Dům"
+      "house": "Dům",
+      "inverter": "Střídač"
     },
     "battery": {
       "mode": "Režim",
@@ -81,6 +82,180 @@
         "close": "Zavřít",
         "cancel": "Zrušit",
         "discard": "Zahodit neuložené změny?"
+      }
+    },
+    "inverter": {
+      "cell_label": "Střídač: {mode}",
+      "link_cue": "podrobnosti komunikace: {value}",
+      "loading": "Načítám údaje střídače…",
+      "load_failed": "Údaje střídače se nepodařilo načíst.",
+      "retry": "Zkusit znovu",
+      "unavailable": "nedostupné",
+      "on": "zapnuto",
+      "off": "vypnuto",
+      "evidence": "Jak se to určuje",
+      "technical": "Technické údaje",
+      "status": {
+        "commanded": "Helman naposledy nastavil: {mode}.",
+        "no_command": "Helman zatím žádný režim nenastavil.",
+        "match": "Registry režimu ve střídači tomu odpovídají.",
+        "unknown": "Zda registry režimu ve střídači odpovídají, teď nelze zjistit."
+      },
+      "figure": {
+        "commanded": "Nastaveno",
+        "ac_power": "Výkon AC",
+        "temperature": "Teplota"
+      },
+      "next_change": "Další: {time} {action}",
+      "no_change": "Na dnešek ani zítřek není naplánovaná změna.",
+      "exception": {
+        "mismatch": "Registry režimu ve střídači neodpovídají poslednímu příkazu Helmanu.",
+        "off_grid": "Střídač hlásí provoz mimo síť ({state}).",
+        "fault": "Střídač hlásí poruchu ({state}).",
+        "details": "Zobrazit podrobnosti"
+      },
+      "mode_short": {
+        "empty": "–",
+        "normal": "Normální",
+        "stop_charging": "Nenabíjet",
+        "stop_discharging": "Nevybíjet",
+        "charge_to_target_soc": "Nabíjení",
+        "discharge_to_target_soc": "Vybíjení",
+        "stop_export": "Bez exportu"
+      },
+      "q": {
+        "why": "Proč střídač dělá tohle?",
+        "next": "Co bude dělat dál?",
+        "limits": "Jaké limity platí?",
+        "operating": "Jak střídač pracuje?",
+        "trust": "Lze jeho údajům věřit?"
+      },
+      "why": {
+        "scheduled_now": "Teď naplánováno",
+        "nothing_scheduled": "Nic naplánováno",
+        "until": "do {time}",
+        "candidate": "kandidát: podmínka není splněna, proto se neprovádí",
+        "execution": "Provádění plánu",
+        "execution_on": "Zapnuto: Helman plán provádí",
+        "execution_off": "Vypnuto: plán se zobrazuje, ale neprovádí",
+        "execution_on_short": "provádění zapnuto",
+        "execution_off_short": "provádění vypnuto",
+        "executor": "Vykonavatel v tomto slotu",
+        "no_runtime": "Pro tento slot není záznam vykonavatele",
+        "last_command": "Poslední příkaz",
+        "observed": "Nastavení střídače",
+        "explain": "Plán je záměr Helmanu, poslední příkaz je to, co Helman do střídače zapsal, a nastavení je to, co teď čtou registry režimu ve střídači. Shoda registrů je kontrola nastavení, ne důkaz toho, co střídač fyzicky dělá.",
+        "registers": "Registry režimu posledního příkazu",
+        "register": "Registr",
+        "expected": "Zapsáno",
+        "actual": "Čte",
+        "match_yes": "odpovídá",
+        "match_no": "liší se",
+        "match_unknown": "nečitelné",
+        "use_mode": "Režim použití",
+        "manual_mode": "Ruční režim",
+        "remote_control": "Dálkové řízení",
+        "remote_control_mode": "Režim dálkového řízení",
+        "active_power_target": "Cíl výkonu dálkového řízení",
+        "active_power_real": "Hlášený činný výkon",
+        "evidence_note": "Rozdíl ukazuje, co registry čtou; sám neříká proč (nepovedený zápis, změna přímo ve střídači nebo pozdní čtení registru)."
+      },
+      "agreement": {
+        "match": "Odpovídá poslednímu příkazu",
+        "mismatch": "Neodpovídá poslednímu příkazu",
+        "mismatch_observed": "Neodpovídá poslednímu příkazu; registry odpovídají režimu {mode}",
+        "unavailable": "Neznámé: některé registry režimu nelze přečíst",
+        "not_bound": "Neznámé: profil nenašel všechny registry režimu",
+        "no_command": "Zatím není s čím porovnat",
+        "no_profile": "U vlastního (Custom) střídače nelze zjistit"
+      },
+      "runtime": {
+        "action": {
+          "apply": "Použito",
+          "slot_stop": "Ukončeno na konci slotu",
+          "noop": "Beze změny"
+        },
+        "outcome": {
+          "success": "úspěšně",
+          "failed": "selhalo",
+          "skipped": "přeskočeno"
+        }
+      },
+      "next": {
+        "today": "Dnes",
+        "tomorrow": "Zítra",
+        "candidate": "kandidát, neprovádí se",
+        "explain": "Naplánované akce z plánu; kandidát se provede, až když je splněna jeho podmínka.",
+        "slot": "Aktuální slot",
+        "kind": "Akce",
+        "target": "Cílové nabití",
+        "set_by": "Nastavil",
+        "set_by_user": "uživatel",
+        "set_by_automation": "automatizace",
+        "condition": "Podmínka provedení",
+        "condition_met": "splněna",
+        "condition_not_met": "nesplněna (kandidát)",
+        "runtime_reason": "Důvod běhu",
+        "reason_not_provided": "důvod neuveden",
+        "optimizer_note": "Plán nezaznamenává, proč optimalizátor tuto akci zvolil."
+      },
+      "limits": {
+        "export_short": "export ≤ {value}",
+        "soc_short": "nabití {range}",
+        "none": "U tohoto střídače nelze limity přečíst.",
+        "export_limit": "Limit exportu",
+        "export_cap": "Limit exportu, který Helman obnovuje",
+        "pv_limit": "Limit výkonu FV",
+        "charge_current": "Max. nabíjecí proud baterie",
+        "discharge_current": "Max. vybíjecí proud baterie",
+        "soc_range": "Rozsah nabití baterie",
+        "scope_inverter": "registr střídače, celé odběrné místo",
+        "scope_helman": "konfigurace Helmanu, zapisuje se po každém režimu",
+        "scope_remote": "nastavení dálkového řízení",
+        "scope_config": "konfigurace Helmanu: od minima vybíjení po strop nabíjení",
+        "explain": "Nastavení, jak je teď hlásí střídač a konfigurace Helmanu; jde o limity, ne o změřené toky.",
+        "eps_min": "Rezerva nabití pro EPS",
+        "eps_restart": "Nabití pro restart EPS",
+        "main_breaker": "Nastavení hlavního jističe",
+        "evidence_note": "Jen nastavení střídače; vlastní limity BMS baterie nejsou součástí této odpovědi."
+      },
+      "operating": {
+        "ac_short": "AC {value}",
+        "solar_short": "FV {value}",
+        "ac_total": "Výkon AC (součet fází)",
+        "solar": "FV (strana DC)",
+        "battery": "Baterie (strana DC)",
+        "battery_charging": "nabíjí",
+        "battery_discharging": "vybíjí",
+        "battery_idle": "nečinná",
+        "derived_note": "Střídač své hodnoty AC odvozuje, neměří je samostatně, proto tu ztráty přeměny nejsou vidět.",
+        "temperature_today": "Teplota střídače dnes",
+        "temperature_summary": "Dnes {min} až {max}, průměr {mean}; nejtepleji kolem {max_at}. Zaznamenáno je {coverage} dosavadního dne.",
+        "temperature_none": "Dnes zatím není zaznamenaná žádná teplota.",
+        "loading_history": "Načítám dnešní historii…",
+        "history_failed": "Dnešní historii se nepodařilo načíst.",
+        "extrema_statistics": "Pětiminutové průměry; minimum a maximum jsou pětiminutové statistiky rekordéru.",
+        "extrema_recorded": "Pětiminutové průměry zaznamenaných stavů; minimum a maximum jsou přímo zaznamenané hodnoty.",
+        "phase": "Fáze",
+        "phase_balance": "Vyvažování výkonu fází",
+        "temperature_now": "Teplota teď",
+        "run_mode": "Provozní režim",
+        "no_phases": "U tohoto střídače nejsou údaje po fázích."
+      },
+      "trust": {
+        "rate_short": "spojení {value}",
+        "quarantined_short": "{count} v karanténě",
+        "unavailable": "Údaje o spojení nejsou k dispozici.",
+        "link_rate": "Úspěšná čtení",
+        "quarantined": "Registry v karanténě",
+        "explain": "Jak integrace hlásí své spojení se střídačem. Jde o dostupné údaje, ne o úplnou kontrolu stavu střídače.",
+        "firmware": "Firmware",
+        "hardware_version": "Hardware",
+        "rated_power": "Jmenovitý výkon",
+        "mppt_count": "Počet MPPT",
+        "lock_state": "Zámek",
+        "grid_runtime": "Doba v síti",
+        "eps_runtime": "Doba mimo síť (EPS)"
       }
     }
   },

@@ -246,6 +246,60 @@ def find_mode_vendor(
     return None
 
 
+@dataclass(frozen=True)
+class DeviceTelemetry:
+    """A device's profile, its binding, and its read-only telemetry entities."""
+
+    profile: VendorProfile
+    #: The bound config entry, ``None`` when the binding is missing or unknown.
+    entry: Any
+    #: Each telemetry key of the profile → its entity id, ``None`` when the
+    #: registry has no enabled entity for it.
+    entities: dict[str, str | None]
+
+
+#: The key :func:`resolve_vendor_telemetry` files the inverter under.
+INVERTER_TELEMETRY_KEY = "inverter"
+
+
+def resolve_vendor_telemetry(
+    hass: Any, config: Mapping[str, Any]
+) -> dict[str, DeviceTelemetry]:
+    """Every profiled device's telemetry, keyed by ``inverter`` or consumer id.
+
+    Resolved with the same binding rules as the config the profile fills, but
+    never written into the config: telemetry is display-only. A device without
+    a profile (Custom) is absent, and a consumer without an id is skipped. A
+    disabled or missing entity, or an unbound profile, resolves to ``None``.
+    """
+    telemetry: dict[str, DeviceTelemetry] = {}
+    for vendor_device in _iter_vendor_devices(hass, config, []):
+        key = (
+            INVERTER_TELEMETRY_KEY
+            if vendor_device.path == "energy_nodes.inverter"
+            else peek_controllable_id(vendor_device.device)
+        )
+        if key is None:
+            continue
+        profile = vendor_device.profile
+        entity_ids = resolve_unique_ids(
+            hass,
+            profile,
+            vendor_device.entry,
+            list(profile.telemetry.values()),
+            device_id=vendor_device.device_id,
+        )
+        telemetry[key] = DeviceTelemetry(
+            profile=profile,
+            entry=vendor_device.entry,
+            entities={
+                metric: entity_ids[template]
+                for metric, template in profile.telemetry.items()
+            },
+        )
+    return telemetry
+
+
 def find_charging_devices(
     hass: Any, config: Mapping[str, Any]
 ) -> list[tuple[str, VendorDevice]]:

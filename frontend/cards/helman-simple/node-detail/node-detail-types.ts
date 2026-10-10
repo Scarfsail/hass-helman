@@ -3,6 +3,7 @@ export type {
     DeviceDetailParams,
     GridDetailParams,
     HouseDetailParams,
+    InverterDetailParams,
     NodeDetailParams,
     NodeType,
     SolarDetailParams,

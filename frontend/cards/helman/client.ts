@@ -10,6 +10,7 @@ import type {
     GetAppliancesRequest,
     GetDeviceTreeRequest,
     GetHistoryRequest,
+    GetNodeDetailRequest,
     HistoryPayload,
     GetScheduleRequest,
     SchedulePayload,
@@ -89,6 +90,11 @@ export class HelmanClient {
             type: "helman/get_history",
         };
         return this._hass.callWS<HistoryPayload>(request);
+    }
+
+    public getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">): Promise<T> {
+        const message: GetNodeDetailRequest = { type: "helman/get_node_detail", ...request };
+        return this._hass.callWS<T>(message);
     }
 
     public getApplianceProjections(): Promise<ApplianceProjectionsPayload> {

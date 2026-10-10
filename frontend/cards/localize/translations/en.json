@@ -146,6 +146,183 @@
         "cancel": "Cancel",
         "discard": "Discard unsaved changes?"
       }
+    },
+    "title": {
+      "inverter": "Inverter"
+    },
+    "inverter": {
+      "cell_label": "Inverter: {mode}",
+      "link_cue": "communication details: {value}",
+      "loading": "Loading inverter details…",
+      "load_failed": "Inverter details could not be loaded.",
+      "retry": "Try again",
+      "unavailable": "unavailable",
+      "on": "on",
+      "off": "off",
+      "evidence": "How this is worked out",
+      "technical": "Technical readings",
+      "status": {
+        "commanded": "Helman last commanded: {mode}.",
+        "no_command": "Helman has not commanded a mode yet.",
+        "match": "The inverter's mode registers match it.",
+        "unknown": "Whether the inverter's mode registers match can't be told right now."
+      },
+      "figure": {
+        "commanded": "Commanded",
+        "ac_power": "AC power",
+        "temperature": "Temperature"
+      },
+      "next_change": "Next: {time} {action}",
+      "no_change": "No change planned for today or tomorrow.",
+      "exception": {
+        "mismatch": "The inverter's mode registers don't match Helman's last command.",
+        "off_grid": "The inverter reports off-grid operation ({state}).",
+        "fault": "The inverter reports a fault ({state}).",
+        "details": "Show details"
+      },
+      "mode_short": {
+        "empty": "–",
+        "normal": "Normal",
+        "stop_charging": "No charging",
+        "stop_discharging": "No discharging",
+        "charge_to_target_soc": "Charging",
+        "discharge_to_target_soc": "Discharging",
+        "stop_export": "No export"
+      },
+      "q": {
+        "why": "Why is the inverter doing this?",
+        "next": "What will it do next?",
+        "limits": "What limits are active?",
+        "operating": "How is the inverter operating?",
+        "trust": "Can I trust its readings?"
+      },
+      "why": {
+        "scheduled_now": "Scheduled now",
+        "nothing_scheduled": "Nothing scheduled",
+        "until": "until {time}",
+        "candidate": "candidate: its condition isn't met, so it isn't executed",
+        "execution": "Schedule execution",
+        "execution_on": "On: Helman applies the schedule",
+        "execution_off": "Off: the schedule is shown but not applied",
+        "execution_on_short": "execution on",
+        "execution_off_short": "execution off",
+        "executor": "Executor in this slot",
+        "no_runtime": "No executor record for this slot",
+        "last_command": "Last command",
+        "observed": "Inverter configuration",
+        "explain": "The schedule is Helman's plan, the last command is what Helman wrote to the inverter, and the configuration is what the inverter's mode registers read now. Matching registers are a configuration check, not proof of what the inverter physically does.",
+        "registers": "Mode registers of the last command",
+        "register": "Register",
+        "expected": "Written",
+        "actual": "Reads",
+        "match_yes": "matches",
+        "match_no": "differs",
+        "match_unknown": "unreadable",
+        "use_mode": "Use mode",
+        "manual_mode": "Manual mode",
+        "remote_control": "Remote control",
+        "remote_control_mode": "Remote control mode",
+        "active_power_target": "Remote control power target",
+        "active_power_real": "Reported active power",
+        "evidence_note": "A difference shows what the registers read; it does not by itself tell why (a write that failed, a change made on the inverter, or a register read late)."
+      },
+      "agreement": {
+        "match": "Matches the last command",
+        "mismatch": "Doesn't match the last command",
+        "mismatch_observed": "Doesn't match the last command; the registers hold {mode}",
+        "unavailable": "Unknown: some mode registers can't be read",
+        "not_bound": "Unknown: not every mode register of the profile is found",
+        "no_command": "No command to compare yet",
+        "no_profile": "Not readable for a Custom inverter"
+      },
+      "runtime": {
+        "action": {
+          "apply": "Applied",
+          "slot_stop": "Stopped at slot end",
+          "noop": "No change needed"
+        },
+        "outcome": {
+          "success": "succeeded",
+          "failed": "failed",
+          "skipped": "skipped"
+        }
+      },
+      "next": {
+        "today": "Today",
+        "tomorrow": "Tomorrow",
+        "candidate": "candidate, not executed",
+        "explain": "Planned actions from the schedule; a candidate runs only once its condition is met.",
+        "slot": "Current slot",
+        "kind": "Action",
+        "target": "Target SoC",
+        "set_by": "Set by",
+        "set_by_user": "you",
+        "set_by_automation": "automation",
+        "condition": "Execution condition",
+        "condition_met": "met",
+        "condition_not_met": "not met (candidate)",
+        "runtime_reason": "Runtime reason",
+        "reason_not_provided": "reason not provided",
+        "optimizer_note": "The schedule does not record why an optimizer chose this action."
+      },
+      "limits": {
+        "export_short": "export ≤ {value}",
+        "soc_short": "SoC {range}",
+        "none": "No limits are readable for this inverter.",
+        "export_limit": "Export limit",
+        "export_cap": "Export cap Helman restores",
+        "pv_limit": "PV power limit",
+        "charge_current": "Battery charge current max",
+        "discharge_current": "Battery discharge current max",
+        "soc_range": "Battery SoC range",
+        "scope_inverter": "inverter register, whole site",
+        "scope_helman": "Helman config, written after each mode",
+        "scope_remote": "remote control setting",
+        "scope_config": "Helman config: discharge floor to charge ceiling",
+        "explain": "Settings as the inverter and Helman's config report them now; they are limits, not measured flows.",
+        "eps_min": "EPS reserve SoC",
+        "eps_restart": "EPS restart SoC",
+        "main_breaker": "Main breaker setting",
+        "evidence_note": "Inverter settings only; the battery's own BMS limits are not part of this answer."
+      },
+      "operating": {
+        "ac_short": "AC {value}",
+        "solar_short": "solar {value}",
+        "ac_total": "AC power (sum of phases)",
+        "solar": "Solar (DC side)",
+        "battery": "Battery (DC side)",
+        "battery_charging": "charging",
+        "battery_discharging": "discharging",
+        "battery_idle": "idle",
+        "derived_note": "The inverter derives its AC figures rather than measuring them separately, so conversion loss isn't visible here.",
+        "temperature_today": "Inverter temperature today",
+        "temperature_summary": "Today {min} to {max}, mean {mean}; warmest around {max_at}. {coverage} of the day so far is recorded.",
+        "temperature_none": "No temperature recorded today yet.",
+        "loading_history": "Loading today's history…",
+        "history_failed": "Today's history could not be loaded.",
+        "extrema_statistics": "Five-minute averages; minimum and maximum are the recorder's five-minute statistics.",
+        "extrema_recorded": "Five-minute averages of recorded states; minimum and maximum are the raw recorded values.",
+        "phase": "Phase",
+        "phase_balance": "Phase power balance",
+        "temperature_now": "Temperature now",
+        "run_mode": "Run mode",
+        "no_phases": "No per-phase readings for this inverter."
+      },
+      "trust": {
+        "rate_short": "link {value}",
+        "quarantined_short": "{count} quarantined",
+        "unavailable": "The link readings are unavailable.",
+        "link_rate": "Successful reads",
+        "quarantined": "Quarantined registers",
+        "explain": "How the integration's link to the inverter reports itself. This is the data available, not a full health check of the inverter.",
+        "firmware": "Firmware",
+        "hardware_version": "Hardware",
+        "rated_power": "Rated power",
+        "mppt_count": "MPPT count",
+        "lock_state": "Lock state",
+        "grid_runtime": "Time on grid",
+        "eps_runtime": "Time off-grid (EPS)"
+      }
     }
   },
   "house_section": {
@@ -205,6 +382,19 @@
       "solar_label": "Solar",
       "measured": "measured",
       "expected": "expected"
+    },
+    "action": {
+      "empty": "No action",
+      "normal": "Normal",
+      "charge_to_target_soc": "Charge to",
+      "discharge_to_target_soc": "Discharge to",
+      "stop_charging": "Stop charging",
+      "stop_discharging": "Stop discharging",
+      "stop_export": "Stop export"
+    },
+    "reason": {
+      "scheduled": "As scheduled",
+      "target_soc_reached": "Target SoC reached"
     }
   },
   "device_energy": {

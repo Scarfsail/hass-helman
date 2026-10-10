@@ -827,6 +827,95 @@ export interface GetApplianceProjectionsRequest {
     type: "helman/get_appliance_projections";
 }
 
+// --- Node details (helman/get_node_detail) ----------------------------------
+
+/** The nodes the backend serves a detail for. */
+export type NodeDetailNode = "inverter";
+
+/** Without `section`: the node's overview. With one: only that section's history. */
+export interface GetNodeDetailRequest {
+    type: "helman/get_node_detail";
+    node: NodeDetailNode;
+    device_id?: string;
+    section?: string;
+}
+
+/**
+ * One reading over a local day, in five-minute buckets. A missing bucket is a
+ * gap, never a zero; `coverage` is the known share of the elapsed time. The
+ * extrema are the statistics' own bucket extrema (`bucket_statistics`) or the
+ * raw recorded ones (`recorded`).
+ */
+export interface DayStatsDTO {
+    entityId: string;
+    unit: string | null;
+    source: "statistics" | "history";
+    extrema: "bucket_statistics" | "recorded";
+    bucketMinutes: number;
+    points: Array<{ start: string; mean: number; min: number; max: number; coverage: number }>;
+    mean: number | null;
+    min: number | null;
+    minAt: string | null;
+    max: number | null;
+    maxAt: string | null;
+    coverage: number;
+}
+
+/** One mode register the last command writes, and what it reads now. */
+export interface ModeRegisterDTO {
+    entityId: string;
+    expected: string | number;
+    actual: string | null;
+    /** `null`: the register has no readable state. */
+    matches: boolean | null;
+}
+
+/**
+ * Whether the hardware's mode registers hold the last command. A
+ * configuration check, not proof of the inverter's physical response.
+ */
+export interface ModeAgreementDTO {
+    status: "match" | "mismatch" | "unknown";
+    reason: "no_profile" | "no_command" | "not_bound" | "unavailable" | null;
+    commanded: ScheduleActionKind | null;
+    observedOption: ScheduleActionKind | null;
+    registers: ModeRegisterDTO[];
+}
+
+export interface InverterDetailPayload {
+    node: "inverter";
+    asOf: string;
+    configured: boolean;
+    /** `null` for a Custom inverter: no telemetry keys in `entities` then. */
+    profile: { id: string; label: string } | null;
+    mode: { entityId: string; actionOptions: Partial<Record<ScheduleActionKind, string>> } | null;
+    /** Metric key → entity id; a key the profile has but the registry lacks is `null`. */
+    entities: Record<string, string | null>;
+    maxAllowedExportPower: number | null;
+    agreement: ModeAgreementDTO;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** The action kind the mode control's live option selects, if it maps to one. */
+export function commandedModeKind(
+    mode: InverterDetailPayload["mode"],
+    states: Record<string, { state: string } | undefined>,
+): ScheduleActionKind | null {
+    if (!mode) return null;
+    const live = states[mode.entityId]?.state;
+    const match = Object.entries(mode.actionOptions).find(([, option]) => option === live);
+    return match ? match[0] as ScheduleActionKind : null;
+}
+
+export interface InverterTemperatureSectionPayload {
+    node: "inverter";
+    section: "temperature";
+    asOf: string;
+    period: { start: string; end: string };
+    temperature: DayStatsDTO | null;
+}
+
 // --- Automation optimizer decision-matrix trace -----------------------------
 
 export type TraceDecisionOutcome =
