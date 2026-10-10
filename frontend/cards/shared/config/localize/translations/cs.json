@@ -86,7 +86,8 @@
       "system_devices": "Systémová zařízení",
       "measurements": "Měření",
       "projection": "Odhad spotřeby",
-      "children": "Podřízená zařízení"
+      "children": "Podřízená zařízení",
+      "hardware": "Hardwarový profil"
     },
     "notes": {
       "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne.",
@@ -107,7 +108,8 @@
       "training_solar_bias_slot_invalidation": "Ne každý zaznamenaný slot je poctivým důkazem o prognóze. Při plné baterii a nulovém exportu měnič výrobu přiškrtí, takže výroba vyjde nízko, přestože prognóza byla správná; stejně tak může chyba měřidla jediný slot vyhnat do špičky nebo srazit na nulu. Tyto prahy určují, které sloty se před sestavením modelu vyřadí, aby se korekce učila z počasí, a ne z přiškrcení a vadných dat.",
       "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy.",
       "devices": "Všechna zařízení domu, která spotřebovávají energii, jako strom: zařízení může mít podřízená zařízení, která mají vlastní elektroměr, nebo odebírají z jeho elektroměru. Plánovatelná zařízení Helman plánuje a spouští, ostatní jen měří.",
-      "system_devices": "Zařízení, která řídí celou instalaci, místo aby spotřebovávala energii; dnes bateriový střídač."
+      "system_devices": "Zařízení, která řídí celou instalaci, místo aby spotřebovávala energii; dnes bateriový střídač.",
+      "hardware_profile": "Hardwarový profil doplní entity tohoto zařízení sám, podle vlastních identifikátorů entit integrace výrobce. Pole, která poskytuje, jsou jinde v editoru jen pro čtení. Vlastní ponechá všechny entity vybrané ručně."
     },
     "empty": {
       "no_appliance_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory spotřebičů.",
@@ -296,7 +298,10 @@
       "children_distribute_all": "Rozdělit veškerou energii podřízeným",
       "children_tolerance_percent": "Tolerance podřízených %",
       "add_device_entity": "Elektroměr nového zařízení",
-      "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení"
+      "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení",
+      "hardware_profile": "Hardwarový profil",
+      "vendor_entry": "Položka integrace",
+      "max_allowed_export_power": "Max. povolený výkon exportu"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -430,7 +435,8 @@
       "top_level": "Žádné (nejvyšší úroveň)",
       "kind_generic": "Obecné",
       "kind_climate": "Klimatizace",
-      "kind_ev_charger": "EV nabíječka"
+      "kind_ev_charger": "EV nabíječka",
+      "profile_custom": "Vlastní"
     },
     "toggles": {
       "entities_only": "Pouze entity"
@@ -473,7 +479,10 @@
       "unsupported_optimizer_kind": "Nepodporovaný typ optimalizátoru: {kind}",
       "unsupported_appliance_kind": "Nepodporovaný typ ovládaného prvku: {kind}",
       "inverter": "Střídač",
-      "condition_group": "Skupina {index}"
+      "condition_group": "Skupina {index}",
+      "provided_by": "Poskytuje {profile}",
+      "vendor_entity_unresolved": "Ve zvolené položce integrace nenalezeno",
+      "vendor_no_entries": "Pro {profile} není v tomto Home Assistantu nastavená žádná položka integrace, takže profil zde nemůže nic poskytnout. Přidejte integraci výrobce v Nastavení > Zařízení a služby, nebo ponechte Vlastní."
     },
     "help": {
       "aria_label": "Nápověda k poli",
@@ -573,7 +582,10 @@
       "children_distribute_all": "Podřízená zařízení tohoto zařízení bez vlastního elektroměru dostávají podíl z jeho vlastního výkonu (jeho měření minus měření podřízených s elektroměrem), dokud běží. Helman se z historie elektroměru učí výkon každého z nich a dělí v tomto poměru; dokud se nenaučí, dělí rovným dílem. Když je tato volba zapnutá, veškerý vlastní výkon připadne právě běžícím podřízeným. Vypněte ji, chcete-li každé podřízené omezit jeho naučeným výkonem plus tolerancí: co limity přesáhne, zůstane na řádku neměřené spotřeby tohoto zařízení a nezapočítá se ani do predikcí podřízených.",
       "children_tolerance_percent": "O kolik procent nad svůj naučený výkon smí podíl podřízeného zařízení jít. Při 0 nedostane nikdy víc, než se naučilo odebírat; zbytek jde na řádek neměřené spotřeby. Zařízení, které se ještě nenaučilo, omezeno není.",
       "schedulable": "Helman smí toto zařízení plánovat a spouštět a optimalizátory na něj mohou cílit. Spotřeba plánovatelného zařízení se odečte od základní zátěže domu a vrací se jako plánovaná poptávka. Nechte vypnuté u zařízení, které chcete jen měřit — jeho zátěž pak zůstane v základní zátěži.",
-      "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím."
+      "device_id": "Vygenerováno z entity vybrané při přidání zařízení a nikdy se nemění: plány, cíle optimalizátorů a trénování se na zařízení odkazují právě jím.",
+      "hardware_profile": "Hardware, kterým toto zařízení je. Profil je definovaný v Helmanu, takže ví, která entita integrace výrobce plní které nastavení; přejmenování těchto entit ho nerozbije. Výběr profilu odstraní z této konfigurace entity, které poskytuje. Nastavení místa, jako maximální výkon, ceny nebo účinnosti, zůstávají na vás.",
+      "vendor_entry": "Položka konfigurace integrace výrobce, kterou toto zařízení je, v Nastavení > Zařízení a služby.",
+      "grid_max_allowed_export_power": "Nejvyšší výkon exportu do sítě, který vám dovoluje smlouva s distributorem, ve wattech; 0 pro smlouvu bez exportu. Hodnotu vezměte ze smlouvy: je to vlastnost vašeho odběrného místa, ne hardwaru. Povinné s hardwarovým profilem, který řídí režimy střídače; ten na ni po slotu se zákazem exportu vrací limit exportu střídače. Jinak se nepoužívá."
     },
     "device_filter": {
       "label": "Zobrazit zařízení",

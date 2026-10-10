@@ -20,7 +20,7 @@ from .const import (
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
 from .config_defaults import CONFIG_FIELD_DEFAULTS
-from .config_validation import validate_config_document
+from .config_validation import ValidationReport, validate_config_document
 from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
 from .span_buckets import BUCKETS
 from .entity_inspection import inspect_targets
@@ -35,6 +35,7 @@ from .solar_bias_correction.websocket import (
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .training.websocket import ws_get_training_status, ws_train_now
 from .storage import HelmanStorage
+from .vendors import describe_vendors, resolve_vendor_config
 
 if TYPE_CHECKING:
     from homeassistant.core import Event
@@ -127,6 +128,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_suggest_device_entities)
     async_register_command(hass, ws_preview_energy_import)
     async_register_command(hass, ws_validate_config)
+    async_register_command(hass, ws_get_vendors)
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_config_defaults)
     async_register_command(hass, ws_get_optimizer_schema)
@@ -192,14 +194,19 @@ def ws_inspect_entities(
     if not _require_admin(connection, msg):
         return
 
+    # Read through the hardware profiles, so a slot a profile fills reads the
+    # entity it resolves to rather than "not configured".
+    saved = msg.get("saved_config")
     connection.send_result(
         msg["id"],
         {
             "results": inspect_targets(
                 hass,
-                msg["config"],
+                resolve_vendor_config(hass, msg["config"])[0],
                 msg["targets"],
-                saved_config=msg.get("saved_config"),
+                saved_config=(
+                    None if saved is None else resolve_vendor_config(hass, saved)[0]
+                ),
             )
         },
     )
@@ -404,7 +411,45 @@ def ws_validate_config(
 ) -> None:
     if not _require_admin(connection, msg):
         return
-    connection.send_result(msg["id"], validate_config_document(msg["config"]).to_dict())
+    connection.send_result(
+        msg["id"], _validate_with_vendors(hass, msg["config"]).to_dict()
+    )
+
+
+def _validate_with_vendors(hass: HomeAssistant, config: dict) -> ValidationReport:
+    """Validate ``config`` as it will run: with its hardware profiles applied.
+
+    The profiles fill the entity slots they own, so the completeness checks
+    have to see the filled document; the resolver's own findings join the
+    report beside them.
+    """
+    resolved, issues = resolve_vendor_config(hass, config)
+    report = validate_config_document(resolved)
+    for issue in issues:
+        add = report.add_error if issue.error else report.add_warning
+        add(
+            section=issue.section,
+            path=issue.path,
+            code=issue.code,
+            message=issue.message,
+        )
+    return report
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_vendors",
+    vol.Required("config"): dict,
+})
+@callback
+def ws_get_vendors(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """The hardware profiles, and what each one owns in the editor's draft."""
+    if not _require_admin(connection, msg):
+        return
+    connection.send_result(msg["id"], describe_vendors(hass, msg["config"]))
 
 
 @websocket_api.websocket_command({
@@ -431,7 +476,7 @@ async def ws_save_config(
     # already in the new shape.
     config = {**msg["config"], "config_version": CONFIG_DOCUMENT_VERSION}
 
-    validation = validate_config_document(config)
+    validation = _validate_with_vendors(hass, config)
     if not validation.valid:
         connection.send_result(
             msg["id"],

@@ -2388,5 +2388,107 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+
+class SolaxProfileScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
+    """With the SolaX inverter profile, the executor drives Helman's own select.
+
+    The profile fills ``controls.mode`` at load; the executor reads it like any
+    hand-configured mode entity.
+    """
+
+    async def test_executor_selects_the_action_on_the_helman_mode_select(self) -> None:
+        kinds = [
+            "normal",
+            "stop_charging",
+            "stop_discharging",
+            "charge_to_target_soc",
+            "discharge_to_target_soc",
+            "stop_export",
+        ]
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            },
+            config={
+                "devices": {"system": [
+                    {
+                        "kind": "inverter",
+                        "id": "inverter",
+                        "vendor": {"profile": "solax_inverter", "entry_id": "solax"},
+                    }
+                ]},
+            },
+        )
+        hass = FakeHass(
+            {
+                "select.helman_inverter_mode": FakeState(
+                    "normal", attributes={"options": kinds}
+                )
+            }
+        )
+        hass.config_entries = types.SimpleNamespace(
+            async_get_entry=lambda entry_id: types.SimpleNamespace(
+                entry_id=entry_id,
+                domain="solax_modbus",
+                title="SolaX",
+                data={},
+                options={},
+                disabled_by=None,
+                source="user",
+            )
+        )
+        with (
+            patch(
+                "homeassistant.helpers.entity_registry.async_get",
+                return_value=types.SimpleNamespace(
+                    async_get_entity_id=lambda domain, platform, unique_id: None
+                ),
+            ),
+            patch(
+                "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                return_value=[],
+            ),
+        ):
+            coordinator = HelmanCoordinator(hass, storage)
+
+        control = coordinator._read_schedule_control_config()
+        self.assertEqual(control.mode_entity_id, "select.helman_inverter_mode")
+        self.assertEqual(control.stop_charging_option, "stop_charging")
+        self.assertEqual(control.stop_export_option, "stop_export")
+
+        executor = schedule_executor_module.ScheduleExecutor(
+            hass,
+            coordinator._schedule_executor._dependencies,
+            now=lambda: REFERENCE_TIME,
+        )
+        with patch.object(
+            schedule_executor_module,
+            "async_track_time_interval",
+            return_value=lambda: None,
+        ):
+            await executor.async_start()
+        try:
+            await asyncio.wait_for(
+                executor.async_reconcile_and_wait(reason="test"), timeout=1
+            )
+        finally:
+            await executor.async_unload()
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "select",
+                    "select_option",
+                    {"entity_id": "select.helman_inverter_mode", "option": "stop_charging"},
+                )
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

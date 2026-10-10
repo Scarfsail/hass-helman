@@ -68,3 +68,29 @@ export interface ApplianceMetadataEntry {
 export interface ApplianceMetadataResponse {
   appliances: ApplianceMetadataEntry[];
 }
+
+/** One hardware profile, as `helman/get_vendors` serves it. */
+export interface VendorProfileInfo {
+  id: string;
+  label: string;
+  deviceKind: string;
+  ownedConfigPaths: string[];
+  ownedDevicePaths: string[];
+  /** The vendor integration's config entries a device can be bound to. */
+  entries: { entryId: string; title: string }[];
+}
+
+/** What a draft device's profile owns, and what each owned entity resolves to. */
+export interface VendorDeviceInfo {
+  profile: string;
+  ownedConfigPaths: string[];
+  ownedDevicePaths: string[];
+  /** Absolute path → entity id, a device's owned mode control entity included. */
+  resolved: Record<string, string | null>;
+}
+
+export interface VendorsResponse {
+  profiles: VendorProfileInfo[];
+  /** Keyed by the device's validation path, e.g. `devices.system[0]`. */
+  devices: Record<string, VendorDeviceInfo>;
+}

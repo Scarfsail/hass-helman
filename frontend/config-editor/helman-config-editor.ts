@@ -213,6 +213,7 @@ import type {
   StatusMessage,
   ValidationIssue,
   ValidationReport,
+  VendorsResponse,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
@@ -245,11 +246,12 @@ type OptimizerBucket = OptimizerConfigBucket;
  * the card lays them out. Mirrors `CONTROLLABLE_SPECS["inverter"]` in Python:
  * the backend owns the list, this is the editor's copy of it.
  */
-type InverterSectionKey = "identity" | "controls" | "action_options";
+type InverterSectionKey = "identity" | "hardware" | "controls" | "action_options";
 
 /** The inverter card's section that holds the field an issue points at. */
 function inverterSectionOfIssue(path: readonly PathSegment[], issuePath: string): InverterSectionKey {
   const rest = issuePath.slice(validationPath(path).length).replace(/^\./, "");
+  if (rest === "vendor" || rest.startsWith("vendor.")) return "hardware";
   if (rest.startsWith("controls.mode.options")) return "action_options";
   if (rest === "controls" || rest.startsWith("controls.")) return "controls";
   return "identity";
@@ -353,6 +355,7 @@ export class HelmanConfigEditorPanel
     _inspectorCardError: { state: true },
     _deviceTreeItems: { state: true },
     _deviceDetail: { state: true },
+    _vendors: { state: true },
   };
 
   static styles = [
@@ -916,6 +919,33 @@ export class HelmanConfigEditorPanel
       justify-self: start;
     }
 
+    /* A slot a hardware profile fills: read-only, where its picker would be. */
+    .vendor-provided-entity {
+      font-family: var(--code-font-family, monospace);
+      overflow-wrap: anywhere;
+    }
+
+    .vendor-resolved ul {
+      margin: 6px 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 4px;
+    }
+
+    .vendor-resolved li {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      justify-content: space-between;
+      overflow-wrap: anywhere;
+    }
+
+    .vendor-resolved .unresolved,
+    .vendor-provided-entity.unresolved {
+      color: var(--error-color);
+    }
+
     @media (max-width: 900px) {
       .header {
         flex-direction: column;
@@ -973,6 +1003,16 @@ export class HelmanConfigEditorPanel
   private _saving = false;
   private _validating = false;
   private _validation: ValidationReport | null = null;
+  /**
+   * The hardware profiles, and what each draft device's profile owns.
+   *
+   * `helman/get_vendors` is the only place the editor learns which paths a
+   * profile owns: re-asked whenever a device's `vendor` changes in the draft
+   * (`_vendorsKey`), never derived here.
+   */
+  private _vendors: VendorsResponse | null = null;
+  private _vendorsKey: string | null = null;
+  private _vendorsSequence = 0;
   /**
    * The inverter card's open sections. Like a consumer card's, all start
    * closed; a section that gains a validation issue is opened, and only the
@@ -1198,6 +1238,17 @@ export class HelmanConfigEditorPanel
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
       void this._pollTrainingStatus();
+    }
+    if (this.hass && this._config) {
+      const vendorsKey = canonicalJson(
+        iterDevices(this._config)
+          .filter(({ device }) => device.vendor !== undefined)
+          .map(({ device, path }) => [validationPath(path), device.vendor]),
+      );
+      if (vendorsKey !== this._vendorsKey) {
+        this._vendorsKey = vendorsKey;
+        void this._loadVendors();
+      }
     }
     if (this.hass && !this._unsubscribeDataChanged) {
       this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
@@ -2157,6 +2208,13 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.grid_power_entity",
             )}
+            ${this._renderOptionalNumberField(
+              ["energy_nodes", "grid", "max_allowed_export_power"],
+              "editor.fields.max_allowed_export_power",
+              undefined,
+              "editor.help.grid_max_allowed_export_power",
+              { min: 0, suffix: "W" },
+            )}
           </div>
 
           ${this._renderSectionScope(
@@ -2903,8 +2961,9 @@ export class HelmanConfigEditorPanel
     return rows.map((row) => ({
       key: entityGroupKey(row.path),
       path: row.path,
-      // Helman's own entity exists whatever the draft says.
-      always: row.ownEntity === true,
+      // Helman's own entity exists whatever the draft says, and so does one a
+      // hardware profile fills in: the backend reads the path through it.
+      always: row.ownEntity === true || this._vendorProvision(row.path) !== null,
     }));
   }
 
@@ -4210,6 +4269,10 @@ export class HelmanConfigEditorPanel
     const optionCount = INVERTER_ACTION_OPTIONS.filter(
       (option) => this._stringValue(options[option.key]) !== "",
     ).length;
+    const profileLabel = this._vendorProfile(inverter)?.label ?? "";
+    // A profile that owns the mode control maps every action itself: only the
+    // entity it points at is shown, read-only, in the controls section.
+    const modeProvided = this._vendorProvision([...modePath, "options"]) !== null;
 
     return html`
       <details class="list-card inverter-card ${isYaml ? "scope-yaml" : ""}">
@@ -4246,6 +4309,11 @@ export class HelmanConfigEditorPanel
                 [{ key: "kind", text: this._t("editor.dynamic.inverter") }],
               )}
               ${this._renderInverterSection(
+                "hardware",
+                this._renderHardwareProfile(inverter, path),
+                profileLabel ? [{ key: "profile", text: profileLabel }] : [],
+              )}
+              ${this._renderInverterSection(
                 "controls",
                 html`<div class="field-grid">
                   ${this._renderEntityGroup(
@@ -4263,31 +4331,245 @@ export class HelmanConfigEditorPanel
                   ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
                   : [],
               )}
-              ${this._renderInverterSection(
-                "action_options",
-                html`<div class="field-grid">
-                  ${INVERTER_ACTION_OPTIONS.map((option) =>
-                    this._renderOptionalTextField(
-                      [...modePath, "options", option.key],
-                      option.labelKey,
-                      undefined,
-                      "editor.help.inverter_action_option",
-                    ),
+              ${modeProvided
+                ? nothing
+                : this._renderInverterSection(
+                    "action_options",
+                    html`<div class="field-grid">
+                      ${INVERTER_ACTION_OPTIONS.map((option) =>
+                        this._renderOptionalTextField(
+                          [...modePath, "options", option.key],
+                          option.labelKey,
+                          undefined,
+                          "editor.help.inverter_action_option",
+                        ),
+                      )}
+                    </div>`,
+                    optionCount > 0
+                      ? [
+                          {
+                            key: "count",
+                            text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                          },
+                        ]
+                      : [],
                   )}
-                </div>`,
-                optionCount > 0
-                  ? [
-                      {
-                        key: "count",
-                        text: this._tFormat("editor.section_badges.count", { count: optionCount }),
-                      },
-                    ]
-                  : [],
-              )}
             `}
         </div>
       </details>
     `;
+  }
+
+  /** The known profile a device's `vendor` names, if any. */
+  private _vendorProfile(device: JsonObject) {
+    const profileId = this._stringValue(asJsonObject(device.vendor)?.profile);
+    return profileId
+      ? (this._vendors?.profiles ?? []).find((profile) => profile.id === profileId)
+      : undefined;
+  }
+
+  /**
+   * A device's hardware profile: the picker, the vendor's config entry, and
+   * every entity the profile fills in, read-only.
+   *
+   * "Custom" is the absence of `vendor`, so a device without one keeps every
+   * hand-mapped slot exactly as before.
+   */
+  private _renderHardwareProfile(device: JsonObject, path: PathSegment[]): TemplateResult {
+    const kind = deviceKind(device);
+    const profiles = (this._vendors?.profiles ?? []).filter(
+      (profile) => profile.deviceKind === kind,
+    );
+    const vendor = asJsonObject(device.vendor);
+    const profileId = this._stringValue(vendor?.profile);
+    const entryId = this._stringValue(vendor?.entry_id);
+    const profile = this._vendorProfile(device);
+    const info = this._vendors?.devices?.[validationPath(path)];
+    return html`
+      <p class="inline-note">${this._t("editor.notes.hardware_profile")}</p>
+      <div class="field-grid">
+        <div class="field">
+          <div class="field-label-row">
+            <label>${this._t("editor.fields.hardware_profile")}</label>
+            ${this._renderHelpIcon("editor.fields.hardware_profile", "editor.help.hardware_profile")}
+          </div>
+          <select
+            data-field="hardware-profile"
+            @change=${(event: Event) =>
+              this._setDeviceProfile(path, (event.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="" ?selected=${profileId === ""}>
+              ${this._t("editor.values.profile_custom")}
+            </option>
+            ${profiles.map(
+              (option) => html`
+                <option value=${option.id} ?selected=${option.id === profileId}>${option.label}</option>
+              `,
+            )}
+          </select>
+        </div>
+        ${profile
+          ? html`
+              <div class="field">
+                <div class="field-label-row">
+                  <label>${this._t("editor.fields.vendor_entry")}</label>
+                  ${this._renderHelpIcon("editor.fields.vendor_entry", "editor.help.vendor_entry")}
+                </div>
+                ${profile.entries.length === 0
+                  ? html`
+                      <div class="vendor-provided-entity unresolved" data-field="vendor-no-entries">
+                        ${this._tFormat("editor.dynamic.vendor_no_entries", { profile: profile.label })}
+                      </div>
+                    `
+                  : nothing}
+                <select
+                  ?hidden=${profile.entries.length === 0}
+                  data-field="vendor-entry"
+                  @change=${(event: Event) =>
+                    this._setDeviceVendorEntry(path, (event.currentTarget as HTMLSelectElement).value)}
+                >
+                  <option value="" ?selected=${entryId === ""}></option>
+                  ${profile.entries.map(
+                    (entry) => html`
+                      <option value=${entry.entryId} ?selected=${entry.entryId === entryId}>
+                        ${entry.title}
+                      </option>
+                    `,
+                  )}
+                </select>
+              </div>
+            `
+          : nothing}
+      </div>
+      ${profile && info
+        ? html`
+            <div class="vendor-resolved">
+              <div class="inline-note">
+                ${this._tFormat("editor.dynamic.provided_by", { profile: profile.label })}
+              </div>
+              <ul>
+                ${Object.entries(info.resolved).map(
+                  ([configPath, entityId]) => html`
+                    <li class=${entityId ? "" : "unresolved"} data-path=${configPath}>
+                      <code>${configPath}</code>
+                      <span>
+                        ${entityId ??
+                        this._t("editor.dynamic.vendor_entity_unresolved")}
+                      </span>
+                    </li>
+                  `,
+                )}
+              </ul>
+            </div>
+          `
+        : nothing}
+    `;
+  }
+
+  /**
+   * Which profile provides a config path, and the entity it resolves to.
+   *
+   * A path under one of a device's owned paths counts too, such as the
+   * inverter's `controls.mode.entity_id`. `null` when no draft device's profile owns the path, which is every path
+   * under "Custom".
+   */
+  private _vendorProvision(
+    path: PathSegment[],
+  ): { label: string; entityId: string | null } | null {
+    const dotted = validationPath(path);
+    for (const [devicePath, device] of Object.entries(this._vendors?.devices ?? {})) {
+      const owned =
+        device.ownedConfigPaths?.includes(dotted) ||
+        device.ownedDevicePaths?.some((relative) => {
+          const ownedPath = `${devicePath}.${relative}`;
+          return dotted === ownedPath || dotted.startsWith(`${ownedPath}.`);
+        });
+      if (!owned) continue;
+      const profile = this._vendors?.profiles?.find((option) => option.id === device.profile);
+      return {
+        label: profile?.label ?? device.profile,
+        entityId: device.resolved?.[dotted] ?? null,
+      };
+    }
+    return null;
+  }
+
+  /** An owned entity slot, where its picker would be: read-only, flagged if unresolved. */
+  private _renderVendorProvidedField(
+    path: PathSegment[],
+    labelKey: string,
+    provision: { label: string; entityId: string | null },
+    slotted: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
+    return html`
+      <div class="field vendor-provided" data-path=${validationPath(path)}>
+        <label>${this._t(labelKey)}</label>
+        <div class="inline-note">
+          ${this._tFormat("editor.dynamic.provided_by", { profile: provision.label })}
+        </div>
+        <div class=${provision.entityId ? "vendor-provided-entity" : "vendor-provided-entity unresolved"}>
+          ${provision.entityId ??
+          this._t("editor.dynamic.vendor_entity_unresolved")}
+        </div>
+        ${slotted}
+      </div>
+    `;
+  }
+
+  /**
+   * Pick a device's hardware profile, or "Custom" for none.
+   *
+   * Picking one deletes the paths it owns from the draft: they are its now,
+   * and a stored copy would be refused on save. The first config entry is
+   * preselected, which on a single-inverter install is the only one.
+   */
+  private _setDeviceProfile(path: PathSegment[], profileId: string): void {
+    const profile = (this._vendors?.profiles ?? []).find((option) => option.id === profileId);
+    // Until the refetch answers, nothing is owned: a stale answer would keep
+    // hiding the fields of a device just switched back to Custom.
+    if (this._vendors) this._vendors = { ...this._vendors, devices: {} };
+    this._applyMutation((draft) => {
+      if (!profile) {
+        unsetValueAtPath(draft, [...path, "vendor"]);
+        return;
+      }
+      for (const owned of profile.ownedConfigPaths) {
+        unsetValueAtPath(draft, owned.split("."));
+      }
+      for (const owned of profile.ownedDevicePaths) {
+        unsetValueAtPath(draft, [...path, ...owned.split(".")]);
+      }
+      const entry = profile.entries[0];
+      setValueAtPath(draft, [...path, "vendor"], {
+        profile: profile.id,
+        ...(entry ? { entry_id: entry.entryId } : {}),
+      });
+    });
+  }
+
+  private _setDeviceVendorEntry(path: PathSegment[], entryId: string): void {
+    this._applyMutation((draft) => {
+      if (entryId) {
+        setValueAtPath(draft, [...path, "vendor", "entry_id"], entryId);
+      } else {
+        unsetValueAtPath(draft, [...path, "vendor", "entry_id"]);
+      }
+    });
+  }
+
+  private async _loadVendors(): Promise<void> {
+    if (!this.hass) return;
+    const sequence = ++this._vendorsSequence;
+    try {
+      const vendors = await this.hass.callWS<VendorsResponse>({
+        type: "helman/get_vendors",
+        config: this._config ?? {},
+      });
+      if (sequence === this._vendorsSequence) this._vendors = vendors;
+    } catch {
+      // Without an answer nothing is owned, which is the Custom editor.
+      if (sequence === this._vendorsSequence) this._vendors = null;
+    }
   }
 
   private _renderUnsupportedDevice(device: JsonObject, path: PathSegment[]): TemplateResult {
@@ -4561,6 +4843,8 @@ export class HelmanConfigEditorPanel
     options: EntityGroupOptions = {},
     slotted: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
+    const provision = this._vendorProvision(path);
+    if (provision) return this._renderVendorProvidedField(path, labelKey, provision, slotted);
     return renderEntityGroup(this, this._inspections.results, path, labelKey, options, slotted);
   }
 
@@ -4586,7 +4870,11 @@ export class HelmanConfigEditorPanel
         helpKey,
         required,
       },
-      this._renderPolarityField(device),
+      // A profile that owns the polarity fixes it; one that owns only the
+      // entity leaves the user's polarity in force, so it stays editable.
+      this._vendorProvision(["energy_nodes", device, "entities", "power_polarity"])
+        ? nothing
+        : this._renderPolarityField(device),
     );
   }
 

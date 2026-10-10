@@ -204,6 +204,17 @@ def _install_import_stubs() -> None:
     storage_mod.Store = DummyStore
     helpers_pkg.storage = storage_mod
 
+    # A hardware profile with a mode table looks Helman's own mode select up
+    # by unique id; an empty registry leaves it at its suggested entity id.
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
+        async_get_entity_id=lambda domain, platform, unique_id: None
+    )
+    helpers_pkg.entity_registry = entity_registry_mod
+
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:
         util_pkg = types.ModuleType("homeassistant.util")
@@ -230,6 +241,7 @@ from custom_components.helman.solar_bias_correction.models import read_bias_conf
 from custom_components.helman.websockets import (
     ws_get_config,
     ws_get_config_defaults,
+    ws_get_vendors,
     ws_save_config,
     ws_validate_config,
 )
@@ -314,8 +326,11 @@ class FakeConfigEntries:
         self.reload_result = reload_result
         self.reload_error = reload_error
 
-    def async_entries(self, domain: str):
+    def async_entries(self, domain: str, **_kwargs):
         return list(self.entries)
+
+    def async_get_entry(self, entry_id: str):
+        return None
 
     async def async_reload(self, entry_id: str) -> bool:
         self.reload_calls.append(entry_id)
@@ -537,6 +552,77 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "automation.system_optimizers[0].kind",
         )
         self.assertIn("does_not_exist", connection.results[0][1]["errors"][0]["message"])
+
+    def test_validate_config_reports_a_key_the_hardware_profile_owns(self) -> None:
+        connection = FakeConnection(is_admin=True)
+        config = {
+            "devices": {"system": [
+                {
+                    "kind": "inverter",
+                    "id": "inverter",
+                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
+                }
+            ]},
+            "energy_nodes": {
+                "house": {"entities": {"power": "sensor.house"}},
+                "grid": {"max_allowed_export_power": 9900},
+            },
+        }
+
+        ws_validate_config(
+            FakeHass(FakeStorage()),
+            connection,
+            {"id": 1, "type": "helman/validate_config", "config": config},
+        )
+
+        report = connection.results[0][1]
+        self.assertFalse(report["valid"])
+        self.assertEqual(
+            sorted((issue["code"], issue["path"]) for issue in report["errors"]),
+            [
+                ("invalid_choice", "devices.system[0].vendor.entry_id"),
+                ("vendor_owned_key", "energy_nodes.house.entities.power"),
+            ],
+        )
+
+    async def test_save_config_refuses_a_key_the_hardware_profile_owns(self) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        config = {
+            "devices": {"system": [
+                {
+                    "kind": "inverter",
+                    "id": "inverter",
+                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
+                }
+            ]},
+            "training": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},
+        }
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertIn(
+            "vendor_owned_key",
+            [issue["code"] for issue in connection.results[0][1]["validation"]["errors"]],
+        )
+
+    def test_get_vendors_requires_admin(self) -> None:
+        connection = FakeConnection(is_admin=False)
+
+        ws_get_vendors(
+            FakeHass(FakeStorage()),
+            connection,
+            {"id": 1, "type": "helman/get_vendors", "config": {}},
+        )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(connection.errors[0][1], "unauthorized")
 
     async def test_save_config_does_not_persist_invalid_document(self) -> None:
         storage = FakeStorage()
