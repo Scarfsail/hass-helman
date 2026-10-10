@@ -996,7 +996,7 @@ test("the inverter is edited first on the Energy nodes tab", async ({ page }) =>
     const card = panel.locator(".inverter-section");
     await expect(card.locator("details.list-card, .card-title")).toHaveCount(0);
     await expect(card.locator(":scope > details.section-card > summary .section-summary-label")).toHaveText([
-        "Hardware profile",
+        "Identity",
         "Controls",
         "Action options",
     ]);
@@ -1098,7 +1098,6 @@ test("the EV charger gets a meter and its lists but no projection", async ({ pag
     );
     expect(sections).toEqual([
         "Identity",
-        "Hardware profile",
         "Measurements",
         "Controls",
         "Use modes",

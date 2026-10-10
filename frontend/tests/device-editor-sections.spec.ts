@@ -197,35 +197,30 @@ test("every section of a device starts collapsed, with chips summarizing it", as
 
     expect(await sections(panel(page), "heater")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy", "Power"] },
         { label: "Controls", open: false, chips: ["Switch"] },
         { label: "Children", open: false, chips: [] },
     ]);
     expect(await sections(panel(page), "boiler")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy"] },
         { label: "Controls", open: false, chips: ["Switch", "Schedulable"] },
         { label: "Projection", open: false, chips: ["History average", "2.0 kW while switched on"] },
     ]);
     expect(await sections(panel(page), "breaker")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy", "Power"] },
         { label: "Controls", open: false, chips: [] },
         { label: "Children", open: false, chips: ["2"] },
     ]);
     expect(await sections(panel(page), "klima_obyvak")).toEqual([
         { label: "Identity", open: false, chips: ["Climate"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Parent meter"] },
         { label: "Controls", open: false, chips: ["Switch", "Schedulable"] },
         { label: "Projection", open: false, chips: ["Fixed", "500 W while switched on"] },
     ]);
     expect(await sections(panel(page), "wallbox")).toEqual([
         { label: "Identity", open: false, chips: ["EV charger"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy"] },
         { label: "Controls", open: false, chips: ["Switch", "Schedulable"] },
         { label: "Use modes", open: false, chips: ["2"] },
@@ -391,7 +386,6 @@ test("the device edit dialog shows every section collapsed, and no Children", as
     await expect(dialog.locator("details.device-card")).toHaveAttribute("open", "");
     await expect.poll(() => sections(dialog, "breaker")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
-        { label: "Hardware profile", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy", "Power"] },
         { label: "Controls", open: false, chips: [] },
     ]);
@@ -421,7 +415,7 @@ const inverterSections = (page: Page) =>
 test("the inverter's sections start collapsed, with chips summarizing them", async ({ page }) => {
     await mountInverter(page, INVERTER);
     expect(await inverterSections(page)).toEqual([
-        { label: "Hardware profile", open: false, chips: [] },
+        { label: "Identity", open: false, chips: [] },
         { label: "Controls", open: false, chips: ["Mode"] },
         { label: "Action options", open: false, chips: ["2"] },
     ]);
@@ -458,4 +452,18 @@ test("an inverter issue opens its section, and a closed one reopens only for a n
     const option = { ...mode, path: "energy_nodes.inverter.controls.mode.options.normal", code: "x" };
     await validate(page, { valid: false, errors: [mode, option], warnings: [] });
     await expect.poll(open).toEqual(["Action options"]);
+    // A profile issue opens Identity, where the picker is.
+    const profile = { ...mode, path: "energy_nodes.inverter.profile", code: "y" };
+    await validate(page, { valid: false, errors: [mode, option, profile], warnings: [] });
+    await expect.poll(open).toEqual(["Identity", "Action options"]);
+});
+
+test("a profile issue opens a device's Identity, where the picker is", async ({ page }) => {
+    await mountEditor(page, [HEATER]);
+    await validate(page, {
+        valid: false,
+        errors: [issue("devices.consumers[0].profile", "heater profile is odd")],
+        warnings: [],
+    });
+    await expect.poll(() => openSections(panel(page), "heater")).toEqual(["Identity"]);
 });

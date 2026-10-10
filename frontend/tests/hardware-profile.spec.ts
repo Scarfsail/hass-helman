@@ -34,8 +34,17 @@ const OWNED = [
     "energy_nodes.battery.entities.power",
     "energy_nodes.battery.entities.min_soc",
     "energy_nodes.battery.entities.max_soc",
+    "energy_nodes.solar.entities.power_polarity",
+    "energy_nodes.house.entities.power_polarity",
     "energy_nodes.battery.entities.power_polarity",
 ];
+
+/** The values the profile sets: each power node's polarity, shown read-only where its select was. */
+const VALUES: Record<string, string> = {
+    "energy_nodes.solar.entities.power_polarity": "positive_is_production",
+    "energy_nodes.house.entities.power_polarity": "positive_is_consumption",
+    "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
+};
 
 const RESOLVED: Record<string, string | null> = {
     "energy_nodes.house.entities.power": "sensor.solax_home_power",
@@ -193,7 +202,7 @@ async function mountEditor(
     page: Page,
     config: unknown,
     profile = PROFILE,
-    { entities = {}, inverterResolved = RESOLVED, inverterValues = {} }: StubOptions = {},
+    { entities = {}, inverterResolved = RESOLVED, inverterValues = VALUES }: StubOptions = {},
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -347,8 +356,9 @@ test("under the SolaX profile the owned pickers are replaced by what they resolv
             await expandEverything(page);
             return Object.keys((await energyFields(page)).provided).sort();
         })
-        // The inverter's own mode control, at the top of the tab, included.
-        .toEqual([...Object.keys(RESOLVED), MODE_PATH].sort());
+        // The inverter's own mode control, at the top of the tab, included,
+        // and each polarity the profile sets.
+        .toEqual([...Object.keys(RESOLVED), ...Object.keys(VALUES), MODE_PATH].sort());
 
     const { groups, provided } = await energyFields(page);
     for (const path of OWNED) {
@@ -366,7 +376,7 @@ test("under the SolaX profile the owned pickers are replaced by what they resolv
     });
 });
 
-test("the inverter's hardware section lists every resolved entity", async ({ page }) => {
+test("the inverter's identity lists every resolved entity", async ({ page }) => {
     await mountEditor(page, SOLAX_CONFIG);
     await openTab(page, "Energy nodes");
 
@@ -515,7 +525,7 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
             await expandEverything(page);
             return Object.keys((await energyFields(page)).provided).length;
         })
-        .toBe(Object.keys(RESOLVED).length + 1);
+        .toBe(Object.keys(RESOLVED).length + Object.keys(VALUES).length + 1);
 
     // And back to Custom: the profile goes, the pickers come back (empty).
     await openTab(page, "Energy nodes");
@@ -781,7 +791,7 @@ const ON_DRIVE_CHARGER = {
     "switch.garage_ev_charging": { device_id: "drive-charger" },
 };
 
-/** The meter-change note in the garage card's hardware section, or `null`. */
+/** The meter-change note in the garage card's Identity section, or `null`. */
 function meterChangeNote(page: Page): Promise<string | null> {
     return page.evaluate(
         () =>
@@ -937,6 +947,8 @@ const INVERTER_ENTITIES: Record<string, string> = {
 };
 
 const INVERTER_VALUES = {
+    "energy_nodes.solar.entities.power_polarity": "positive_is_production",
+    "energy_nodes.house.entities.power_polarity": "positive_is_consumption",
     "energy_nodes.battery.entities.power_polarity": "positive_is_discharging",
     "energy_nodes.grid.entities.power_polarity": "positive_is_import",
 };
@@ -1024,4 +1036,129 @@ test("a profile of another kind than the device's owns nothing on it", async ({ 
             return { provided: Object.keys(card.provided).length, kind: card.kind?.value };
         })
         .toEqual({ provided: 0, kind: "generic" });
+});
+
+/**
+ * A card's or the inverter's top-level sections: each label, its chips, and
+ * the first field of its first field grid.
+ */
+function topSections(page: Page, selector: string): Promise<{ label: string; chips: string[]; firstField: string | null }[]> {
+    return page.evaluate((selector) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll<HTMLDetailsElement>(selector) ?? []).map((details) => ({
+            label: details.querySelector(":scope > summary .section-summary-label")?.textContent?.trim() ?? "",
+            chips: Array.from(details.querySelectorAll(":scope > summary .device-badge")).map(
+                (chip) => chip.textContent?.trim() ?? "",
+            ),
+            firstField:
+                details.querySelector(".field-grid > .field select, .field-grid > .field input")?.getAttribute("data-field") ??
+                null,
+        }));
+    }, selector);
+}
+
+test("the profile picker is the first field of a device card's Identity, with no Hardware section", async ({ page }) => {
+    await mountEditor(page, GARAGE_ON_PROFILE);
+    await openTab(page, "Devices");
+    await expandEverything(page);
+
+    await expect
+        .poll(async () =>
+            (await topSections(page, 'details.device-card[data-device-id="garage-ev"] > .appliance-body > details.section-card'))[0] ?? null,
+        )
+        .toEqual({ label: "Identity", chips: ["EV charger", "SolaX EV charger"], firstField: "hardware-profile" });
+    const labels = (
+        await topSections(page, 'details.device-card[data-device-id="garage-ev"] > .appliance-body > details.section-card')
+    ).map((section) => section.label);
+    expect(labels).not.toContain("Hardware profile");
+});
+
+test("the profile picker is the first field of the inverter's Identity, its first section", async ({ page }) => {
+    await mountEditor(page, SOLAX_CONFIG);
+    await openTab(page, "Energy nodes");
+    await expandEverything(page);
+
+    await expect
+        .poll(async () => (await topSections(page, ".inverter-section > details.section-card"))[0] ?? null)
+        .toEqual({ label: "Identity", chips: ["SolaX inverter"], firstField: "hardware-profile" });
+    const labels = (await topSections(page, ".inverter-section > details.section-card")).map((section) => section.label);
+    expect(labels).not.toContain("Hardware profile");
+});
+
+/** Open every section but the mapped-entity boxes, and read those boxes. */
+function mappedEntityBoxes(page: Page): Promise<{ open: boolean; summary: string; unmapped: boolean }[]> {
+    return page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        for (const section of root?.querySelectorAll("details:not(.vendor-resolved)") ?? []) {
+            section.setAttribute("open", "");
+        }
+        return Array.from(root?.querySelectorAll<HTMLDetailsElement>("details.vendor-resolved") ?? []).map((box) => ({
+            open: box.open,
+            summary: box.querySelector(":scope > summary")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            unmapped: box.querySelector(":scope > summary .unresolved") !== null,
+        }));
+    });
+}
+
+test("the mapped entities sit in a closed box counting them and the unmapped ones", async ({ page }) => {
+    await mountEditor(page, SOLAX_CONFIG);
+    await openTab(page, "Energy nodes");
+
+    // Six entities and the mode select, the max SoC among them unmapped.
+    await expect
+        .poll(() => mappedEntityBoxes(page))
+        .toEqual([{ open: false, summary: "Mapped entities (7) · 1 unmapped", unmapped: true }]);
+});
+
+test("a box whose entities are all mapped says only how many", async ({ page }) => {
+    await mountEditor(page, GARAGE_ON_PROFILE);
+    await openTab(page, "Devices");
+
+    await expect
+        .poll(() => mappedEntityBoxes(page))
+        .toEqual([{ open: false, summary: "Mapped entities (5)", unmapped: false }]);
+});
+
+/** Whether any select on the tab offers the solar polarity's options. */
+function hasSolarPolaritySelect(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll("select") ?? []).some((select) =>
+            Array.from(select.options).some((option) => option.value === "negative_is_production"),
+        );
+    });
+}
+
+test("a profiled Solar node shows the profile's polarity read-only, not a select", async ({ page }) => {
+    await mountEditor(page, SOLAX_CONFIG);
+    await openTab(page, "Energy nodes");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return (await energyFields(page)).provided["energy_nodes.solar.entities.power_polarity"] ?? null;
+        })
+        .toEqual({ text: "Positive = production", unresolved: false });
+    const label = await page.evaluate(() =>
+        document
+            .querySelector("helman-config-editor-panel")
+            ?.shadowRoot?.querySelector('.vendor-provided[data-path="energy_nodes.solar.entities.power_polarity"]')
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim(),
+    );
+    expect(label).toContain("Provided by SolaX inverter");
+    expect(await hasSolarPolaritySelect(page)).toBe(false);
+});
+
+test("a Custom Solar node keeps its polarity select", async ({ page }) => {
+    await mountEditor(page, CUSTOM_CONFIG);
+    await openTab(page, "Energy nodes");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            return hasSolarPolaritySelect(page);
+        })
+        .toBe(true);
+    expect((await energyFields(page)).provided).toEqual({});
 });

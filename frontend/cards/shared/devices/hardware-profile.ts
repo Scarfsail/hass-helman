@@ -14,7 +14,9 @@ import { answersFor, writeProvided } from "../config/resolved-draft";
 import type {
     HomeAssistantLike,
     JsonObject,
+    JsonValue,
     PathSegment,
+    VendorDeviceInfo,
     VendorProfileInfo,
     VendorsResponse,
 } from "../config/types";
@@ -38,10 +40,11 @@ export interface HardwareProfileHost extends FormFieldHost {
     mutateDraft(mutator: (draft: JsonObject) => void): void;
 }
 
-/** Which profile provides a path, and the entity it resolves to. */
+/** Which profile provides a path, and the entity it resolves to or the value it sets. */
 export interface VendorProvision {
     label: string;
     entityId: string | null;
+    value: JsonValue | null;
 }
 
 /** The profile UI's own rules; a host adopts these next to `configFormStyles`. */
@@ -50,6 +53,10 @@ export const hardwareProfileStyles = css`
     .vendor-provided-entity {
         font-family: var(--code-font-family, monospace);
         overflow-wrap: anywhere;
+    }
+
+    .vendor-resolved > summary {
+        cursor: pointer;
     }
 
     .vendor-resolved ul {
@@ -176,7 +183,8 @@ export function deviceProfile(
 }
 
 /**
- * Which profile provides a path, and the entity it resolves to.
+ * Which profile provides a path, and the entity it resolves to or the value
+ * it sets.
  *
  * A path under one of a device's owned paths counts too, such as the
  * inverter's `controls.mode.entity_id`. `null` when no draft device's profile
@@ -199,6 +207,7 @@ export function vendorProvision(
         return {
             label: profile?.label ?? device.profile,
             entityId: device.resolved?.[dotted] ?? null,
+            value: device.values?.[dotted] ?? null,
         };
     }
     return null;
@@ -223,23 +232,27 @@ export function deviceProvision(
         const ownedPath = `${validationPath(devicePath)}.${relative}`;
         return dotted === ownedPath || dotted.startsWith(`${ownedPath}.`);
     });
-    return profile && owned ? { label: profile.label, entityId: null } : null;
+    return profile && owned ? { label: profile.label, entityId: null, value: null } : null;
 }
 
-/** An owned entity slot, where its picker would be: read-only, flagged if unresolved. */
+/**
+ * An owned slot, where its picker or select would be: read-only, flagged if
+ * unresolved. `text` is what the profile fills in, the entity id by default.
+ */
 export function renderProvidedField(
     host: FormFieldHost,
     path: PathSegment[],
     labelKey: string,
     provision: VendorProvision,
     slotted: TemplateResult | typeof nothing = nothing,
+    text: string | null = provision.entityId,
 ): TemplateResult {
     return html`
         <div class="field vendor-provided" data-path=${validationPath(path)}>
             <label>${host.t(labelKey)}</label>
             <div class="inline-note">${tFormat(host, "editor.dynamic.provided_by", { profile: provision.label })}</div>
-            <div class=${provision.entityId ? "vendor-provided-entity" : "vendor-provided-entity unresolved"}>
-                ${provision.entityId ?? host.t("editor.dynamic.vendor_entity_unresolved")}
+            <div class=${text ? "vendor-provided-entity" : "vendor-provided-entity unresolved"}>
+                ${text ?? host.t("editor.dynamic.vendor_entity_unresolved")}
             </div>
             ${slotted}
         </div>
@@ -247,8 +260,9 @@ export function renderProvidedField(
 }
 
 /**
- * A device's hardware profile: the picker, what the profile binds to, and
- * every entity it fills in, read-only.
+ * A device's hardware profile, as fields of the host's Identity `field-grid`:
+ * the picker, what the profile binds to, and a meter change it makes.
+ * {@link renderProfileEntities} lists what it fills in, below the grid.
  *
  * Only the profiles of the device's `kind` are offered besides Custom. An
  * entry-bound profile binds to a config entry of its integration, a
@@ -260,7 +274,7 @@ export function renderProvidedField(
  * answer for the draft is in, a profile resolving another one says so, as
  * learned usage and history are keyed by the meter.
  */
-export function renderHardwareProfile(
+export function renderHardwareProfileFields(
     host: HardwareProfileHost,
     vendors: VendorsResponse | null | undefined,
     path: PathSegment[],
@@ -276,66 +290,102 @@ export function renderHardwareProfile(
     const profiles = ofKind.sort((a, b) => Number(matching(b)) - Number(matching(a)));
     const profileId = stringValue(asJsonObject(device.profile)?.id);
     const profile = deviceProfile(vendors, device, kind);
-    const candidateInfo = vendors?.devices?.[validationPath(path)];
-    // Only the answer for what the device stores now: a stale one would name
-    // another binding's meter, or write it in on switching to Custom.
-    const info = candidateInfo && answersFor(candidateInfo, device) ? candidateInfo : undefined;
+    const info = currentInfo(vendors, device, path);
     const meter = info?.resolved[`${validationPath(path)}.consumption.energy_entity_id`];
     return html`
-        <p class="inline-note">${host.t("editor.notes.hardware_profile")}</p>
-        <div class="field-grid">
-            <div class="field">
-                <div class="field-label-row">
-                    <label>${host.t("editor.fields.hardware_profile")}</label>
-                    ${renderHelpIcon(host, "editor.fields.hardware_profile", "editor.help.hardware_profile")}
-                </div>
-                <select
-                    data-field="hardware-profile"
-                    ?disabled=${profile !== undefined && info === undefined}
-                    @change=${(event: Event) =>
-                        setDeviceProfile(host, vendors, path, (event.currentTarget as HTMLSelectElement).value)}
-                >
-                    <option value="" ?selected=${profileId === ""}>${host.t("editor.values.profile_custom")}</option>
-                    ${device.profile !== undefined && !profiles.some((option) => option.id === profileId)
-                        ? html`<option value=${profileId || "-"} selected>${profileId || canonicalJson(device.profile)}</option>`
-                        : nothing}
-                    ${profiles.map(
-                        (option) => html`
-                            <option value=${option.id} ?selected=${option.id === profileId}>
-                                ${matching(option)
-                                    ? tFormat(host, "editor.dynamic.profile_matches", { profile: option.label })
-                                    : option.label}
-                            </option>
-                        `,
-                    )}
-                </select>
+        <div class="field">
+            <div class="field-label-row">
+                <label>${host.t("editor.fields.hardware_profile")}</label>
+                ${renderHelpIcon(host, "editor.fields.hardware_profile", "editor.help.hardware_profile")}
             </div>
-            ${profile ? renderBinding(host, profile, device, path) : nothing}
+            <select
+                data-field="hardware-profile"
+                ?disabled=${profile !== undefined && info === undefined}
+                @change=${(event: Event) =>
+                    setDeviceProfile(host, vendors, path, (event.currentTarget as HTMLSelectElement).value)}
+            >
+                <option value="" ?selected=${profileId === ""}>${host.t("editor.values.profile_custom")}</option>
+                ${device.profile !== undefined && !profiles.some((option) => option.id === profileId)
+                    ? html`<option value=${profileId || "-"} selected>${profileId || canonicalJson(device.profile)}</option>`
+                    : nothing}
+                ${profiles.map(
+                    (option) => html`
+                        <option value=${option.id} ?selected=${option.id === profileId}>
+                            ${matching(option)
+                                ? tFormat(host, "editor.dynamic.profile_matches", { profile: option.label })
+                                : option.label}
+                        </option>
+                    `,
+                )}
+            </select>
+            <div class="helper">${host.t("editor.notes.hardware_profile")}</div>
         </div>
+        ${profile ? renderBinding(host, profile, device, path) : nothing}
         ${profile && storedMeter && meter && meter !== storedMeter
             ? html`
-                  <p class="inline-note" data-field="profile-meter-change">
-                      ${tFormat(host, "editor.dynamic.profile_meter_change", { from: storedMeter, to: meter })}
-                  </p>
-              `
-            : nothing}
-        ${profile && info
-            ? html`
-                  <div class="vendor-resolved">
-                      <div class="inline-note">${tFormat(host, "editor.dynamic.provided_by", { profile: profile.label })}</div>
-                      <ul>
-                          ${Object.entries(info.resolved).map(
-                              ([configPath, entityId]) => html`
-                                  <li class=${entityId ? "" : "unresolved"} data-path=${configPath}>
-                                      <code>${configPath}</code>
-                                      <span>${entityId ?? host.t("editor.dynamic.vendor_entity_unresolved")}</span>
-                                  </li>
-                              `,
-                          )}
-                      </ul>
+                  <div class="field">
+                      <p class="inline-note" data-field="profile-meter-change">
+                          ${tFormat(host, "editor.dynamic.profile_meter_change", { from: storedMeter, to: meter })}
+                      </p>
                   </div>
               `
             : nothing}
+    `;
+}
+
+/**
+ * The answer for `device` at `path` as it stores its `profile` now: a stale
+ * one would name another binding's meter, or write it in on switching to
+ * Custom.
+ */
+function currentInfo(
+    vendors: VendorsResponse | null | undefined,
+    device: JsonObject,
+    path: PathSegment[],
+): VendorDeviceInfo | undefined {
+    const info = vendors?.devices?.[validationPath(path)];
+    return info && answersFor(info, device) ? info : undefined;
+}
+
+/**
+ * Every entity a device's profile fills in, read-only, in a box closed by
+ * default whose header counts them and the ones left unmapped. Nothing until
+ * the answer for the device as it stores its profile is in.
+ */
+export function renderProfileEntities(
+    host: HardwareProfileHost,
+    vendors: VendorsResponse | null | undefined,
+    path: PathSegment[],
+    kind: string,
+): TemplateResult | typeof nothing {
+    const device = asJsonObject(host.getValue(path)) ?? {};
+    const profile = deviceProfile(vendors, device, kind);
+    const info = currentInfo(vendors, device, path);
+    if (!profile || !info) return nothing;
+    const entities = Object.entries(info.resolved);
+    const unmapped = entities.filter(([, entityId]) => entityId === null).length;
+    return html`
+        <details class="vendor-resolved">
+            <summary>
+                ${tFormat(host, "editor.dynamic.profile_entities", { count: String(entities.length) })}
+                ${unmapped
+                    ? html`<span class="unresolved" data-field="profile-entities-unmapped">
+                          ${tFormat(host, "editor.dynamic.profile_entities_unmapped", { count: String(unmapped) })}
+                      </span>`
+                    : nothing}
+            </summary>
+            <div class="inline-note">${tFormat(host, "editor.dynamic.provided_by", { profile: profile.label })}</div>
+            <ul>
+                ${entities.map(
+                    ([configPath, entityId]) => html`
+                        <li class=${entityId ? "" : "unresolved"} data-path=${configPath}>
+                            <code>${configPath}</code>
+                            <span>${entityId ?? host.t("editor.dynamic.vendor_entity_unresolved")}</span>
+                        </li>
+                    `,
+                )}
+            </ul>
+        </details>
     `;
 }
 

@@ -80,7 +80,8 @@ import {
 } from "./device-energy";
 import {
     deviceProfile,
-    renderHardwareProfile,
+    renderHardwareProfileFields,
+    renderProfileEntities,
     renderProvidedField,
     deviceProvision,
     type HardwareProfileHost,
@@ -119,7 +120,6 @@ const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 type SectionKey =
     | "identity"
     | "groups"
-    | "hardware"
     | "measurements"
     | "controls"
     | "projection"
@@ -181,7 +181,6 @@ function sectionOfIssue(devicePath: readonly PathSegment[], issuePath: string): 
     const under = (prefix: string) =>
         rest === prefix || rest.startsWith(`${prefix}.`) || rest.startsWith(`${prefix}[`);
     if (under("children")) return "children";
-    if (under("profile")) return "hardware";
     if (under("consumption.projection")) return "projection";
     if (under("consumption")) return "measurements";
     if (under("controls.use_mode.values")) return "use_modes";
@@ -651,6 +650,13 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                         ${this._renderSection(
                             "identity",
                             html`<div class="field-grid">
+                                ${renderHardwareProfileFields(
+                                    this,
+                                    this.vendors,
+                                    path,
+                                    kind,
+                                    ownMeter(findDeviceByKey(this.savedConfig, id, "id")?.device ?? {}),
+                                )}
                                 ${renderOptionalTextField(
                                     this,
                                     [...path, "name"],
@@ -675,21 +681,14 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                                 ${this._renderDeviceKindField(profile?.deviceKind ?? kind, profiled)}
                                 ${this._renderDeviceParentField()}
                                 ${haDevice || showAll ? this._renderHaDeviceField(haDevice, id) : nothing}
-                            </div>`,
-                            [{ key: "kind", text: this.t(`editor.values.kind_${kind}`) }],
+                            </div>
+                            ${renderProfileEntities(this, this.vendors, path, kind)}`,
+                            [
+                                { key: "kind", text: this.t(`editor.values.kind_${kind}`) },
+                                ...(profile ? [{ key: "profile", text: profile.label }] : []),
+                            ],
                         )}
                         ${this._renderGroupsSection(device)}
-                        ${this._renderSection(
-                            "hardware",
-                            renderHardwareProfile(
-                                this,
-                                this.vendors,
-                                path,
-                                kind,
-                                ownMeter(findDeviceByKey(this.savedConfig, id, "id")?.device ?? {}),
-                            ),
-                            profile ? [{ key: "profile", text: profile.label }] : [],
-                        )}
                         ${this._renderSection(
                             "measurements",
                             html`<div class="field-grid">

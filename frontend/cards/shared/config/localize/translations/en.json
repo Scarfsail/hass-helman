@@ -84,8 +84,7 @@
       "inverter": "Inverter",
       "measurements": "Measurements",
       "projection": "Projection",
-      "children": "Children",
-      "hardware": "Hardware profile"
+      "children": "Children"
     },
     "notes": {
       "device_groupings": "Group devices by breaker box, room or mode. Each grouping is a chip on the card; a device is in at most one group per grouping: drag it between the groups and \"Unassigned\". A device is in a group only through its own assignment, which its editor's \"Groups\" section also sets. The short name is the badge a member device shows. Removing a group or grouping also removes it from every device. The id is what devices and the helman.group_action / helman.get_group_entities actions refer to; devices follow an id change, automations using the old id do not.",
@@ -486,7 +485,9 @@
       "vendor_no_entries": "No integration entry for {profile} is set up in this Home Assistant, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
       "vendor_no_devices": "No device for {profile} is set up in this Home Assistant, or each one is already used by another device, so the profile can provide nothing here. Add the vendor integration under Settings > Devices & services, or keep Custom.",
       "profile_matches": "{profile} (matches this device's entities)",
-      "profile_meter_change": "The energy meter changes from {from} to {to}. Learned usage and history are keyed by the meter."
+      "profile_meter_change": "The energy meter changes from {from} to {to}. Learned usage and history are keyed by the meter.",
+      "profile_entities": "Mapped entities ({count})",
+      "profile_entities_unmapped": "· {count} unmapped"
     },
     "help": {
       "aria_label": "Field help",
