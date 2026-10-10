@@ -31,6 +31,8 @@ type Variant = {
     exportPartlyPriced?: boolean;
     /** The payload's current import price is from before the 12:00 boundary. */
     staleCurrentPrice?: boolean;
+    /** The grid source node is `positive`, as with a positive-is-import meter. */
+    positiveGridNode?: boolean;
 };
 
 declare global {
@@ -55,7 +57,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             controllableIds: [], children: [],
         });
         const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
+            sources: [node("solar", "sensor.solar", "solar"), { ...node("grid", "sensor.grid", "grid"), valueType: v.positiveGridNode ? "positive" : "default" }, node("battery", "sensor.battery", "battery")],
             consumers: [node("house", "sensor.house", null)],
             consumptionTotalSensorId: null,
             productionTotalSensorId: null,
@@ -215,6 +217,12 @@ async function openDetail(page: Page): Promise<void> {
     await gridCell(page).click();
     await expect(content(page).locator("[data-overview]")).toBeVisible();
 }
+
+test("a positive grid source node still reports the export the meter reads", async ({ page }) => {
+    await mount(page, { positiveGridNode: true });
+    await openDetail(page);
+    await expect(content(page).locator("[data-overview] .status")).toHaveText("Exporting 650 W to the grid.");
+});
 
 test.describe("the grid overview", () => {
     test("opens compact: a status sentence, two figures, the next price and five closed questions, voltage first", async ({ page }) => {

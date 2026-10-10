@@ -60,6 +60,12 @@ interface EnergyEntityMap {
 interface EnergyValues {
     solarPower:   number;
     gridPower:    number;
+    /**
+     * The grid meter signed import-positive, export-negative. `gridPower` keeps
+     * only the source side (a `positive` grid node clamps export to zero) and
+     * the card derives export from the balance; the grid detail reports the meter.
+     */
+    gridPowerSigned: number;
     batteryPower: number;
     batterySoc:   number;
     batteryMinSoc:number;
@@ -67,7 +73,7 @@ interface EnergyValues {
 }
 
 const EMPTY_ENERGY: EnergyValues = {
-    solarPower: 0, gridPower: 0, batteryPower: 0,
+    solarPower: 0, gridPower: 0, gridPowerSigned: 0, batteryPower: 0,
     batterySoc: 0, batteryMinSoc: 10,
     housePower: 0,
 };
@@ -724,7 +730,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             batteryProducerNode: this._batteryProducerNode,
             batteryConsumerNode: this._batteryConsumerNode,
             solarNode: this._solarNode,
-            gridPower: this._energy.gridPower,
+            gridPower: this._energy.gridPowerSigned,
             productionNode: this._productionNode,
             consumptionNode: this._consumptionNode,
             housePower: this._energy.housePower,
@@ -758,6 +764,9 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return {
             solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
+            gridPowerSigned: map.gridValueType === "negative"
+                ? -rawPower(map.gridPowerEntityId)
+                : rawPower(map.gridPowerEntityId),
             batteryPower: map.batteryInverted
                 ? -rawPower(map.batteryPowerEntityId)
                 : rawPower(map.batteryPowerEntityId),

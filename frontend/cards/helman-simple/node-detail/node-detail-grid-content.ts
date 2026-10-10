@@ -319,6 +319,7 @@ export class NodeDetailGridContent extends LitElement {
     private _overviewRequest = 0;
     private _moneyRequest = 0;
     private _unsubscribeDataChanged?: () => void;
+    private _boundaryTimer?: ReturnType<typeof setTimeout>;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
     private _voltageRequest = 0;
@@ -336,6 +337,7 @@ export class NodeDetailGridContent extends LitElement {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        clearTimeout(this._boundaryTimer);
         this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this._started = false;
@@ -983,6 +985,27 @@ export class NodeDetailGridContent extends LitElement {
             }
         }
         return null;
+    }
+
+    /**
+     * The rate now, the next change and the planned flow are read off the
+     * clock: render again at the next price point or plan slot boundary.
+     */
+    protected updated(): void {
+        clearTimeout(this._boundaryTimer);
+        const grid = this._forecast?.grid;
+        if (!grid || !this.isConnected) return;
+        const now = Date.now();
+        let next = Infinity;
+        for (const point of [...grid.importPricePoints, ...grid.exportPricePoints]) {
+            const at = Date.parse(point.timestamp);
+            if (at > now && at < next) next = at;
+        }
+        for (const slot of grid.series) {
+            const end = Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
+            if (end > now && end < next) next = end;
+        }
+        if (next !== Infinity) this._boundaryTimer = setTimeout(() => this.requestUpdate(), next - now + 50);
     }
 
     private _currentPlanSlot() {
