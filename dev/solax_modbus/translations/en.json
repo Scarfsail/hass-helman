@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SolaX Modbus (dev stub)",
+        "description": "Pick the prod device whose mirrored entities this entry claims.",
+        "data": {
+          "title": "Device"
+        }
+      }
+    },
+    "abort": {
+      "no_devices_left": "Every device in registry_snapshot.json already has an entry.",
+      "already_configured": "This device already has an entry."
+    }
+  }
+}
