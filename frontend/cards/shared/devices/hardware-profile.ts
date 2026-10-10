@@ -8,7 +8,7 @@ import {
 } from "lit";
 
 import { asJsonObject, canonicalJson, setValueAtPath, unsetValueAtPath } from "../config/config-document";
-import { findInverter, INVERTER_PATH, iterDevices, validationPath } from "../config/devices";
+import { deviceKind, findInverter, INVERTER_PATH, iterDevices, validationPath } from "../config/devices";
 import { renderHelpIcon, stringValue, type FormFieldHost } from "../config/form-fields";
 import type {
     HomeAssistantLike,
@@ -157,13 +157,19 @@ function tFormat(host: FormFieldHost, key: string, values: Record<string, string
     return text;
 }
 
-/** The known profile a device's `profile` names, if any. */
+/**
+ * The known profile a device's `profile` names, if any, and if it goes on a
+ * device of `kind`: the backend ignores a profile of another kind.
+ */
 export function deviceProfile(
     vendors: VendorsResponse | null | undefined,
     device: JsonObject,
+    kind: string,
 ): VendorProfileInfo | undefined {
     const profileId = stringValue(asJsonObject(device.profile)?.id);
-    return profileId ? vendors?.profiles?.find((profile) => profile.id === profileId) : undefined;
+    return profileId
+        ? vendors?.profiles?.find((profile) => profile.id === profileId && profile.deviceKind === kind)
+        : undefined;
 }
 
 /**
@@ -208,7 +214,7 @@ export function deviceProvision(
 ): VendorProvision | null {
     const provision = vendorProvision(vendors, path);
     if (provision) return provision;
-    const profile = deviceProfile(vendors, device);
+    const profile = deviceProfile(vendors, device, deviceKind(device));
     const dotted = validationPath(path);
     const owned = profile?.ownedDevicePaths.some((relative) => {
         const ownedPath = `${validationPath(devicePath)}.${relative}`;
@@ -254,7 +260,7 @@ export function renderHardwareProfile(
     const device = asJsonObject(host.getValue(path)) ?? {};
     const profiles = (vendors?.profiles ?? []).filter((profile) => profile.deviceKind === kind);
     const profileId = stringValue(asJsonObject(device.profile)?.id);
-    const profile = deviceProfile(vendors, device);
+    const profile = deviceProfile(vendors, device, kind);
     const info = vendors?.devices?.[validationPath(path)];
     return html`
         <p class="inline-note">${host.t("editor.notes.hardware_profile")}</p>

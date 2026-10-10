@@ -618,7 +618,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
         // stay on the stored draft.
         const resolved = this._resolvedDevice(path) ?? device;
         const parent = this.parent ? (this._resolvedDevice(path.slice(0, -2)) ?? this.parent) : null;
-        const profile = deviceProfile(this.vendors, device);
+        const profile = deviceProfile(this.vendors, device, deviceKind(device));
         // Only a stored profile id locks the card; a malformed `profile` stays
         // repairable from the form.
         const profiled = stringValue(asJsonObject(device.profile)?.id) !== "";

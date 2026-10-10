@@ -4193,7 +4193,7 @@ export class HelmanConfigEditorPanel
     const optionCount = INVERTER_ACTION_OPTIONS.filter(
       (option) => this._stringValue(options[option.key]) !== "",
     ).length;
-    const profileLabel = deviceProfile(this._vendors.vendors, inverter)?.label ?? "";
+    const profileLabel = deviceProfile(this._vendors.vendors, inverter, CONTROLLABLE_ID_INVERTER)?.label ?? "";
     // A profile that owns the mode control maps every action itself: only the
     // entity it points at is shown, read-only, in the controls section.
     const modeProvided = vendorProvision(this._vendors.vendors, [...modePath, "options"]) !== null;

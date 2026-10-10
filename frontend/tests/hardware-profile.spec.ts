@@ -219,7 +219,8 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                         }
                         const consumers: any[] = request.config?.devices?.consumers ?? [];
                         consumers.forEach((device, index) => {
-                            if (device?.profile?.id !== charger.id) return;
+                            // The backend ignores a profile of another kind.
+                            if (device?.profile?.id !== charger.id || device.kind !== charger.deviceKind) return;
                             const path = `devices.consumers[${index}]`;
                             const absolute = (relative: Record<string, unknown>) =>
                                 Object.fromEntries(
@@ -784,3 +785,18 @@ test(`a device storing profile ${JSON.stringify(stored)} shows it and can go bac
     await expect.poll(async () => "profile" in ((await lastDraft(page))?.devices?.consumers?.[0] ?? {})).toBe(false);
 });
 }
+
+test("a profile of another kind than the device's owns nothing on it", async ({ page }) => {
+    const mismatched: any = structuredClone(GARAGE_ON_PROFILE);
+    mismatched.devices.consumers[0].kind = "generic";
+    await mountEditor(page, mismatched);
+    await openTab(page, "Devices");
+
+    await expect
+        .poll(async () => {
+            await expandEverything(page);
+            const card = await garageCard(page);
+            return { provided: Object.keys(card.provided).length, kind: card.kind?.value };
+        })
+        .toEqual({ provided: 0, kind: "generic" });
+});
