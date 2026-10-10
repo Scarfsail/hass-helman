@@ -11,6 +11,7 @@ import type {
     SchedulePayload,
 } from "../../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { getSharedHelmanStore } from "../../helman/store";
 import { commandedModeKind } from "../../helman-api";
 import { formatPower } from "../../power-format";
@@ -32,6 +33,7 @@ import "../../shared/node-question";
 import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
 import type { InverterDetailParams } from "./node-detail-types";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
@@ -242,6 +244,7 @@ export class NodeDetailInverterContent extends LitElement {
     /** The compared registers' states the current overview was computed from. */
     private _comparedStates = "";
     private _unsubscribeSchedule?: () => void;
+    private _unsubscribeDataChanged?: () => void;
     /** `_runs()` for the update in progress; several answers read it per render. */
     private _runsCache?: ScheduleRun[];
     private _planCard?: InspectorCardElement;
@@ -259,6 +262,8 @@ export class NodeDetailInverterContent extends LitElement {
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this._unsubscribeSchedule?.();
         this._unsubscribeSchedule = undefined;
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         // Whatever is still in flight answers nobody.
         this._overviewRequest += 1;
         this._temperatureRequest += 1;
@@ -279,12 +284,18 @@ export class NodeDetailInverterContent extends LitElement {
         this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
             this._schedule = snapshot.schedule;
         });
+        // A config change (another client) can re-map what the overview reads.
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
+            void this._loadOverview(true);
+            if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
+        });
         void this._loadOverview();
     }
 
     // ── Data ────────────────────────────────────────────────────────────────
 
-    private async _loadOverview(): Promise<void> {
+    /** `fresh`: never join a request sent before a change was announced. */
+    private async _loadOverview(fresh = false): Promise<void> {
         const request = ++this._overviewRequest;
         const previous = this._overview.status === "ready" ? this._overview.payload : undefined;
         // A refresh compares the states as they are now, when it is sent: a
@@ -293,10 +304,15 @@ export class NodeDetailInverterContent extends LitElement {
         else this._overview = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: previous !== undefined });
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: fresh || previous !== undefined });
             if (request !== this._overviewRequest) return;
             if (!previous) this._comparedStates = this._comparedSignature(payload);
             this._overview = { status: "ready", payload };
+            announceWatchedEntities(this, [
+                payload.mode?.entityId,
+                ...Object.values(payload.entities),
+                ...payload.agreement.registers.map((register) => register.entityId),
+            ]);
         } catch (error) {
             if (request !== this._overviewRequest) return;
             console.error("node-detail-inverter: failed to load the overview", error);
@@ -310,7 +326,7 @@ export class NodeDetailInverterContent extends LitElement {
         this._temperature = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterTemperatureSectionPayload>({ node: "inverter", section: "temperature" });
+                .getNodeDetail<InverterTemperatureSectionPayload>({ node: "inverter", section: "temperature" }, { fresh: true });
             if (request !== this._temperatureRequest) return;
             this._temperature = { status: "ready", payload };
         } catch (error) {
@@ -801,19 +817,11 @@ export class NodeDetailInverterContent extends LitElement {
 
     /** A reading as shown: its state and unit, `null` when missing or unavailable. */
     private _reading(overview: InverterDetailPayload, key: string): string | null {
-        const entityId = overview.entities[key];
-        const stateObj = entityId ? this.hass.states[entityId] : undefined;
-        if (!stateObj || stateObj.state === "unavailable" || stateObj.state === "unknown") return null;
-        if (stateObj.state === "on" || stateObj.state === "off") return this._t(stateObj.state === "on" ? "on" : "off");
-        const unit = stateObj.attributes.unit_of_measurement as string | undefined;
-        return unit ? stateObj.state + " " + unit : stateObj.state;
+        return readingText(this.hass, overview.entities[key], (on) => this._t(on ? "on" : "off"));
     }
 
     private _number(overview: InverterDetailPayload, key: string): number | null {
-        const entityId = overview.entities[key];
-        const raw = entityId ? this.hass.states[entityId]?.state : undefined;
-        const value = raw === undefined ? NaN : parseFloat(raw);
-        return Number.isFinite(value) ? value : null;
+        return readingNumber(this.hass, overview.entities[key]);
     }
 
     /** The phases' AC power summed, only when every phase reads. */

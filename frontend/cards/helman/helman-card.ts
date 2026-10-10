@@ -71,6 +71,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private _watchedEntityIds: Set<string> = new Set();
     /** Entity ids the schedule editor host resolved, folded into the filter. */
     private _scheduleWatchedIds: Set<string> = new Set();
+    /** The readings the open node detail announced it reads live. */
+    private _detailEntityIds: string[] = [];
     private _latestHass?: HomeAssistant;
 
     // 5. State properties
@@ -252,6 +254,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     .open=${true}
                     .params=${dialogParams}
                     @closed=${this._closeNodeDetail}
+                    @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
             ` : ""}
         `;
@@ -265,6 +268,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._dialogRequest = (event as CustomEvent<{ nodeType: NodeType }>).detail.nodeType;
     };
 
+    /** The open detail's own readings: watched while it is open, the latest handed down now. */
+    private _onDetailWatch = (event: CustomEvent<string[]>): void => {
+        event.stopPropagation();
+        this._detailEntityIds = event.detail;
+        this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
+    };
+
     private _handleShowDeviceDetail = (event: Event): void => {
         event.stopPropagation();
         this._dialogRequest = (event as CustomEvent<{ item: TreeItem }>).detail.item;
@@ -272,6 +283,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     private _closeNodeDetail(): void {
         this._dialogRequest = null;
+        this._detailEntityIds = [];
+        this._rebuildWatchedEntityIds();
     }
 
     /**
@@ -325,6 +338,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const batterySocEntityId = batteryConfig?.entities.capacity ?? null;
         const batterySocState = batterySocEntityId ? this._hass?.states[batterySocEntityId] : null;
         const rawBatterySoc = batterySocState ? parseFloat(batterySocState.state) : NaN;
+        const gridSensorId = gridProducerNode?.powerSensorId ?? gridConsumerNode?.powerSensorId;
+        const gridReadable = !!gridSensorId && Number.isFinite(parseFloat(this._hass?.states[gridSensorId]?.state ?? ""));
 
         return {
             batteryPower: (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0),
@@ -334,8 +349,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             batteryProducerNode,
             batteryConsumerNode,
             solarNode,
-            gridProducerNode,
-            gridConsumerNode,
+            gridPower: gridReadable
+                ? (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0)
+                : null,
             productionNode: sourcesNode ?? null,
             consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,
@@ -463,6 +479,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             ids.add(id);
         }
 
+        for (const id of this._detailEntityIds) ids.add(id);
         this._watchedEntityIds = ids;
     }
 

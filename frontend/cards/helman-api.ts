@@ -830,7 +830,7 @@ export interface GetApplianceProjectionsRequest {
 // --- Node details (helman/get_node_detail) ----------------------------------
 
 /** The nodes the backend serves a detail for. */
-export type NodeDetailNode = "inverter";
+export type NodeDetailNode = "inverter" | "grid";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
 export interface GetNodeDetailRequest {
@@ -914,6 +914,64 @@ export interface InverterTemperatureSectionPayload {
     asOf: string;
     period: { start: string; end: string };
     temperature: DayStatsDTO | null;
+}
+
+/**
+ * The grid detail's overview. `entities` carries the profile's grid telemetry
+ * (absent for a Custom inverter, `null` where the registry lacks one) and the
+ * grid's own today meters. `phasePowerPolarity` says which way the
+ * `grid_power_l*` readings are positive.
+ */
+export interface GridDetailPayload {
+    node: "grid";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    phasePowerPolarity: "positive_is_import" | "positive_is_export" | null;
+    maxAllowedExportPower: number | null;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/**
+ * Today's phase voltages. `spread` is the largest difference between the
+ * compared phases' means within one five-minute bucket all of them know;
+ * `coverage` is the share of the elapsed day they were known together.
+ */
+export interface GridVoltageSectionPayload {
+    node: "grid";
+    section: "voltage";
+    asOf: string;
+    period: { start: string; end: string };
+    /** By phase number; `null` for a phase without a resolved sensor. */
+    phases: Record<"1" | "2" | "3", DayStatsDTO | null>;
+    spread: { phases: number[]; max: number | null; maxAt: string | null; coverage: number };
+}
+
+/**
+ * One local day of `helman/solar_bias/day_aggregates`, as far as the grid
+ * detail reads it. Money is priced hour by hour; each side is `null` where
+ * nothing was priced, and `moneyCostKwh`/`moneyGainKwh` are the kWh it priced.
+ */
+export interface GridDayAggregateDTO {
+    date: string;
+    gridImportKwh: number | null;
+    gridExportKwh: number | null;
+    moneyCost: number | null;
+    moneyGain: number | null;
+    moneyCostKwh: number | null;
+    moneyGainKwh: number | null;
+}
+
+export interface GridDayAggregatesPayload {
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    days: GridDayAggregateDTO[];
+}
+
+/** One local day's measured grid figures and their money, from the inspector's span read. */
+export function fetchGridDayAggregates(hass: Pick<HomeAssistantLike, "callWS">, date: string): Promise<GridDayAggregatesPayload> {
+    return hass.callWS({ type: "helman/solar_bias/day_aggregates", start_date: date, end_date: date });
 }
 
 // --- Automation optimizer decision-matrix trace -----------------------------
