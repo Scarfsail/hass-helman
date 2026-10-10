@@ -278,3 +278,48 @@ def test_back_on_custom_the_registered_select_is_removed():
 
     assert added == []
     registry.async_remove.assert_called_once_with("select.helman_inverter_mode")
+
+
+# --- The shared definition of "the registers hold this mode" --------------------
+
+from custom_components.helman.vendors.modes import (  # noqa: E402
+    first_matching_option,
+    register_matches,
+)
+
+
+@pytest.mark.parametrize(
+    ("state", "entity_id", "target", "expected"),
+    [
+        (NS(state="Self Use Mode"), USE_MODE, "Self Use Mode", True),
+        (NS(state="Back Up Mode"), USE_MODE, "Self Use Mode", False),
+        (NS(state="9900.0"), EXPORT_LIMIT, 9900, True),
+        (NS(state="5000"), EXPORT_LIMIT, 9900, False),
+        # Unreadable is not a mismatch.
+        (None, USE_MODE, "Self Use Mode", None),
+        (NS(state="unavailable"), USE_MODE, "Self Use Mode", None),
+        (NS(state="None"), USE_MODE, "Self Use Mode", None),
+        (NS(state="unknown"), EXPORT_LIMIT, 9900, None),
+    ],
+)
+def test_a_register_matches_mismatches_or_is_unreadable(state, entity_id, target, expected):
+    assert register_matches(state, entity_id, target) is expected
+
+
+def test_an_unreadable_register_matches_no_option_and_writes_anyway():
+    entity, calls = build({USE_MODE: "unavailable", EXPORT_LIMIT: "9900"})
+
+    with patch.object(select_module, "resolve_unique_ids", side_effect=_resolve):
+        assert entity._vendor_option() is None
+    select(entity, "normal")
+
+    # The write is not skipped on a register that cannot be read.
+    assert calls == [(USE_MODE, "Self Use Mode")]
+
+
+def test_an_unbound_option_never_matches():
+    states = {USE_MODE: NS(state="Self Use Mode")}
+
+    assert first_matching_option(
+        {"normal": None, "stop_export": [(USE_MODE, "Self Use Mode")]}, states.get
+    ) == "stop_export"

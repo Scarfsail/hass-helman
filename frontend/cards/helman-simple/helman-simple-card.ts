@@ -3,8 +3,9 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
-import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, applyValueType } from "../helman-api";
+import { mdiCurrentAc } from "@mdi/js";
+import { fillTemplate, getLocalizeFunction, LocalizeFunction } from "../localize/localize";
+import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload, applyValueType, commandedModeKind } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
 import { TreeItem } from "../helman/tree-item";
@@ -156,6 +157,48 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             100% { stroke-dashoffset: -18; }
         }
 
+        /* The inverter sits where the flows cross: drawn over them, kept small. */
+        .center-cell {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .inverter-cell {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            min-height: 26px;
+            padding: 2px 7px 2px 5px;
+            border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+            border-radius: 13px;
+            background: var(--card-background-color, #fff);
+            color: var(--primary-text-color);
+            font: inherit;
+            font-size: 0.68rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .inverter-cell:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 1px;
+        }
+        .inverter-cell svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--secondary-text-color);
+            flex: none;
+        }
+        .inverter-link {
+            font-weight: 400;
+            color: var(--secondary-text-color);
+        }
+
         .loading {
             display: flex;
             justify-content: center;
@@ -212,6 +255,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     /** What the node detail dialog shows: a top-level node by type, or one device. */
     @state() private _dialogRequest: NodeType | TreeItem | null = null;
     @state() private _houseDevices: TreeItem[] = [];
+    /** The inverter overview behind the centre cell; `null` until loaded, or when it failed. */
+    @state() private _inverter: InverterDetailPayload | null = null;
 
     // 7. HA-specific property setter
     public set hass(hass: HomeAssistant) {
@@ -378,7 +423,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                         <div class="connector-v">
                             ${solarActive ? this._flowV(solarFlowColor, this._flowGlows!.solar, false, solarToHouseT) : ""}
                         </div>
-                        <div></div>
+                        <div class="center-cell">${this._renderInverterCell()}</div>
                         <div class="connector-v">
                             ${(gridImport && battCharge) ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, gridToBattT) : ""}
                             ${battToGridPower > 50 ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, battToGridT) : ""}
@@ -409,7 +454,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .localize=${this._localize!}
                     .open=${true}
                     .params=${this._buildDialogParams(this._dialogRequest)}
-                    @closed=${() => { this._dialogRequest = null; }}
+                    @closed=${() => { this._dialogRequest = null; this._rebuildWatchedEntityIds(); }}
                 ></node-detail-dialog>
             ` : ''}
             <scheduling-day-editor-host
@@ -420,6 +465,68 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     // 12. Private helper methods
+
+    /**
+     * The inverter's centre cell: its commanded mode and, when the link is
+     * short of perfect, a neutral communication cue with its value. Not a
+     * fault verdict: the detail's trust question explains it.
+     */
+    private _renderInverterCell() {
+        const inverter = this._inverter;
+        if (!inverter?.configured || !this._localize) return "";
+        const states = this._hass?.states ?? {};
+        const live = inverter.mode ? states[inverter.mode.entityId]?.state : undefined;
+        const kind = commandedModeKind(inverter.mode, states);
+        const label = kind
+            ? this._localize(`node_detail.inverter.mode_short.${kind}`)
+            : live && live !== "unavailable" && live !== "unknown" ? live : "–";
+        const number = (key: string): number | null => {
+            const entityId = inverter.entities[key];
+            const value = entityId ? parseFloat(states[entityId]?.state ?? "") : NaN;
+            return Number.isFinite(value) ? value : null;
+        };
+        const rate = number("link_success_rate");
+        const quarantined = number("link_quarantined_registers");
+        const cue = rate !== null && rate < 100
+            // Rounded down to one decimal, so 99.97 never reads as 100.
+            ? String(Math.floor(rate * 10) / 10) + " %"
+            : quarantined !== null && quarantined > 0 ? String(quarantined) : null;
+        const ariaLabel = fillTemplate(this._localize("node_detail.inverter.cell_label"), { mode: label })
+            + (cue ? ". " + fillTemplate(this._localize("node_detail.inverter.link_cue"), { value: cue }) : "");
+        return html`
+            <button
+                class="inverter-cell"
+                aria-label=${ariaLabel}
+                title=${ariaLabel}
+                @click=${(event: Event) => { event.stopPropagation(); this._openInverter(); }}
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${mdiCurrentAc}></path></svg>
+                <span class="inverter-mode">${label}</span>
+                ${cue ? html`<span class="inverter-link">${cue}</span>` : ""}
+            </button>
+        `;
+    }
+
+    private _openInverter(): void {
+        this._dialogRequest = "inverter";
+        this._rebuildWatchedEntityIds();
+        // Newly watched readings were not followed until now: hand the latest down.
+        this._hass = this._latestHass;
+    }
+
+    /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
+    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+        try {
+            const payload = await getSharedHelmanStore(this._latestHass!)
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+            if (obsolete()) return;
+            this._inverter = payload;
+            this._rebuildWatchedEntityIds();
+            this._hass = this._latestHass;
+        } catch (err) {
+            if (!obsolete()) console.error("helman-simple-card: failed to load the inverter overview", err);
+        }
+    }
 
     private _handleOpenScheduleEditor = (event: Event): void => {
         event.stopPropagation();
@@ -448,6 +555,24 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         addNode(this._batteryConsumerNode);
         addNode(this._gridConsumerNode);
         addNode(this._houseNode);
+        // The centre cell's mode and link cue; every inverter reading while
+        // its detail is open, so the detail reads them live.
+        const inverter = this._inverter;
+        if (inverter) {
+            if (inverter.mode) ids.add(inverter.mode.entityId);
+            if (this._dialogRequest === "inverter") {
+                for (const register of inverter.agreement.registers) {
+                    if (register.entityId) ids.add(register.entityId);
+                }
+            }
+            const keys = this._dialogRequest === "inverter"
+                ? Object.keys(inverter.entities)
+                : ["link_success_rate", "link_quarantined_registers"];
+            for (const key of keys) {
+                const entityId = inverter.entities[key];
+                if (entityId) ids.add(entityId);
+            }
+        }
         this._watchedEntityIds = ids;
     }
 
@@ -518,6 +643,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
+            void this._loadInverter(obsolete);
             return true;
         } catch (err) {
             // Logged even for an obsolete load: the guard is there to keep stale data
@@ -601,6 +727,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             productionNode: this._productionNode,
             consumptionNode: this._consumptionNode,
             housePower: this._energy.housePower,
+            solarPower: this._energy.solarPower,
             houseDevices: this._houseDevices,
             houseNode: this._houseNode,
             historyBuckets,

@@ -15,6 +15,7 @@ export interface NodeDetailContext {
     productionNode: TreeItem | null;
     consumptionNode: TreeItem | null;
     housePower: number;
+    solarPower: number;
     houseDevices: TreeItem[];
     houseNode: TreeItem | null;
     historyBuckets: number;
@@ -77,6 +78,12 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
                 historyRevision: context.historyRevision,
                 uiConfig: context.uiConfig,
                 houseNode: context.houseNode,
+            };
+        case "inverter":
+            return {
+                nodeType: "inverter",
+                solarPower: context.solarPower,
+                batteryPower: context.batteryPower,
             };
     }
 }

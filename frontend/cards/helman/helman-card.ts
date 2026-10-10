@@ -339,6 +339,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             productionNode: sourcesNode ?? null,
             consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,
+            solarPower: solarNode?.powerValue ?? 0,
             houseDevices: [...houseDevices],
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,

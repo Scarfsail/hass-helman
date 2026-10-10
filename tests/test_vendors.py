@@ -927,3 +927,125 @@ def test_charger_candidates_are_the_ha_devices_it_fully_resolves_on(missing):
     ]
     assert profiles["solax_inverter"]["binding"] == "entry"
     assert "candidates" not in profiles["solax_inverter"]
+
+
+# --- Telemetry: read-only readings, never config --------------------------------
+
+SNAPSHOT_PATH = (
+    __import__("pathlib").Path(__file__).resolve().parents[1]
+    / "dev"
+    / "solax_modbus"
+    / "registry_snapshot.json"
+)
+
+
+def snapshot_rows(title="SolaX"):
+    """The prod registry snapshot's rows of one entry (see #435), as registry rows."""
+    import json
+
+    rows = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))[title]
+    return [registry_entry(row["unique_id"], entity_id) for entity_id, row in rows.items()]
+
+
+def resolve_telemetry(document, *, entries=None, hass_entries=None, devices=None):
+    from custom_components.helman.vendors import resolve_vendor_telemetry
+
+    hass = fake_hass(hass_entries if hass_entries is not None else [config_entry()])
+    with registry(snapshot_rows() if entries is None else entries, devices):
+        return resolve_vendor_telemetry(hass, document)
+
+
+def test_every_solax_telemetry_key_resolves_on_the_prod_registry():
+    telemetry = resolve_telemetry(solax_document())
+
+    inverter = telemetry["inverter"]
+    assert inverter.profile is PROFILES["solax_inverter"]
+    assert None not in inverter.entities.values(), [
+        key for key, entity_id in inverter.entities.items() if entity_id is None
+    ]
+    # Each in the domain it is registered in, which the entity id does not tell.
+    for key, entity_id in inverter.entities.items():
+        assert entity_id.split(".")[0] == PROFILES["solax_inverter"].telemetry[key][0], key
+    assert inverter.entities["eps_min_soc"] == "number.solax_inverter_eps_min_soc"
+    assert inverter.entities["phase_balance"] == "switch.solax_inverter_phase_power_balance_x3"
+    assert inverter.entities["inverter_temperature"] == "sensor.solax_inverter_temperature"
+    assert {f"ac_{q}_l{p}" for q in ("power", "voltage", "current", "frequency") for p in (1, 2, 3)} <= set(inverter.entities)
+
+
+def test_telemetry_is_read_in_its_domain_only():
+    # The unique id of the use mode, registered as a sensor instead of a select.
+    entries = [registry_entry("SolaX_charger_use_mode", "sensor.solax_charger_use_mode")]
+
+    inverter = resolve_telemetry(solax_document(), entries=entries)["inverter"]
+
+    assert inverter.entities["use_mode"] is None
+
+
+def test_disabled_and_missing_telemetry_resolve_to_none():
+    entries = [
+        registry_entry(
+            "SolaX_inverter_temperature",
+            "sensor.solax_inverter_temperature",
+            disabled_by="integration",
+        ),
+        registry_entry("SolaX_run_mode", "sensor.solax_run_mode"),
+    ]
+
+    inverter = resolve_telemetry(solax_document(), entries=entries)["inverter"]
+
+    assert inverter.entities["inverter_temperature"] is None
+    assert inverter.entities["run_mode"] == "sensor.solax_run_mode"
+    assert inverter.entities["firmware"] is None
+
+
+def test_only_the_bound_entry_is_read_for_telemetry():
+    entries = [
+        registry_entry(
+            "SolaX_inverter_temperature",
+            "sensor.other_inverter_temperature",
+            entry_id="other-entry",
+        )
+    ]
+
+    inverter = resolve_telemetry(solax_document(), entries=entries)["inverter"]
+
+    assert inverter.entities["inverter_temperature"] is None
+
+
+def test_an_unbound_inverter_keeps_its_keys_as_none():
+    inverter = resolve_telemetry(solax_document(), hass_entries=[])["inverter"]
+
+    assert inverter.entry is None
+    assert set(inverter.entities) == set(PROFILES["solax_inverter"].telemetry)
+    assert set(inverter.entities.values()) == {None}
+
+
+def test_a_custom_inverter_has_no_telemetry():
+    assert resolve_telemetry({"energy_nodes": {"inverter": {}}}) == {}
+
+
+def test_a_charger_is_keyed_by_its_helman_id():
+    telemetry = resolve_telemetry(
+        {"energy_nodes": {"inverter": {}}, "devices": {"consumers": [charger()]}},
+        entries=charger_rows(),
+        hass_entries=[charger_entry()],
+        devices={CHARGER_DEVICE_ID: [CHARGER_ENTRY_ID]},
+    )
+
+    assert set(telemetry) == {"garage-ev"}
+    assert telemetry["garage-ev"].profile is PROFILES["solax_ev_charger"]
+
+
+def test_telemetry_never_enters_the_config():
+    resolved, issues = resolve(solax_document())
+
+    assert issues == []
+    # No telemetry-only entity was written anywhere in the document.
+    flat = repr(resolved)
+    for key in ("inverter_temperature", "communication_success_rate", "inverter_voltage_l1"):
+        assert key not in flat
+    # Nor is any of it owned, so the editor neither hides nor guards it.
+    with registry(solax_registry()):
+        described = describe_vendors(fake_hass([config_entry()]), solax_document())
+    owned = described["devices"]["energy_nodes.inverter"]["ownedConfigPaths"]
+    assert not any("temperature" in path or "telemetry" in path for path in owned)

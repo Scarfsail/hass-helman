@@ -15,6 +15,12 @@ behind ``input_select.rezim_fv`` made on prod: the use mode first, then, in
 Manual Mode, the manual mode. The export limit follows every mode; its value
 is the user's grid contract, never the profile's.
 
+The ``telemetry`` the inverter detail reads is taken from the prod registry
+(2026-10-10), each under the domain it is registered in: the unique id does not
+follow the entity id (``number.solax_inverter_eps_min_soc`` is
+``SolaX_eps_min_soc``), and several of these are numbers, selects or a switch
+rather than sensors.
+
 Site facts (``max_power``, the ``forecast`` blocks other than the house total,
 prices, efficiencies) are deliberately absent: they are the user's config,
 whatever hardware sits behind them.
@@ -129,4 +135,48 @@ PROFILE = VendorProfile(
     },
     device_paths=(MODE_DEVICE_PATH,),
     export_limit=("number", "{name}_export_control_user_limit"),
+    telemetry={
+        "use_mode": _USE_MODE,
+        "manual_mode": _MANUAL_MODE,
+        "run_mode": ("sensor", "{name}_run_mode"),
+        "export_limit": ("number", "{name}_export_control_user_limit"),
+        "pv_power_limit": ("number", "{name}_remotecontrol_pv_power_limit"),
+        "main_breaker_limit": ("number", "{name}_main_breaker_current_limit"),
+        "battery_charge_max_current": ("number", "{name}_battery_charge_max_current"),
+        "battery_discharge_max_current": (
+            "number",
+            "{name}_battery_discharge_max_current",
+        ),
+        "eps_min_soc": ("number", "{name}_eps_min_soc"),
+        "eps_restart_soc": ("number", "{name}_eps_restart_soc"),
+        "remote_control": ("select", "{name}_remotecontrol_power_control"),
+        "remote_control_mode": ("select", "{name}_remotecontrol_power_control_mode"),
+        "active_power_target": ("sensor", "{name}_active_power_target"),
+        "active_power_real": ("sensor", "{name}_active_power_real"),
+        **{
+            f"ac_{quantity}_l{phase}": ("sensor", f"{{name}}_inverter_{quantity}_l{phase}")
+            for quantity in ("power", "voltage", "current", "frequency")
+            for phase in (1, 2, 3)
+        },
+        "phase_balance": ("switch", "{name}_phase_power_balance_x3"),
+        "inverter_temperature": ("sensor", "{name}_inverter_temperature"),
+        "link_success_rate": ("sensor", "{name}_communication_success_rate"),
+        "link_quarantined_registers": (
+            "sensor",
+            "{name}_communication_quarantined_registers",
+        ),
+        "firmware": ("sensor", "{name}_software_version"),
+        "hardware_version": ("sensor", "{name}_hardware_version"),
+        "rated_power": ("sensor", "{name}_inverter_power_type"),
+        "mppt_count": ("sensor", "{name}_mppt_count"),
+        "lock_state": ("select", "{name}_lock_state"),
+        "grid_mode_runtime": ("sensor", "{name}_grid_mode_runtime"),
+        "eps_mode_runtime": ("sensor", "{name}_eps_mode_runtime"),
+    },
+    # Gen4+ run_mode strings (solax_modbus plugin_solax.py, register 0x9).
+    run_mode_conditions={
+        "Off-Grid": "off_grid",
+        "Fault": "fault",
+        "Permanent Fault Mode": "fault",
+    },
 )

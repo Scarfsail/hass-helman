@@ -24,6 +24,7 @@ from .config_validation import ValidationReport, validate_config_document
 from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
 from .span_buckets import BUCKETS
 from .entity_inspection import inspect_targets
+from .node_details import NodeDetailError, async_get_node_detail
 from .solar_bias_correction.websocket import (
     _is_dashed_date,
     ws_get_solar_bias_day_aggregates,
@@ -143,6 +144,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_device_stats)
     async_register_command(hass, ws_get_device_report)
+    async_register_command(hass, ws_get_node_detail)
     async_register_command(hass, ws_get_solar_bias_status)
     async_register_command(hass, ws_train_solar_bias_now)
     async_register_command(hass, ws_get_solar_bias_profile)
@@ -784,6 +786,48 @@ async def ws_get_device_report(
     except Exception:
         _LOGGER.exception("Unexpected device report failure")
         connection.send_error(msg["id"], "internal_error", "Unexpected device report failure")
+        return
+    connection.send_result(msg["id"], payload)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_node_detail",
+    vol.Required("node"): str,
+    vol.Optional("device_id"): str,
+    vol.Optional("section"): str,
+})
+@websocket_api.async_response
+async def ws_get_node_detail(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """One node detail's overview, or one of its history sections.
+
+    The node registry (:mod:`.node_details`) validates the node, the device and
+    the section; a refused request is a websocket error with its code. Not
+    admin-gated: it carries entity ids and numbers the card already shows, the
+    same exposure as ``helman/get_controllable_entities``.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+    try:
+        payload = await async_get_node_detail(
+            hass,
+            coordinator.config,
+            node=msg["node"],
+            device_id=msg.get("device_id"),
+            section=msg.get("section"),
+            now=dt_util.now(),
+        )
+    except NodeDetailError as err:
+        connection.send_error(msg["id"], err.code, str(err))
+        return
+    except Exception:
+        _LOGGER.exception("Unexpected node detail failure")
+        connection.send_error(msg["id"], "internal_error", "Unexpected node detail failure")
         return
     connection.send_result(msg["id"], payload)
 
