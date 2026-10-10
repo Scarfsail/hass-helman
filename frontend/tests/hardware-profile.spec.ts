@@ -755,9 +755,13 @@ test("switching a charger back to Custom brings its empty pickers back", async (
     expect((await lastDraft(page)).devices.consumers[0]).toEqual(garage);
 });
 
-test("a device naming an unknown profile shows it and can go back to Custom", async ({ page }) => {
-    const retired = structuredClone(GARAGE_ON_PROFILE);
-    retired.devices.consumers[0].profile = { id: "retired_profile", device_id: "garage-charger" };
+for (const [stored, shown] of [
+    [{ id: "retired_profile", device_id: "garage-charger" }, "retired_profile"],
+    [null, "-"],
+] as const) {
+test(`a device storing profile ${JSON.stringify(stored)} shows it and can go back to Custom`, async ({ page }) => {
+    const retired: any = structuredClone(GARAGE_ON_PROFILE);
+    retired.devices.consumers[0].profile = stored;
     await mountEditor(page, retired);
     await openTab(page, "Devices");
     // The select shows the stored id, so picking Custom is a real change.
@@ -773,9 +777,10 @@ test("a device naming an unknown profile shows it and can go back to Custom", as
                         )?.value ?? null,
             );
         })
-        .toBe("retired_profile");
+        .toBe(shown);
 
     await pickGarageProfile(page, "");
 
-    await expect.poll(async () => (await lastDraft(page))?.devices?.consumers?.[0]?.profile ?? null).toBeNull();
+    await expect.poll(async () => "profile" in ((await lastDraft(page))?.devices?.consumers?.[0] ?? {})).toBe(false);
 });
+}

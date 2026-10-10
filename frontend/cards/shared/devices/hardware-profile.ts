@@ -261,8 +261,8 @@ export function renderHardwareProfile(
                         setDeviceProfile(host, vendors, path, (event.currentTarget as HTMLSelectElement).value)}
                 >
                     <option value="" ?selected=${profileId === ""}>${host.t("editor.values.profile_custom")}</option>
-                    ${profileId && !profiles.some((option) => option.id === profileId)
-                        ? html`<option value=${profileId} selected>${profileId}</option>`
+                    ${device.profile !== undefined && !profiles.some((option) => option.id === profileId)
+                        ? html`<option value=${profileId || "-"} selected>${profileId || canonicalJson(device.profile)}</option>`
                         : nothing}
                     ${profiles.map(
                         (option) => html`
