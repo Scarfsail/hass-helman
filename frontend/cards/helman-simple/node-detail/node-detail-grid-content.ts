@@ -44,6 +44,9 @@ const PHASE_COLORS: Record<Phase, string> = { 1: "#8e24aa", 2: "#fb8c00", 3: "#0
 const NOMINAL_VOLTAGE = 230;
 const REFERENCE_BAND = { from: 207, to: 253 };
 
+/** How stale today's money may get before a reading change re-reads it. */
+const MONEY_REFRESH_MS = 5 * 60_000;
+
 /** Below this many watts either way the grid counts as idle, as on the card. */
 const IDLE_W = 50;
 
@@ -323,6 +326,7 @@ export class NodeDetailGridContent extends LitElement {
     private _forecastRequest = 0;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
+    private _moneyRequestedAt = 0;
     private _voltageRequest = 0;
     /** The run mode the current overview's condition was computed from. */
     private _runModeState = "";
@@ -356,7 +360,11 @@ export class NodeDetailGridContent extends LitElement {
             else if (this._overview.status === "ready" && this._runModeOf(this._overview.payload) !== this._runModeState) {
                 void this._loadOverview();
             }
-            if (this._started && this._moneyDate !== todayIso(this._timeZone)) void this._loadMoney();
+            // Today's statistics grow while the dialog is open: re-read them on a
+            // new day, and otherwise at most every few minutes as readings change.
+            if (this._started && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > MONEY_REFRESH_MS)) {
+                void this._loadMoney();
+            }
             // Only the open evidence's embed is in the page; a closed one waits.
             for (const card of this._inspectors.values()) if (card.isConnected) card.hass = this.hass;
         }
@@ -410,6 +418,7 @@ export class NodeDetailGridContent extends LitElement {
         if (this._money?.status !== "ready") this._money = { status: "loading" };
         const date = todayIso(this._timeZone);
         this._moneyDate = date;
+        this._moneyRequestedAt = Date.now();
         try {
             const payload = await fetchGridDayAggregates(this.hass, date);
             if (request !== this._moneyRequest) return;

@@ -28,6 +28,8 @@ export class ForecastLoader {
     private _payload: ForecastPayload | null = null;
     private _payloadHourKey: string | null = null;
     private _fetchedAt = 0;
+    /** Bumped by `invalidate()`: a request from an older generation fills no cache. */
+    private _generation = 0;
 
     constructor(private readonly _forecastDays?: number | null) {}
 
@@ -53,7 +55,9 @@ export class ForecastLoader {
         if (this._forecastDays !== null && this._forecastDays !== undefined) {
             requestMessage.forecast_days = this._forecastDays;
         }
+        const generation = this._generation;
         const request = hass.connection.sendMessagePromise<ForecastPayload>(requestMessage).then((payload) => {
+            if (generation !== this._generation) return payload;
             this._payload = payload;
             this._payloadHourKey = requestHourKey;
             this._fetchedAt = Date.now();
@@ -72,6 +76,7 @@ export class ForecastLoader {
 
     /** Forget the cached payload and any request in flight: the next load asks again. */
     invalidate(): void {
+        this._generation += 1;
         this._payload = null;
         this._payloadHourKey = null;
         this._inFlight = null;
