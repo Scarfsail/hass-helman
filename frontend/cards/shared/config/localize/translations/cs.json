@@ -297,6 +297,8 @@
       "children_tolerance_percent": "Tolerance podřízených %",
       "add_device_entity": "Elektroměr nového zařízení",
       "add_child_device_entity": "Elektroměr, spínač, světlo nebo klimatizace nového podřízeného zařízení",
+      "add_device_profile": "Hardwarový profil nového zařízení",
+      "add_device_vendor_device": "HA zařízení nového zařízení",
       "hardware_profile": "Hardwarový profil",
       "vendor_entry": "Položka integrace",
       "vendor_device": "Zařízení",
@@ -376,6 +378,7 @@
       "children_distribute_all": "Zapnuto: běžící podřízená zařízení si rozdělí veškerý vlastní výkon tohoto zařízení v poměru svého naučeného výkonu. Vypnuto: každé je omezeno svým naučeným výkonem plus tolerancí níže a zbytek se zobrazí jako neměřený.",
       "consumption_energy_entity_child": "U podřízeného zařízení volitelné: když pole necháte prázdné, odebírá z elektroměru nadřazeného zařízení.",
       "add_device": "Jeho id se jednou vygeneruje z entity a už se nemění.",
+      "add_device_profile": "Jeho entity poskytuje profil, takže se nic nevybírá ručně. Jeho id se jednou vygeneruje z názvu zařízení a už se nemění.",
       "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač, světlo či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění."
     },
     "messages": {

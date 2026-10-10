@@ -335,7 +335,7 @@ export function deviceIdentityTargets(
 }
 
 /** Persist the projection default shown for a newly schedulable device. */
-function seedDeviceProjection(draft: JsonObject, path: PathSegment[]): void {
+export function seedDeviceProjection(draft: JsonObject, path: PathSegment[]): void {
     const device = asJsonObject(getValueAtPath(draft, path));
     if (!device || !isSchedulable(device) || deviceKind(device) === "ev_charger") return;
     const projectionPath = [...path, "consumption", "projection"];

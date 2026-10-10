@@ -65,6 +65,7 @@ import {
   deviceChildren,
   deviceIdFor,
   deviceKind,
+  nameSlug,
   CONTROLLABLE_ID_INVERTER,
   INVERTER_PATH,
   isCarvedMeterOwner,
@@ -76,6 +77,7 @@ import {
   slugId,
   stripGroupReferences,
   SWITCH_CONTROL_DOMAINS,
+  uniqueDeviceId,
   validationPath,
   type DeviceFilter,
   type GroupedDeviceEntry,
@@ -194,13 +196,16 @@ import {
   renderDeviceIssues,
   renderIssueCountBadge,
   renderTrackedSection,
+  seedDeviceProjection,
   trainingDepthCell,
   type DeviceConfigChangedDetail,
   type HelmanDeviceEditor,
 } from "../cards/shared/devices/helman-device-editor";
 import {
   VendorsController,
+  candidateLabel,
   deviceProfile,
+  freeCandidates,
   type HardwareProfileHost,
   hardwareProfileStyles,
   renderHardwareProfile,
@@ -223,6 +228,7 @@ import type {
   StatusMessage,
   ValidationIssue,
   ValidationReport,
+  VendorProfileInfo,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
@@ -350,6 +356,8 @@ export class HelmanConfigEditorPanel
     _deviceActionMessage: { state: true },
     _importLoading: { state: true },
     _addDeviceTarget: { state: true },
+    _addDeviceProfile: { state: true },
+    _addedDeviceId: { state: true },
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
     _configDefaults: { state: true },
@@ -1037,6 +1045,10 @@ export class HelmanConfigEditorPanel
 
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
+  /** The hardware profile picked in the open "Add device" picker; "" is Custom. */
+  private _addDeviceProfile = "";
+  /** The device a profile add just created, whose card opens on it. */
+  private _addedDeviceId: string | null = null;
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
@@ -3752,7 +3764,8 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * "Add device": pick one entity, and the device is created from it.
+   * "Add device": pick one entity, and the device is created from it -- or,
+   * with a hardware profile picked, the HA device the profile binds to.
    *
    * At the top level the entity is the new device's energy meter. Under a
    * parent it is either the child's own meter (a sensor) or, for a child that
@@ -3775,6 +3788,9 @@ export class HelmanConfigEditorPanel
             class="add-button primary add-device"
             @click=${() => {
               this._addDeviceTarget = key;
+              this._addDeviceProfile = "";
+              // Re-armed, so the card of a device added again opens again.
+              this._addedDeviceId = null;
             }}
           >
             ${this._t(child ? "editor.actions.add_child_device" : "editor.actions.add_device")}
@@ -3783,21 +3799,41 @@ export class HelmanConfigEditorPanel
         </div>
       `;
     }
+    // Only a device-bound profile has HA devices to add a device from.
+    const profiles = (this._vendors.vendors?.profiles ?? []).filter(
+      (option) =>
+        option.binding === "device" && (EDITABLE_DEVICE_KINDS as readonly string[]).includes(option.deviceKind),
+    );
+    const profile = profiles.find((option) => option.id === this._addDeviceProfile);
     return html`
       <div class="field add-device-picker">
-        <label>
-          ${this._t(child ? "editor.fields.add_child_device_entity" : "editor.fields.add_device_entity")}
-        </label>
-        <ha-entity-picker
-          .hass=${this.hass}
-          .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"] : ["sensor"]}
-          .entityFilter=${SENSOR_KIND_FILTERS.energy}
-          @value-changed=${(event: CustomEvent<{ value?: string }>) =>
-            this._addDevice(listPath, parent, event.detail?.value ?? "")}
-        ></ha-entity-picker>
-        <div class="helper">
-          ${this._t(child ? "editor.helpers.add_child_device" : "editor.helpers.add_device")}
-        </div>
+        <label>${this._t("editor.fields.add_device_profile")}</label>
+        <select
+          data-field="add-device-profile"
+          @change=${(event: Event) => {
+            this._addDeviceProfile = (event.currentTarget as HTMLSelectElement).value;
+          }}
+        >
+          <option value="" ?selected=${!profile}>${this._t("editor.values.profile_custom")}</option>
+          ${profiles.map(
+            (option) => html`<option value=${option.id} ?selected=${option === profile}>${option.label}</option>`,
+          )}
+        </select>
+        ${profile ? this._renderAddProfileDevice(listPath, profile) : html`
+          <label>
+            ${this._t(child ? "editor.fields.add_child_device_entity" : "editor.fields.add_device_entity")}
+          </label>
+          <ha-entity-picker
+            .hass=${this.hass}
+            .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"] : ["sensor"]}
+            .entityFilter=${SENSOR_KIND_FILTERS.energy}
+            @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+              this._addDevice(listPath, parent, event.detail?.value ?? "")}
+          ></ha-entity-picker>
+          <div class="helper">
+            ${this._t(child ? "editor.helpers.add_child_device" : "editor.helpers.add_device")}
+          </div>
+        `}
         <div class="section-footer">
           <button
             type="button"
@@ -3811,6 +3847,69 @@ export class HelmanConfigEditorPanel
         </div>
       </div>
     `;
+  }
+
+  /**
+   * The "Add device" picker under a profile: the HA devices it can bind that
+   * no draft device binds yet, or P2's message when none is left.
+   */
+  private _renderAddProfileDevice(listPath: PathSegment[], profile: VendorProfileInfo): TemplateResult {
+    const newPath = [...listPath, (asJsonArray(this._getValue(listPath)) ?? []).length];
+    const candidates = freeCandidates(this, profile, newPath);
+    if (candidates.length === 0) {
+      return html`
+        <div class="vendor-provided-entity unresolved" data-field="vendor-no-devices">
+          ${this._tFormat("editor.dynamic.vendor_no_devices", { profile: profile.label })}
+        </div>
+      `;
+    }
+    return html`
+      <label>${this._t("editor.fields.add_device_vendor_device")}</label>
+      <select
+        data-field="add-device-vendor-device"
+        @change=${(event: Event) => {
+          const candidate = candidates.find(
+            (option) => option.deviceId === (event.currentTarget as HTMLSelectElement).value,
+          );
+          if (candidate) this._addProfileDevice(newPath, profile, candidate);
+        }}
+      >
+        <option value="" selected></option>
+        ${candidates.map(
+          (candidate) =>
+            html`<option value=${candidate.deviceId}>${candidateLabel(candidate)}</option>`,
+        )}
+      </select>
+      <div class="helper">${this._t("editor.helpers.add_device_profile")}</div>
+    `;
+  }
+
+  /**
+   * A profile device, created complete: the profile owns its meters and
+   * controls, so it stores none, and its id is slugged from the HA device's
+   * name. `path` is where it lands, at the end of its list; its card opens
+   * on it, showing what is left to set.
+   */
+  private _addProfileDevice(
+    path: PathSegment[],
+    profile: VendorProfileInfo,
+    candidate: NonNullable<VendorProfileInfo["candidates"]>[number],
+  ): void {
+    const id = uniqueDeviceId(nameSlug(candidate.name) || profile.deviceKind, [
+      CONTROLLABLE_ID_INVERTER,
+      ...this._deviceIds(),
+    ]);
+    this._addDeviceTarget = null;
+    this._addedDeviceId = id;
+    this._applyMutation((draft) => {
+      appendListItem(draft, path.slice(0, -1), {
+        id,
+        name: candidate.name,
+        kind: profile.deviceKind,
+        profile: { id: profile.id, device_id: candidate.deviceId },
+      });
+      seedDeviceProjection(draft, path);
+    });
   }
 
   private _addDevice(listPath: PathSegment[], parent: JsonObject | null, rawEntityId: string): void {
@@ -4325,6 +4424,7 @@ export class HelmanConfigEditorPanel
         .validation=${this._validation}
         .inspections=${this._inspections.results}
         .vendors=${this._vendors.vendors}
+        .expanded=${this._addedDeviceId !== null && device.id === this._addedDeviceId}
         .energyEstimate=${this._deviceEnergyEstimate(
           asJsonObject(getValueAtPath(this._resolvedConfig() ?? {}, path)) ?? device,
         )}
@@ -5210,9 +5310,10 @@ export class HelmanConfigEditorPanel
   }
 
   /** Every device id in the draft tree: ids are unique across all of it. */
+  /** Every draft device id, trimmed as the backend compares them. */
   private _deviceIds(): string[] {
     return iterDevices(this._config)
-      .map(({ device }) => this._stringValue(device.id))
+      .map(({ device }) => this._stringValue(device.id).trim())
       .filter((value) => value.length > 0);
   }
 
