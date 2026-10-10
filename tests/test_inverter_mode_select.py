@@ -11,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from custom_components.helman import select as select_module
+from custom_components.helman.scheduling import actuation as actuation_module
 from custom_components.helman.select import HelmanInverterModeSelect
 from custom_components.helman.vendors import PROFILES
 
@@ -53,7 +54,7 @@ VENDOR_ENTRY = NS(entry_id="solax-entry", title="SolaX", options={}, data={})
 
 def _resolve(_hass, _profile, entry, templates):
     return {
-        template: SOLAX_CONTROLS.get(template.format(name=entry.title))
+        template: SOLAX_CONTROLS.get(template[1].format(name=entry.title))
         for template in templates
     }
 
@@ -156,7 +157,7 @@ def test_a_stalled_write_times_out_and_releases_the_lock():
 
     entity.hass.services.async_call = AsyncMock(side_effect=stall)
 
-    with patch.object(select_module, "SERVICE_CALL_TIMEOUT_SECONDS", 0.01), pytest.raises(
+    with patch.object(actuation_module, "SERVICE_CALL_TIMEOUT_SECONDS", 0.01), pytest.raises(
         HomeAssistantError, match="Timed out"
     ):
         select(entity, "stop_charging")
@@ -265,8 +266,8 @@ def _setup(config, registered=None):
 def test_the_select_exists_only_with_the_solax_profile():
     assert _setup({"energy_nodes": {"inverter": {}}})[0] == []
 
-    vendor = {"profile": "solax_inverter", "entry_id": "solax-entry"}
-    [entity], _registry = _setup({"energy_nodes": {"inverter": {"vendor": vendor}}})
+    profile = {"id": "solax_inverter", "entry_id": "solax-entry"}
+    [entity], _registry = _setup({"energy_nodes": {"inverter": {"profile": profile}}})
     assert isinstance(entity, HelmanInverterModeSelect)
 
 

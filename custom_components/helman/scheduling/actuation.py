@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .schedule import ScheduleError, ScheduleExecutionUnavailableError
 
@@ -112,3 +113,37 @@ class ScheduleActuator:
                 f"'{data.get('entity_id')}' after "
                 f"{self._service_call_timeout_seconds:g} seconds"
             ) from err
+
+
+async def async_write_vendor_entity(
+    hass: HomeAssistant, entity_id: str, target: str | float
+) -> None:
+    """Set one vendor entity: a number to a value, a select to an option."""
+    domain = entity_id.partition(".")[0]
+    if domain == "number":
+        service, data = "set_value", {"value": target}
+    else:
+        service, data = "select_option", {"option": target}
+    # Bounded like the executor's own writes: a stalled vendor call would
+    # otherwise hold the caller's lock, and every later write, indefinitely.
+    timeout = asyncio.timeout(SERVICE_CALL_TIMEOUT_SECONDS)
+    try:
+        async with timeout:
+            await hass.services.async_call(
+                domain, service, {"entity_id": entity_id, **data}, blocking=True
+            )
+    except HomeAssistantError:
+        raise
+    except TimeoutError as err:
+        if not timeout.expired():
+            raise HomeAssistantError(
+                f"Failed to set {entity_id} to {target!r}: {err}"
+            ) from err
+        raise HomeAssistantError(
+            f"Timed out setting {entity_id} to {target!r} after "
+            f"{SERVICE_CALL_TIMEOUT_SECONDS:g} seconds"
+        ) from err
+    except Exception as err:
+        raise HomeAssistantError(
+            f"Failed to set {entity_id} to {target!r}: {err}"
+        ) from err

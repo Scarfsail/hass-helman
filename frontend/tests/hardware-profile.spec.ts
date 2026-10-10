@@ -56,7 +56,7 @@ const PROFILE = {
 
 /** A hand-mapped document: every owned path is set, and one site setting. */
 const CUSTOM_CONFIG = {
-    config_version: 28,
+    config_version: 29,
     energy_nodes: {
         inverter: {
             controls: {
@@ -87,9 +87,9 @@ const CUSTOM_CONFIG = {
 };
 
 const SOLAX_CONFIG = {
-    config_version: 28,
+    config_version: 29,
     energy_nodes: {
-        inverter: { vendor: { profile: "solax_inverter", entry_id: "solax-entry" } },
+        inverter: { profile: { id: "solax_inverter", entry_id: "solax-entry" } },
         solar: { forecast: { total_energy_entity_id: "sensor.solar_total" } },
         battery: { forecast: { charge_efficiency: 0.95 } },
     },
@@ -128,7 +128,7 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                         return {
                             profiles: [profile],
                             devices:
-                                inverter?.vendor?.profile === profile.id
+                                inverter?.profile?.id === profile.id
                                     ? {
                                           "energy_nodes.inverter": {
                                               profile: profile.id,
@@ -366,10 +366,10 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         .poll(() =>
             page.evaluate(() => {
                 const requests = (window as any).__vendorRequests as any[];
-                return requests.at(-1)?.energy_nodes?.inverter?.vendor ?? null;
+                return requests.at(-1)?.energy_nodes?.inverter?.profile ?? null;
             }),
         )
-        .toEqual({ profile: "solax_inverter", entry_id: "solax-entry" });
+        .toEqual({ id: "solax_inverter", entry_id: "solax-entry" });
     const draft = await page.evaluate(() => (window as any).__vendorRequests.at(-1));
     const { inverter, ...nodes } = draft.energy_nodes;
     expect(nodes).toEqual({
@@ -387,7 +387,7 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         })
         .toBe(Object.keys(RESOLVED).length + 1);
 
-    // And back to Custom: the vendor goes, the pickers come back (empty).
+    // And back to Custom: the profile goes, the pickers come back (empty).
     await openTab(page, "Energy nodes");
     await expandEverything(page);
     await page.evaluate(() => {
@@ -402,7 +402,7 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         .poll(() =>
             page.evaluate(() => {
                 const requests = (window as any).__vendorRequests as any[];
-                return requests.at(-1)?.energy_nodes?.inverter?.vendor ?? null;
+                return requests.at(-1)?.energy_nodes?.inverter?.profile ?? null;
             }),
         )
         .toBeNull();

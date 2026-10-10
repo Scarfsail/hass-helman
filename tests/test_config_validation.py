@@ -299,11 +299,11 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_solax_profile_document_without_entity_slots_passes(self) -> None:
         # The stored shape under the SolaX inverter profile: the profile owns
-        # every energy entity slot, so none is written, and the `vendor` key on
-        # the inverter is a config key like any other.
+        # every energy entity slot, so none is written, and the `profile` key
+        # on the inverter is a config key like any other.
         config = _valid_config()
-        config["energy_nodes"]["inverter"]["vendor"] = {
-            "profile": "solax_inverter",
+        config["energy_nodes"]["inverter"]["profile"] = {
+            "id": "solax_inverter",
             "entry_id": "solax-entry",
         }
         for node in config["energy_nodes"].values():
@@ -322,8 +322,8 @@ class ConfigValidationTests(unittest.TestCase):
     def _export_cap_errors(self, *, vendor: bool, **grid) -> list[tuple[str, str]]:
         config = _valid_config()
         if vendor:
-            config["energy_nodes"]["inverter"]["vendor"] = {
-                "profile": "solax_inverter",
+            config["energy_nodes"]["inverter"]["profile"] = {
+                "id": "solax_inverter",
                 "entry_id": "solax-entry",
             }
         config["energy_nodes"]["grid"].update(grid)
@@ -1385,6 +1385,24 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             _paths_and_codes(report),
             [("energy_nodes.inverter.groups", "groups_not_allowed")],
+        )
+
+    def test_a_stored_vendor_key_is_refused_by_name(self) -> None:
+        """Load migrates ``vendor`` to ``profile`` (v29); save refuses it."""
+        config = _valid_config()
+        vendor = {"profile": "solax_inverter", "entry_id": "solax-entry"}
+        config["energy_nodes"]["inverter"]["vendor"] = vendor
+        config["devices"]["consumers"][0]["vendor"] = vendor
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            sorted(
+                issue.path
+                for issue in report.errors
+                if issue.code == "relocated_config_key"
+            ),
+            ["devices.consumers[0].vendor", "energy_nodes.inverter.vendor"],
         )
 
     def test_top_level_card_key_is_refused_by_name(self) -> None:

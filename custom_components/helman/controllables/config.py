@@ -519,7 +519,7 @@ def find_inverter_device(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """``energy_nodes.inverter``, or an empty mapping when absent or not one.
 
     The only reader of the inverter's location: its id and kind are implied by
-    it, so the mapping holds just ``controls`` and ``vendor``.
+    it, so the mapping holds just ``controls`` and ``profile``.
     """
     if not isinstance(config, Mapping):
         return {}
