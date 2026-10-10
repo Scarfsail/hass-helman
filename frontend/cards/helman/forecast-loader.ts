@@ -70,6 +70,14 @@ export class ForecastLoader {
         return request;
     }
 
+    /** Forget the cached payload and any request in flight: the next load asks again. */
+    invalidate(): void {
+        this._payload = null;
+        this._payloadHourKey = null;
+        this._inFlight = null;
+        this._inFlightHourKey = null;
+    }
+
     async refresh(hass: HomeAssistant): Promise<ForecastPayload | null> {
         try {
             return await this.load(hass);

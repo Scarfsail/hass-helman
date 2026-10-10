@@ -320,6 +320,7 @@ export class NodeDetailGridContent extends LitElement {
     private _moneyRequest = 0;
     private _unsubscribeDataChanged?: () => void;
     private _boundaryTimer?: ReturnType<typeof setTimeout>;
+    private _forecastRequest = 0;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
     private _voltageRequest = 0;
@@ -366,8 +367,9 @@ export class NodeDetailGridContent extends LitElement {
         // A new plan or config (an optimizer run, another client) can change
         // everything shown: the feed's contract is to reload it all.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
-            void this._loadOverview();
+            void this._loadOverview(true);
             void this._loadMoney();
+            this._forecastLoader.invalidate();
             void this._loadForecast();
             if (this._open === "voltage" && this._voltage !== null) void this._loadVoltage();
         });
@@ -378,14 +380,15 @@ export class NodeDetailGridContent extends LitElement {
 
     // ── Data ────────────────────────────────────────────────────────────────
 
-    private async _loadOverview(): Promise<void> {
+    /** `fresh`: never join a request sent before a change was announced. */
+    private async _loadOverview(fresh = false): Promise<void> {
         const request = ++this._overviewRequest;
         const previous = this._overview.status === "ready" ? this._overview.payload : undefined;
         if (previous) this._runModeState = this._runModeOf(previous);
         else this._overview = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<GridDetailPayload>({ node: "grid" }, { fresh: previous !== undefined });
+                .getNodeDetail<GridDetailPayload>({ node: "grid" }, { fresh: fresh || previous !== undefined });
             if (request !== this._overviewRequest) return;
             if (!previous) this._runModeState = this._runModeOf(payload);
             this._overview = { status: "ready", payload };
@@ -419,8 +422,9 @@ export class NodeDetailGridContent extends LitElement {
     }
 
     private async _loadForecast(): Promise<void> {
+        const request = ++this._forecastRequest;
         const forecast = await this._forecastLoader.refresh(this.hass);
-        if (this._started) this._forecast = forecast;
+        if (this._started && request === this._forecastRequest) this._forecast = forecast;
     }
 
     private async _loadVoltage(): Promise<void> {
@@ -428,7 +432,7 @@ export class NodeDetailGridContent extends LitElement {
         this._voltage = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<GridVoltageSectionPayload>({ node: "grid", section: "voltage" });
+                .getNodeDetail<GridVoltageSectionPayload>({ node: "grid", section: "voltage" }, { fresh: true });
             if (request !== this._voltageRequest) return;
             this._voltage = { status: "ready", payload };
         } catch (error) {

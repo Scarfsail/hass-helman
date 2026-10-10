@@ -286,7 +286,7 @@ export class NodeDetailInverterContent extends LitElement {
         });
         // A config change (another client) can re-map what the overview reads.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
-            void this._loadOverview();
+            void this._loadOverview(true);
             if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
         });
         void this._loadOverview();
@@ -294,7 +294,8 @@ export class NodeDetailInverterContent extends LitElement {
 
     // ── Data ────────────────────────────────────────────────────────────────
 
-    private async _loadOverview(): Promise<void> {
+    /** `fresh`: never join a request sent before a change was announced. */
+    private async _loadOverview(fresh = false): Promise<void> {
         const request = ++this._overviewRequest;
         const previous = this._overview.status === "ready" ? this._overview.payload : undefined;
         // A refresh compares the states as they are now, when it is sent: a
@@ -303,7 +304,7 @@ export class NodeDetailInverterContent extends LitElement {
         else this._overview = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: previous !== undefined });
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: fresh || previous !== undefined });
             if (request !== this._overviewRequest) return;
             if (!previous) this._comparedStates = this._comparedSignature(payload);
             this._overview = { status: "ready", payload };
@@ -325,7 +326,7 @@ export class NodeDetailInverterContent extends LitElement {
         this._temperature = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterTemperatureSectionPayload>({ node: "inverter", section: "temperature" });
+                .getNodeDetail<InverterTemperatureSectionPayload>({ node: "inverter", section: "temperature" }, { fresh: true });
             if (request !== this._temperatureRequest) return;
             this._temperature = { status: "ready", payload };
         } catch (error) {
