@@ -263,20 +263,16 @@ def _setup(config, registered=None):
 
 
 def test_the_select_exists_only_with_the_solax_profile():
-    inverter = {"kind": "inverter", "id": "inverter"}
-
-    assert _setup({"devices": {"system": [inverter]}})[0] == []
+    assert _setup({"energy_nodes": {"inverter": {}}})[0] == []
 
     vendor = {"profile": "solax_inverter", "entry_id": "solax-entry"}
-    [entity], _registry = _setup({"devices": {"system": [{**inverter, "vendor": vendor}]}})
+    [entity], _registry = _setup({"energy_nodes": {"inverter": {"vendor": vendor}}})
     assert isinstance(entity, HelmanInverterModeSelect)
 
 
 def test_back_on_custom_the_registered_select_is_removed():
-    inverter = {"kind": "inverter", "id": "inverter"}
-
     added, registry = _setup(
-        {"devices": {"system": [inverter]}}, registered="select.helman_inverter_mode"
+        {"energy_nodes": {"inverter": {}}}, registered="select.helman_inverter_mode"
     )
 
     assert added == []

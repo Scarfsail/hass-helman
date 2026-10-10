@@ -167,17 +167,13 @@ def registry(entries):
 
 def solax_document(**inverter_extra):
     return {
-        "devices": {
-            "system": [
-                {
-                    "kind": "inverter",
-                    "id": "inverter",
-                    "vendor": {"profile": "solax_inverter", "entry_id": ENTRY_ID},
-                    **inverter_extra,
-                }
-            ]
+        "energy_nodes": {
+            "inverter": {
+                "vendor": {"profile": "solax_inverter", "entry_id": ENTRY_ID},
+                **inverter_extra,
+            },
+            "battery": {"forecast": {"charge_efficiency": 0.95}},
         },
-        "energy_nodes": {"battery": {"forecast": {"charge_efficiency": 0.95}}},
     }
 
 
@@ -206,7 +202,7 @@ def test_every_row_of_the_solax_table_resolves():
         "positive_is_import"
     )
     # Helman's own mode select, under its suggested id until it is registered.
-    assert resolved["devices"]["system"][0]["controls"]["mode"] == {
+    assert resolved["energy_nodes"]["inverter"]["controls"]["mode"] == {
         "entity_id": "select.helman_inverter_mode",
         "options": {kind: kind for kind in INVERTER_ACTION_KINDS},
     }
@@ -264,8 +260,8 @@ def test_only_the_chosen_entry_on_the_vendor_platform_is_read():
     resolved, issues = resolve(solax_document(), entries=entries)
 
     assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
-    assert [(i.code, i.path) for i in issues] == [
-        ("vendor_entity_unresolved", "devices.system[0].vendor")
+    assert [(i.section, i.code, i.path) for i in issues] == [
+        ("energy_nodes", "vendor_entity_unresolved", "energy_nodes.inverter.vendor")
     ]
 
 
@@ -277,7 +273,7 @@ def test_a_disabled_or_ignored_config_entry_is_refused(entry):
 
     assert value_at(resolved, "energy_nodes.battery.entities.capacity") is None
     assert [(i.code, i.path) for i in issues] == [
-        ("invalid_choice", "devices.system[0].vendor.entry_id")
+        ("invalid_choice", "energy_nodes.inverter.vendor.entry_id")
     ]
 
 
@@ -344,7 +340,7 @@ def test_a_renamed_mode_select_still_resolves():
     resolved, issues = resolve(solax_document(), entries=entries)
 
     assert issues == []
-    assert resolved["devices"]["system"][0]["controls"]["mode"]["entity_id"] == (
+    assert resolved["energy_nodes"]["inverter"]["controls"]["mode"]["entity_id"] == (
         "select.my_inverter_mode"
     )
 
@@ -357,17 +353,19 @@ def test_a_stored_mode_control_is_refused():
     resolved, issues = resolve(document)
 
     assert [(i.code, i.path, i.error) for i in issues] == [
-        ("vendor_owned_key", "devices.system[0].controls.mode", True)
+        ("vendor_owned_key", "energy_nodes.inverter.controls.mode", True)
     ]
-    assert resolved["devices"]["system"][0]["controls"]["mode"]["entity_id"] == (
+    assert resolved["energy_nodes"]["inverter"]["controls"]["mode"]["entity_id"] == (
         "select.helman_inverter_mode"
     )
 
 
 def test_a_config_without_a_vendor_resolves_to_itself():
     document = {
-        "devices": {"system": [{"kind": "inverter", "id": "inverter"}]},
-        "energy_nodes": {"battery": {"entities": {"min_soc": "sensor.min"}}},
+        "energy_nodes": {
+            "inverter": {},
+            "battery": {"entities": {"min_soc": "sensor.min"}},
+        },
     }
     original = deepcopy(document)
 
@@ -381,16 +379,16 @@ def test_a_config_without_a_vendor_resolves_to_itself():
 
 def test_a_malformed_vendor_is_reported():
     document = solax_document()
-    document["devices"]["system"][0]["vendor"] = {"profile": "nope", "entry_id": ENTRY_ID}
+    document["energy_nodes"]["inverter"]["vendor"] = {"profile": "nope", "entry_id": ENTRY_ID}
     _resolved, issues = resolve(document)
-    assert [(i.code, i.path) for i in issues] == [
-        ("invalid_choice", "devices.system[0].vendor.profile")
+    assert [(i.section, i.code, i.path) for i in issues] == [
+        ("energy_nodes", "invalid_choice", "energy_nodes.inverter.vendor.profile")
     ]
 
-    document["devices"]["system"][0]["vendor"] = {"profile": "solax_inverter"}
+    document["energy_nodes"]["inverter"]["vendor"] = {"profile": "solax_inverter"}
     _resolved, issues = resolve(document)
     assert [(i.code, i.path) for i in issues] == [
-        ("required", "devices.system[0].vendor.entry_id")
+        ("required", "energy_nodes.inverter.vendor.entry_id")
     ]
 
 
@@ -401,7 +399,7 @@ def test_a_missing_entry_is_one_issue_and_the_profile_still_owns_its_paths():
     _resolved, issues = resolve(document, hass_entries=[config_entry(domain="other")])
 
     assert sorted((i.code, i.path) for i in issues) == [
-        ("invalid_choice", "devices.system[0].vendor.entry_id"),
+        ("invalid_choice", "energy_nodes.inverter.vendor.entry_id"),
         ("vendor_owned_key", "energy_nodes.grid.entities.power"),
     ]
 
@@ -420,8 +418,8 @@ def test_a_profile_only_goes_on_its_device_kind():
 
     _resolved, issues = resolve(document)
 
-    assert [(i.code, i.path) for i in issues] == [
-        ("invalid_choice", "devices.consumers[0].vendor.profile")
+    assert [(i.section, i.code, i.path) for i in issues] == [
+        ("devices", "invalid_choice", "devices.consumers[0].vendor.profile")
     ]
 
 
@@ -435,7 +433,7 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert profile["id"] == "solax_inverter"
     assert profile["deviceKind"] == "inverter"
     assert profile["entries"] == [{"entryId": ENTRY_ID, "title": "SolaX"}]
-    device = payload["devices"]["devices.system[0]"]
+    device = payload["devices"]["energy_nodes.inverter"]
     assert device["profile"] == "solax_inverter"
     assert device["ownedDevicePaths"] == ["controls.mode"]
     assert set(device["ownedConfigPaths"]) == set(SOLAX_ROWS) | {
@@ -446,13 +444,13 @@ def test_get_vendors_describes_profiles_and_the_draft_devices():
     assert device["resolved"]["energy_nodes.solar.entities.power"] == (
         "sensor.solax_pv_power_total"
     )
-    assert device["resolved"]["devices.system[0].controls.mode.entity_id"] == (
+    assert device["resolved"]["energy_nodes.inverter.controls.mode.entity_id"] == (
         "select.helman_inverter_mode"
     )
 
 
 def test_get_vendors_without_a_vendor_lists_only_the_profiles():
-    payload = describe_vendors(fake_hass([]), {"devices": {"system": [{"kind": "inverter"}]}})
+    payload = describe_vendors(fake_hass([]), {"energy_nodes": {"inverter": {}}})
 
     assert payload["devices"] == {}
     assert payload["profiles"][0]["entries"] == []

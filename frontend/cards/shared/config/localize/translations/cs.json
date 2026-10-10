@@ -22,7 +22,6 @@
       "add_group": "Přidat skupinu",
       "add_daily_energy_entity": "Přidat entitu denní energie",
       "add_import_price_window": "Přidat okno ceny importu",
-      "add_inverter": "Přidat střídač",
       "add_export_price_optimizer": "Přidat optimalizátor exportní ceny",
       "add_charge_hold_optimizer": "Přidat optimalizátor zadržení nabíjení",
       "add_charge_from_grid_optimizer": "Přidat optimalizátor nabíjení ze sítě",
@@ -83,7 +82,7 @@
       "diagnostics": "Diagnostika",
       "device_settings": "Nastavení zařízení",
       "consumers": "Spotřebiče",
-      "system_devices": "Systémová zařízení",
+      "inverter": "Střídač",
       "measurements": "Měření",
       "projection": "Odhad spotřeby",
       "children": "Podřízená zařízení",
@@ -108,7 +107,7 @@
       "training_solar_bias_slot_invalidation": "Ne každý zaznamenaný slot je poctivým důkazem o prognóze. Při plné baterii a nulovém exportu měnič výrobu přiškrtí, takže výroba vyjde nízko, přestože prognóza byla správná; stejně tak může chyba měřidla jediný slot vyhnat do špičky nebo srazit na nulu. Tyto prahy určují, které sloty se před sestavením modelu vyřadí, aby se korekce učila z počasí, a ne z přiškrcení a vadných dat.",
       "solar_forecast_bias_correction": "Korekce zkreslení této prognózy se nastavuje na kartě Trénování v sekci Korekce solární prognózy.",
       "devices": "Všechna zařízení domu, která spotřebovávají energii, jako strom: zařízení může mít podřízená zařízení, která mají vlastní elektroměr, nebo odebírají z jeho elektroměru. Plánovatelná zařízení Helman plánuje a spouští, ostatní jen měří.",
-      "system_devices": "Zařízení, která řídí celou instalaci, místo aby spotřebovávala energii; dnes bateriový střídač.",
+      "inverter": "Bateriový střídač, který Helman řídí. Nejdřív vyberte jeho hardwarový profil: profil vyplní entity domu, soláru, baterie a sítě níže.",
       "hardware_profile": "Hardwarový profil doplní entity tohoto zařízení sám, podle vlastních identifikátorů entit integrace výrobce. Pole, která poskytuje, jsou jinde v editoru jen pro čtení. Vlastní ponechá všechny entity vybrané ručně."
     },
     "empty": {
@@ -116,8 +115,7 @@
       "no_system_optimizers": "Zatím nejsou nakonfigurovány žádné systémové optimalizátory.",
       "no_device_groupings": "Nejsou nakonfigurována žádná seskupení.",
       "no_entities_on_tab": "Tato záložka nekonfiguruje žádné entity.",
-      "no_devices": "Zatím žádná zařízení. Po instalaci se nic neimportuje automaticky: přidejte každé zařízení výběrem jeho elektroměru.",
-      "no_inverter": "Není nakonfigurován žádný střídač."
+      "no_devices": "Zatím žádná zařízení. Po instalaci se nic neimportuje automaticky: přidejte každé zařízení výběrem jeho elektroměru."
     },
     "badges": {
       "optimizer_warning": "Upozornění na pořadí"

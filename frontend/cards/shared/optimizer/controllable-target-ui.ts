@@ -1,12 +1,12 @@
-import { deviceKind, isSchedulable, iterDevices } from "../config/devices";
+import { CONTROLLABLE_ID_INVERTER, deviceKind, findInverter, isSchedulable, iterDevices } from "../config/devices";
 import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "../config/types";
 
 /**
  * The optimizer target picker's state, over the draft `devices` tree.
  *
  * Every optimizer kind names what it drives the same way now — by device id —
- * so this reads the whole tree, keeps only schedulable devices (a passive one
- * can never be targeted), and filters by the kinds the optimizer's spec says
+ * so this reads the inverter and the whole tree, keeps only schedulable devices
+ * (a passive one can never be targeted), and filters by the kinds the optimizer's spec says
  * it may drive (`OptimizerSchema.controllableKinds`, which the backend derives
  * from `CONTROLLABLE_SPECS`). Filtering here rather than in the renderer is
  * what makes "the picker cannot offer an incompatible target" the same rule as
@@ -16,6 +16,8 @@ import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } fr
  * targetable before they save. Live metadata only supplies what a draft cannot
  * — a climate entity's authorable modes.
  */
+
+/** The inverter's kind, and its reserved controllable id too. */
 
 /** One option in the target picker. `kind` is the controllable kind. */
 export interface ControllableTargetOption {
@@ -125,6 +127,16 @@ function _readDraftControllableOptions(
   }
 
   const options: ControllableTargetOption[] = [];
+  // No device, but a controllable under its reserved id; the picker labels it.
+  if (findInverter(config) && allowedKinds.includes(CONTROLLABLE_ID_INVERTER)) {
+    options.push({
+      id: CONTROLLABLE_ID_INVERTER,
+      name: CONTROLLABLE_ID_INVERTER,
+      kind: CONTROLLABLE_ID_INVERTER,
+      liveClimateModes: null,
+      selectionDisabled: false,
+    });
+  }
   for (const { device } of iterDevices(config)) {
     const controllableId = _readNonEmptyString(device.id);
     const kind = deviceKind(device);

@@ -9,6 +9,9 @@ import { resolve } from "node:path";
  * it is told about, show what each resolved to where its picker was, and flag
  * the ones that did not resolve. Picking the profile deletes the owned keys
  * from the draft, and that is checked on the draft the editor sends back.
+ *
+ * The inverter is the first section of the Energy nodes tab, above the nodes
+ * its profile fills, so everything here happens on that one tab.
  */
 
 const BUNDLE = resolve(
@@ -37,10 +40,10 @@ const RESOLVED: Record<string, string | null> = {
 };
 
 /** The inverter's mode control, owned on the device: Helman's own select. */
-const MODE_PATH = "devices.system[0].controls.mode.entity_id";
+const MODE_PATH = "energy_nodes.inverter.controls.mode.entity_id";
 const MODE_RESOLVED = { [MODE_PATH]: "select.helman_inverter_mode" };
 /** The same path as an entity group's key. */
-const MODE_GROUP = "devices.system.0.controls.mode.entity_id";
+const MODE_GROUP = MODE_PATH;
 
 const PROFILE = {
     id: "solax_inverter",
@@ -53,8 +56,16 @@ const PROFILE = {
 
 /** A hand-mapped document: every owned path is set, and one site setting. */
 const CUSTOM_CONFIG = {
-    config_version: 7,
+    config_version: 28,
     energy_nodes: {
+        inverter: {
+            controls: {
+                mode: {
+                    entity_id: "input_select.rezim_fv",
+                    options: { normal: "Standardní", stop_charging: "Zákaz nabíjení" },
+                },
+            },
+        },
         house: {
             entities: { power: "sensor.house_load" },
             forecast: { total_energy_entity_id: "sensor.house_load_total" },
@@ -73,38 +84,14 @@ const CUSTOM_CONFIG = {
             forecast: { charge_efficiency: 0.95 },
         },
     },
-    devices: {
-        system: [
-            {
-                kind: "inverter",
-                id: "inverter",
-                name: "Inverter",
-                controls: {
-                    mode: {
-                        entity_id: "input_select.rezim_fv",
-                        options: { normal: "Standardní", stop_charging: "Zákaz nabíjení" },
-                    },
-                },
-            },
-        ],
-    },
 };
 
 const SOLAX_CONFIG = {
-    config_version: 7,
+    config_version: 28,
     energy_nodes: {
+        inverter: { vendor: { profile: "solax_inverter", entry_id: "solax-entry" } },
         solar: { forecast: { total_energy_entity_id: "sensor.solar_total" } },
         battery: { forecast: { charge_efficiency: 0.95 } },
-    },
-    devices: {
-        system: [
-            {
-                kind: "inverter",
-                id: "inverter",
-                name: "Inverter",
-                vendor: { profile: "solax_inverter", entry_id: "solax-entry" },
-            },
-        ],
     },
 };
 
@@ -137,13 +124,13 @@ async function mountEditor(page: Page, config: unknown, profile = PROFILE): Prom
                         (window as any).__vendorRequests.push(
                             JSON.parse(JSON.stringify(request.config)),
                         );
-                        const inverter = request.config?.devices?.system?.[0];
+                        const inverter = request.config?.energy_nodes?.inverter;
                         return {
                             profiles: [profile],
                             devices:
                                 inverter?.vendor?.profile === profile.id
                                     ? {
-                                          "devices.system[0]": {
+                                          "energy_nodes.inverter": {
                                               profile: profile.id,
                                               ownedConfigPaths: profile.ownedConfigPaths,
                                               ownedDevicePaths: profile.ownedDevicePaths,
@@ -230,7 +217,8 @@ test("under the SolaX profile the owned pickers are replaced by what they resolv
             await expandEverything(page);
             return Object.keys((await energyFields(page)).provided).sort();
         })
-        .toEqual(Object.keys(RESOLVED).sort());
+        // The inverter's own mode control, at the top of the tab, included.
+        .toEqual([...Object.keys(RESOLVED), MODE_PATH].sort());
 
     const { groups, provided } = await energyFields(page);
     for (const path of OWNED) {
@@ -250,7 +238,7 @@ test("under the SolaX profile the owned pickers are replaced by what they resolv
 
 test("the inverter's hardware section lists every resolved entity", async ({ page }) => {
     await mountEditor(page, SOLAX_CONFIG);
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
 
     await expect
         .poll(async () => {
@@ -302,7 +290,7 @@ test("under the SolaX profile the inverter's mode control is provided, not confi
     page,
 }) => {
     await mountEditor(page, SOLAX_CONFIG);
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
 
     await expect
         .poll(async () => {
@@ -315,7 +303,7 @@ test("under the SolaX profile the inverter's mode control is provided, not confi
     expect(groups).not.toContain(MODE_GROUP);
     const sections = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        return Array.from(root?.querySelectorAll(".inverter-card summary") ?? []).map(
+        return Array.from(root?.querySelectorAll(".inverter-section summary") ?? []).map(
             (summary) => summary.textContent?.trim() ?? "",
         );
     });
@@ -326,7 +314,7 @@ test("under the SolaX profile the inverter's mode control is provided, not confi
 
 test("under Custom the inverter's mode control stays editable", async ({ page }) => {
     await mountEditor(page, CUSTOM_CONFIG);
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
 
     await expect
         .poll(async () => {
@@ -336,7 +324,7 @@ test("under Custom the inverter's mode control stays editable", async ({ page })
         .toContain(MODE_GROUP);
     const sections = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        return Array.from(root?.querySelectorAll(".inverter-card summary") ?? []).map(
+        return Array.from(root?.querySelectorAll(".inverter-section summary") ?? []).map(
             (summary) => summary.textContent?.trim() ?? "",
         );
     });
@@ -356,7 +344,7 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         .toContain("energy_nodes.battery.entities.min_soc");
     expect((await energyFields(page)).provided).toEqual({});
 
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
     await expect
         .poll(async () => {
             await expandEverything(page);
@@ -378,17 +366,18 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         .poll(() =>
             page.evaluate(() => {
                 const requests = (window as any).__vendorRequests as any[];
-                return requests.at(-1)?.devices?.system?.[0]?.vendor ?? null;
+                return requests.at(-1)?.energy_nodes?.inverter?.vendor ?? null;
             }),
         )
         .toEqual({ profile: "solax_inverter", entry_id: "solax-entry" });
     const draft = await page.evaluate(() => (window as any).__vendorRequests.at(-1));
-    expect(draft.energy_nodes).toEqual({
+    const { inverter, ...nodes } = draft.energy_nodes;
+    expect(nodes).toEqual({
         solar: { forecast: { total_energy_entity_id: "sensor.solar_total" } },
         battery: { forecast: { charge_efficiency: 0.95 } },
     });
     // The mode control is the profile's too: the hand-made helper goes.
-    expect(draft.devices.system[0].controls?.mode).toBeUndefined();
+    expect(inverter.controls?.mode).toBeUndefined();
 
     await openTab(page, "Energy nodes");
     await expect
@@ -396,10 +385,10 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
             await expandEverything(page);
             return Object.keys((await energyFields(page)).provided).length;
         })
-        .toBe(Object.keys(RESOLVED).length);
+        .toBe(Object.keys(RESOLVED).length + 1);
 
     // And back to Custom: the vendor goes, the pickers come back (empty).
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
     await expandEverything(page);
     await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
@@ -413,7 +402,7 @@ test("picking the profile deletes the owned keys and keeps the site settings", a
         .poll(() =>
             page.evaluate(() => {
                 const requests = (window as any).__vendorRequests as any[];
-                return requests.at(-1)?.devices?.system?.[0]?.vendor ?? null;
+                return requests.at(-1)?.energy_nodes?.inverter?.vendor ?? null;
             }),
         )
         .toBeNull();
@@ -434,7 +423,7 @@ test("without an integration entry the section says so instead of offering an em
     page,
 }) => {
     await mountEditor(page, SOLAX_CONFIG, { ...PROFILE, entries: [] });
-    await openTab(page, "Devices");
+    await openTab(page, "Energy nodes");
 
     await expect
         .poll(async () => {

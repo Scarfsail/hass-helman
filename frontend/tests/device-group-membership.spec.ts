@@ -73,7 +73,6 @@ const LAMP = {
     groups: { modes: "night_off" },
     children: [{ id: "bulb", name: "Bulb", consumption: { energy_entity_id: "sensor.bulb_energy" } }],
 };
-const INVERTER = { kind: "inverter", id: "inverter", name: "Inverter" };
 
 /** What the backend's name resolution answers, by name path key. */
 const PLACEHOLDERS: Record<string, string> = {
@@ -134,7 +133,7 @@ async function mountEditor(page: Page): Promise<void> {
         {
             config: {
                 config_version: 26,
-                devices: { groupings: [BREAKERS, MODES], system: [INVERTER], consumers: [AC, BOILER, LAMP] },
+                devices: { groupings: [BREAKERS, MODES], consumers: [AC, BOILER, LAMP] },
             },
             placeholders: PLACEHOLDERS,
         },
@@ -231,7 +230,6 @@ const INITIAL = {
 test("consumerGroups: each consumer with its own group only", () => {
     const config = {
         devices: {
-            system: [{ id: "inverter", kind: "inverter" }],
             consumers: [
                 {
                     id: "top",

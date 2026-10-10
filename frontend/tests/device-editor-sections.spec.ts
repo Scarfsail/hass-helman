@@ -87,9 +87,6 @@ const WALLBOX = {
 const VALID = { valid: true, errors: [], warnings: [] };
 
 const INVERTER = {
-    kind: "inverter",
-    id: "inverter",
-    name: "Inverter",
     controls: {
         mode: {
             entity_id: "select.solax_charger_use_mode",
@@ -111,7 +108,7 @@ async function mountEditor(
     page: Page,
     consumers: unknown[],
     validation: unknown = VALID,
-    system: unknown[] = [],
+    inverter: unknown = null,
 ): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
@@ -148,7 +145,14 @@ async function mountEditor(
             };
             document.body.appendChild(element);
         },
-        { config: { config_version: 26, devices: { consumers, system } }, report: validation },
+        {
+            config: {
+                config_version: 28,
+                ...(inverter ? { energy_nodes: { inverter } } : {}),
+                devices: { consumers },
+            },
+            report: validation,
+        },
     );
 
     const panel = page.locator("helman-config-editor-panel");
@@ -387,10 +391,17 @@ test("the device edit dialog shows every section collapsed, and no Children", as
     ]);
 });
 
-/** The inverter card's sections, in order: label, whether open, and the summary's chips. */
+/** The inverter sits first on the Energy nodes tab, straight in its section. */
+async function mountInverter(page: Page, inverter: unknown): Promise<void> {
+    await mountEditor(page, [HEATER], VALID, inverter);
+    await panel(page).locator(".tabs").getByRole("button", { name: "Energy nodes", exact: true }).click();
+    await expect(panel(page).locator(".inverter-section")).toHaveCount(1);
+}
+
+/** The inverter's sub-sections, in order: label, whether open, and the summary's chips. */
 const inverterSections = (page: Page) =>
     panel(page)
-        .locator("details.inverter-card > .appliance-body > details.section-card")
+        .locator(".inverter-section > details.section-card")
         .evaluateAll((all) =>
             all.map((details) => ({
                 label: details.querySelector(":scope > summary .section-summary-label")?.textContent?.trim(),
@@ -402,9 +413,8 @@ const inverterSections = (page: Page) =>
         );
 
 test("the inverter's sections start collapsed, with chips summarizing them", async ({ page }) => {
-    await mountEditor(page, [HEATER], VALID, [INVERTER]);
+    await mountInverter(page, INVERTER);
     expect(await inverterSections(page)).toEqual([
-        { label: "Identity", open: false, chips: ["Inverter"] },
         { label: "Hardware profile", open: false, chips: [] },
         { label: "Controls", open: false, chips: ["Mode"] },
         { label: "Action options", open: false, chips: ["2"] },
@@ -412,42 +422,34 @@ test("the inverter's sections start collapsed, with chips summarizing them", asy
 });
 
 test("an inverter issue opens its section, and a closed one reopens only for a new issue", async ({ page }) => {
-    await mountEditor(page, [HEATER], VALID, [{ ...INVERTER, controls: { mode: { options: {} } } }]);
+    await mountInverter(page, { controls: { mode: { options: {} } } });
     const open = async () =>
         (await inverterSections(page)).filter((section) => section.open).map((section) => section.label);
-    expect((await inverterSections(page)).map((section) => section.chips)).toEqual([["Inverter"], [], [], []]);
+    expect((await inverterSections(page)).map((section) => section.chips)).toEqual([[], [], []]);
 
     const mode = {
-        section: "devices",
-        path: "devices.system[0].controls.mode.entity_id",
+        section: "energy_nodes",
+        path: "energy_nodes.inverter.controls.mode.entity_id",
         code: "required",
         message: "mode entity is required",
     };
     await validate(page, { valid: false, errors: [mode], warnings: [] });
     await expect.poll(open).toEqual(["Controls"]);
+    // Counted on the Inverter section's own summary, where the card used to show it.
+    await expect(
+        panel(page)
+            .locator("details.section-card", {
+                has: page.locator(":scope > summary .section-summary-label", { hasText: /^Inverter$/ }),
+            })
+            .locator(':scope > summary .device-badge[data-badge="issues"]'),
+    ).toHaveText("Issues: 1");
 
     await panel(page)
-        .locator("details.inverter-card > .appliance-body > details.section-card[open]")
+        .locator(".inverter-section > details.section-card[open]")
         .evaluate((details) => ((details as HTMLDetailsElement).open = false));
     await expect.poll(open).toEqual([]);
     await validate(page, { valid: false, errors: [mode], warnings: [] });
-    const option = { ...mode, path: "devices.system[0].controls.mode.options.normal", code: "x" };
+    const option = { ...mode, path: "energy_nodes.inverter.controls.mode.options.normal", code: "x" };
     await validate(page, { valid: false, errors: [mode, option], warnings: [] });
     await expect.poll(open).toEqual(["Action options"]);
-});
-
-test("an inverter added after a removed one starts with its sections collapsed", async ({ page }) => {
-    await mountEditor(page, [HEATER], VALID, [INVERTER]);
-    await panel(page)
-        .locator("details.inverter-card > .appliance-body > details.section-card")
-        .first()
-        .evaluate((details) => ((details as HTMLDetailsElement).open = true));
-    await expect.poll(async () => (await inverterSections(page))[0].open).toBe(true);
-
-    page.on("dialog", (dialog) => dialog.accept());
-    await panel(page).locator("details.inverter-card .list-actions button.danger").dispatchEvent("click");
-    await expect(panel(page).locator("details.inverter-card")).toHaveCount(0);
-    await panel(page).locator(".section-footer .add-button", { hasText: "Add inverter" }).dispatchEvent("click");
-    await expect(panel(page).locator("details.inverter-card")).toHaveCount(1);
-    expect((await inverterSections(page)).map((section) => section.open)).toEqual([false, false, false, false]);
 });

@@ -30,6 +30,7 @@ const BUNDLE = resolve(
 const CONFIG = {
     config_version: 7,
     energy_nodes: {
+        inverter: { controls: { mode: { entity_id: "select.inverter_mode", options: {} } } },
         house: {
             entities: { power: "sensor.house_power" },
             forecast: {
@@ -68,14 +69,7 @@ const CONFIG = {
             slot_invalidation: { max_battery_soc_percent: 95 },
         },
     },
-    devices: { system: [
-        {
-            kind: "inverter",
-            id: "inverter",
-            name: "Inverter",
-            controls: { mode: { entity_id: "select.inverter_mode", options: {} } },
-        },
-    ], consumers: [
+    devices: { consumers: [
         {
             kind: "generic",
             schedulable: true,
@@ -90,12 +84,8 @@ const CONFIG = {
     ] },
 };
 
-/**
- * The same, for the tab whose entity groups live inside device cards,
- * the inverter's included.
- */
+/** The same, for the tab whose entity groups live inside device cards. */
 const DEVICE_ENTITY_PATHS = [
-    "devices.system.0.controls.mode.entity_id",
     "devices.consumers.0.controls.switch.entity_id",
     "devices.consumers.0.consumption.energy_entity_id",
     "devices.consumers.0.consumption.power_entity_id",
@@ -112,6 +102,7 @@ const DAILY_ENERGY_ENTITIES =
  * so the expected count has to follow the document that is actually mounted.
  */
 const POWER_DEVICE_ENTITY_PATHS = [
+    "energy_nodes.inverter.controls.mode.entity_id",
     "energy_nodes.house.entities.power",
     "energy_nodes.house.forecast.total_energy_entity_id",
     "energy_nodes.solar.entities.power",

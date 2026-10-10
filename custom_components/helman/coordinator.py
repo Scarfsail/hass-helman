@@ -103,7 +103,6 @@ from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_training_window_config,
 )
-from .controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .controllables.config import (
     entity_friendly_name,
     is_active_state,
@@ -111,7 +110,6 @@ from .controllables.config import (
     iter_devices,
     own_meter,
     peek_controllable_id,
-    peek_controllable_kind,
     read_carved_meters,
     read_name_cleaner_regex,
     read_schedulable_consumers,
@@ -1940,8 +1938,6 @@ class HelmanCoordinator:
         }
         subjects: dict[str, DeviceSubject] = {}
         for device, parent in iter_devices(self._active_config):
-            if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
-                continue
             controllable_id = peek_controllable_id(device)
             meter = own_meter(device)
             if meter is not None:

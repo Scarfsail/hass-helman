@@ -8,12 +8,10 @@ from ..controllables.config import (
     effective_meter,
     is_schedulable,
     iter_device_paths,
-    peek_controllable_kind,
     read_consumers,
     read_name_cleaner_regex,
     resolve_device_name,
 )
-from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
 from .climate_appliance import read_climate_appliance
 from .errors import ApplianceConfigError
 from .ev_charger import read_ev_charger_appliance
@@ -36,10 +34,10 @@ def build_appliances_runtime_registry(
     """The schedulable appliance devices, as runtime objects.
 
     Since config version 20 the appliance kinds live in the ``devices:`` tree
-    with the inverter and every passive device. This registry holds only what
-    Helman may schedule — projections, demand and the appliance websocket
-    commands are meaningless for the inverter and for a passive device — so
-    those are skipped rather than rejected. Every level of the tree is walked:
+    with every passive device. This registry holds only what Helman may
+    schedule — projections, demand and the appliance websocket commands are
+    meaningless for a passive device — so those are skipped rather than
+    rejected. Every level of the tree is walked:
     a schedulable child is as much an appliance as a top-level device.
     """
     active_logger = logger or _LOGGER
@@ -52,8 +50,6 @@ def build_appliances_runtime_registry(
 
     for path, device, parent in iter_device_paths(config):
         if not isinstance(device, Mapping):
-            continue
-        if peek_controllable_kind(device) == CONTROLLABLE_KIND_INVERTER:
             continue
         if not is_schedulable(device):
             continue

@@ -58,14 +58,6 @@ CONFIG = {
             },
             {"id": "room", "groups": [{"id": "night", "name": "Other grouping"}]},
         ],
-        "system": [
-            {
-                "kind": "inverter",
-                "id": "inverter",
-                "groups": {"power": "night"},
-                "controls": _switch("switch.inverter"),
-            }
-        ],
         "consumers": [
             {
                 "id": "boiler",
@@ -116,10 +108,9 @@ class GroupResolverTests(unittest.TestCase):
         self.assertEqual(entity_ids, NIGHT)
         self.assertEqual(skipped, ["no_control"])
 
-    def test_inheriting_child_and_inverter_are_excluded(self) -> None:
+    def test_inheriting_child_is_excluded(self) -> None:
         entity_ids, _ = group_member_entities(CONFIG, "power", "night")
         self.assertNotIn("switch.pump", entity_ids)
-        self.assertNotIn("switch.inverter", entity_ids)
 
     def test_group_id_is_scoped_to_its_grouping(self) -> None:
         self.assertEqual(

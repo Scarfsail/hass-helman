@@ -47,7 +47,7 @@ Profiles are defined in Helman's code, never in your config: supporting another 
 
 Available today:
 
-- **SolaX inverter** (`solax_modbus`, built against the X3-Hybrid), on the inverter system device. It provides the solar, battery, grid and house power and energy entities, the battery SoC bounds (the Self Use discharge floor and the charge ceiling), the house consumption total the forecast trains on, and the solar total the bias correction trains on. It also drives the inverter: Helman creates `select.helman_inverter_mode`, with one option per schedule action, and points the inverter's mode control at it. Selecting an option, whether the schedule or you do it, writes the SolaX use mode (and in Manual Mode the manual mode), then the export limit: `0` for stop export, otherwise your grid contract's export cap, `energy_nodes.grid.max_allowed_export_power`, which the profile requires. In the stored config it is `devices.system[0].vendor: {profile: solax_inverter, entry_id: <solax_modbus config entry id>}`. Picking it in the editor removes the entities it provides from your config, and the save refuses a config that still sets one of them (`vendor_owned_key`). An entity the integration doesn't have is reported (`vendor_entity_unresolved`) and leaves its slot unset.
+- **SolaX inverter** (`solax_modbus`, built against the X3-Hybrid), on the inverter (`energy_nodes.inverter`). It provides the solar, battery, grid and house power and energy entities, the battery SoC bounds (the Self Use discharge floor and the charge ceiling), the house consumption total the forecast trains on, and the solar total the bias correction trains on. It also drives the inverter: Helman creates `select.helman_inverter_mode`, with one option per schedule action, and points the inverter's mode control at it. Selecting an option, whether the schedule or you do it, writes the SolaX use mode (and in Manual Mode the manual mode), then the export limit: `0` for stop export, otherwise your grid contract's export cap, `energy_nodes.grid.max_allowed_export_power`, which the profile requires. In the stored config it is `energy_nodes.inverter.vendor: {profile: solax_inverter, entry_id: <solax_modbus config entry id>}`. Picking it in the editor removes the entities it provides from your config, and the save refuses a config that still sets one of them (`vendor_owned_key`). An entity the integration doesn't have is reported (`vendor_entity_unresolved`) and leaves its slot unset.
 
 ## Cards
 
@@ -103,8 +103,10 @@ Config version 27 dropped the panel texts and the energy node display names, whi
   Defaults: `false`, `true`.
 
 **`energy_nodes`**
-Defines entities for the four power endpoints. At least `house.entities.power` should be provided to
+Defines the battery inverter and the entities for the four power endpoints. At least `house.entities.power` should be provided to
 build the consumer tree around the house. Config version 24 renamed the key from `power_devices`; a stored config is migrated on load.
+
+- `energy_nodes.inverter`: object — The battery inverter Helman drives, at most one, configured first in the editor's Energy nodes tab because its hardware profile fills in the nodes below. It holds `controls.mode` (the mode select and its `options`, one per schedule action) and `vendor` (the hardware profile) only: no `id`, `kind` or `name`, since its location implies them. Schedules, optimizer targets (`target.controllable_id: inverter`) and `select.helman_inverter_mode` still name it by the reserved id `inverter`, which no device may take. Config version 28 moved it here from `devices.system`; a stored config is migrated on load (dropping `id`, `kind` and `name`), and a `devices.system` key is refused on save.
 
 - `energy_nodes.house`: `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
@@ -119,9 +121,8 @@ build the consumer tree around the house. Config version 24 renamed the key from
   `sensor.helman_solar_forecast_today_remaining` and is not configurable.
 
 **`devices`**
-The devices and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. Since config version 25 the single `items` list is split in two. A stored config is migrated on load.
+The devices and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. Since config version 25 the single `items` list is split in two, and since version 28 the inverter half lives at `energy_nodes.inverter`, leaving `devices` to the consumers. A stored config is migrated on load.
 - `consumers`: list — The devices that draw power, as a tree, as described under "House consumption forecast" below.
-- `system`: list — The devices that control the site rather than draw power; today only the battery inverter (`kind: inverter`, `id: inverter`, at most one). A system device never nests and takes no `consumption`, `schedulable` or `groups`.
 - `groupings`: list — The ways devices are grouped (breaker boxes, rooms, modes, …), each with its groups; a consumer joins groups through its own `groups`. See "Grouping devices".
 - `name_cleaner_regex`: string — Python regular expression (`re.sub`) removed from an entity's friendly name wherever a device without a `name` is named from it: the card, the inspector, the schedulable runtimes and the Devices editor. E.g. `" - [Pp]ower$"`.
 - `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.consumers` configures. Label names must match HA Labels exactly.

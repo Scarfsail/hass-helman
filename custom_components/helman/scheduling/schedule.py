@@ -58,11 +58,7 @@ TARGET_ACTION_KINDS = {
 #: stored document in that shape can still be recognised and converted.
 LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: How the inverter's control block is named when reporting a config problem.
-#: Not an index: the inverter is a singleton found by kind, so its position in
-#: the list is not stable and would only mislead.
-_INVERTER_CONTROL_PATH = (
-    f"devices.system[{CONTROLLABLE_ID_INVERTER}].controls.mode"
-)
+_INVERTER_CONTROL_PATH = "energy_nodes.inverter.controls.mode"
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 
 SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
@@ -534,11 +530,10 @@ def _read_inverter_mode_control(
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     """``controls.mode`` and its ``options`` for the inverter controllable.
 
-    Since config version 7 the inverter is one entry in the device list
-    (``devices:`` since version 20) rather than a section of its own, so this
-    is where the old
-    ``scheduler.control`` / ``action_option_map`` pair is now read from. The
-    returned dataclass is unchanged — only its source moved.
+    Since config version 28 the inverter lives at ``energy_nodes.inverter``,
+    so this is where the old ``scheduler.control`` / ``action_option_map``
+    pair is now read from. The returned dataclass is unchanged — only its
+    source moved.
     """
     inverter = find_inverter_device(config)
     mode_config = _read_mapping(_read_mapping(inverter.get("controls")).get("mode"))

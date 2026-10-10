@@ -497,11 +497,10 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
         name: "Fridge",
         consumption: { energy_entity_id: "sensor.fridge_energy" },
     });
-    config.devices.system = [{
-        id: "inverter",
-        name: "Inverter",
-        kind: "inverter",
-    }];
+    config.energy_nodes = {
+        ...config.energy_nodes,
+        inverter: { controls: { mode: { entity_id: "select.inverter_mode" } } },
+    };
 
     await mountEditor(page, config);
     const tables = await waitForRows(page, 7);

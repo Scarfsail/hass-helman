@@ -1595,6 +1595,45 @@ def _migrate_v26_to_v27(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v27_to_v28(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The inverter moves from ``devices.system`` to ``energy_nodes.inverter``.
+
+    The first ``kind: inverter`` entry of the ``devices.system`` list becomes
+    the ``energy_nodes.inverter`` mapping, without its ``id``, ``kind`` and
+    ``name``: the location implies the first two, and nothing reads the third.
+    ``devices.system`` is removed once that leaves it empty; any other entry
+    stays where it is for the validator to report, as in
+    :func:`_migrate_v24_to_v25`, and so does the inverter itself when
+    ``energy_nodes`` is not an object or already has one. A document without a
+    ``devices.system`` list is unchanged.
+    """
+    section = document.get("devices")
+    system = section.get("system") if isinstance(section, dict) else None
+    if not isinstance(system, list):
+        return (document, [])
+    inverter = next(
+        (
+            item
+            for item in system
+            if isinstance(item, dict)
+            and peek_controllable_kind(item) == CONTROLLABLE_KIND_INVERTER
+        ),
+        None,
+    )
+    if inverter is not None:
+        energy_nodes = document.setdefault("energy_nodes", {})
+        if isinstance(energy_nodes, dict) and "inverter" not in energy_nodes:
+            system.remove(inverter)
+            energy_nodes["inverter"] = {
+                key: value
+                for key, value in inverter.items()
+                if key not in ("id", "kind", "name")
+            }
+    if not system:
+        del section["system"]
+    return (document, [])
+
+
 def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
     """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
 
@@ -1640,6 +1679,7 @@ _MIGRATIONS = {
     24: _migrate_v24_to_v25,
     # 25 -> 26 needs the HA labels: bound in migrate_config_document.
     26: _migrate_v26_to_v27,
+    27: _migrate_v27_to_v28,
 }
 
 

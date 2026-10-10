@@ -249,10 +249,8 @@ from custom_components.helman.websockets import (
 
 def _invalid_config() -> dict:
     return {
-        "devices": {"system": [
-            {
-                "kind": "inverter",
-                "id": "inverter",
+        "energy_nodes": {
+            "inverter": {
                 "controls": {
                     "mode": {
                         "entity_id": "sensor.invalid",
@@ -260,7 +258,7 @@ def _invalid_config() -> dict:
                     }
                 },
             }
-        ]}
+        }
     }
 
 
@@ -556,14 +554,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
     def test_validate_config_reports_a_key_the_hardware_profile_owns(self) -> None:
         connection = FakeConnection(is_admin=True)
         config = {
-            "devices": {"system": [
-                {
-                    "kind": "inverter",
-                    "id": "inverter",
-                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
-                }
-            ]},
             "energy_nodes": {
+                "inverter": {
+                    "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
+                },
                 "house": {"entities": {"power": "sensor.house"}},
                 "grid": {"max_allowed_export_power": 9900},
             },
@@ -580,7 +574,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted((issue["code"], issue["path"]) for issue in report["errors"]),
             [
-                ("invalid_choice", "devices.system[0].vendor.entry_id"),
+                ("invalid_choice", "energy_nodes.inverter.vendor.entry_id"),
                 ("vendor_owned_key", "energy_nodes.house.entities.power"),
             ],
         )
@@ -590,13 +584,11 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
         config = {
-            "devices": {"system": [
-                {
-                    "kind": "inverter",
-                    "id": "inverter",
+            "energy_nodes": {
+                "inverter": {
                     "vendor": {"profile": "solax_inverter", "entry_id": "gone"},
                 }
-            ]},
+            },
             "training": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},
         }
 
