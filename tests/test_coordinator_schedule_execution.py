@@ -2416,7 +2416,7 @@ class SolaxProfileScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             config={
                 "energy_nodes": {
                     "inverter": {
-                        "vendor": {"profile": "solax_inverter", "entry_id": "solax"},
+                        "profile": {"id": "solax_inverter", "entry_id": "solax"},
                     }
                 },
             },

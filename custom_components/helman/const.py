@@ -29,7 +29,7 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 28
+CONFIG_DOCUMENT_VERSION = 29
 
 # The card texts config version 27 retired, under ``visualization`` and under
 # each ``energy_nodes`` block: the card localizes them. The migration drops
@@ -106,6 +106,10 @@ SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID = "sensor.helman_solar_forecast_today_rem
 #: resolves), and by the suggested id before it is first registered.
 INVERTER_MODE_UNIQUE_ID = "helman_inverter_mode"
 INVERTER_MODE_ENTITY_ID = "select.helman_inverter_mode"
+
+#: Helman's EV charging switch, one per device whose hardware profile has
+#: ``charging``: its unique id is this prefix and the device's id.
+EV_CHARGING_UNIQUE_ID_PREFIX = "helman_ev_charging_"
 
 #: Single source of truth for the sensor-platform entity registry migration
 #: (``__init__.async_migrate_entry``) run when a config entry upgrades from

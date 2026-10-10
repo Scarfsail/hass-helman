@@ -1634,6 +1634,30 @@ def _migrate_v27_to_v28(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v28_to_v29(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """A device's hardware profile is stored as ``profile: {id, ...}``.
+
+    ``vendor: {profile, entry_id}`` on ``energy_nodes.inverter`` and on every
+    consumer at any depth becomes ``profile: {id, entry_id}``, any other key
+    kept. A ``vendor`` that is not an object is moved as it is, for the
+    validator to report under its new name; a device that already has a
+    ``profile`` keeps both, for the validator to refuse the old one.
+    """
+    energy_nodes = document.get("energy_nodes")
+    inverter = energy_nodes.get("inverter") if isinstance(energy_nodes, dict) else None
+    for device in [inverter, *(device for device, _parent in iter_devices(document))]:
+        if not isinstance(device, dict) or "vendor" not in device or "profile" in device:
+            continue
+        vendor = device.pop("vendor")
+        if isinstance(vendor, dict) and "profile" in vendor:
+            vendor = {
+                ("id" if key == "profile" else key): value
+                for key, value in vendor.items()
+            }
+        device["profile"] = vendor
+    return (document, [])
+
+
 def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
     """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
 
@@ -1680,6 +1704,7 @@ _MIGRATIONS = {
     # 25 -> 26 needs the HA labels: bound in migrate_config_document.
     26: _migrate_v26_to_v27,
     27: _migrate_v27_to_v28,
+    28: _migrate_v28_to_v29,
 }
 
 

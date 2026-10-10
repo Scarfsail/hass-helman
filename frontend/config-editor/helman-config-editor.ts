@@ -250,7 +250,7 @@ type InverterSectionKey = "hardware" | "controls" | "action_options";
 /** The inverter sub-section that holds the field an issue points at. */
 function inverterSectionOfIssue(path: readonly PathSegment[], issuePath: string): InverterSectionKey {
   const rest = issuePath.slice(validationPath(path).length).replace(/^\./, "");
-  if (rest === "vendor" || rest.startsWith("vendor.")) return "hardware";
+  if (rest === "profile" || rest.startsWith("profile.")) return "hardware";
   if (rest.startsWith("controls.mode.options")) return "action_options";
   return "controls";
 }
@@ -1005,7 +1005,7 @@ export class HelmanConfigEditorPanel
    * The hardware profiles, and what each draft device's profile owns.
    *
    * `helman/get_vendors` is the only place the editor learns which paths a
-   * profile owns: re-asked whenever a device's `vendor` changes in the draft
+   * profile owns: re-asked whenever a device's `profile` changes in the draft
    * (`_vendorsKey`), never derived here.
    */
   private _vendors: VendorsResponse | null = null;
@@ -1237,8 +1237,8 @@ export class HelmanConfigEditorPanel
         ...(inverter ? [{ device: inverter, path: [...INVERTER_PATH] }] : []),
         ...iterDevices(this._config),
       ]
-        .filter(({ device }) => device.vendor !== undefined)
-        .map(({ device, path }) => [validationPath(path), device.vendor]));
+        .filter(({ device }) => device.profile !== undefined)
+        .map(({ device, path }) => [validationPath(path), device.profile]));
       if (vendorsKey !== this._vendorsKey) {
         this._vendorsKey = vendorsKey;
         void this._loadVendors();
@@ -4295,9 +4295,9 @@ export class HelmanConfigEditorPanel
     );
   }
 
-  /** The known profile a device's `vendor` names, if any. */
+  /** The known profile a device's `profile` names, if any. */
   private _vendorProfile(device: JsonObject) {
-    const profileId = this._stringValue(asJsonObject(device.vendor)?.profile);
+    const profileId = this._stringValue(asJsonObject(device.profile)?.id);
     return profileId
       ? (this._vendors?.profiles ?? []).find((profile) => profile.id === profileId)
       : undefined;
@@ -4307,7 +4307,7 @@ export class HelmanConfigEditorPanel
    * A device's hardware profile: the picker, the vendor's config entry, and
    * every entity the profile fills in, read-only.
    *
-   * "Custom" is the absence of `vendor`, so a device without one keeps every
+   * "Custom" is the absence of `profile`, so a device without one keeps every
    * hand-mapped slot exactly as before. Only the inverter has profiles today,
    * and its kind comes from its location, as the backend reads it.
    */
@@ -4315,9 +4315,9 @@ export class HelmanConfigEditorPanel
     const profiles = (this._vendors?.profiles ?? []).filter(
       (profile) => profile.deviceKind === CONTROLLABLE_ID_INVERTER,
     );
-    const vendor = asJsonObject(device.vendor);
-    const profileId = this._stringValue(vendor?.profile);
-    const entryId = this._stringValue(vendor?.entry_id);
+    const stored = asJsonObject(device.profile);
+    const profileId = this._stringValue(stored?.id);
+    const entryId = this._stringValue(stored?.entry_id);
     const profile = this._vendorProfile(device);
     const info = this._vendors?.devices?.[validationPath(path)];
     return html`
@@ -4465,7 +4465,7 @@ export class HelmanConfigEditorPanel
     if (this._vendors) this._vendors = { ...this._vendors, devices: {} };
     this._applyMutation((draft) => {
       if (!profile) {
-        unsetValueAtPath(draft, [...path, "vendor"]);
+        unsetValueAtPath(draft, [...path, "profile"]);
         return;
       }
       for (const owned of profile.ownedConfigPaths) {
@@ -4475,8 +4475,8 @@ export class HelmanConfigEditorPanel
         unsetValueAtPath(draft, [...path, ...owned.split(".")]);
       }
       const entry = profile.entries[0];
-      setValueAtPath(draft, [...path, "vendor"], {
-        profile: profile.id,
+      setValueAtPath(draft, [...path, "profile"], {
+        id: profile.id,
         ...(entry ? { entry_id: entry.entryId } : {}),
       });
     });
@@ -4485,9 +4485,9 @@ export class HelmanConfigEditorPanel
   private _setDeviceVendorEntry(path: PathSegment[], entryId: string): void {
     this._applyMutation((draft) => {
       if (entryId) {
-        setValueAtPath(draft, [...path, "vendor", "entry_id"], entryId);
+        setValueAtPath(draft, [...path, "profile", "entry_id"], entryId);
       } else {
-        unsetValueAtPath(draft, [...path, "vendor", "entry_id"]);
+        unsetValueAtPath(draft, [...path, "profile", "entry_id"]);
       }
     });
   }

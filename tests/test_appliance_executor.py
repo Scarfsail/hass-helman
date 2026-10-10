@@ -7,6 +7,8 @@ import unittest
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +70,7 @@ from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerEcoGearRuntime,
     EvChargerUseModeRuntime,
     EvVehicleRuntime,
+    read_ev_charger_appliance,
 )
 from custom_components.helman.appliances.generic_appliance import (  # noqa: E402
     GenericApplianceRuntime,
@@ -82,6 +85,7 @@ from custom_components.helman.appliances.execution import (  # noqa: E402
 from custom_components.helman.scheduling.actuation import (  # noqa: E402
     ScheduleActuator,
 )
+from custom_components.helman.vendors import resolve_vendor_config  # noqa: E402
 
 
 def _actuator(
@@ -193,6 +197,79 @@ def _build_appliance() -> EvChargerApplianceRuntime:
     )
 
 
+def _build_solax_resolved_appliance() -> EvChargerApplianceRuntime:
+    """The prod charger as the SolaX EV charger profile resolves it.
+
+    The device stores no entity id: the meters, use mode, eco gear and their
+    value maps come from the charger's HA device, and the charge switch is
+    Helman's own.
+    """
+    rows = [
+        SimpleNamespace(
+            unique_id=f"SolaX_EV_Charger_{key}",
+            entity_id=f"{domain}.solax_ev_charger_{key}",
+            platform="solax_modbus",
+            disabled_by=None,
+        )
+        for domain, key in (
+            ("sensor", "charge_added_total"),
+            ("sensor", "charge_power_total"),
+            ("select", "charger_use_mode"),
+            ("select", "eco_gear"),
+        )
+    ]
+    entry = SimpleNamespace(
+        entry_id="charger-entry",
+        domain="solax_modbus",
+        title="SolaX_EV_Charger",
+        data={},
+        options={},
+        disabled_by=None,
+        source="user",
+    )
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_get_entry={entry.entry_id: entry}.get)
+    )
+    device = {
+        "kind": "ev_charger",
+        "id": "garage-ev",
+        "name": "Garage EV",
+        "profile": {"id": "solax_ev_charger", "device_id": "charger-device"},
+        "limits": {"max_charging_power_kw": 11.0},
+        "vehicles": [
+            {
+                "id": "kona",
+                "name": "Kona",
+                "telemetry": {"soc_entity_id": "sensor.kona_ev_battery_level"},
+                "limits": {"battery_capacity_kwh": 64.0, "max_charging_power_kw": 11.0},
+            }
+        ],
+    }
+    with (
+        patch(
+            "homeassistant.helpers.entity_registry.async_get",
+            return_value=SimpleNamespace(async_get_entity_id=lambda *_args: None),
+        ),
+        patch(
+            "homeassistant.helpers.entity_registry.async_entries_for_device",
+            return_value=rows,
+        ),
+        patch(
+            "homeassistant.helpers.device_registry.async_get",
+            return_value=SimpleNamespace(
+                async_get=lambda _device_id: SimpleNamespace(config_entries={entry.entry_id})
+            ),
+        ),
+    ):
+        resolved, issues = resolve_vendor_config(
+            hass, {"devices": {"consumers": [device]}}
+        )
+    assert issues == []
+    return read_ev_charger_appliance(
+        resolved["devices"]["consumers"][0], path="devices.consumers[0]"
+    )
+
+
 def _build_generic_appliance() -> GenericApplianceRuntime:
     return GenericApplianceRuntime(
         id="dishwasher",
@@ -276,6 +353,70 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "apply")
         self.assertEqual(runtime.outcome, "success")
         self.assertTrue(memory.last_enabled)
+
+    async def test_a_solax_resolved_charger_charges_through_helmans_switch(self) -> None:
+        hass = FakeHass(
+            {
+                "switch.helman_ev_charging_garage_ev": FakeState("off"),
+                "select.solax_ev_charger_charger_use_mode": FakeState(
+                    "Fast",
+                    attributes={"options": ["Stop", "Fast", "ECO"]},
+                ),
+                "select.solax_ev_charger_eco_gear": FakeState(
+                    "6A",
+                    attributes={"options": ["6A", "10A"]},
+                ),
+            }
+        )
+        executor = ApplianceExecutor(
+            _actuator(hass),
+            EvChargerDriver(charge_on_wait_seconds=1, sleep=asyncio.sleep),
+        )
+
+        runtime, _memory = await executor.async_execute(
+            appliance=_build_solax_resolved_appliance(),
+            action={
+                "charge": True,
+                "vehicleId": "kona",
+                "useMode": "ECO",
+                "ecoGear": "10A",
+            },
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "switch",
+                    "turn_on",
+                    {"entity_id": "switch.helman_ev_charging_garage_ev"},
+                    True,
+                ),
+                (
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": "select.solax_ev_charger_charger_use_mode",
+                        "option": "ECO",
+                    },
+                    True,
+                ),
+                (
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": "select.solax_ev_charger_eco_gear",
+                        "option": "10A",
+                    },
+                    True,
+                ),
+            ],
+        )
+        self.assertEqual(runtime.outcome, "success")
 
     async def test_charge_false_turns_off_only_charge_switch(self) -> None:
         hass = FakeHass(

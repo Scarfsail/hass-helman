@@ -1,8 +1,11 @@
 """Refresh dev/solax_modbus/registry_snapshot.json from prod's entity registry.
 
-Writes ``{"<entry title>": {"<unique_id>": "<entity_id>", ...}, ...}`` for every
-``solax_modbus`` registry row on prod, grouped by its config entry's title. Only
-ids are written; the token is read from the environment and never stored.
+Writes ``{"<entry title>": {"<entity_id>": {"unique_id": ..., "device": "<device
+name>"}, ...}, ...}`` for every ``solax_modbus`` registry row on prod, grouped by
+its config entry's title. Keyed by entity id, because one unique id can be
+registered in several domains (the EV charger's ``control_command`` sensor and
+select). Only ids and device names are written; the token is read from the
+environment and never stored.
 
     HASS_PROD_TOKEN=... .venv/bin/python -I scripts/snapshot_solax_registry.py
 """
@@ -35,7 +38,7 @@ async def _call(ws: aiohttp.ClientWebSocketResponse, msg_id: int, **payload):
         return reply["result"]
 
 
-async def fetch_snapshot(token: str) -> dict[str, dict[str, str]]:
+async def fetch_snapshot(token: str) -> dict[str, dict[str, dict[str, str]]]:
     async with aiohttp.ClientSession() as session:
         async with session.ws_connect(PROD_WS_URL) as ws:
             await ws.receive_json()  # auth_required
@@ -46,14 +49,21 @@ async def fetch_snapshot(token: str) -> dict[str, dict[str, str]]:
 
             entries = await _call(ws, 1, type="config_entries/get", domain=DOMAIN)
             rows = await _call(ws, 2, type="config/entity_registry/list")
+            devices = await _call(ws, 3, type="config/device_registry/list")
 
     titles = {entry["entry_id"]: entry["title"] for entry in entries}
-    snapshot: dict[str, dict[str, str]] = {title: {} for title in titles.values()}
+    device_names = {
+        device["id"]: device["name_by_user"] or device["name"] for device in devices
+    }
+    snapshot: dict[str, dict[str, dict[str, str]]] = {
+        title: {} for title in titles.values()
+    }
     for row in rows:
         if row["platform"] == DOMAIN and row["config_entry_id"] in titles:
-            snapshot[titles[row["config_entry_id"]]][row["unique_id"]] = row[
-                "entity_id"
-            ]
+            snapshot[titles[row["config_entry_id"]]][row["entity_id"]] = {
+                "unique_id": row["unique_id"],
+                "device": device_names.get(row["device_id"]),
+            }
     return snapshot
 
 
