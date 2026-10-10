@@ -5310,9 +5310,10 @@ export class HelmanConfigEditorPanel
   }
 
   /** Every device id in the draft tree: ids are unique across all of it. */
+  /** Every draft device id, trimmed as the backend compares them. */
   private _deviceIds(): string[] {
     return iterDevices(this._config)
-      .map(({ device }) => this._stringValue(device.id))
+      .map(({ device }) => this._stringValue(device.id).trim())
       .filter((value) => value.length > 0);
   }
 
