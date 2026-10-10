@@ -4245,7 +4245,6 @@ export class HelmanConfigEditorPanel
                 includeDomains: ["input_select", "select"],
                 helperKey: "editor.helpers.mode_entity",
                 helpKey: "editor.help.inverter_mode_entity",
-                required: true,
               },
             )}
           </div>`,

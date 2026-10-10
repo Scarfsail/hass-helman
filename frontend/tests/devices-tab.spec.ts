@@ -919,6 +919,24 @@ test("the inverter section is always there, like House: no add or remove, and ed
     expect((await config(page)).map((device) => device.kind)).toEqual(["generic"]);
 });
 
+test("clearing a custom inverter's settings deconfigures it, with no remove button needed", async ({ page }) => {
+    await mountEditor(page, [BOILER], undefined, {
+        controls: { mode: { entity_id: "select.solax_charger_use_mode" } },
+    });
+    const panel = page.locator("helman-config-editor-panel");
+    await openTab(page, "Energy nodes");
+    await openTabSection(page, "Inverter");
+
+    await panel.locator(".inverter-section helman-entity-group").evaluate((group) => {
+        group.shadowRoot?.querySelector("ha-entity-picker")?.dispatchEvent(new CustomEvent("value-changed", {
+            detail: { value: "" }, bubbles: true, composed: true,
+        }));
+    });
+    // Cleared, not written as "": the emptied mapping goes with it.
+    await expect.poll(() => inverter(page)).toBeUndefined();
+    await expect(panel.locator(".inverter-section")).toHaveCount(1);
+});
+
 test("the Devices tab has no inverter section", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
