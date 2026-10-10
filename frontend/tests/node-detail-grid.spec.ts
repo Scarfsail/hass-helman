@@ -29,6 +29,8 @@ type Variant = {
     sectionFails?: boolean;
     /** Only half of today's exported kWh had a rate. */
     exportPartlyPriced?: boolean;
+    /** The payload's current import price is from before the 12:00 boundary. */
+    staleCurrentPrice?: boolean;
 };
 
 declare global {
@@ -138,7 +140,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             grid: {
                 status: "available", generatedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 48,
                 startedAt: null, partialReason: null, coverageUntil: null, scheduleAdjusted: true,
-                currentImportPrice: 4.2, importPriceUnit: "CZK/kWh",
+                currentImportPrice: v.staleCurrentPrice ? 3.0 : 4.2, importPriceUnit: "CZK/kWh",
                 importPricePoints: [
                     { timestamp: `${day}T12:00:00+00:00`, value: 4.2 },
                     { timestamp: `${day}T13:00:00+00:00`, value: 4.2 },
@@ -386,6 +388,15 @@ test.describe("money and what comes next", () => {
         await expect(next.locator("[data-row='planned-change']")).toContainText("from 15:00: importing");
         await expect(next).toContainText("with the schedule applied, an estimate rather than a commitment");
     });
+});
+
+test("next: a rate whose boundary has passed is the rate now, from the price points", async ({ page }) => {
+    await mount(page, { staleCurrentPrice: true });
+    await openDetail(page);
+    await header(page, "next").click();
+    const next = question(page, "next");
+    await expect(next.locator("[data-row='import-now']")).toContainText("4.2 CZK/kWh");
+    await expect(next.locator("[data-row='import-next']")).toContainText("5.1 CZK/kWh from 14:00");
 });
 
 test.describe("disclosure", () => {

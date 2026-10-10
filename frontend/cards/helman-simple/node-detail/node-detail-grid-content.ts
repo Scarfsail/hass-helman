@@ -13,6 +13,7 @@ import {
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
+import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { getSharedHelmanStore } from "../../helman/store";
 import { ForecastLoader } from "../../helman/forecast-loader";
 import { formatPower } from "../../power-format";
@@ -317,6 +318,7 @@ export class NodeDetailGridContent extends LitElement {
     private _started = false;
     private _overviewRequest = 0;
     private _moneyRequest = 0;
+    private _unsubscribeDataChanged?: () => void;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
     private _voltageRequest = 0;
@@ -337,6 +339,8 @@ export class NodeDetailGridContent extends LitElement {
         this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this._started = false;
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         // Whatever is still in flight answers nobody.
         this._overviewRequest += 1;
         this._moneyRequest += 1;
@@ -357,6 +361,10 @@ export class NodeDetailGridContent extends LitElement {
 
     private _start(): void {
         this._started = true;
+        // A new plan (an optimizer run, another client) supersedes the planned flow.
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
+            void this._loadForecast();
+        });
         void this._loadOverview();
         void this._loadMoney();
         void this._loadForecast();
@@ -880,8 +888,10 @@ export class NodeDetailGridContent extends LitElement {
         const grid = this._forecast?.grid;
         if (!grid) return null;
         const parts: string[] = [];
-        if (grid.currentImportPrice !== null) parts.push(fillTemplate(this._t("next.import_short"), { price: this._price(grid.currentImportPrice, grid.importPriceUnit) }));
-        if (grid.currentExportPrice !== null) parts.push(fillTemplate(this._t("next.export_short"), { price: this._price(grid.currentExportPrice, grid.exportPriceUnit) }));
+        const importNow = this._priceNow("import");
+        const exportNow = this._priceNow("export");
+        if (importNow !== null) parts.push(fillTemplate(this._t("next.import_short"), { price: this._price(importNow, grid.importPriceUnit) }));
+        if (exportNow !== null) parts.push(fillTemplate(this._t("next.export_short"), { price: this._price(exportNow, grid.exportPriceUnit) }));
         return parts.length ? parts.join(" · ") : this._t("next.no_prices");
     }
 
@@ -897,9 +907,9 @@ export class NodeDetailGridContent extends LitElement {
         const changeRow = (label: string, next: { at: number; value: number } | null, unit: string | null, key: string) =>
             this._row(label, next ? fillTemplate(this._t("next.change_value"), { price: this._price(next.value, unit), time: this._time(next.at) }) : this._t("next.no_change"), key);
         return html`
-            ${priceRow(this._t("next.import_now"), grid.currentImportPrice, grid.importPriceUnit, "import-now")}
+            ${priceRow(this._t("next.import_now"), this._priceNow("import"), grid.importPriceUnit, "import-now")}
             ${changeRow(this._t("next.import_next"), importNext, grid.importPriceUnit, "import-next")}
-            ${priceRow(this._t("next.export_now"), grid.currentExportPrice, grid.exportPriceUnit, "export-now")}
+            ${priceRow(this._t("next.export_now"), this._priceNow("export"), grid.exportPriceUnit, "export-now")}
             ${changeRow(this._t("next.export_next"), exportNext, grid.exportPriceUnit, "export-next")}
             ${this._row(this._t("next.planned_now"), planned ?? this._t("next.no_plan"), "planned-now")}
             ${change ? this._row(this._t("next.planned_change"), change, "planned-change") : nothing}
@@ -915,10 +925,28 @@ export class NodeDetailGridContent extends LitElement {
     }
 
     /** The first future price point that differs from the current rate. */
+    /**
+     * The rate in force now, from the timestamped points so it advances at a
+     * tariff boundary while the dialog stays open; the payload's current
+     * price only before the first point.
+     */
+    private _priceNow(side: "import" | "export"): number | null {
+        const grid = this._forecast?.grid;
+        if (!grid) return null;
+        const points = side === "import" ? grid.importPricePoints : grid.exportPricePoints;
+        const now = Date.now();
+        let current = side === "import" ? grid.currentImportPrice : grid.currentExportPrice;
+        for (const point of points) {
+            if (Date.parse(point.timestamp) > now) break;
+            current = point.value;
+        }
+        return current;
+    }
+
     private _nextPriceChange(side: "import" | "export"): { at: number; value: number } | null {
         const grid = this._forecast?.grid;
         if (!grid) return null;
-        const current = side === "import" ? grid.currentImportPrice : grid.currentExportPrice;
+        const current = this._priceNow(side);
         const points = side === "import" ? grid.importPricePoints : grid.exportPricePoints;
         if (current === null) return null;
         const now = Date.now();
