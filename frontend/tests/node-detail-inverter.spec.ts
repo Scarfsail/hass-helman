@@ -28,6 +28,8 @@ type Variant = {
     condition?: "off_grid" | null;
     /** Stop export until 13:00, then nothing scheduled until 14:00. */
     stopExportThenEmpty?: boolean;
+    /** Leave out the 14:00 charge, so the 18:00 candidate is the only action left. */
+    noCharge?: boolean;
 };
 
 declare global {
@@ -157,7 +159,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             let action: Record<string, unknown> | null = { kind: "normal", setBy: "automation" };
             if (v.stopExportThenEmpty && hour < 13) action = { kind: "stop_export", setBy: "automation" };
             if (v.stopExportThenEmpty && hour === 13) action = null;
-            if (hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if (!v.noCharge && hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: action ? { inverter: action } : {} });
         }
@@ -273,6 +275,12 @@ test.describe("the inverter overview", () => {
         await openDetail(page);
         await expect(content(page).locator("[data-overview] [data-next]")).toHaveText(/^Next: 13:00 /);
         await expect(content(page).locator("[data-overview] [data-next]")).not.toContainText("Charge");
+    });
+
+    test("a candidate whose condition is not met is not the next change", async ({ page }) => {
+        await mount(page, { noCharge: true });
+        await openDetail(page);
+        await expect(content(page).locator("[data-overview] [data-next]")).toHaveText("No change planned for today or tomorrow.");
     });
 
     test("answer previews say the answer", async ({ page }) => {

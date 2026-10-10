@@ -17,6 +17,7 @@ import { formatPower } from "../../power-format";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
 import {
     formatScheduleTime,
+    addDaysToDayKey,
     getScheduleDayKey,
     resolveScheduleSlotBoundaries,
 } from "../../shared/schedule/model/schedule-time";
@@ -894,7 +895,7 @@ export class NodeDetailInverterContent extends LitElement {
      */
     private _nextChange(): ScheduleRun | null {
         const now = Date.now();
-        const days = [this._dayKey(now), this._dayKey(now + 86_400_000)];
+        const days = this._todayAndTomorrow();
         // Before the first scheduled slot the inverter rests in normal mode.
         let previous: ScheduleActionDTO = { kind: "normal" };
         for (const run of this._runs()) {
@@ -909,8 +910,7 @@ export class NodeDetailInverterContent extends LitElement {
 
     /** Today's and tomorrow's runs, empty stretches left out. */
     private _upcomingRuns(): ScheduleRun[] {
-        const today = this._dayKey(Date.now());
-        const tomorrow = this._dayKey(Date.now() + 86_400_000);
+        const [today, tomorrow] = this._todayAndTomorrow();
         return this._runs().filter((run) => {
             const day = this._dayKey(run.startMs);
             return run.action.kind !== "empty" && (day === today || day === tomorrow);
@@ -935,6 +935,12 @@ export class NodeDetailInverterContent extends LitElement {
         return run.endMs === null ? this._time(run.startMs) + "+" : this._time(run.startMs) + "–" + this._time(run.endMs);
     }
 
+    /** Local calendar days, so a 25-hour DST day still has a tomorrow. */
+    private _todayAndTomorrow(): [string | null, string | null] {
+        const today = this._dayKey(Date.now());
+        return [today, today === null ? null : addDaysToDayKey(today, 1)];
+    }
+
     private _dayKey(ms: number): string | null {
         return getScheduleDayKey(new Date(ms), this._timeZone);
     }
@@ -952,9 +958,12 @@ export class NodeDetailInverterContent extends LitElement {
     }
 }
 
-/** What the inverter does in a run: an empty stretch is its normal mode. */
+/**
+ * What the inverter does in a run: an empty stretch is its normal mode, and so
+ * is a candidate whose condition is not met, which the executor strips.
+ */
 function effectiveAction(action: ScheduleActionDTO): ScheduleActionDTO {
-    return action.kind === "empty" ? { kind: "normal" } : action;
+    return action.kind === "empty" || action.conditionMet === false ? { kind: "normal" } : action;
 }
 
 function sameAction(left: ScheduleActionDTO, right: ScheduleActionDTO): boolean {
