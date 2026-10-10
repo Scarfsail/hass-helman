@@ -11,6 +11,7 @@ import type {
     SchedulePayload,
 } from "../../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { getSharedHelmanStore } from "../../helman/store";
 import { commandedModeKind } from "../../helman-api";
 import { formatPower } from "../../power-format";
@@ -243,6 +244,7 @@ export class NodeDetailInverterContent extends LitElement {
     /** The compared registers' states the current overview was computed from. */
     private _comparedStates = "";
     private _unsubscribeSchedule?: () => void;
+    private _unsubscribeDataChanged?: () => void;
     /** `_runs()` for the update in progress; several answers read it per render. */
     private _runsCache?: ScheduleRun[];
     private _planCard?: InspectorCardElement;
@@ -260,6 +262,8 @@ export class NodeDetailInverterContent extends LitElement {
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this._unsubscribeSchedule?.();
         this._unsubscribeSchedule = undefined;
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         // Whatever is still in flight answers nobody.
         this._overviewRequest += 1;
         this._temperatureRequest += 1;
@@ -279,6 +283,11 @@ export class NodeDetailInverterContent extends LitElement {
     private _start(): void {
         this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
             this._schedule = snapshot.schedule;
+        });
+        // A config change (another client) can re-map what the overview reads.
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
+            void this._loadOverview();
+            if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
         });
         void this._loadOverview();
     }

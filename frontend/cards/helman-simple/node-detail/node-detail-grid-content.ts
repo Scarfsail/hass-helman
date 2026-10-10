@@ -361,9 +361,13 @@ export class NodeDetailGridContent extends LitElement {
 
     private _start(): void {
         this._started = true;
-        // A new plan (an optimizer run, another client) supersedes the planned flow.
+        // A new plan or config (an optimizer run, another client) can change
+        // everything shown: the feed's contract is to reload it all.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
+            void this._loadOverview();
+            void this._loadMoney();
             void this._loadForecast();
+            if (this._open === "voltage" && this._voltage !== null) void this._loadVoltage();
         });
         void this._loadOverview();
         void this._loadMoney();
