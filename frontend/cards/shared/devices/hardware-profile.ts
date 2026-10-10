@@ -80,10 +80,13 @@ function profileDevices(config: JsonObject | null | undefined): { device: JsonOb
     ].filter(({ device }) => device.profile !== undefined);
 }
 
-/** What `helman/get_vendors` answers from: each device's path and `profile`. */
+/**
+ * What `helman/get_vendors` answers from: each device's path, `profile` and
+ * id, which names Helman's own entities such as the EV charging switch.
+ */
 function vendorsKey(config: JsonObject): string {
     return canonicalJson(
-        profileDevices(config).map(({ device, path }) => [validationPath(path), device.profile]),
+        profileDevices(config).map(({ device, path }) => [validationPath(path), device.profile, device.id ?? null]),
     );
 }
 
