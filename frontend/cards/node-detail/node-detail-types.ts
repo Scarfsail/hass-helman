@@ -1,5 +1,4 @@
 import type { TreeItem } from "../helman/tree-item";
-import type { HelmanUiConfig } from "../helman-api";
 
 export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 
@@ -41,16 +40,15 @@ export interface GridDetailParams {
     gridPower: number | null;
 }
 
+/**
+ * The house. Its readings come from `helman/get_node_detail`; the power is the
+ * card's own live figure, with the polarity the card already applied, and the
+ * house tree is the card's own, which the phase answer estimates from.
+ */
 export interface HouseDetailParams {
     nodeType: "house";
+    /** House consumption, W. */
     power: number;
-    devices: TreeItem[];
-    parentPowerHistory?: number[];
-    consumptionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
-    uiConfig?: HelmanUiConfig;
     houseNode: TreeItem | null;
 }
 

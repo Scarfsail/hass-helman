@@ -265,7 +265,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     @state() private _loading = true;
     /** What the node detail dialog shows: a top-level node by type, or one device. */
     @state() private _dialogRequest: NodeType | TreeItem | null = null;
-    @state() private _houseDevices: TreeItem[] = [];
     /** The inverter overview behind the centre cell; `null` until loaded, or when it failed. */
     @state() private _inverter: InverterDetailPayload | null = null;
 
@@ -626,7 +625,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             if (this._houseDTO) {
                 this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
                 if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
-                this._houseDevices = this._houseNode.children;
             }
 
             this._productionNode  = payload.productionTotalSensorId
@@ -728,15 +726,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             batteryPowerReading: this._energy.batteryPowerReading,
             solarPowerReading: this._energy.solarPowerReading,
             gridPower: this._energy.gridPowerSigned,
-            consumptionNode: this._consumptionNode,
             housePower: this._energy.housePower,
             solarPower: this._energy.solarPower,
-            houseDevices: this._houseDevices,
             houseNode: this._houseNode,
             historyBuckets,
             historyBucketDuration,
-            historyRevision: this._historyRevision,
-            uiConfig: this._uiConfig,
         };
     }
 

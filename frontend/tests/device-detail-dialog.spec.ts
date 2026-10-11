@@ -347,32 +347,6 @@ test.describe("device detail from the power card", () => {
             .toEqual(["switch.boiler", "sensor.boiler_power"]);
         expect(await openDialog(page)).toBeNull();
     });
-
-    test("a device name inside the house detail swaps the dialog to that device", async ({ page }) => {
-        // The house icon opens the house detail, which draws the same rows.
-        await page.evaluate(() => {
-            const house = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) =>
-                candidate.shadowRoot?.querySelector(".deviceName")?.textContent.trim() === "House");
-            (house.shadowRoot.querySelector("helman-tree-item-icon").shadowRoot.querySelector(".node-icon") as HTMLElement).click();
-        });
-        await expect.poll(() => page.evaluate(() =>
-            !!(window as any).__deepAll(document, "node-detail-house-content")[0])).toBe(true);
-        const historyBefore = await page.evaluate(() => window.history.length);
-
-        const opened = await page.evaluate(() => {
-            const house = (window as any).__deepAll(document, "node-detail-house-content")[0];
-            const row = (window as any).__deepAll(house.shadowRoot, "helman-tree-item").find((candidate: any) =>
-                candidate.shadowRoot?.querySelector(".deviceName")?.textContent.trim() === "Boiler");
-            if (!row) return false;
-            (row.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
-            return true;
-        });
-        expect(opened).toBe(true);
-
-        await expect.poll(async () => (await openDialog(page))?.title).toBe("Boiler");
-        expect(await page.evaluate(() => (window as any).__deepAll(document, "node-detail-dialog").length)).toBe(1);
-        expect(await page.evaluate(() => window.history.length)).toBe(historyBefore);
-    });
 });
 
 /** A metered boiler's record: days, runs, and both power figures. */

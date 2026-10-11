@@ -66,17 +66,17 @@ def build_solar_overview(
     strings whose power the profile resolves; the string question needs two.
     """
     telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
-    solar = _node(config, "solar")
-    grid = _node(config, "grid")
+    solar = node_config(config, "solar")
+    grid = node_config(config, "grid")
 
     entities: dict[str, str | None] = {}
     if telemetry is not None:
         for key in _TELEMETRY_KEYS:
             if key in telemetry.entities:
                 entities[key] = telemetry.entities[key]
-    entities["power"] = _entity(solar, "power")
-    entities["today_energy"] = _entity(solar, "today_energy")
-    entities["today_export"] = _entity(grid, "today_export")
+    entities["power"] = node_entity(solar, "power")
+    entities["today_energy"] = node_entity(solar, "today_energy")
+    entities["today_export"] = node_entity(grid, "today_export")
     training = config.get("training") if isinstance(config, Mapping) else None
     solar_bias = training.get("solar_bias") if isinstance(training, Mapping) else None
     lifetime = solar_bias.get("total_energy_entity_id") if isinstance(solar_bias, Mapping) else None
@@ -123,8 +123,8 @@ async def async_solar_section(
         return {**payload, **await _destinations(hass, local_now)}
     stop = min(end, dt_util.as_utc(now))
     if section == "production":
-        solar = _node(config, "solar")
-        entity_id = _entity(solar, "power")
+        solar = node_config(config, "solar")
+        entity_id = node_entity(solar, "power")
         stats = (
             await async_day_stats(hass, [entity_id], start=start, end=end, now=now)
             if entity_id
@@ -313,13 +313,15 @@ async def _destinations(hass: Any, local_now: datetime) -> dict[str, Any]:
     }
 
 
-def _node(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+def node_config(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    """``energy_nodes.<name>``, ``{}`` when absent or not a mapping."""
     energy_nodes = config.get("energy_nodes") if isinstance(config, Mapping) else None
     node = energy_nodes.get(name) if isinstance(energy_nodes, Mapping) else None
     return node if isinstance(node, Mapping) else {}
 
 
-def _entity(node: Mapping[str, Any], slot: str) -> str | None:
+def node_entity(node: Mapping[str, Any], slot: str) -> str | None:
+    """The node's ``entities.<slot>``, ``None`` when unset."""
     entities = node.get("entities")
     entity_id = entities.get(slot) if isinstance(entities, Mapping) else None
     return entity_id if isinstance(entity_id, str) and entity_id else None

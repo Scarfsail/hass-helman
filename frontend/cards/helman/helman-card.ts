@@ -327,7 +327,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private _buildNodeDetailContext(): NodeDetailContext {
-        const { sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
+        const { sourcesChildren, consumersChildren, houseNode } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
         const gridProducerNode = sourcesChildren.find((device) => device.sourceType === "grid") ?? null;
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
@@ -352,15 +352,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
             solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
             gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
-            consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,
             solarPower: solarNode?.powerValue ?? 0,
-            houseDevices: [...houseDevices],
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
             historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,
-            historyRevision: this._historyRevision,
-            uiConfig: this._uiConfig,
         };
     }
 

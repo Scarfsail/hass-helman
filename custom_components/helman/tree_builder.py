@@ -12,6 +12,7 @@ from .visualization import read_visualization
 from .controllables.config import (
     Device,
     device_groups,
+    device_phase,
     entity_friendly_name,
     is_schedulable,
     iter_devices,
@@ -79,6 +80,10 @@ class TreeItemDTO:
     # by and badges with. Empty for every other item.
     groups: dict[str, str] = field(default_factory=dict)
     group_badge_texts: list[str] = field(default_factory=list)
+    # A house device's own ``phase`` (``L1``, ``L2``, ``L3`` or ``3ph``), the
+    # wiring the house detail estimates per-phase load from; ``None`` when
+    # unassigned and for every other item.
+    phase: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -107,6 +112,7 @@ class TreeItemDTO:
             "controllableIds": self.controllable_ids,
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
+            "phase": self.phase,
         }
 
 
@@ -306,7 +312,8 @@ class HelmanTreeBuilder:
             for grouping in groupings
         }
 
-        def apply_groups(item: TreeItemDTO, device: Device) -> None:
+        def apply_groups_and_phase(item: TreeItemDTO, device: Device) -> None:
+            item.phase = device_phase(device)
             item.groups = device_groups(device)
             item.group_badge_texts = [
                 names[group_id]
@@ -325,7 +332,7 @@ class HelmanTreeBuilder:
                         device, parent_device, shared, carved, cleaner_regex
                     )
                     if share_device is not None:
-                        apply_groups(share_device, device)
+                        apply_groups_and_phase(share_device, device)
                         parent_device.children.append(share_device)
                 continue
             power_sensor_id = _consumption_entity(device, "power_entity_id")
@@ -362,7 +369,7 @@ class HelmanTreeBuilder:
                 ),
                 energy_entity_id=meter,
             )
-            apply_groups(item, device)
+            apply_groups_and_phase(item, device)
             devices[id(device)] = item
             (parent_device.children if parent_device is not None else tree).append(item)
 

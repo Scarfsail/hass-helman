@@ -75,22 +75,29 @@ _CONFIG_ENTITIES = {
 
 #: Helman's own ETA sensors: unique-id suffix and the entity id ``sensor.py``
 #: creates them under, the fallback before they are registered.
-_TIME_SENSORS = {
+TIME_SENSORS = {
     "time_to_full": ("battery_time_to_full", "sensor.helman_battery_time_to_full"),
     "time_to_empty": ("battery_time_to_empty", "sensor.helman_battery_time_to_empty"),
 }
 
 
-def _time_sensor_ids(hass: Any) -> dict[str, str]:
-    """Helman's ETA sensors by unique id, so a renamed entity is still found."""
+def helman_sensor_ids(
+    hass: Any, sensors: Mapping[str, tuple[str, str]]
+) -> dict[str, str]:
+    """Helman's own sensors by unique id, so a renamed entity is still found.
+
+    ``sensors`` maps a payload key to the sensor's unique-id suffix and the
+    entity id ``sensor.py`` creates it under, the fallback before it is
+    registered.
+    """
     config_entries = getattr(hass, "config_entries", None)
     entries = config_entries.async_entries(DOMAIN) if config_entries is not None else []
     if not entries:
-        return {key: fallback for key, (_, fallback) in _TIME_SENSORS.items()}
+        return {key: fallback for key, (_, fallback) in sensors.items()}
     entry_id = entries[0].entry_id
     return {
         key: helman_entity_id(hass, "sensor", f"{entry_id}_{suffix}", fallback)
-        for key, (suffix, fallback) in _TIME_SENSORS.items()
+        for key, (suffix, fallback) in sensors.items()
     }
 
 
@@ -113,7 +120,7 @@ def build_battery_overview(
     for key, slot in _CONFIG_ENTITIES.items():
         entity_id = battery_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
-    entities.update(_time_sensor_ids(hass))
+    entities.update(helman_sensor_ids(hass, TIME_SENSORS))
     if telemetry is not None:
         for key in _TELEMETRY_KEYS:
             if key in telemetry.entities:

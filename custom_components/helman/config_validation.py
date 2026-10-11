@@ -20,6 +20,7 @@ from .grid_price_forecast_builder import (
 )
 from .controllables.config import (
     CONTROLLABLE_ID_INVERTER,
+    DEVICE_PHASES,
     device_children,
     find_inverter_device,
     is_schedulable,
@@ -282,7 +283,7 @@ def _validate_inverter_config(
     Its id and kind are implied by where it lives, so the mapping holds only
     ``controls`` and ``profile`` (the latter judged by the vendor resolver). It
     is not a consumer: it moves energy rather than drawing it, never nests, is
-    always schedulable and belongs to no group.
+    always schedulable, belongs to no group and is wired to no house phase.
     """
     section = "energy_nodes"
     path = "energy_nodes.inverter"
@@ -303,7 +304,7 @@ def _validate_inverter_config(
                     "implies its id, kind and name"
                 ),
             )
-    for key in ("consumption", "children", "schedulable", "groups"):
+    for key in ("consumption", "children", "schedulable", "groups", "phase"):
         if inverter.get(key) is not None:
             report.add_error(
                 section=section,
@@ -1282,6 +1283,7 @@ def _validate_controllables_config(
         # Membership is kind-independent, so a preserved unknown kind is
         # checked too.
         _validate_device_groups(raw_device.get("groups"), path, known_groups, report)
+        _validate_device_phase(raw_device.get("phase"), path, report)
 
         if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(
@@ -1504,6 +1506,22 @@ def _validate_device_groups(
                 code="unknown_group",
                 message=f"{group_path} names no group of grouping {grouping_id!r}",
             )
+
+
+def _validate_device_phase(raw_phase: Any, path: str, report: ValidationReport) -> None:
+    """A device's optional ``phase``: the house wiring it is on.
+
+    Absent is unassigned, which is always allowed: the house detail shows the
+    unassigned share rather than asking for a mapping.
+    """
+    if raw_phase is None or raw_phase in DEVICE_PHASES:
+        return
+    report.add_error(
+        section="devices",
+        path=f"{path}.phase",
+        code="invalid_phase",
+        message=f"{path}.phase must be one of {', '.join(DEVICE_PHASES)}",
+    )
 
 
 def _validate_device_children(

@@ -217,6 +217,12 @@ PROFILE = VendorProfile(
             for period in (1, 2)
             for edge in ("start", "end")
         },
+        # The house detail: the EPS output's measured active power per phase
+        # (W), what the house draws from the inverter while off-grid.
+        **{
+            f"eps_power_l{phase}": ("sensor", f"{{name}}_eps_power_active_l{phase}")
+            for phase in (1, 2, 3)
+        },
         # The solar detail: each MPPT string's DC power (W), voltage (V) and
         # current (A), and the shade-tolerance (``Off``/``Low``/``Middle``/
         # ``High``) setting per string, a select.

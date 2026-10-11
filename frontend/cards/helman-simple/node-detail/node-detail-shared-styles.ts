@@ -50,27 +50,6 @@ export const nodeDetailSharedStyles = css`
         margin-top: 4px;
     }
 
-    .tree-item-wrapper {
-        display: flex;
-        width: 100%;
-    }
-
-    .tree-items-dual {
-        display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 8px;
-        width: 100%;
-    }
-
-    .tree-item-section {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-width: 160px;
-        gap: 4px;
-    }
-
 `;
 
 /** The question-led node details: the overview summary, answer rows and tables. */

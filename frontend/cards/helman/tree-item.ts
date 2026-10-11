@@ -1,5 +1,5 @@
 import { EnergyNodeConfig } from "./energy-node-config";
-import { ValueType } from "../helman-api";
+import type { DevicePhase, ValueType } from "../helman-api";
 import type { ValueKind } from "../power-format";
 
 export class TreeItem {
@@ -67,6 +67,7 @@ export class TreeItem {
     public show_additional_info?: boolean; // Indicates if additional info should be shown in the UI
     public groupBadgeTexts?: string[]; // Short names of the device's groups, in grouping order
     public groups?: Record<string, string>; // The device's own group per grouping: grouping id -> group id
+    public phase?: DevicePhase | null; // The house phase the device is wired to, its own; null when unassigned
     // Virtual grouping metadata
     public displayName?: string; // Optional display name override (e.g., "Group (short name)")
     public virtualType?: 'group' | 'others';
