@@ -141,7 +141,7 @@ async function mountEditor(page: Page): Promise<void> {
 
     const panel = page.locator("helman-config-editor-panel");
     await panel.locator(".tabs").getByRole("button", { name: "Devices", exact: true }).click();
-    for (const label of ["Device groupings", "Consumers"]) {
+    for (const label of ["Groupings and phases", "Consumers"]) {
         await panel
             .locator("details.section-card", {
                 has: page.locator(":scope > summary .section-summary-label", { hasText: label }),

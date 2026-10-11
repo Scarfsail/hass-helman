@@ -59,9 +59,13 @@ import {
 } from "../cards/shared/config/config-document";
 import {
   assignGroup,
+  assignPhase,
   canHaveChildren,
   consumerGroups,
+  consumerPhases,
   DEVICE_FILTERS,
+  DEVICE_PHASES,
+  isDevicePhase,
   deviceChildren,
   deviceIdFor,
   deviceKind,
@@ -460,6 +464,12 @@ export class HelmanConfigEditorPanel
       display: grid;
       gap: 6px;
       padding: 0 16px 8px;
+    }
+
+    /* The phase board has no name row above its buckets to space them from
+       the summary, so its rows take that row's top padding. */
+    .phase-card > .group-rows {
+      padding-top: 16px;
     }
 
     .member-chip {
@@ -3588,6 +3598,7 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.devices.groupings,
         html`
           <p class="inline-note">${this._t("editor.notes.device_groupings")}</p>
+          ${this._renderPhaseBoard()}
           ${this._renderGroupings()}
           <div class="section-footer">
             <button type="button" class="add-button add-grouping" @click=${this._handleAddGrouping}>
@@ -3944,6 +3955,71 @@ export class HelmanConfigEditorPanel
   }
 
   /**
+   * The House phases card: each consumer's own `phase` as a chip in its
+   * phase's bucket, dragged between them like a grouping's groups. Phases are
+   * a fixed electrical fact, not user data, so the card has no remove button,
+   * inputs, handles or "Add group". Only a direct assignment counts, as in a
+   * grouping: a child without its own phase sits in "Unassigned" though the
+   * house detail counts it on its single-phase parent's phase.
+   */
+  private _renderPhaseBoard(): TemplateResult {
+    const members = consumerPhases(this._config);
+    return html`
+      <details class="list-card phase-card">
+        ${this._renderBoardSummary(this._t("editor.card.house_phases"), this._t("editor.card.phases"))}
+        <div class="group-rows">
+          ${DEVICE_PHASES.map(
+            (phase) => html`
+              <div class="group-row">
+                <strong class="phase-name">${this._t(`editor.device_phases.${phase}`)}</strong>
+                ${this._renderGroupMembers(
+                  "helman-phases",
+                  phase,
+                  members.filter((entry) => entry.group === phase),
+                  assignPhase,
+                )}
+              </div>
+            `,
+          )}
+        </div>
+        <div class="group-unassigned">
+          <strong>${this._t("editor.device_phases.unassigned")}</strong>
+          ${this._renderGroupMembers(
+            "helman-phases",
+            null,
+            // A phase the backend does not know fails validation; until it is
+            // fixed the device shows here rather than nowhere.
+            members.filter((entry) => !isDevicePhase(entry.group)),
+            assignPhase,
+          )}
+        </div>
+      </details>
+    `;
+  }
+
+  /** The summary row a board card (the House phases card, a grouping) opens from. */
+  private _renderBoardSummary(
+    title: string,
+    subtitle: string,
+    actions: TemplateResult | typeof nothing = nothing,
+  ): TemplateResult {
+    return html`
+      <summary>
+        <div class="appliance-summary-row">
+          <div class="appliance-summary-left">
+            ${this._renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
+            <div class="card-title">
+              <strong>${title}</strong>
+              <span class="card-subtitle">${subtitle}</span>
+            </div>
+          </div>
+          ${actions}
+        </div>
+      </summary>
+    `;
+  }
+
+  /**
    * `devices.groupings`: one card per grouping, its groups as sortable rows.
    *
    * Ids are slugged from the name when the entry is added and editable after:
@@ -3977,24 +4053,17 @@ export class HelmanConfigEditorPanel
     const idLabel = this._t("editor.fields.grouping_id");
     return html`
       <details class="list-card grouping-card" data-grouping-id=${groupingId}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${this._stringValue(grouping.name)}</strong>
-                <span class="card-subtitle">${this._t("editor.card.grouping")}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${renderRemoveButton(this, {
-                className: "remove-grouping",
-                onRemove: () => this._handleRemoveGrouping(index),
-                label: this._t("editor.actions.remove_grouping"),
-              })}
-            </div>
-          </div>
-        </summary>
+        ${this._renderBoardSummary(
+          this._stringValue(grouping.name),
+          this._t("editor.card.grouping"),
+          html`<div class="list-actions" @click=${this._preventSummaryToggle}>
+            ${renderRemoveButton(this, {
+              className: "remove-grouping",
+              onRemove: () => this._handleRemoveGrouping(index),
+              label: this._t("editor.actions.remove_grouping"),
+            })}
+          </div>`,
+        )}
         <div class="grouping-name">
           <input
             class="grouping-name-input"
@@ -4036,11 +4105,12 @@ export class HelmanConfigEditorPanel
         <div class="group-unassigned">
           <strong>${this._t("editor.device_groups.unassigned")}</strong>
           ${this._renderGroupMembers(
-            groupingId,
+            "helman-grouping-" + groupingId,
             null,
             // An id the grouping does not have fails validation; until it is
             // fixed the device shows here rather than nowhere.
             members.filter((entry) => entry.group === null || !groupIds.has(entry.group)),
+            (draft, devicePath, groupId) => assignGroup(draft, devicePath, groupingId, groupId),
           )}
         </div>
         <div class="section-footer">
@@ -4101,18 +4171,20 @@ export class HelmanConfigEditorPanel
           })}
         </div>
         ${this._renderGroupMembers(
-          groupingId,
+          "helman-grouping-" + groupingId,
           groupId,
           members.filter((entry) => entry.group === groupId),
+          (draft, devicePath, bucketId) => assignGroup(draft, devicePath, groupingId, bucketId),
         )}
       </div>
     `;
   }
 
   /**
-   * One group's devices, or "Unassigned"'s (`groupId` null), as chips dragged
-   * between the lists of one grouping. Their order is the tree's: it is not
-   * stored, so the list does not sort.
+   * One bucket's devices -- a group's or a phase's, or "Unassigned"'s
+   * (`bucketId` null) -- as chips dragged between the lists sharing
+   * `dragGroup`, one grouping's or the phase board's. A drop calls `assign`.
+   * Their order is the tree's: it is not stored, so the list does not sort.
    *
    * A drop is applied from the target's item-added; ha-sortable's rollback
    * first puts the dragged chip back where it came from, so the DOM is Lit's again before it redraws from the document.
@@ -4120,25 +4192,26 @@ export class HelmanConfigEditorPanel
    * own list would take an item-moved for a reorder of the groups.
    */
   private _renderGroupMembers(
-    groupingId: string,
-    groupId: string | null,
+    dragGroup: string,
+    bucketId: string | null,
     members: GroupedDeviceEntry[],
+    assign: (draft: JsonObject, devicePath: PathSegment[], bucketId: string | null) => boolean,
   ): TemplateResult {
     return html`
       <ha-sortable
-        group=${"helman-grouping-" + groupingId}
+        group=${dragGroup}
         draggable-selector=".member-chip.draggable"
         .options=${MEMBER_SORTABLE_OPTIONS}
         @item-added=${(event: Event) => {
           event.stopPropagation();
           const devicePath = (event as CustomEvent<{ data?: unknown }>).detail?.data;
           if (!Array.isArray(devicePath)) return;
-          this._applyMutation((draft) => assignGroup(draft, devicePath, groupingId, groupId));
+          this._applyMutation((draft) => assign(draft, devicePath, bucketId));
         }}
         @item-moved=${stopEvent}
         @item-removed=${stopEvent}
       >
-        <div class="group-members" data-group-id=${groupId ?? ""}>
+        <div class="group-members" data-group-id=${bucketId ?? ""}>
           ${repeat(
             members,
             (entry) => entry.path.join("."),

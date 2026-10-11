@@ -87,6 +87,13 @@ function setOwnGroup(device: JsonObject, groupingId: string, groupId: string | n
   else delete device.groups;
 }
 
+/** The consumer at `devicePath`, or `undefined` when that path is none. */
+function consumerAt(config: JsonObject, devicePath: readonly PathSegment[]): JsonObject | undefined {
+  // A device path ends at its list index; anything deeper is no device.
+  const isConsumerPath = devicePath[1] === "consumers" && typeof devicePath[devicePath.length - 1] === "number";
+  return isConsumerPath ? asJsonObject(getValueAtPath(config, [...devicePath])) : undefined;
+}
+
 /**
  * Puts the consumer at `devicePath` into group `groupId` of a grouping, or
  * takes it out (`null`). The one setter behind both the groupings section's
@@ -99,12 +106,53 @@ export function assignGroup(
   groupingId: string,
   groupId: string | null,
 ): boolean {
-  // A device path ends at its list index; anything deeper is no device.
-  const isConsumerPath = devicePath[1] === "consumers" && typeof devicePath[devicePath.length - 1] === "number";
-  const device = isConsumerPath ? asJsonObject(getValueAtPath(config, [...devicePath])) : undefined;
+  const device = consumerAt(config, devicePath);
   if (!device) return false;
   if ((ownGroup(device, groupingId) ?? null) === groupId) return false;
   setOwnGroup(device, groupingId, groupId);
+  return true;
+}
+
+/** The house phases a consumer can be wired to, as `phase` stores them. Mirrors the backend's. */
+export const DEVICE_PHASES = ["L1", "L2", "L3", "3ph"] as const;
+
+/** Whether `value` is one of {@link DEVICE_PHASES}. */
+export function isDevicePhase(value: unknown): value is (typeof DEVICE_PHASES)[number] {
+  return (DEVICE_PHASES as readonly unknown[]).includes(value);
+}
+
+/** The device's own house phase, or `undefined`. */
+export function ownPhase(device: JsonObject): string | undefined {
+  const own = device.phase;
+  return typeof own === "string" && own ? own : undefined;
+}
+
+/**
+ * Every consumer, in {@link iterDevices} order, with its own house phase as
+ * its `group`. Only a direct assignment counts, as in {@link consumerGroups}:
+ * a child with none is unassigned, though the house detail counts it on its
+ * single-phase parent's phase.
+ */
+export function consumerPhases(config: JsonObject | null | undefined): GroupedDeviceEntry[] {
+  return iterDevices(config).map((entry) => ({ ...entry, group: ownPhase(entry.device) ?? null }));
+}
+
+/**
+ * Wires the consumer at `devicePath` to `phase`, or unassigns it (`null`).
+ * The one setter behind both the House phases card's drag and drop and the
+ * device editor's picker. `false` when that path is no consumer or nothing
+ * changes.
+ *
+ * Compared against the stored key rather than {@link ownPhase}: an invalid
+ * `phase: ""` or `phase: 3` reads as unassigned, yet unassigning must still
+ * delete it, or the validation error it raises could never be cleared.
+ */
+export function assignPhase(config: JsonObject, devicePath: readonly PathSegment[], phase: string | null): boolean {
+  const device = consumerAt(config, devicePath);
+  if (!device) return false;
+  if (phase === null ? !("phase" in device) : device.phase === phase) return false;
+  if (phase !== null) device.phase = phase;
+  else delete device.phase;
   return true;
 }
 
