@@ -827,6 +827,20 @@ def test_cycles_need_valid_comparable_counters_and_capacity(overrides, tele, rea
     assert payload["cycles"]["reason"] == reason
 
 
+def test_renamed_eta_sensors_are_found_by_unique_id():
+    from custom_components.helman.node_details.battery import _time_sensor_ids
+
+    registered = {("sensor", "helman", "entry1_battery_time_to_full"): "sensor.my_battery_full_in"}
+    registry = NS(async_get_entity_id=lambda domain, platform, uid: registered.get((domain, platform, uid)))
+    hass = NS(config_entries=NS(async_entries=lambda domain: [NS(entry_id="entry1")]))
+    with patch("homeassistant.helpers.entity_registry.async_get", return_value=registry):
+        ids = _time_sensor_ids(hass)
+
+    assert ids["time_to_full"] == "sensor.my_battery_full_in"
+    # Not registered yet: the id sensor.py creates it under.
+    assert ids["time_to_empty"] == "sensor.helman_battery_time_to_empty"
+
+
 def test_cycles_need_no_planning_bounds_for_the_capacity():
     # 50 % sits above a 40 % planning ceiling; remaining ÷ SoC is still 20 kWh.
     payload, _ = battery_detail(states=battery_states(**{"number.max_soc": ("40", "%")}))

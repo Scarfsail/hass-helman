@@ -28,7 +28,7 @@ from ..battery_state import (
 from ..const import DOMAIN
 from ..device_reports.reports import ReportQuery
 from ..energy_units import normalize_energy_to_kwh
-from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
+from ..vendors import INVERTER_TELEMETRY_KEY, helman_entity_id, resolve_vendor_telemetry
 from .day_stats import day_window
 from .inverter import run_mode_condition
 
@@ -73,11 +73,25 @@ _CONFIG_ENTITIES = {
     "today_discharge": "today_discharge_energy",
 }
 
-#: Helman's own ETA sensors, at the entity ids ``sensor.py`` gives them.
+#: Helman's own ETA sensors: unique-id suffix and the entity id ``sensor.py``
+#: creates them under, the fallback before they are registered.
 _TIME_SENSORS = {
-    "time_to_full": "sensor.helman_battery_time_to_full",
-    "time_to_empty": "sensor.helman_battery_time_to_empty",
+    "time_to_full": ("battery_time_to_full", "sensor.helman_battery_time_to_full"),
+    "time_to_empty": ("battery_time_to_empty", "sensor.helman_battery_time_to_empty"),
 }
+
+
+def _time_sensor_ids(hass: Any) -> dict[str, str]:
+    """Helman's ETA sensors by unique id, so a renamed entity is still found."""
+    config_entries = getattr(hass, "config_entries", None)
+    entries = config_entries.async_entries(DOMAIN) if config_entries is not None else []
+    if not entries:
+        return {key: fallback for key, (_, fallback) in _TIME_SENSORS.items()}
+    entry_id = entries[0].entry_id
+    return {
+        key: helman_entity_id(hass, "sensor", f"{entry_id}_{suffix}", fallback)
+        for key, (suffix, fallback) in _TIME_SENSORS.items()
+    }
 
 
 def build_battery_overview(
@@ -99,7 +113,7 @@ def build_battery_overview(
     for key, slot in _CONFIG_ENTITIES.items():
         entity_id = battery_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
-    entities.update(_TIME_SENSORS)
+    entities.update(_time_sensor_ids(hass))
     if telemetry is not None:
         for key in _TELEMETRY_KEYS:
             if key in telemetry.entities:
