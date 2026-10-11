@@ -36,6 +36,7 @@ type Variant = {
     remainingUnit?: string;
     todayUnit?: string;
     minSoc?: string;
+    remaining?: string;
 };
 
 declare global {
@@ -100,7 +101,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s("4200", "W"), "sensor.grid": s("-300", "W"), "sensor.battery": s(v.power ?? "-2100", "W"),
             "sensor.house": s("1200", "W"),
-            "sensor.soc": s("67", "%"), "sensor.remaining": s("11577", v.remainingUnit ?? "Wh"),
+            "sensor.soc": s("67", "%"), "sensor.remaining": s(v.remaining ?? "11577", v.remainingUnit ?? "Wh"),
             "number.min_soc": s(v.minSoc ?? "10", "%"), "number.max_soc": s("100", "%"),
             "sensor.battery_in_today": s("6.2", v.todayUnit ?? "kWh"), "sensor.battery_out_today": s("4.1", "kWh"),
             "sensor.helman_battery_time_to_empty": s(v.timeToEmpty ?? "280", "min", { target_time: "2026-10-21T16:40:00+00:00", target_soc: 10 }),
@@ -381,6 +382,13 @@ test("an out-of-range SoC floor is no floor, never a usable figure above it", as
     const reserve = question(page, "reserve");
     await expect(reserve).not.toContainText("120 %");
     await expect(reserve.locator("[data-row='room']")).toContainText("5.7 kWh");
+});
+
+test("a zero remaining energy at a positive SoC is no reserve, never 0 kWh of room", async ({ page }) => {
+    await mount(page, { remaining: "0" });
+    await openDetail(page);
+    await header(page, "reserve").click();
+    await expect(question(page, "reserve").locator("[data-row='usable'], [data-row='room']")).toHaveCount(0);
 });
 
 test("a cold reading in °F is compared in °C", async ({ page }) => {

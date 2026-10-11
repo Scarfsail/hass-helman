@@ -277,6 +277,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const remainingKwh = readEnergyKWh(this.hass, overview.entities.remaining_energy, false);
         if (soc === null || remainingKwh === null || soc <= 0 || soc > 100 || remainingKwh < 0) return null;
         const capacityKwh = remainingKwh / (soc / 100);
+        // A zero capacity is a reading that means nothing; the forecast refuses it too.
+        if (!(capacityKwh > 0)) return null;
         // Bounds outside 0–100 % or reversed are refused, as by the forecast: no
         // floor or ceiling is shown rather than one that means nothing.
         let minSoc = this._number(overview, "min_soc");
