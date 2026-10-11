@@ -849,7 +849,7 @@ export interface GetApplianceProjectionsRequest {
 // --- Node details (helman/get_node_detail) ----------------------------------
 
 /** The nodes the backend serves a detail for. */
-export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar" | "house";
+export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar" | "house" | "ev_charger";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
 export interface GetNodeDetailRequest {
@@ -1218,6 +1218,54 @@ export interface HousePatternSectionPayload {
     };
     /** kWh per hour, Monday first; `null` while no profile is fitted. */
     profile: { historyDays: number; trainedAt: string | null; kwh: number[][] } | null;
+}
+
+/**
+ * One EV charger's detail overview, by its consumer id. `entities` carries the
+ * device's config (`power`, `energy_total`, `charge_switch`, `use_mode`,
+ * `eco_gear`) and, with a hardware profile, its telemetry. `status` is the run
+ * mode the profile names.
+ */
+export interface EvChargerDetailPayload {
+    node: "ev_charger";
+    deviceId: string;
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    status: { kind: "charging" | "waiting" | "no_car" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/**
+ * When the charger's charging run mode began, as recorded: the start of a
+ * charging segment, not the plugged-in session. `null` while not charging, or
+ * when the record cannot tell.
+ */
+export interface EvChargerSegmentSectionPayload {
+    node: "ev_charger";
+    section: "segment";
+    deviceId: string;
+    asOf: string;
+    chargingSince: string | null;
+}
+
+/** Today's sources and attributed money of one charger, from the ranking report: today, not the session. */
+export interface EvChargerTodaySectionPayload {
+    node: "ev_charger";
+    section: "today";
+    deviceId: string;
+    asOf: string;
+    period: { start: string; end: string };
+    currency: string | null;
+    complete: boolean;
+    unavailable: string | null;
+    charger: {
+        kwh: number;
+        coverage: number;
+        estimated: boolean;
+        sources: { solar: number; battery: number; grid: number; unattributed: number };
+        money: HouseMoneyDTO;
+    } | null;
 }
 
 /**

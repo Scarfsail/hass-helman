@@ -981,6 +981,40 @@ def test_every_solax_telemetry_key_resolves_on_the_prod_registry():
     assert inverter.entities["shade_fix_pv1"] == "select.solax_shadow_fix_function_level_pv1_gmppt"
 
 
+def test_every_charger_telemetry_key_resolves_on_the_prod_registry():
+    import json
+
+    rows = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))["SolaX_EV_Charger"]
+    entries = [
+        registry_entry(
+            row["unique_id"], entity_id, entry_id=CHARGER_ENTRY_ID, device_id=CHARGER_DEVICE_ID
+        )
+        for entity_id, row in rows.items()
+        if row["device"] == "SolaX_EV_Charger solax_ev_charger"
+    ]
+    charger_telemetry = resolve_telemetry(
+        {"energy_nodes": {"inverter": {}}, "devices": {"consumers": [charger()]}},
+        entries=entries,
+        hass_entries=[charger_entry()],
+        devices={CHARGER_DEVICE_ID: [CHARGER_ENTRY_ID]},
+    )["garage-ev"]
+
+    profile = PROFILES["solax_ev_charger"]
+    assert None not in charger_telemetry.entities.values(), [
+        key for key, entity_id in charger_telemetry.entities.items() if entity_id is None
+    ]
+    for key, entity_id in charger_telemetry.entities.items():
+        assert entity_id.split(".")[0] == profile.telemetry[key][0], key
+    # Entity ids that do not follow the unique id.
+    assert charger_telemetry.entities["session_duration"] == (
+        "sensor.solax_ev_charger_solax_ev_charger_solax_ev_charger_charging_duration"
+    )
+    assert charger_telemetry.entities["network_status"] == (
+        "sensor.solax_ev_charger_solax_ev_charger_network_status"
+    )
+    assert charger_telemetry.entities["run_mode"] == "sensor.solax_ev_charger_run_mode"
+
+
 def test_telemetry_is_read_in_its_domain_only():
     # The unique id of the use mode, registered as a sensor instead of a select.
     entries = [registry_entry("SolaX_charger_use_mode", "sensor.solax_charger_use_mode")]

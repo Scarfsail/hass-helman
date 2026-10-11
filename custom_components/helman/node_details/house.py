@@ -200,7 +200,7 @@ async def _today(hass: Any, local_now: datetime) -> dict[str, Any]:
             "kwh": round(house_kwh, 3),
             "coverage": house.get("coverage", 0.0),
             "sources": house.get("sources") or {},
-            "money": _money(house),
+            "money": ranking_money(house),
             "ambiguousKwh": report.get("ambiguous_kwh", 0.0),
             "mismatchKwh": report.get("mismatch_kwh", 0.0),
         },
@@ -271,7 +271,7 @@ def top_consumers(nodes: Sequence[Mapping[str, Any]], count: int = TOP_CONSUMERS
             "estimated": bool(node.get("estimated")),
             "kwh": node.get("kwh") or 0.0,
             "coverage": node.get("coverage", 0.0),
-            "money": _money(node),
+            "money": ranking_money(node),
         }
 
     def walk(parent: Mapping[str, Any]) -> None:
@@ -301,7 +301,7 @@ def top_consumers(nodes: Sequence[Mapping[str, Any]], count: int = TOP_CONSUMERS
     }
 
 
-def _money(node: Mapping[str, Any]) -> dict[str, Any]:
+def ranking_money(node: Mapping[str, Any]) -> dict[str, Any]:
     """A ranking node's attributed money: paid first, the forgone export value apart.
 
     Estimates by the reports' attribution, not a bill. An amount is ``None``

@@ -1753,3 +1753,304 @@ def test_the_learned_profile_is_the_forecasts_base_load_monday_first():
 
     payload, _ = house_detail(section="pattern")
     assert payload["profile"] is None
+
+
+# --- The EV charger detail -------------------------------------------------------
+
+EV_RUN_MODE = "sensor.solax_ev_charger_run_mode"
+EV_SESSION_ENERGY = "sensor.solax_ev_charger_charge_added"
+EV_SESSION_DURATION = "sensor.solax_ev_charger_charging_duration"
+EV_POWER = "sensor.solax_ev_charger_charge_power_total"
+EV_ENERGY = "sensor.solax_ev_charger_charge_added_total"
+EV_SWITCH = "switch.helman_ev_charging_garage_ev"
+CHARGING_SINCE = datetime(2026, 10, 10, 13, 20, tzinfo=PRAGUE)  # NOW - 40 min
+
+
+def ev_config(*, profile=True, meter=True, kind="ev_charger"):
+    charger = {
+        "kind": kind,
+        "id": "garage-ev",
+        "name": "Garage EV",
+        "schedulable": True,
+        "controls": {
+            "charge": {"entity_id": EV_SWITCH},
+            "use_mode": {"entity_id": "select.solax_ev_charger_charger_use_mode"},
+            "eco_gear": {"entity_id": "select.solax_ev_charger_eco_gear"},
+        },
+        "consumption": {"power_entity_id": EV_POWER},
+    }
+    if meter:
+        charger["consumption"]["energy_entity_id"] = EV_ENERGY
+    if profile:
+        charger["profile"] = {"id": "solax_ev_charger", "device_id": "charger-device"}
+    cfg = config()
+    # Nested under a parent: the detail finds a charger at any depth.
+    cfg["devices"] = {"consumers": [{"id": "garage", "kind": "generic", "children": [charger]}]}
+    return cfg
+
+
+def ev_telemetry(**entities):
+    profile = PROFILES["solax_ev_charger"]
+    resolved = {key: None for key in profile.telemetry}
+    resolved.update(
+        {
+            "run_mode": EV_RUN_MODE,
+            "session_energy": EV_SESSION_ENERGY,
+            "session_duration": EV_SESSION_DURATION,
+            **entities,
+        }
+    )
+    return {"garage-ev": DeviceTelemetry(profile=profile, entry=ENTRY, entities=resolved)}
+
+
+def ev_detail(
+    *, run_mode="Charging", cfg=None, tele=None, section=None, report=None,
+    device_id="garage-ev", history=(),
+):
+    reports = []
+
+    async def run_mode_history(hass, entity_id, start, end):
+        assert entity_id == EV_RUN_MODE
+        return list(history)
+
+    async def device_report(name, query):
+        reports.append((name, query))
+        return report
+
+    states = {}
+    if run_mode is not None:
+        states[EV_RUN_MODE] = NS(state=run_mode, attributes={}, last_changed=CHARGING_SINCE)
+    hass = NS(
+        states=NS(get=states.get),
+        data={"helman": {"coordinator": NS(async_device_report=device_report)}},
+    )
+    with patch(
+        "custom_components.helman.node_details.ev_charger.resolve_vendor_telemetry",
+        return_value=ev_telemetry() if tele is None else tele,
+    ), patch(
+        "custom_components.helman.node_details.ev_charger.async_run_mode_history",
+        side_effect=run_mode_history,
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                hass,
+                ev_config() if cfg is None else cfg,
+                node="ev_charger",
+                device_id=device_id,
+                section=section,
+                now=NOW,
+            )
+        )
+    return payload, reports
+
+
+@pytest.mark.parametrize(
+    ("device_id", "cfg"),
+    [
+        (None, None),
+        ("toaster", None),
+        # A consumer of another kind is not a charger, whatever its id.
+        ("garage", None),
+        ("garage-ev", ev_config(kind="generic")),
+    ],
+)
+def test_the_charger_detail_validates_its_device(device_id, cfg):
+    with pytest.raises(NodeDetailError) as raised:
+        ev_detail(device_id=device_id, cfg=cfg)
+    assert raised.value.code == "invalid_device"
+
+
+def test_the_charger_overview_carries_config_and_telemetry_and_reads_no_report():
+    payload, reports = ev_detail()
+
+    assert reports == []
+    assert payload["node"] == "ev_charger"
+    assert payload["deviceId"] == "garage-ev"
+    assert payload["profile"] == {"id": "solax_ev_charger", "label": "SolaX EV charger"}
+    entities = payload["entities"]
+    assert entities["power"] == EV_POWER
+    assert entities["energy_total"] == EV_ENERGY
+    assert entities["charge_switch"] == EV_SWITCH
+    assert entities["use_mode"] == "select.solax_ev_charger_charger_use_mode"
+    # Unresolved telemetry stays a typed null, never dropped.
+    assert "grid_power" in entities and entities["grid_power"] is None
+    assert payload["sections"] == ["today", "segment"]
+    # The segment start is a recorder read, so it is a section of its own.
+    assert "chargingSince" not in payload
+
+
+def run_mode_state(state, minutes_ago):
+    return NS(state=state, last_changed=NOW - timedelta(minutes=minutes_ago))
+
+
+def test_the_hardware_session_counters_are_separate_from_the_charging_segment():
+    payload, _ = ev_detail(run_mode="Charging")
+
+    # The counters are the hardware's own, read live by the card.
+    assert payload["entities"]["session_energy"] == EV_SESSION_ENERGY
+    assert payload["entities"]["session_duration"] == EV_SESSION_DURATION
+    assert payload["status"] == {"kind": "charging", "runMode": "Charging", "entityId": EV_RUN_MODE}
+    assert "sessionStart" not in payload
+
+    # The recorded transition into Charging starts a segment, not the session.
+    segment, _ = ev_detail(
+        section="segment",
+        history=[run_mode_state("SuspendedEV", 90), run_mode_state("Charging", 40)],
+    )
+    assert segment["chargingSince"] == CHARGING_SINCE.isoformat()
+    assert "sessionStart" not in segment
+
+
+@pytest.mark.parametrize(
+    ("history", "since"),
+    [
+        # An HA restart: the run mode's last_changed moves, the segment does not.
+        (
+            [run_mode_state("Preparing", 90), run_mode_state("Charging", 40),
+             run_mode_state("unavailable", 20), run_mode_state("Charging", 18)],
+            CHARGING_SINCE,
+        ),
+        # A pause and a restart start a new segment.
+        (
+            [run_mode_state("Charging", 90), run_mode_state("SuspendedEV", 40),
+             run_mode_state("Charging", 30)],
+            NOW - timedelta(minutes=30),
+        ),
+        # A gap too long to call continuous leaves the start unknown.
+        (
+            [run_mode_state("Preparing", 90), run_mode_state("Charging", 40),
+             run_mode_state("unavailable", 30), run_mode_state("Charging", 10)],
+            None,
+        ),
+        # Several gap states in a row are one gap, measured whole.
+        (
+            [run_mode_state("Preparing", 90), run_mode_state("Charging", 60),
+             run_mode_state("unavailable", 34), run_mode_state("unknown", 26),
+             run_mode_state("unavailable", 18), run_mode_state("Charging", 10)],
+            None,
+        ),
+        # Charging since before the history read: unknown, not its window start.
+        ([run_mode_state("Charging", 40)], None),
+    ],
+)
+def test_the_charging_segment_starts_at_the_recorded_transition(history, since):
+    segment, _ = ev_detail(section="segment", history=history)
+
+    assert segment["chargingSince"] == (None if since is None else since.isoformat())
+
+
+@pytest.mark.parametrize(
+    ("run_mode", "kind"),
+    [
+        ("SuspendedEV", "waiting"),
+        ("Preparing", "waiting"),
+        ("Available", "no_car"),
+        ("Faulted", "fault"),
+    ],
+)
+def test_a_paused_or_no_car_charger_has_no_charging_segment(run_mode, kind):
+    payload, _ = ev_detail(run_mode=run_mode)
+    segment, _ = ev_detail(
+        run_mode=run_mode, section="segment", history=[run_mode_state("Charging", 40)]
+    )
+
+    assert payload["status"]["kind"] == kind
+    assert segment["chargingSince"] is None
+
+
+def test_a_run_mode_the_profile_does_not_name_has_no_status():
+    payload, _ = ev_detail(run_mode="Update")
+    segment, _ = ev_detail(run_mode="Update", section="segment")
+
+    assert payload["status"] is None
+    assert segment["chargingSince"] is None
+
+
+def test_missing_session_telemetry_stays_unavailable():
+    payload, _ = ev_detail(tele=ev_telemetry(session_energy=None, session_duration=None), run_mode=None)
+    segment, _ = ev_detail(run_mode=None, section="segment")
+
+    assert payload["entities"]["session_energy"] is None
+    assert payload["entities"]["session_duration"] is None
+    assert payload["status"] is None
+    assert segment["chargingSince"] is None
+
+
+def test_a_custom_charger_keeps_its_config_backed_entities():
+    payload, _ = ev_detail(cfg=ev_config(profile=False), tele={})
+
+    assert payload["profile"] is None
+    assert payload["status"] is None
+    assert set(payload["entities"]) == {"power", "energy_total", "charge_switch", "use_mode", "eco_gear"}
+    assert payload["entities"]["power"] == EV_POWER
+
+
+def ev_ranking():
+    return {
+        "currency": "CZK/kWh",
+        "complete": False,
+        "as_of": "2026-10-10T13:55:00+02:00",
+        "nodes": [
+            {"id": "house", "kwh": 20.0},
+            {
+                "id": EV_ENERGY,
+                "kwh": 6.4,
+                "coverage": 0.9,
+                "estimated": False,
+                "sources": {"solar": 4.0, "battery": 0.4, "grid": 1.8, "unattributed": 0.2},
+                "money": {
+                    "paid": {"amount": 7.2, "priced_kwh": 1.8, "unpriced_kwh": 0.0},
+                    "forgone": {"amount": 4.8, "priced_kwh": 4.0, "unpriced_kwh": 0.0},
+                },
+            },
+        ],
+    }
+
+
+def test_todays_attribution_is_the_chargers_ranking_node_over_the_local_day():
+    payload, reports = ev_detail(section="today", report=ev_ranking())
+
+    [(name, query)] = reports
+    assert name == "ranking"
+    # Whole local dates: today so far, never the charging session.
+    assert (query.start_date, query.end_date) == (date(2026, 10, 10), date(2026, 10, 10))
+    assert payload["period"] == {
+        "start": "2026-10-10T00:00:00+02:00",
+        "end": "2026-10-11T00:00:00+02:00",
+    }
+    assert payload["asOf"] == "2026-10-10T13:55:00+02:00"
+    charger = payload["charger"]
+    assert charger["kwh"] == 6.4
+    assert charger["sources"]["grid"] == 1.8
+    assert charger["money"]["paid"] == 7.2
+    assert charger["money"]["forgone"] == 4.8
+    assert payload["currency"] == "CZK/kWh"
+    assert payload["unavailable"] is None
+
+
+def test_a_meterless_charger_is_found_by_its_id_in_the_ranking():
+    report = ev_ranking()
+    report["nodes"][1]["id"] = "garage-ev"
+    payload, _ = ev_detail(section="today", report=report, cfg=ev_config(meter=False))
+
+    assert payload["charger"]["kwh"] == 6.4
+
+
+@pytest.mark.parametrize(
+    ("report", "reason"),
+    [
+        ({"unavailable": "no_house_meter"}, "no_house_meter"),
+        ({"currency": None, "nodes": [{"id": "house", "kwh": 1.0}]}, "no_charger_node"),
+    ],
+)
+def test_today_without_this_chargers_node_is_unavailable(report, reason):
+    payload, _ = ev_detail(section="today", report=report)
+
+    assert payload["charger"] is None
+    assert payload["unavailable"] == reason
+
+
+def test_the_charger_refuses_a_section_it_does_not_answer():
+    with pytest.raises(NodeDetailError) as raised:
+        ev_detail(section="voltage")
+    assert raised.value.code == "unknown_section"
