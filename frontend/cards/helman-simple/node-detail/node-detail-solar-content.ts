@@ -539,8 +539,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 ${destinations.otherExportKwh > 0 ? this._row(this._t("destinations.other_export"), formatGridEnergy(destinations.otherExportKwh), "other-export", this._t("destinations.other_export_scope")) : nothing}
                 ${!payload!.complete ? html`<p class="note" data-incomplete>${this._t("destinations.incomplete")}</p>` : nothing}
                 <div class="section-title">${this._t("destinations.reconcile")}</div>
-                ${this._row(this._t("destinations.meter_today"), meterToday === null ? this._t("unavailable") : formatGridEnergy(meterToday), "meter-today")}
-                ${this._row(this._t("destinations.export_today"), exportToday === null ? this._t("unavailable") : formatGridEnergy(exportToday), "export-today")}
+                ${this._row(this._t("destinations.meter_today"), meterToday === null ? this._t("unavailable") : formatGridEnergy(meterToday), "meter-today", undefined, overview.entities.today_energy)}
+                ${this._row(this._t("destinations.export_today"), exportToday === null ? this._t("unavailable") : formatGridEnergy(exportToday), "export-today", undefined, overview.entities.today_export)}
                 <p class="note">${this._t("destinations.reconcile_note")}</p>
             ` : nothing}
             <div class="section-title">${this._t("destinations.dc_split")}</div>
@@ -622,12 +622,12 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             : fillTemplate(this._t("limits.input_of_rating"), { power: formatPower(input).display, share: this._share(input / rated) });
         return html`
             ${this._row(this._t("limits.input"), inputText, "input")}
-            ${rated !== null ? this._row(this._t("limits.rating"), formatPower(rated).display, "rating", this._t("limits.scope_rating")) : nothing}
+            ${rated !== null ? this._row(this._t("limits.rating"), formatPower(rated).display, "rating", this._t("limits.scope_rating"), overview.entities.rated_power) : nothing}
             ${input !== null && rated !== null && input > rated ? html`
                 <p class="note" data-above-rating>${this._t("limits.above_rating")}</p>
             ` : nothing}
-            ${pvLimit !== null ? this._row(this._t("limits.pv_limit"), formatPower(pvLimit).display, "pv-limit", this._t("limits.scope_remote")) : nothing}
-            ${exportLimit !== null ? this._row(this._t("limits.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("limits.scope_inverter")) : nothing}
+            ${pvLimit !== null ? this._row(this._t("limits.pv_limit"), formatPower(pvLimit).display, "pv-limit", this._t("limits.scope_remote"), overview.entities.pv_power_limit) : nothing}
+            ${exportLimit !== null ? this._row(this._t("limits.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("limits.scope_inverter"), overview.entities.export_limit) : nothing}
             ${overview.maxAllowedExportPower !== null ? this._row(this._t("limits.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("limits.scope_helman")) : nothing}
             ${exportLimit === 0 ? html`<p class="note" data-export-zero>${this._t("limits.export_zero")}</p>` : nothing}
             ${this._row(this._t("limits.intent"), run
@@ -821,7 +821,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 </div>
                 <p class="note">${this._t(model.corrected ? "outlook.explain" : "outlook.explain_raw")}</p>
             ` : this._forecastFailed ? this._renderForecastFailed() : html`<p class="note">${this._forecastMissing()}</p>`}
-            ${lifetime !== null ? this._row(this._t("outlook.lifetime"), formatGridEnergy(lifetime), "lifetime", this._t("outlook.lifetime_scope")) : nothing}
+            ${lifetime !== null ? this._row(this._t("outlook.lifetime"), formatGridEnergy(lifetime), "lifetime", this._t("outlook.lifetime_scope"), overview.entities.lifetime_energy) : nothing}
         `;
     }
 

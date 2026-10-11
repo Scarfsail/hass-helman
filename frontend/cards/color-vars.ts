@@ -10,6 +10,7 @@ import {
     HOUSE_COLOR,
     NEUTRAL_COLOR,
     NEUTRAL_LIGHT_COLOR,
+    PHASE_COLORS,
     PRICE_NEGATIVE_COLOR,
     PRICE_POSITIVE_COLOR,
     SELECTION_COLOR,
@@ -59,6 +60,10 @@ export const helmanColorVars = css`
 
         --helman-neutral: var(--helman-theme-neutral, ${unsafeCSS(NEUTRAL_COLOR)});
         --helman-neutral-light: var(--helman-theme-neutral-light, ${unsafeCSS(NEUTRAL_LIGHT_COLOR)});
+
+        --helman-phase-l1: var(--helman-theme-phase-l1, ${unsafeCSS(PHASE_COLORS[1])});
+        --helman-phase-l2: var(--helman-theme-phase-l2, ${unsafeCSS(PHASE_COLORS[2])});
+        --helman-phase-l3: var(--helman-theme-phase-l3, ${unsafeCSS(PHASE_COLORS[3])});
     }
 `;
 

@@ -383,9 +383,9 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const pvLimit = this._number(overview, "pv_power_limit");
         const soc = this._socRange(overview);
         const rows = [
-            exportLimit !== null ? this._row(this._t("limits.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("limits.scope_inverter")) : nothing,
+            exportLimit !== null ? this._row(this._t("limits.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("limits.scope_inverter"), overview.entities.export_limit) : nothing,
             overview.maxAllowedExportPower !== null ? this._row(this._t("limits.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("limits.scope_helman")) : nothing,
-            pvLimit !== null ? this._row(this._t("limits.pv_limit"), formatPower(pvLimit).display, "pv-limit", this._t("limits.scope_remote")) : nothing,
+            pvLimit !== null ? this._row(this._t("limits.pv_limit"), formatPower(pvLimit).display, "pv-limit", this._t("limits.scope_remote"), overview.entities.pv_power_limit) : nothing,
             this._optionalRow(overview, "battery_charge_max_current", "limits.charge_current"),
             this._optionalRow(overview, "battery_discharge_max_current", "limits.discharge_current"),
             soc ? this._row(this._t("limits.soc_range"), soc, "soc-range", this._t("limits.scope_config")) : nothing,
@@ -527,8 +527,8 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const quarantined = this._number(overview, "link_quarantined_registers");
         return html`
             ${rate === null && quarantined === null ? html`<p class="note">${this._t("trust.unavailable")}</p>` : nothing}
-            ${rate !== null ? this._row(this._t("trust.link_rate"), rate, "link-rate") : nothing}
-            ${quarantined !== null ? this._row(this._t("trust.quarantined"), String(quarantined), "quarantined") : nothing}
+            ${rate !== null ? this._row(this._t("trust.link_rate"), rate, "link-rate", undefined, overview.entities.link_success_rate) : nothing}
+            ${quarantined !== null ? this._row(this._t("trust.quarantined"), String(quarantined), "quarantined", undefined, overview.entities.link_quarantined_registers) : nothing}
             <p class="note">${this._t("trust.explain")}</p>
         `;
     }

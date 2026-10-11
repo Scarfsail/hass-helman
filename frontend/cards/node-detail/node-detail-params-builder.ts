@@ -1,7 +1,7 @@
 import type { TreeItem } from "../helman/tree-item";
-import type { NodeDetailParams, NodeType } from "./node-detail-types";
+import type { EnergyNodeFlowParams, NodeDetailParams, NodeType } from "./node-detail-types";
 
-export interface NodeDetailContext {
+export interface NodeDetailContext extends EnergyNodeFlowParams {
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -17,9 +17,11 @@ export interface NodeDetailContext {
 }
 
 export function buildNodeDetailParams(context: NodeDetailContext, nodeType: NodeType): NodeDetailParams {
+    const flow: EnergyNodeFlowParams = { flows: context.flows, flowScaleW: context.flowScaleW };
     switch (nodeType) {
         case "battery":
             return {
+                ...flow,
                 nodeType: "battery",
                 power: context.batteryPowerReading,
                 historyBuckets: context.historyBuckets,
@@ -27,6 +29,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
             };
         case "solar":
             return {
+                ...flow,
                 nodeType: "solar",
                 power: context.solarPowerReading,
                 batteryPower: context.batteryPowerReading,
@@ -34,17 +37,20 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
             };
         case "grid":
             return {
+                ...flow,
                 nodeType: "grid",
                 gridPower: context.gridPower,
             };
         case "house":
             return {
+                ...flow,
                 nodeType: "house",
                 power: context.housePower,
                 houseNode: context.houseNode,
             };
         case "inverter":
             return {
+                ...flow,
                 nodeType: "inverter",
                 solarPower: context.solarPower,
                 batteryPower: context.batteryPower,

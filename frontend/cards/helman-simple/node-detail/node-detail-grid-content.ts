@@ -10,7 +10,7 @@ import {
 } from "../../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
+import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PHASE_COLORS } from "../../color-utils";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
@@ -26,9 +26,6 @@ type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
 
 const PHASES = [1, 2, 3] as const;
 type Phase = (typeof PHASES)[number];
-
-/** One colour per phase; every chart and table also names the phase in text. */
-const PHASE_COLORS: Record<Phase, string> = { 1: "#8e24aa", 2: "#fb8c00", 3: "#00897b" };
 
 /** The nominal low-voltage supply and the ±10 % band around it, as references only. */
 const NOMINAL_VOLTAGE = 230;
@@ -808,7 +805,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const exportLimit = this._number(overview, "export_limit");
         return html`
             ${this._row(this._t("outage.state"), state, "grid-state")}
-            ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter")) : nothing}
+            ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter"), overview.entities.export_limit) : nothing}
             ${overview.maxAllowedExportPower !== null ? this._row(this._t("outage.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("outage.scope_helman")) : nothing}
             ${this._optionalRow(overview, "grid_mode_runtime", "outage.grid_runtime")}
             ${this._optionalRow(overview, "eps_mode_runtime", "outage.eps_runtime")}

@@ -155,6 +155,20 @@
       "solar": "Solar",
       "house": "House"
     },
+    "flow": {
+      "now": "Now",
+      "today": "Today",
+      "scope_now": "Now · {time}",
+      "scope_today": "Today · 00:00–{time}",
+      "total_in": "In {value}",
+      "total_out": "Out {value}",
+      "paid_estimate": "paid ≈ {value}",
+      "loading": "Loading today's flows…",
+      "failed": "Today's flows could not be loaded.",
+      "unavailable_not_loaded": "Today's flows are not available yet: Helman is still loading. Try again shortly.",
+      "unavailable_no_house_node": "Today's flows need the house in the device tree, which has no house node yet.",
+      "unavailable_no_house_meter": "Today's flows need the house meter the device reports read; it is not configured."
+    },
     "inverter": {
       "cell_label": "Inverter: {mode}",
       "link_cue": "communication details: {value}",
@@ -509,9 +523,18 @@
         "idle": "Idle ({power}).",
         "unavailable": "No battery power reading right now."
       },
-      "figure": {
-        "soc": "Charge (SoC)",
-        "usable": "Usable above {floor}"
+      "glyph": {
+        "min": "min {soc}",
+        "max": "max {soc}"
+      },
+      "flow": {
+        "net": "Net change today: {kwh}, by the battery's own meters.",
+        "unknown_charge": "{kwh} of today's charge has no known source."
+      },
+      "tile": {
+        "no_change": "No change planned",
+        "limits_charge": "charge ceiling",
+        "limits_discharge": "discharge ceiling"
       },
       "exception": {
         "bms_disconnected": "The inverter reports the battery management system as disconnected ({state}).",

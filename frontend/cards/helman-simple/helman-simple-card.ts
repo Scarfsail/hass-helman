@@ -28,6 +28,8 @@ import "./simple-card-grid";
 import "./simple-card-house";
 import { computeDominantSourceColorCached } from "../color-utils";
 import { getFlowColor, getFlowGlow } from "./flow-colors";
+import { DEFAULT_SOLAR_MAX_W, IDLE_W, liveFlows, type LiveFlows } from "./live-flows";
+import { powerUnitFactor, readingNumber } from "./node-detail/node-detail-readings";
 
 // ──────────────────────────────── Internal model ──────────────────────────────
 
@@ -339,47 +341,29 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             return html`<ha-card class=${this._config?.transparent_background ? "transparent" : ""}><div class="loading">${this._localize?.('card.loading') ?? 'Loading energy data…'}</div></ha-card>`;
         }
 
-        const { solarPower, gridPower, housePower, batteryPower,
+        const { solarPower, housePower, batteryPower,
                 batterySoc, batteryMinSoc } = this._energy;
 
-        // All activation thresholds: 50 W
-        const solarActive   = solarPower > 50;
-        const battCharge    = batteryPower > 50;
-        const battDischarge = batteryPower < -50;
-
-        // Infer solar→grid export from power balance (sign-convention independent)
-        const solarToGrid = Math.max(0, solarPower - housePower - Math.max(0, batteryPower));
-        const solarExportingToGrid = solarToGrid > 50;
-
-        // ── Solar distribution (house load has priority over battery charging) ──
-        const solarToGridPower  = solarExportingToGrid ? solarToGrid : 0;
-        // Solar covers house first, then remaining excess charges battery
-        const solarToHousePower = solarActive ? Math.max(0, Math.min(solarPower - solarToGridPower, housePower)) : 0;
-        const solarToBattPower  = solarActive && battCharge
-            ? Math.min(Math.max(0, solarPower - solarToHousePower - solarToGridPower), Math.max(0, batteryPower))
-            : 0;
-
-        // ── Battery distribution (when discharging) ────────────────────────────
-        // Battery fills remaining house demand first; any excess is exported to grid
-        const houseRemainingAfterSolar = Math.max(0, housePower - solarToHousePower);
-        const battToHousePower = battDischarge ? Math.min(Math.abs(batteryPower), houseRemainingAfterSolar) : 0;
-        const battToGridPower  = battDischarge ? Math.max(0, Math.abs(batteryPower) - battToHousePower) : 0;
-
-        // Effective grid power: if the sensor reads ≈0 but solar or battery is clearly exporting,
-        // derive the export value from the power balance (negative = exporting)
-        const effectiveGridPower = (Math.abs(gridPower) < 20 && (solarExportingToGrid || battToGridPower > 50))
-            ? -(solarToGridPower + battToGridPower)
-            : gridPower;
-        const gridImport = effectiveGridPower > 50;
+        // One activation threshold for every flow, as the details read it.
+        const solarActive   = solarPower > IDLE_W;
+        const battCharge    = batteryPower > IDLE_W;
+        const flows = liveFlows(this._energy);
+        const solarExportingToGrid = flows.solarToGrid > 0;
+        const solarToGridPower  = flows.solarToGrid;
+        const solarToHousePower = flows.solarToHouse;
+        const solarToBattPower  = flows.solarToBattery;
+        const battToHousePower  = flows.batteryToHouse;
+        const battToGridPower   = flows.batteryToGrid;
+        const effectiveGridPower = flows.gridPower;
+        const gridImport = effectiveGridPower > IDLE_W;
 
         const em = this._entityMap;
         const intensity = (power: number, max: number) => Math.min(Math.abs(power) / max, 1);
         // Stroke width scales linearly from 1.5 to 12 px based on the power ratio; minimum ensures visibility.
         const thick = (i: number) => Math.max(1.5, i * 12);
 
-        // ── Grid distribution ──────────────────────────────────────────────────
-        const gridToBattPower  = battCharge ? Math.max(0, batteryPower - solarToBattPower) : 0;
-        const gridToHousePower = Math.max(0, housePower - solarToHousePower - battToHousePower);
+        const gridToBattPower  = flows.gridToBattery;
+        const gridToHousePower = flows.gridToHouse;
 
         // ── Intensities: ratio of each flow's power to its source's max power ──
         const solarToHouseI = intensity(solarToHousePower, em.solarMaxPower);
@@ -436,7 +420,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                         <div class="center-cell">${this._renderInverterCell()}</div>
                         <div class="connector-v">
                             ${(gridImport && battCharge) ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, gridToBattT) : ""}
-                            ${battToGridPower > 50 ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, battToGridT) : ""}
+                            ${battToGridPower > IDLE_W ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, battToGridT) : ""}
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
@@ -453,7 +437,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             ></simple-card-battery>
                         </div>
 
-                        ${this._renderFlowOverlay(solarToBattPower > 50, gridToHousePower > 50, battToHousePower > 50, solarToBattT, gridToHouseT, battToHouseT)}
+                        ${this._renderFlowOverlay(solarToBattPower > IDLE_W, gridToHousePower > IDLE_W, battToHousePower > IDLE_W, solarToBattT, gridToHouseT, battToHouseT)}
 
                     </div>
                 </div>
@@ -463,7 +447,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .hass=${this._hass!}
                     .localize=${this._localize!}
                     .open=${true}
-                    .params=${this._buildDialogParams(this._dialogRequest)}
+                    .params=${this._buildDialogParams(this._dialogRequest, flows)}
                     @closed=${() => { this._dialogRequest = null; this._detailEntityIds = []; this._rebuildWatchedEntityIds(); }}
                     @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
@@ -691,7 +675,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             batteryMinSocEntityId: battCfg.min_soc            ?? null,
             housePowerEntityId:    houseNode?.powerSensorId   ?? null,
             houseValueType:        houseNode?.valueType       ?? "default",
-            solarMaxPower:   Math.max(1, solarNode?.sourceConfig?.max_power   ?? 5000),
+            solarMaxPower:   Math.max(1, solarNode?.sourceConfig?.max_power   ?? DEFAULT_SOLAR_MAX_W),
             gridMaxPower:    Math.max(1, gridNode?.sourceConfig?.max_power    ?? 11500),
             batteryMaxPower: Math.max(1, batteryNode?.sourceConfig?.max_power ?? 5000),
         };
@@ -718,10 +702,12 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return undefined;
     }
 
-    private _buildNodeDetailContext(): NodeDetailContext {
+    private _buildNodeDetailContext(flows: LiveFlows): NodeDetailContext {
         const historyBuckets = this._uiConfig?.history_buckets ?? 60;
         const historyBucketDuration = this._uiConfig?.history_bucket_duration ?? 60;
         return {
+            flows,
+            flowScaleW: this._flowScaleW(),
             batteryPower: this._energy.batteryPower,
             batteryPowerReading: this._energy.batteryPowerReading,
             solarPowerReading: this._energy.solarPowerReading,
@@ -734,9 +720,22 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         };
     }
 
-    private _buildDialogParams(request: NodeType | TreeItem): NodeDetailParams {
+    /**
+     * The power a detail's flow draws at full height: the inverter's AC
+     * rating, else the solar node's configured maximum.
+     */
+    private _flowScaleW(): number {
+        const entityId = this._inverter?.entities.rated_power;
+        const hass = this._hass ?? this._latestHass;
+        const value = hass ? readingNumber(hass, entityId) : null;
+        const factor = hass ? powerUnitFactor(hass, entityId) : null;
+        const rated = value === null || factor === null ? null : value * factor;
+        return rated !== null && rated > 0 ? rated : this._entityMap!.solarMaxPower;
+    }
+
+    private _buildDialogParams(request: NodeType | TreeItem, flows: LiveFlows): NodeDetailParams {
         return typeof request === "string"
-            ? buildNodeDetailParams(this._buildNodeDetailContext(), request)
+            ? buildNodeDetailParams(this._buildNodeDetailContext(flows), request)
             : { nodeType: "device", item: request };
     }
 

@@ -34,6 +34,20 @@
       "house": "Dům",
       "inverter": "Střídač"
     },
+    "flow": {
+      "now": "Teď",
+      "today": "Dnes",
+      "scope_now": "Teď · {time}",
+      "scope_today": "Dnes · 00:00–{time}",
+      "total_in": "Dovnitř {value}",
+      "total_out": "Ven {value}",
+      "paid_estimate": "zaplaceno ≈ {value}",
+      "loading": "Načítají se dnešní toky…",
+      "failed": "Dnešní toky se nepodařilo načíst.",
+      "unavailable_not_loaded": "Dnešní toky zatím nejsou k dispozici: Helman se ještě načítá. Zkuste to za chvíli.",
+      "unavailable_no_house_node": "Dnešní toky potřebují dům ve stromu zařízení, který zatím nemá uzel domu.",
+      "unavailable_no_house_meter": "Dnešní toky potřebují elektroměr domu, ze kterého čtou přehledy zařízení; není nastavený."
+    },
     "battery": {
       "loading": "Načítám podrobnosti baterie…",
       "load_failed": "Podrobnosti baterie se nepodařilo načíst.",
@@ -52,9 +66,18 @@
         "idle": "V klidu ({power}).",
         "unavailable": "Výkon baterie teď nemá žádný údaj."
       },
-      "figure": {
-        "soc": "Nabití (SoC)",
-        "usable": "Využitelné nad {floor}"
+      "glyph": {
+        "min": "min {soc}",
+        "max": "max {soc}"
+      },
+      "flow": {
+        "net": "Čistá změna dnes: {kwh}, podle vlastních měřičů baterie.",
+        "unknown_charge": "{kwh} dnešního nabití nemá známý zdroj."
+      },
+      "tile": {
+        "no_change": "Žádná plánovaná změna",
+        "limits_charge": "strop nabíjení",
+        "limits_discharge": "strop vybíjení"
       },
       "exception": {
         "bms_disconnected": "Střídač hlásí systém správy baterie (BMS) jako odpojený ({state}).",

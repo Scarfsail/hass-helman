@@ -17,6 +17,7 @@ import {
 } from "../node-detail/node-detail-params-builder";
 import type { NodeDetailParams, NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
+import { DEFAULT_SOLAR_MAX_W, liveFlows } from "../helman-simple/live-flows";
 import "./power-flow-arrows"
 import "./tree-item-info"
 import "./house-devices-section"
@@ -347,14 +348,20 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const houseRaw = raw(houseNode?.powerSensorId);
 
         const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
+        const gridPower = gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw;
+        const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType));
+        const solarPower = solarNode?.powerValue ?? 0;
 
         return {
+            flows: liveFlows({ solarPower, housePower, batteryPower, gridPower: gridPower ?? 0 }),
+            // This card reads no inverter overview: the solar node's maximum is the scale.
+            flowScaleW: Math.max(1, solarNode?.sourceConfig?.max_power ?? DEFAULT_SOLAR_MAX_W),
             batteryPower,
             batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
             solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
-            gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
-            housePower: houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType)),
-            solarPower: solarNode?.powerValue ?? 0,
+            gridPower,
+            housePower,
+            solarPower,
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
             historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,

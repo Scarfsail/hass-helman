@@ -135,6 +135,31 @@ export const nodeDetailQuestionStyles = css`
         min-width: 0;
         max-width: 60%;
     }
+    .reading {
+        font: inherit;
+        font-weight: 600;
+        color: inherit;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+        text-decoration: underline dotted;
+        text-underline-offset: 3px;
+        border-radius: 2px;
+    }
+    .reading::after {
+        content: " ↗";
+        visibility: hidden;
+    }
+    .reading:hover::after,
+    .reading:focus-visible::after {
+        visibility: visible;
+    }
+    .reading:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
     .note {
         margin: 0;
         font-size: 0.82rem;

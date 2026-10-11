@@ -1177,7 +1177,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderEps(overview: HouseDetailPayload) {
         const rows = [1, 2, 3].map((phase) => {
             const value = this._reading(overview, `eps_power_l${phase}`);
-            return value === null ? nothing : this._row(`L${phase}`, value, `eps-l${phase}`);
+            return value === null ? nothing : this._row(`L${phase}`, value, `eps-l${phase}`, undefined, overview.entities[`eps_power_l${phase}`]);
         });
         const minutes = readingNumber(this.hass, overview.entities.time_to_empty);
         return html`
