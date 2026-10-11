@@ -36,6 +36,8 @@ import {
     meterlessChildren,
     ownGroup,
     ownMeter,
+    ownPhase,
+    phaseAssignableDevices,
     SWITCH_CONTROL_DOMAINS,
     validationPath,
 } from "../config/devices";
@@ -986,11 +988,13 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
             return { grouping, groupingId, groups, current, group: groups.find((group) => group.id === current) };
         });
         const assigned = rows.filter((row) => row.current);
-        const phase = stringValue(device.phase);
+        const assignable = phaseAssignableDevices(this.config);
+        // A stale phase on a device that cannot carry one is no badge: save drops it.
+        const phase = assignable.has(device) ? stringValue(device.phase) : "";
         return this._renderSection(
             "groups",
             html`<div class="field-grid">
-                ${this._renderPhaseField(phase)}
+                ${assignable.has(device) ? this._renderPhaseField(phase) : this._renderInheritedPhase(device, assignable)}
                 ${rows.map(
                     ({ grouping, groupingId, groups, current, group }) => html`
                         <div class="field">
@@ -1057,6 +1061,34 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                         : nothing}
                 </select>
                 <div class="helper">${this.t("editor.helpers.device_phase")}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * A device whose phase is not its own to choose, under a single-phase or
+     * unassigned device: the phase of its nearest phase-assignable ancestor,
+     * read-only, and which device that is.
+     */
+    private _renderInheritedPhase(device: JsonObject, assignable: Set<JsonObject>): TemplateResult | typeof nothing {
+        const entries = new Map(iterDevices(this.config).map((entry) => [entry.device, entry]));
+        let source = entries.get(device)?.parent;
+        while (source && !assignable.has(source)) source = entries.get(source)?.parent;
+        const entry = source ? entries.get(source) : undefined;
+        if (!entry) return nothing;
+        const phase = ownPhase(entry.device);
+        return html`
+            <div class="field">
+                <label>${this.t("editor.fields.device_phase")}</label>
+                <input
+                    class="device-phase-inherited"
+                    .value=${this._tFormat("editor.values.device_phase_inherited", {
+                        parent: deviceName(this, this.inspections, entry.device, entry.path),
+                        phase: phase ? this._phaseLabel(phase) : this.t("editor.device_phases.unassigned"),
+                    })}
+                    readonly
+                />
+                <div class="helper">${this.t("editor.helpers.device_phase_inherited")}</div>
             </div>
         `;
     }

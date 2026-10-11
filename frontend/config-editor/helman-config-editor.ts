@@ -77,6 +77,7 @@ import {
   iterDevices,
   meterlessChildren,
   ownMeter,
+  pruneUnassignablePhases,
   renameGroupReferences,
   slugId,
   stripGroupReferences,
@@ -3959,8 +3960,9 @@ export class HelmanConfigEditorPanel
    * phase's bucket, dragged between them like a grouping's groups. Phases are
    * a fixed electrical fact, not user data, so the card has no remove button,
    * inputs, handles or "Add group". Only a direct assignment counts, as in a
-   * grouping: a child without its own phase sits in "Unassigned" though the
-   * house detail counts it on its single-phase parent's phase.
+   * grouping, and only a device whose phase is the user's choice shows: a
+   * top-level one, or a child under a three-phase one. Any other child is on
+   * its parent's phase and has no chip.
    */
   private _renderPhaseBoard(): TemplateResult {
     const members = consumerPhases(this._config);
@@ -4936,6 +4938,17 @@ export class HelmanConfigEditorPanel
     }
   }
 
+  /**
+   * The draft as it is sent: a phase on a device that cannot carry one is
+   * wiring that cannot exist, so it is dropped from what is validated and
+   * saved. Never from the draft while editing, so a parent switched back to
+   * `3ph` before saving keeps its children's phases.
+   */
+  private _prunedConfig(): { config: JsonObject; pruned: boolean } {
+    const config = cloneJson(this._config!);
+    return { config, pruned: pruneUnassignablePhases(config) };
+  }
+
   private async _validateConfig(): Promise<void> {
     if (!this.hass || !this._config) {
       return;
@@ -4951,7 +4964,7 @@ export class HelmanConfigEditorPanel
     try {
       const validation = await this.hass.callWS<ValidationReport>({
         type: "helman/validate_config",
-        config: this._config,
+        config: this._prunedConfig().config,
       });
       this._validation = validation;
       this._message = validation.valid
@@ -4981,13 +4994,21 @@ export class HelmanConfigEditorPanel
       };
       return;
     }
+    const { config, pruned } = this._prunedConfig();
     this._saving = true;
     try {
       const response = await this.hass.callWS<SaveConfigResponse>({
         type: "helman/save_config",
-        config: this._config,
+        config,
       });
       this._validation = response.validation;
+      if (pruned && response.validation.valid) {
+        // Written, so what was written is the draft from here on. The YAML
+        // editors would otherwise keep showing, and re-apply, the pruned phases.
+        this._config = config;
+        this._scopeYamlValues = {};
+        this._deviceYamlValues = {};
+      }
       if (response.success) {
         // The document this save wrote is what the editor now agrees with, so
         // the reload's own announcements compare equal and say nothing. Re-read

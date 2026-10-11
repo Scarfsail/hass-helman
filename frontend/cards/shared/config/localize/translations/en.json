@@ -87,7 +87,7 @@
       "children": "Children"
     },
     "notes": {
-      "device_groupings": "Group devices by breaker box, room or mode. Each grouping is a chip on the card; a device is in at most one group per grouping: drag it between the groups and \"Unassigned\". A device is in a group only through its own assignment, which its editor's \"Groups\" section also sets. The short name is the badge a member device shows. Removing a group or grouping also removes it from every device. The id is what devices and the helman.group_action / helman.get_group_entities actions refer to; devices follow an id change, automations using the old id do not. The House phases card sets each device's own phase by drag and drop, the same as its editor's \"House phase\" field; a device left unassigned under a single-phase parent is counted on that parent's phase.",
+      "device_groupings": "Group devices by breaker box, room or mode. Each grouping is a chip on the card; a device is in at most one group per grouping: drag it between the groups and \"Unassigned\". A device is in a group only through its own assignment, which its editor's \"Groups\" section also sets. The short name is the badge a member device shows. Removing a group or grouping also removes it from every device. The id is what devices and the helman.group_action / helman.get_group_entities actions refer to; devices follow an id change, automations using the old id do not. The House phases card sets each device's own phase by drag and drop, the same as its editor's \"House phase\" field. Only top-level devices and devices under a three-phase device are wired individually and listed there; the rest follow the device above them.",
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
       "automation": "Visual mode supports the automation enable switch plus the export_price and appliance_runtime optimizers. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
@@ -381,7 +381,8 @@
       "add_device": "Its id is generated from the entity once and never changes.",
       "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes.",
-      "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it; a device under a single-phase device without its own phase is on that one."
+      "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it. Only a top-level device or one under a three-phase device is wired individually; the rest follow the device above them.",
+      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there."
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -417,6 +418,7 @@
       "key_missing": "Key {key} does not exist."
     },
     "values": {
+      "device_phase_inherited": "Inherited from {parent}: {phase}",
       "fixed_max_power": "Fixed max power",
       "surplus_aware": "Surplus aware",
       "fixed": "Fixed",

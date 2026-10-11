@@ -88,7 +88,7 @@
       "children": "Podřízená zařízení"
     },
     "notes": {
-      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne. Karta Fáze domu přetažením nastaví vlastní fázi každého zařízení, stejně jako pole „Fáze v domě“ v jeho editoru; zařízení bez přiřazení pod jednofázovým nadřazeným zařízením se počítá na fázi nadřazeného.",
+      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne. Karta Fáze domu přetažením nastaví vlastní fázi každého zařízení, stejně jako pole „Fáze v domě“ v jeho editoru. Jednotlivě se zapojují a na kartě se zobrazují jen zařízení nejvyšší úrovně a zařízení pod třífázovým zařízením; ostatní přebírají fázi nadřazeného zařízení.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
@@ -382,7 +382,8 @@
       "add_device": "Jeho id se jednou vygeneruje z entity a už se nemění.",
       "add_device_profile": "Jeho entity poskytuje profil, takže se nic nevybírá ručně. Jeho id se jednou vygeneruje z názvu zařízení a už se nemění.",
       "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač, světlo či klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění.",
-      "device_phase": "Volitelné. Fáze, na kterou je zařízení zapojené podle elektroinstalace domu. Detail domu z ní odhaduje zatížení jednotlivých fází; zařízení pod jednofázovým zařízením bez vlastní fáze je na stejné fázi."
+      "device_phase": "Volitelné. Fáze, na kterou je zařízení zapojené podle elektroinstalace domu. Detail domu z ní odhaduje zatížení jednotlivých fází. Jednotlivě se zapojuje jen zařízení nejvyšší úrovně nebo zařízení pod třífázovým zařízením; ostatní přebírají fázi nadřazeného zařízení.",
+      "device_phase_inherited": "Pod jednofázovým nebo nepřiřazeným zařízením je toto zařízení na jeho fázi. Fázi změňte tam."
     },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -418,6 +419,7 @@
       "key_missing": "Klíč {key} neexistuje."
     },
     "values": {
+      "device_phase_inherited": "Zděděno od zařízení {parent}: {phase}",
       "fixed_max_power": "Pevný maximální výkon",
       "surplus_aware": "Řízeno přebytkem",
       "fixed": "Pevná hodnota",
