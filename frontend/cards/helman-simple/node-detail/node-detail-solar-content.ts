@@ -858,7 +858,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const slot = Math.floor(now / SLOT_MS);
         const cache = this._modelCache;
         if (cache && cache.forecast === solar && cache.slot === slot) return cache.model;
-        const model = solar && solar.status !== "not_configured" ? this._buildModel(now) : null;
+        // Only a forecast with data builds a model: a startup or history-short
+        // payload has no points, which would read as zero production ahead.
+        const model = solar && (solar.status === "available" || solar.status === "partial") ? this._buildModel(now) : null;
         this._modelCache = { forecast: solar, slot, model };
         return model;
     }
@@ -933,7 +935,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     /** Why there is no forecast model: still loading, or not configured. */
     private _forecastMissing(): string {
         if (this._forecast === null) return this._t("forecast_loading");
-        return this._t("forecast_not_configured");
+        return this._t(this._forecast.solar.status === "not_configured" ? "forecast_not_configured" : "forecast_unavailable");
     }
 
     // ── Schedule ────────────────────────────────────────────────────────────
@@ -976,9 +978,13 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _dayLabel(key: string, firstMs: number | null): string {
-        // A day's first slot is inside it in HA's time zone; the key alone is not.
-        const at = firstMs ?? Date.parse(`${key}T12:00:00Z`);
-        return new Intl.DateTimeFormat(this._locale, { weekday: "short", day: "numeric", month: "numeric", timeZone: this._timeZone }).format(at);
+        // A day's first slot is inside it in HA's time zone. Without one, the
+        // key is the calendar date itself: format it in UTC, where noon of the
+        // key is that date whatever HA's offset.
+        const format = { weekday: "short", day: "numeric", month: "numeric" } as const;
+        return firstMs !== null
+            ? new Intl.DateTimeFormat(this._locale, { ...format, timeZone: this._timeZone }).format(firstMs)
+            : new Intl.DateTimeFormat(this._locale, { ...format, timeZone: "UTC" }).format(Date.parse(`${key}T12:00:00Z`));
     }
 
     private _dateTime(ms: number): string {

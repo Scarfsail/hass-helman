@@ -231,6 +231,7 @@
       "loading_history": "Načítám dnešní historii…",
       "history_failed": "Dnešní historii se nepodařilo načíst.",
       "forecast_loading": "Načítám předpověď…",
+      "forecast_unavailable": "Předpověď výroby zatím není k dispozici.",
       "forecast_not_configured": "Předpověď výroby není nastavena.",
       "period": "Dnes {start}–{end}",
       "status": {

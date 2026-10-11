@@ -687,6 +687,7 @@
       "loading_history": "Loading today's history…",
       "history_failed": "Today's history could not be loaded.",
       "forecast_loading": "Loading the forecast…",
+      "forecast_unavailable": "No solar forecast is available yet.",
       "forecast_not_configured": "No solar forecast is configured.",
       "period": "Today {start}–{end}",
       "status": {

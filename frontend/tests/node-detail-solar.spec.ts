@@ -37,6 +37,8 @@ type Variant = {
     night?: boolean;
     exportLimit?: string;
     forecastFails?: boolean;
+    /** The forecast's status, as at startup. */
+    forecastStatus?: string;
     /** The destinations: complete with some unresolved, battery-only export, or unavailable. */
     destinations?: "normal" | "batteryExport" | "unavailable";
     /** The production section's request fails. */
@@ -237,7 +239,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         };
         const forecast = {
             solar: {
-                status: "available", unit: "Wh", resolution: "quarter_hour", horizonHours: 168,
+                status: v.forecastStatus ?? "available", unit: "Wh", resolution: "quarter_hour", horizonHours: 168,
                 actualHistory: points.actual, points: points.raw, adjustedPoints: points.adjusted,
                 biasCorrection: {
                     status: "applied", effectiveVariant: "adjusted",
@@ -394,6 +396,14 @@ test.describe("the solar overview", () => {
         await openDetail(page);
         await expect(content(page).locator("[data-overview] .status")).toHaveText("No solar power reading right now.");
     });
+});
+
+test("an unavailable forecast is no forecast, never zero production ahead", async ({ page }) => {
+    await mount(page, { forecastStatus: "unavailable" });
+    await openDetail(page);
+    await expect(content(page).locator("[data-overview]")).not.toContainText("No more production");
+    await expect(content(page).locator("[data-overview]")).not.toContainText("0 kWh");
+    await expect(question(page, "production")).toContainText("No solar forecast is available yet.");
 });
 
 test("a solar sensor in kW is converted, never read as watts", async ({ page }) => {
