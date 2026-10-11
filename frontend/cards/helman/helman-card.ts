@@ -3,7 +3,6 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { TreeItem } from "./tree-item";
-import type { BatteryNodeConfig } from "./energy-node-config";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
@@ -334,20 +333,16 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
         const batteryProducerNode = sourcesChildren.find((device) => device.sourceType === "battery") ?? null;
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
-        const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
-        const batterySocEntityId = batteryConfig?.entities.capacity ?? null;
-        const batterySocState = batterySocEntityId ? this._hass?.states[batterySocEntityId] : null;
-        const rawBatterySoc = batterySocState ? parseFloat(batterySocState.state) : NaN;
+        const batterySensorId = batteryProducerNode?.powerSensorId ?? batteryConsumerNode?.powerSensorId;
+        const batteryReadable = !!batterySensorId && Number.isFinite(parseFloat(this._hass?.states[batterySensorId]?.state ?? ""));
         const gridSensorId = gridProducerNode?.powerSensorId ?? gridConsumerNode?.powerSensorId;
         const gridReadable = !!gridSensorId && Number.isFinite(parseFloat(this._hass?.states[gridSensorId]?.state ?? ""));
 
+        const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
+
         return {
-            batteryPower: (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0),
-            batterySoc: Number.isFinite(rawBatterySoc) ? Math.max(0, Math.min(100, rawBatterySoc)) : 0,
-            batterySocEntityId,
-            batteryRemainingEnergyEntityId: batteryConfig?.entities.remaining_energy ?? null,
-            batteryProducerNode,
-            batteryConsumerNode,
+            batteryPower,
+            batteryPowerReading: batteryReadable ? batteryPower : null,
             solarNode,
             gridPower: gridReadable
                 ? (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0)

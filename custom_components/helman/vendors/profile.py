@@ -99,6 +99,10 @@ class VendorProfile:
     #: promotes for it: ``off_grid`` or ``fault``. Any other state is shown as
     #: read, without a verdict.
     run_mode_conditions: Mapping[str, str] = field(default_factory=dict)
+    #: A ``bms_connect_state`` telemetry state → the condition the battery
+    #: detail promotes for it (``bms_disconnected``): an explicit hardware
+    #: report, never inferred from other readings.
+    bms_connect_conditions: Mapping[str, str] = field(default_factory=dict)
     #: Which way the ``grid_power_l*`` telemetry reads positive
     #: (``positive_is_import`` or ``positive_is_export``), the vocabulary of the
     #: grid's ``power_polarity``; ``None`` when the profile has no phase power.

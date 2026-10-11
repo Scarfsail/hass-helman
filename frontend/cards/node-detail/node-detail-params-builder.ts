@@ -4,11 +4,8 @@ import type { NodeDetailParams, NodeType } from "./node-detail-types";
 
 export interface NodeDetailContext {
     batteryPower: number;
-    batterySoc: number;
-    batterySocEntityId: string | null;
-    batteryRemainingEnergyEntityId: string | null;
-    batteryProducerNode: TreeItem | null;
-    batteryConsumerNode: TreeItem | null;
+    /** The battery meter, positive charging; `null` without a reading. */
+    batteryPowerReading: number | null;
     solarNode: TreeItem | null;
     /** Grid power: positive imports, negative exports, W. */
     gridPower: number | null;
@@ -34,17 +31,9 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
         case "battery":
             return {
                 nodeType: "battery",
-                power: context.batteryPower,
-                soc: context.batterySoc,
-                socEntityId: context.batterySocEntityId,
-                remainingEnergyEntityId: context.batteryRemainingEnergyEntityId,
-                batteryProducerNode: context.batteryProducerNode,
-                batteryConsumerNode: context.batteryConsumerNode,
-                productionNode: context.productionNode,
-                consumptionNode: context.consumptionNode,
+                power: context.batteryPowerReading,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
             };
         case "solar":
             return {

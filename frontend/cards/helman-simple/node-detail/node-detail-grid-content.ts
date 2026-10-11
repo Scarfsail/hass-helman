@@ -1,11 +1,9 @@
-import { LitElement, css, html, nothing, type TemplateResult } from "lit";
+import { css, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../hass-frontend/src/types";
-import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
+import { fillTemplate } from "../../localize/localize";
 import {
     fetchGridDayAggregates,
     type DayStatsDTO,
-    type ForecastPayload,
     type GridDayAggregatesPayload,
     type GridDetailPayload,
     type GridVoltageSectionPayload,
@@ -13,25 +11,16 @@ import {
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { convertToKWh } from "../../helman/energy-unit-converter";
-import { startNowClock } from "../../shared/now-clock";
 import { getSharedHelmanStore } from "../../helman/store";
-import { ForecastLoader } from "../../helman/forecast-loader";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
-import { formatScheduleTime } from "../../shared/schedule/model/schedule-time";
-import { isoDateInTimeZone, todayIso } from "../../shared/today-iso";
-import {
-    EVIDENCE_TOGGLE_EVENT,
-    QUESTION_TOGGLE_EVENT,
-    type QuestionToggleDetail,
-} from "../../shared/node-question";
-import "../../shared/node-question";
+import { todayIso } from "../../shared/today-iso";
 import "../../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../../shared/day-line-chart";
-import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
+import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
+import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { readingNumber } from "./node-detail-readings";
 import type { GridDetailParams } from "./node-detail-types";
 
 type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
@@ -45,12 +34,6 @@ const PHASE_COLORS: Record<Phase, string> = { 1: "#8e24aa", 2: "#fb8c00", 3: "#0
 /** The nominal low-voltage supply and the ±10 % band around it, as references only. */
 const NOMINAL_VOLTAGE = 230;
 const REFERENCE_BAND = { from: 207, to: 253 };
-
-/** How stale today's money or open voltage history may get before it is re-read. */
-const TODAY_REFRESH_MS = 5 * 60_000;
-
-/** Below this many watts either way the grid counts as idle, as on the card. */
-const IDLE_W = 50;
 
 /**
  * The inspector under "What has the grid cost or earned today?": today's
@@ -81,21 +64,6 @@ export const GRID_PLAN_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
     daylight_only_default: false,
     chart_series: ["gridForecast", "gridActual"],
 };
-
-const INSPECTOR_CONFIGS: Partial<Record<QuestionId, HelmanSolarInspectorCardConfig>> = {
-    money: GRID_MONEY_INSPECTOR_CONFIG,
-    next: GRID_PLAN_INSPECTOR_CONFIG,
-};
-
-type InspectorCardElement = HTMLElement & {
-    setConfig(config: HelmanSolarInspectorCardConfig): void;
-    hass: unknown;
-};
-
-type SectionState<T> =
-    | { status: "loading" }
-    | { status: "ready"; payload: T }
-    | { status: "error" };
 
 interface PhaseReading {
     phase: Phase;
@@ -130,112 +98,8 @@ interface MoneyFigures {
  * answers' second disclosure.
  */
 @customElement("node-detail-grid-content")
-export class NodeDetailGridContent extends LitElement {
-    static styles = [nodeDetailSharedStyles, css`
-        .content {
-            gap: 8px;
-        }
-        .summary {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding-bottom: 8px;
-        }
-        .status {
-            margin: 0;
-            font-size: 0.95rem;
-        }
-        .figures {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-            gap: 8px;
-        }
-        .figure {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            min-width: 0;
-        }
-        .figure-label {
-            font-size: 0.75rem;
-            color: var(--secondary-text-color);
-        }
-        .figure-value {
-            font-size: 1.05rem;
-            font-weight: 600;
-            overflow-wrap: anywhere;
-        }
-        .next {
-            margin: 0;
-            font-size: 0.9rem;
-            color: var(--secondary-text-color);
-        }
-        .exception {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 4px 8px;
-            padding: 8px 10px;
-            border-radius: 8px;
-            border-left: 3px solid var(--warning-color, #ffa600);
-            background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
-            font-size: 0.9rem;
-        }
-        .link-button {
-            font: inherit;
-            background: none;
-            border: none;
-            padding: 4px 0;
-            color: var(--primary-color);
-            font-weight: 600;
-            cursor: pointer;
-            min-height: 32px;
-        }
-        .rows {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            gap: 12px;
-            font-size: 0.9rem;
-        }
-        .row .label {
-            flex: 1 1 auto;
-            min-width: 0;
-        }
-        .row .value {
-            text-align: right;
-            overflow-wrap: anywhere;
-            min-width: 0;
-            max-width: 60%;
-        }
-        .note {
-            margin: 0;
-            font-size: 0.82rem;
-            color: var(--secondary-text-color);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-            font-variant-numeric: tabular-nums;
-        }
-        th, td {
-            padding: 3px 4px;
-            text-align: right;
-            overflow-wrap: anywhere;
-        }
-        th:first-child, td:first-child {
-            text-align: left;
-        }
-        th {
-            color: var(--secondary-text-color);
-            font-weight: 600;
-        }
+export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload, QuestionId> {
+    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
         .swatch {
             display: inline-block;
             width: 10px;
@@ -298,20 +162,13 @@ export class NodeDetailGridContent extends LitElement {
         .muted {
             color: var(--secondary-text-color);
         }
-        .plan {
-            margin: 0 -8px;
-        }
     `];
 
-    @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public localize!: LocalizeFunction;
+    protected readonly _node = "grid" as const;
+
     @property({ attribute: false }) public params!: GridDetailParams;
 
-    @state() private _overview: SectionState<GridDetailPayload> = { status: "loading" };
     @state() private _money: SectionState<GridDayAggregatesPayload> | null = null;
-    @state() private _forecast: ForecastPayload | null = null;
-    @state() private _open: QuestionId | null = null;
-    @state() private _evidenceOpen = false;
     @state() private _voltage: SectionState<GridVoltageSectionPayload> | null = null;
     private _voltageChart?: {
         payload: GridVoltageSectionPayload;
@@ -320,55 +177,15 @@ export class NodeDetailGridContent extends LitElement {
         bands: DayLineBand[];
     };
 
-    private _started = false;
-    private _overviewRequest = 0;
     private _moneyRequest = 0;
-    private _unsubscribeDataChanged?: () => void;
-    /** When the clock next moves something shown; the now-clock re-renders then. */
-    private _nextBoundary = Infinity;
-    private _stopClock?: () => void;
-    private _forecastRequest = 0;
     /** The local date `_money` was requested for; a new day re-reads it. */
     private _moneyDate = "";
     private _moneyRequestedAt = 0;
     private _voltageRequestedAt = 0;
     private _voltageRequest = 0;
-    /** The run mode the current overview's condition was computed from. */
-    private _runModeState = "";
-    private readonly _forecastLoader = new ForecastLoader();
-    private readonly _inspectors = new Map<QuestionId, InspectorCardElement>();
-
-    connectedCallback(): void {
-        super.connectedCallback();
-        this.addEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
-        this.addEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
-        if (this.hass) this._start();
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._stopClock?.();
-        this._stopClock = undefined;
-        this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
-        this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
-        this._started = false;
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
-        // Whatever is still in flight answers nobody.
-        this._overviewRequest += 1;
-        this._moneyRequest += 1;
-        this._voltageRequest += 1;
-    }
 
     willUpdate(changed: Map<string, unknown>): void {
-        if (changed.has("hass") && this.hass) {
-            if (!this._started) this._start();
-            else if (this._overview.status === "ready" && this._runModeOf(this._overview.payload) !== this._runModeState) {
-                void this._loadOverview();
-            }
-            // Only the open evidence's embed is in the page; a closed one waits.
-            for (const card of this._inspectors.values()) if (card.isConnected) card.hass = this.hass;
-        }
+        super.willUpdate(changed);
         // Today's statistics grow while the dialog is open: re-read them on a new
         // day, and otherwise at most every few minutes, only while the page is
         // visible. The now-clock brings an idle or returning dialog back here.
@@ -382,51 +199,37 @@ export class NodeDetailGridContent extends LitElement {
         }
     }
 
-    private _start(): void {
-        this._started = true;
-        // Paused while the page is hidden; a returning reader catches up at once.
-        this._stopClock = startNowClock(() => {
-            if (Date.now() >= this._nextBoundary) this.requestUpdate();
-        });
-        // A new plan or config (an optimizer run, another client) can change
-        // everything shown: the feed's contract is to reload it all.
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
-            void this._loadOverview(true);
-            void this._loadMoney();
-            this._forecastLoader.invalidate();
-            void this._loadForecast();
-            if (this._open === "voltage" && this._voltage !== null) void this._loadVoltage();
-        });
-        void this._loadOverview();
+    protected _start(): void {
+        super._start();
         void this._loadMoney();
         void this._loadForecast();
     }
 
-    // ── Data ────────────────────────────────────────────────────────────────
+    protected _stop(): void {
+        this._moneyRequest += 1;
+        this._voltageRequest += 1;
+    }
 
-    /** `fresh`: never join a request sent before a change was announced. */
-    private async _loadOverview(fresh = false): Promise<void> {
-        const request = ++this._overviewRequest;
-        const previous = this._overview.status === "ready" ? this._overview.payload : undefined;
-        if (previous) this._runModeState = this._runModeOf(previous);
-        else this._overview = { status: "loading" };
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<GridDetailPayload>({ node: "grid" }, { fresh: fresh || previous !== undefined });
-            if (request !== this._overviewRequest) return;
-            if (!previous) this._runModeState = this._runModeOf(payload);
-            this._overview = { status: "ready", payload };
-            announceWatchedEntities(this, Object.values(payload.entities));
-            // The voltage answer may already be open, waiting for its sensors.
-            if (this._open === "voltage" && this._voltage === null && payload.sections.includes("voltage")) {
-                void this._loadVoltage();
-            }
-        } catch (error) {
-            if (request !== this._overviewRequest) return;
-            console.error("node-detail-grid: failed to load the overview", error);
-            if (this._overview.status !== "ready") this._overview = { status: "error" };
+    protected _onDataChanged(): void {
+        super._onDataChanged();
+        void this._loadMoney();
+        if (this._open === "voltage" && this._voltage !== null) void this._loadVoltage();
+    }
+
+    /** The run mode the overview's condition was computed from. */
+    protected _overviewSignature(payload: GridDetailPayload): string {
+        const entityId = payload.entities.run_mode;
+        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
+    }
+
+    protected _overviewLoaded(payload: GridDetailPayload): void {
+        // The voltage answer may already be open, waiting for its sensors.
+        if (this._open === "voltage" && this._voltage === null && payload.sections.includes("voltage")) {
+            void this._loadVoltage();
         }
     }
+
+    // ── Data ────────────────────────────────────────────────────────────────
 
     /** Today's measured grid money; a failure leaves the money figures out, nothing else. */
     private async _loadMoney(): Promise<void> {
@@ -444,12 +247,6 @@ export class NodeDetailGridContent extends LitElement {
             console.error("node-detail-grid: failed to load today's money", error);
             if (this._money?.status !== "ready") this._money = { status: "error" };
         }
-    }
-
-    private async _loadForecast(): Promise<void> {
-        const request = ++this._forecastRequest;
-        const forecast = await this._forecastLoader.refresh(this.hass);
-        if (this._started && request === this._forecastRequest) this._forecast = forecast;
     }
 
     private async _loadVoltage(): Promise<void> {
@@ -471,36 +268,10 @@ export class NodeDetailGridContent extends LitElement {
         }
     }
 
-    /** Whether a period that starts at `start` is today in HA's time zone. */
-    private _isToday(start: string): boolean {
-        return isoDateInTimeZone(new Date(start), this._timeZone) === todayIso(this._timeZone);
-    }
-
-    private _runModeOf(payload: GridDetailPayload): string {
-        const entityId = payload.entities.run_mode;
-        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
-    }
-
     // ── Disclosure ──────────────────────────────────────────────────────────
 
-    private _onQuestionToggle = (event: CustomEvent<QuestionToggleDetail>): void => {
-        event.stopPropagation();
-        const id = event.detail.id as QuestionId;
-        const header = event.composedPath()[0] as HTMLElement | undefined;
-        this._setOpen(this._open === id ? null : id);
-        // Opening one closes the one above it, which would move this header
-        // out from under the pointer: keep it where it is in view.
-        void this.updateComplete.then(() => header?.scrollIntoView?.({ block: "nearest" }));
-    };
-
-    private _onEvidenceToggle = (event: CustomEvent<QuestionToggleDetail>): void => {
-        event.stopPropagation();
-        this._evidenceOpen = !this._evidenceOpen;
-    };
-
-    private _setOpen(id: QuestionId | null): void {
-        this._open = id;
-        this._evidenceOpen = false;
+    protected _setOpen(id: QuestionId | null): void {
+        super._setOpen(id);
         // A closed answer's history request is obsolete; it is re-read on reopen.
         this._voltageRequest += 1;
         this._voltage = null;
@@ -515,17 +286,8 @@ export class NodeDetailGridContent extends LitElement {
     // ── Rendering ───────────────────────────────────────────────────────────
 
     render() {
-        if (this._overview.status === "loading") {
-            return html`<div class="content"><p class="note">${this._t("loading")}</p></div>`;
-        }
-        if (this._overview.status === "error") {
-            return html`
-                <div class="content">
-                    <p class="note">${this._t("load_failed")}</p>
-                    <button class="link-button" @click=${() => this._loadOverview()}>${this._t("retry")}</button>
-                </div>
-            `;
-        }
+        const notReady = this._renderNotReady();
+        if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         return html`
             <div class="content">
@@ -536,30 +298,6 @@ export class NodeDetailGridContent extends LitElement {
                 ${this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence")}
                 ${overview.profile ? this._question("outage", this._outagePreview(overview), () => this._renderOutage(overview), () => this._renderOutageEvidence(overview), "technical") : nothing}
             </div>
-        `;
-    }
-
-    private _question(
-        id: QuestionId,
-        preview: string | null,
-        answer: () => TemplateResult,
-        evidence: () => TemplateResult,
-        evidenceKind: "evidence" | "technical",
-    ) {
-        const open = this._open === id;
-        return html`
-            <helman-node-question
-                data-question=${id}
-                question-id=${id}
-                .question=${this._t(`q.${id}`)}
-                .preview=${preview}
-                ?open=${open}
-                ?evidence-open=${open && this._evidenceOpen}
-                .evidenceLabel=${this._t(evidenceKind)}
-            >
-                ${open ? html`<div slot="answer" class="rows">${answer()}</div>` : nothing}
-                ${open && this._evidenceOpen ? html`<div slot="evidence" class="rows">${evidence()}</div>` : nothing}
-            </helman-node-question>
         `;
     }
 
@@ -920,7 +658,7 @@ export class NodeDetailGridContent extends LitElement {
 
     private _renderMoneyEvidence() {
         return html`
-            <div class="plan" data-money-inspector>${this._inspector("money")}</div>
+            <div class="plan" data-money-inspector>${this._inspector("money", GRID_MONEY_INSPECTOR_CONFIG)}</div>
             <p class="note">${this._t("money.valuation")}</p>
         `;
     }
@@ -940,7 +678,7 @@ export class NodeDetailGridContent extends LitElement {
 
     private _renderNext() {
         const grid = this._forecast?.grid;
-        if (!grid) return html`<p class="note">${this._t("next.unavailable")}</p>`;
+        if (!grid) return this._forecastFailed ? this._renderForecastFailed() : html`<p class="note">${this._t("next.unavailable")}</p>`;
         const importNext = this._nextPriceChange("import");
         const exportNext = this._nextPriceChange("export");
         const planned = this._plannedNow();
@@ -962,7 +700,7 @@ export class NodeDetailGridContent extends LitElement {
 
     private _renderNextEvidence() {
         return html`
-            <div class="plan" data-plan-inspector>${this._inspector("next")}</div>
+            <div class="plan" data-plan-inspector>${this._inspector("next", GRID_PLAN_INSPECTOR_CONFIG)}</div>
             <p class="note">${this._t("next.evidence_note")}</p>
         `;
     }
@@ -1030,21 +768,14 @@ export class NodeDetailGridContent extends LitElement {
      * boundary passes, and at least every few minutes for the day's rollover
      * and money.
      */
-    protected updated(): void {
+    protected *_clockBoundaries(): Iterable<number> {
         const grid = this._forecast?.grid;
-        const now = Date.now();
-        // At least every few minutes, so a new day and today's money arrive
-        // even when no reading or forecast boundary moves.
-        let next = now + TODAY_REFRESH_MS;
         for (const point of [...(grid?.importPricePoints ?? []), ...(grid?.exportPricePoints ?? [])]) {
-            const at = Date.parse(point.timestamp);
-            if (at > now && at < next) next = at;
+            yield Date.parse(point.timestamp);
         }
         for (const slot of grid?.series ?? []) {
-            const end = Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
-            if (end > now && end < next) next = end;
+            yield Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
         }
-        this._nextBoundary = next;
     }
 
     private _currentPlanSlot() {
@@ -1099,40 +830,6 @@ export class NodeDetailGridContent extends LitElement {
 
     // ── Rows and readings ───────────────────────────────────────────────────
 
-    private _inspector(id: QuestionId): HTMLElement {
-        let card = this._inspectors.get(id);
-        if (!card) {
-            card = document.createElement("helman-solar-inspector-card") as InspectorCardElement;
-            card.setConfig(INSPECTOR_CONFIGS[id]!);
-            this._inspectors.set(id, card);
-        }
-        card.hass = this.hass;
-        return card;
-    }
-
-    private _row(label: string, value: string, key?: string, scope?: string) {
-        return html`
-            <div class="row" data-row=${key ?? nothing}>
-                <span class="label">${label}${scope ? html`<br><span class="note">${scope}</span>` : nothing}</span>
-                <span class="value">${value}</span>
-            </div>
-        `;
-    }
-
-    /** A technical row, hidden when its reading is unavailable. */
-    private _optionalRow(overview: GridDetailPayload, key: string, labelKey: string) {
-        const value = this._reading(overview, key);
-        return value === null ? nothing : this._row(this._t(labelKey), value, key);
-    }
-
-    private _reading(overview: GridDetailPayload, key: string): string | null {
-        return readingText(this.hass, overview.entities[key], (on) => this._t(on ? "on" : "off"));
-    }
-
-    private _number(overview: GridDetailPayload, key: string): number | null {
-        return readingNumber(this.hass, overview.entities[key]);
-    }
-
     /** Whether the profile maps any phase of `prefix` (`grid_power`, `ac_voltage`). */
     private _hasPhaseTelemetry(overview: GridDetailPayload, prefix: string): boolean {
         return PHASES.some((phase) => `${prefix}_l${phase}` in overview.entities);
@@ -1151,23 +848,7 @@ export class NodeDetailGridContent extends LitElement {
         return convertToKWh(value, this.hass.states[entityId!]?.attributes.unit_of_measurement as string | undefined);
     }
 
-    private _name(entityId: string): string {
-        return (this.hass.states[entityId]?.attributes.friendly_name as string | undefined) ?? entityId;
-    }
-
     // ── Formatting ──────────────────────────────────────────────────────────
-
-    private get _timeZone(): string {
-        return this.hass.config?.time_zone || "UTC";
-    }
-
-    private get _locale(): string {
-        return this.hass.locale?.language ?? this.hass.language ?? "cs";
-    }
-
-    private _time(ms: number): string {
-        return formatScheduleTime(ms, this._locale, this._timeZone);
-    }
 
     /** Power with its direction in words, never by colour or sign alone. */
     private _directedPower(power: number): string {
@@ -1193,13 +874,6 @@ export class NodeDetailGridContent extends LitElement {
         return formatPriceValue(value, unit);
     }
 
-    private _formatMoney(value: number, currency: string): string {
-        return (value.toFixed(2) + " " + currency).trim();
-    }
-
-    private _t(key: string): string {
-        return this.localize(`node_detail.grid.${key}`);
-    }
 }
 
 /** Which way a slot's planned grid flow mostly goes; a few Wh either way is balanced. */

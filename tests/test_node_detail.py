@@ -699,3 +699,270 @@ def test_voltage_extrema_are_bucket_extrema_and_the_mean_is_duration_weighted():
     assert len(summary["points"]) == 2
     assert summary["mean"] == pytest.approx((236 * 240 + 221 * 60 + 240 * 300) / 600)
     assert summary["coverage"] == pytest.approx(600 / 900)
+
+
+# --- The battery detail --------------------------------------------------------
+
+BATTERY_TELEMETRY = {
+    "battery_voltage": "sensor.solax_battery_voltage_charge",
+    "input_energy_total": "sensor.solax_battery_input_energy_total",
+    "output_energy_total": "sensor.solax_battery_output_energy_total",
+    "bms_connect_state": "sensor.solax_bms_connect_state",
+    "run_mode": RUN_MODE,
+}
+
+
+def battery_config(*, profile=True, forecast=None):
+    cfg = config(profile=profile)
+    cfg["energy_nodes"]["battery"] = {
+        "entities": {
+            "capacity": "sensor.soc",
+            "remaining_energy": "sensor.remaining",
+            "min_soc": "number.min_soc",
+            "max_soc": "number.max_soc",
+            "today_charge_energy": "sensor.battery_in_today",
+        },
+        "forecast": forecast or {"max_charge_power_w": 5000, "max_discharge_power_w": 6000},
+    }
+    return cfg
+
+
+def battery_states(**overrides):
+    """A 20 kWh battery at 50 %, lifetime counters 3000 kWh in and 2600 kWh out."""
+    states = {
+        "sensor.soc": ("50", "%"),
+        "sensor.remaining": ("10000", "Wh"),
+        "number.min_soc": ("10", "%"),
+        "number.max_soc": ("100", "%"),
+        "sensor.solax_battery_input_energy_total": ("3000", "kWh"),
+        "sensor.solax_battery_output_energy_total": ("2600", "kWh"),
+        "sensor.solax_bms_connect_state": ("Connected", None),
+        RUN_MODE: ("Normal Mode", None),
+    }
+    states.update(overrides)
+    return NS(
+        get=lambda entity_id: (
+            NS(state=states[entity_id][0], attributes={"unit_of_measurement": states[entity_id][1]})
+            if entity_id in states and states[entity_id] is not None
+            else None
+        )
+    )
+
+
+def battery_detail(*, cfg=None, tele=None, states=None, section=None, report=None):
+    reports = []
+
+    async def device_report(name, query):
+        reports.append((name, query))
+        return report
+
+    hass = NS(
+        states=states or battery_states(),
+        data={"helman": {"coordinator": NS(async_device_report=device_report)}},
+    )
+    with patch(
+        "custom_components.helman.node_details.battery.resolve_vendor_telemetry",
+        return_value=telemetry(BATTERY_TELEMETRY) if tele is None else tele,
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                hass,
+                battery_config() if cfg is None else cfg,
+                node="battery",
+                device_id=None,
+                section=section,
+                now=NOW,
+            )
+        )
+    return payload, reports
+
+
+def test_the_battery_overview_carries_its_mappings_ceilings_and_cycles():
+    payload, reports = battery_detail()
+
+    assert reports == []
+    assert payload["node"] == "battery"
+    assert payload["entities"]["soc"] == "sensor.soc"
+    assert payload["entities"]["today_charge"] == "sensor.battery_in_today"
+    # Not configured: a typed null, never a guess.
+    assert payload["entities"]["today_discharge"] is None
+    assert payload["entities"]["time_to_full"] == "sensor.helman_battery_time_to_full"
+    assert payload["entities"]["battery_voltage"] == "sensor.solax_battery_voltage_charge"
+    # A key the profile has but the registry lacks is a typed null.
+    assert payload["entities"]["cell_voltage_high"] is None
+    # Grid-only and inverter-only telemetry stays with their details.
+    assert "grid_power_l1" not in payload["entities"]
+    assert "inverter_temperature" not in payload["entities"]
+    assert payload["configured"] == {"maxChargePowerW": 5000.0, "maxDischargePowerW": 6000.0}
+    # (3000 + 2600) / (2 × 20 kWh), the forecast's nominal capacity.
+    assert payload["cycles"]["cycles"] == pytest.approx(140.0)
+    assert payload["cycles"]["capacityKwh"] == pytest.approx(20.0)
+    assert payload["cycles"]["reason"] is None
+    assert payload["condition"] is None
+    assert payload["sections"] == ["charge"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "tele", "reason"),
+    [
+        # The lifetime counters disabled on the hardware: not mapped.
+        ({}, {**BATTERY_TELEMETRY, "input_energy_total": None}, "no_counters"),
+        ({"sensor.solax_battery_output_energy_total": ("unavailable", "kWh")}, None, "invalid_counters"),
+        ({"sensor.solax_battery_output_energy_total": ("-5", "kWh")}, None, "invalid_counters"),
+        # A counter in no energy unit is not comparable with the capacity.
+        ({"sensor.solax_battery_input_energy_total": ("3000", None)}, None, "invalid_counters"),
+        ({"sensor.remaining": ("unknown", "Wh")}, None, "no_capacity"),
+        ({"sensor.soc": ("0", "%")}, None, "no_capacity"),
+        # A remaining energy with no unit is not guessed at.
+        ({"sensor.remaining": ("10000", None)}, None, "no_capacity"),
+    ],
+)
+def test_cycles_need_valid_comparable_counters_and_capacity(overrides, tele, reason):
+    payload, _ = battery_detail(
+        states=battery_states(**overrides),
+        tele=None if tele is None else telemetry(tele),
+    )
+
+    assert payload["cycles"]["cycles"] is None
+    assert payload["cycles"]["reason"] == reason
+
+
+def test_cycles_need_no_planning_bounds_for_the_capacity():
+    # 50 % sits above a 40 % planning ceiling; remaining ÷ SoC is still 20 kWh.
+    payload, _ = battery_detail(states=battery_states(**{"number.max_soc": ("40", "%")}))
+
+    assert payload["cycles"]["capacityKwh"] == pytest.approx(20.0)
+    assert payload["cycles"]["cycles"] == pytest.approx(140.0)
+
+
+def test_cycles_normalize_the_counters_units():
+    from custom_components.helman.node_details.battery import equivalent_full_cycles
+
+    payload, _ = battery_detail(
+        states=battery_states(**{"sensor.solax_battery_input_energy_total": ("3", "MWh")})
+    )
+
+    assert payload["cycles"]["inputKwh"] == pytest.approx(3000.0)
+    assert payload["cycles"]["cycles"] == pytest.approx(140.0)
+    assert equivalent_full_cycles(10.0, 10.0, 0.0)["reason"] == "no_capacity"
+
+
+def test_a_custom_battery_has_no_telemetry_and_no_cycles():
+    payload, _ = battery_detail(cfg=battery_config(profile=False), tele={})
+
+    assert payload["profile"] is None
+    assert "battery_voltage" not in payload["entities"]
+    assert payload["cycles"]["reason"] == "no_counters"
+    assert payload["condition"] is None
+
+
+def test_only_an_explicit_bms_report_is_promoted_before_the_run_mode():
+    payload, _ = battery_detail(
+        states=battery_states(
+            **{"sensor.solax_bms_connect_state": ("Disconnected", None), RUN_MODE: ("Off-Grid", None)}
+        )
+    )
+    assert payload["condition"] == {
+        "kind": "bms_disconnected",
+        "state": "Disconnected",
+        "entityId": "sensor.solax_bms_connect_state",
+    }
+
+    payload, _ = battery_detail(states=battery_states(**{RUN_MODE: ("Off-Grid", None)}))
+    assert payload["condition"] == {"kind": "off_grid", "state": "Off-Grid", "entityId": RUN_MODE}
+
+
+def origin(charged, **fractions):
+    base = {
+        "charged_kwh": charged,
+        "grid": 0.0,
+        "grid_recorded": 0.0,
+        "grid_tariff": 0.0,
+        "grid_unpriced": 0.0,
+        "solar": 0.0,
+        "solar_priced": 0.0,
+        "solar_unpriced": 0.0,
+        "unknown": 1.0,
+        "paid_rate": None,
+        "forgone_rate": None,
+    }
+    base.update(fractions)
+    base["grid"] = base["grid_recorded"] + base["grid_tariff"] + base["grid_unpriced"]
+    base["solar"] = base["solar_priced"] + base["solar_unpriced"]
+    return base
+
+
+def test_charge_fractions_become_kwh_keeping_unknown_and_unpriced_shares():
+    from custom_components.helman.node_details.battery import charge_origin_kwh
+
+    charge = charge_origin_kwh(
+        origin(
+            10.0,
+            grid_recorded=0.2,
+            grid_unpriced=0.1,
+            solar_priced=0.4,
+            solar_unpriced=0.2,
+            unknown=0.1,
+            paid_rate=4.0,
+            forgone_rate=1.5,
+        )
+    )
+
+    assert charge["chargedKwh"] == pytest.approx(10.0)
+    assert charge["gridKwh"] == pytest.approx(3.0)
+    assert charge["solarKwh"] == pytest.approx(6.0)
+    # Nothing is forced into a source: the unexplained kWh stay unknown.
+    assert charge["unknownKwh"] == pytest.approx(1.0)
+    assert charge["gridKwh"] + charge["solarKwh"] + charge["unknownKwh"] == pytest.approx(10.0)
+    # Only the rated grid share is paid for; the unrated one stays unpriced.
+    assert charge["gridPricedKwh"] == pytest.approx(2.0)
+    assert charge["gridUnpricedKwh"] == pytest.approx(1.0)
+    assert charge["paidCost"] == pytest.approx(8.0)
+    assert charge["solarPricedKwh"] == pytest.approx(4.0)
+    assert charge["solarUnpricedKwh"] == pytest.approx(2.0)
+    assert charge["forgoneValue"] == pytest.approx(6.0)
+
+
+def test_a_side_without_kwh_costs_zero_and_one_without_a_rate_is_unknown():
+    from custom_components.helman.node_details.battery import charge_origin_kwh
+
+    solar_only = charge_origin_kwh(origin(4.0, solar_unpriced=1.0, unknown=0.0))
+    assert solar_only["paidCost"] == 0.0
+    assert solar_only["forgoneValue"] is None
+
+    unrated_grid = charge_origin_kwh(origin(4.0, grid_unpriced=1.0, unknown=0.0))
+    assert unrated_grid["paidCost"] is None
+
+
+def test_a_period_without_charge_is_no_charge_not_unknown_storage():
+    from custom_components.helman.node_details.battery import charge_origin_kwh
+
+    charge = charge_origin_kwh(origin(0.0))
+
+    assert charge["chargedKwh"] == 0.0
+    assert charge["unknownKwh"] == 0.0
+    assert charge["gridKwh"] == 0.0 and charge["solarKwh"] == 0.0
+    assert charge["paidCost"] == 0.0
+    assert charge["forgoneValue"] == 0.0
+
+
+def test_the_charge_section_reuses_todays_ranking_report():
+    report = {"currency": "CZK/kWh", "complete": False, "charge_origin": origin(5.0, solar_priced=1.0, unknown=0.0, forgone_rate=1.2)}
+
+    payload, reports = battery_detail(section="charge", report=report)
+
+    assert len(reports) == 1
+    name, query = reports[0]
+    assert name == "ranking"
+    assert query.start_date == query.end_date == NOW.date()
+    assert payload["currency"] == "CZK/kWh"
+    assert payload["charge"]["solarKwh"] == pytest.approx(5.0)
+    assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
+    assert payload["unavailable"] is None
+
+
+def test_the_charge_section_says_why_without_reports():
+    payload, _ = battery_detail(section="charge", report={"unavailable": "no_house_meter"})
+
+    assert payload["charge"] is None
+    assert payload["unavailable"] == "no_house_meter"

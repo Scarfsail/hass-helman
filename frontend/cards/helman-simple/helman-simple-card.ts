@@ -10,7 +10,6 @@ import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
 import { TreeItem } from "../helman/tree-item";
 import { hydrateItem } from "../helman/tree-item-hydrator";
-import type { BatteryNodeConfig } from "../helman/energy-node-config";
 import type { NodeType, NodeDetailParams } from "./node-detail/node-detail-types";
 import {
     buildNodeDetailParams,
@@ -67,13 +66,15 @@ interface EnergyValues {
      */
     gridPowerSigned: number | null;
     batteryPower: number;
+    /** The battery meter, positive charging; `null` without a reading, never 0. */
+    batteryPowerReading: number | null;
     batterySoc:   number;
     batteryMinSoc:number;
     housePower:   number;
 }
 
 const EMPTY_ENERGY: EnergyValues = {
-    solarPower: 0, gridPower: 0, gridPowerSigned: null, batteryPower: 0,
+    solarPower: 0, gridPower: 0, gridPowerSigned: null, batteryPower: 0, batteryPowerReading: null,
     batterySoc: 0, batteryMinSoc: 10,
     housePower: 0,
 };
@@ -720,15 +721,9 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _buildNodeDetailContext(): NodeDetailContext {
         const historyBuckets = this._uiConfig?.history_buckets ?? 60;
         const historyBucketDuration = this._uiConfig?.history_bucket_duration ?? 60;
-        const batteryConfig = (this._batteryProducerNode?.nodeConfig ?? this._batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
-
         return {
             batteryPower: this._energy.batteryPower,
-            batterySoc: this._energy.batterySoc,
-            batterySocEntityId: this._entityMap?.batterySocEntityId ?? null,
-            batteryRemainingEnergyEntityId: batteryConfig?.entities.remaining_energy ?? null,
-            batteryProducerNode: this._batteryProducerNode,
-            batteryConsumerNode: this._batteryConsumerNode,
+            batteryPowerReading: this._energy.batteryPowerReading,
             solarNode: this._solarNode,
             gridPower: this._energy.gridPowerSigned,
             productionNode: this._productionNode,
@@ -762,6 +757,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const batterySoc = Math.max(0, Math.min(100, rawPower(map.batterySocEntityId)));
         const gridRaw = map.gridPowerEntityId ? parseFloat(hass.states[map.gridPowerEntityId]?.state ?? "") : NaN;
         const gridReading = Number.isFinite(gridRaw) ? gridRaw : null;
+        const batteryRaw = map.batteryPowerEntityId ? parseFloat(hass.states[map.batteryPowerEntityId]?.state ?? "") : NaN;
+        const batteryReading = Number.isFinite(batteryRaw) ? (map.batteryInverted ? -batteryRaw : batteryRaw) : null;
 
         return {
             solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
@@ -770,6 +767,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             batteryPower: map.batteryInverted
                 ? -rawPower(map.batteryPowerEntityId)
                 : rawPower(map.batteryPowerEntityId),
+            batteryPowerReading: batteryReading,
             batterySoc,
             batteryMinSoc: rawPower(map.batteryMinSocEntityId) || 10,
             // applyValueType("default") passes the raw value through, so the
