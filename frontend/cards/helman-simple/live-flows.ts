@@ -62,14 +62,15 @@ export function liveFlows({ solarPower, housePower, batteryPower, gridPower }: L
         ? -(solarToGrid + batteryToGrid)
         : gridPower;
 
+    const flow = (watts: number) => watts > IDLE_W ? watts : 0;
     return {
-        solarToHouse,
-        solarToBattery,
+        solarToHouse: flow(solarToHouse),
+        solarToBattery: flow(solarToBattery),
         solarToGrid,
-        batteryToHouse,
-        batteryToGrid,
-        gridToHouse: Math.max(0, housePower - solarToHouse - batteryToHouse),
-        gridToBattery: charging ? Math.max(0, batteryPower - solarToBattery) : 0,
+        batteryToHouse: flow(batteryToHouse),
+        batteryToGrid: flow(batteryToGrid),
+        gridToHouse: flow(Math.max(0, housePower - solarToHouse - batteryToHouse)),
+        gridToBattery: flow(charging ? Math.max(0, batteryPower - solarToBattery) : 0),
         gridPower: effectiveGridPower,
     };
 }

@@ -387,6 +387,15 @@ test.describe("the flow", () => {
         await expect(flow(page).locator("[data-total]")).toHaveCount(0);
     });
 
+    test("an unreadable solar meter leaves the split unknown, never charge from the grid", async ({ page }) => {
+        await mount(page, { solar: "unavailable", house: "900", power: "3200", grid: "-2400" });
+        await openDetail(page);
+        for (const [side, id] of [["in", "solar"], ["in", "grid"], ["out", "house"], ["out", "grid"]] as const) {
+            await expect(flowLabel(page, side, id)).toContainText("–");
+        }
+        await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
+    });
+
     test("Today is requested only once chosen, in kWh with the paid estimate, the unknown charge and the net change", async ({ page }) => {
         await mount(page);
         await openDetail(page);

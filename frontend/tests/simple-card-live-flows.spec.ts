@@ -58,6 +58,9 @@ test.describe("the live split", () => {
         expect(flows(1000, 910, IDLE_W, 0)).toMatchObject({ solarToBattery: 0, gridToBattery: 0, solarToGrid: 0, solarToHouse: 910 });
         // A 50 W discharge is idle too.
         expect(flows(0, 300, -IDLE_W, 300)).toMatchObject({ batteryToHouse: 0, gridToHouse: 300 });
+        // So is every edge derived from an active flow: 60 W out of the battery
+        // to a 10 W house is neither 10 W to the house nor 50 W of export.
+        expect(flows(0, 10, -60, 0)).toMatchObject({ batteryToHouse: 0, batteryToGrid: 0, gridToHouse: 0 });
     });
 
     test("a grid meter at ≈ 0 while the battery or solar clearly exports reads the export the balance implies", () => {

@@ -376,19 +376,18 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         `;
     }
 
-    /** The card's live split, W; unknown without a battery reading, never 0. */
+    /** The card's live split, W; unknown without the solar or battery reading, never 0. */
     private _nowFlow(): BatteryFlow {
         const flows = this.params.flows;
-        const known = this.params.power !== null;
-        const watts = (value: number) => known ? value : null;
+        const watts = (value: number | undefined) => value ?? null;
         const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
         const inputs = [
-            this._flowItem("solar", watts(flows.solarToBattery), power),
-            this._flowItem("grid", watts(flows.gridToBattery), power),
+            this._flowItem("solar", watts(flows?.solarToBattery), power),
+            this._flowItem("grid", watts(flows?.gridToBattery), power),
         ];
         const outputs = [
-            this._flowItem("house", watts(flows.batteryToHouse), power),
-            this._flowItem("grid", watts(flows.batteryToGrid), power),
+            this._flowItem("house", watts(flows?.batteryToHouse), power),
+            this._flowItem("grid", watts(flows?.batteryToGrid), power),
         ];
         return {
             scopeLabel: fillTemplate(this.localize("node_detail.flow.scope_now"), { time: this._time(Date.now()) }),

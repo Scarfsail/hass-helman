@@ -1,7 +1,11 @@
 import type { TreeItem } from "../helman/tree-item";
+import type { LiveFlows } from "../helman-simple/live-flows";
 import type { EnergyNodeFlowParams, NodeDetailParams, NodeType } from "./node-detail-types";
 
-export interface NodeDetailContext extends EnergyNodeFlowParams {
+export interface NodeDetailContext {
+    /** The card's live power split, W. */
+    flows: LiveFlows;
+    flowScaleW: number;
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -17,7 +21,9 @@ export interface NodeDetailContext extends EnergyNodeFlowParams {
 }
 
 export function buildNodeDetailParams(context: NodeDetailContext, nodeType: NodeType): NodeDetailParams {
-    const flow: EnergyNodeFlowParams = { flows: context.flows, flowScaleW: context.flowScaleW };
+    // The split reads a missing meter as 0: without one it is not known, never a zero.
+    const known = context.solarPowerReading !== null && context.batteryPowerReading !== null;
+    const flow: EnergyNodeFlowParams = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW };
     switch (nodeType) {
         case "battery":
             return {

@@ -351,14 +351,22 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const gridPower = gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw;
         const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType));
         const solarPower = solarNode?.powerValue ?? 0;
+        const batteryPowerReading = batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw;
+        const solarPowerReading = solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType);
 
         return {
-            flows: liveFlows({ solarPower, housePower, batteryPower, gridPower: gridPower ?? 0 }),
+            // From the sensors' current states, as the reading figures are.
+            flows: liveFlows({
+                solarPower: solarPowerReading ?? 0,
+                housePower,
+                batteryPower: batteryPowerReading ?? 0,
+                gridPower: gridPower ?? 0,
+            }),
             // This card reads no inverter overview: the solar node's maximum is the scale.
             flowScaleW: Math.max(1, solarNode?.sourceConfig?.max_power ?? DEFAULT_SOLAR_MAX_W),
             batteryPower,
-            batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
-            solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
+            batteryPowerReading,
+            solarPowerReading,
             gridPower,
             housePower,
             solarPower,
