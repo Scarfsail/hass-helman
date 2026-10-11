@@ -15,6 +15,11 @@ constants, not the user's config.
 
 The charger's ``id``, ``name``, ``icon``, ``limits``, ``vehicles``, groups,
 whether it is schedulable and its place in the device tree stay user config.
+
+The telemetry is what the EV charger detail reads, display only: the run mode
+the charge switch also reads, the hardware's session counters, per-phase power,
+its grid CT reading and its fault, link and setting registers. Domains and
+unique ids are the prod registry's (``dev/solax_modbus/registry_snapshot.json``).
 """
 
 from __future__ import annotations
@@ -52,6 +57,39 @@ PROFILE = VendorProfile(
             "6A": {"min_power_kw": 3.5},
             "10A": {"min_power_kw": 6.9},
         },
+    },
+    telemetry={
+        "run_mode": ("sensor", "{name}_run_mode"),
+        "charge_mode": ("sensor", "{name}_charge_mode"),
+        **{
+            f"charge_power_l{phase}": ("sensor", f"{{name}}_charge_power_l{phase}")
+            for phase in (1, 2, 3)
+        },
+        "active_phase": ("sensor", "{name}_active_charge_phase"),
+        "session_energy": ("sensor", "{name}_charge_added"),
+        "session_duration": ("sensor", "{name}_charge_duration"),
+        "green_start_power": ("sensor", "{name}_green_mode_start_power"),
+        "grid_power": ("sensor", "{name}_grid_power_total"),
+        "temperature": ("sensor", "{name}_charger_temperature"),
+        "fault_code": ("sensor", "{name}_fault_code"),
+        "fault_description": ("sensor", "{name}_fault_description"),
+        "network_status": ("sensor", "{name}_net_connected"),
+        "firmware": ("sensor", "{name}_firmware_version"),
+        "link_success_rate": ("sensor", "{name}_communication_success_rate"),
+        "auth_priority": ("select", "{name}_auth_priority"),
+        "main_breaker_limit": ("number", "{name}_main_breaker_limit"),
+        "lock": ("switch", "{name}_electronic_lock"),
+    },
+    # The charger's OCPP-style run modes, as solax_modbus names them. Any other
+    # (Reserved, Unavailable, Update, RFID Activation) is shown as read.
+    run_mode_conditions={
+        "Charging": "charging",
+        "Preparing": "waiting",
+        "SuspendedEV": "waiting",
+        "SuspendedEVSE": "waiting",
+        "Finishing": "waiting",
+        "Available": "no_car",
+        "Faulted": "fault",
     },
     charging=ChargingControl(
         state=(("sensor", "{name}_run_mode"), "Charging"),

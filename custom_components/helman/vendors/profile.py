@@ -95,9 +95,11 @@ class VendorProfile:
     export_limit: EntityTemplate | None = None
     charging: ChargingControl | None = None
     telemetry: Mapping[str, EntityTemplate] = field(default_factory=dict)
-    #: A ``run_mode`` telemetry state → the condition the inverter detail
-    #: promotes for it: ``off_grid`` or ``fault``. Any other state is shown as
-    #: read, without a verdict.
+    #: A ``run_mode`` telemetry state → what the hardware reports by it: for
+    #: an inverter the condition its details promote (``off_grid`` or
+    #: ``fault``), for an EV charger its status (``charging``, ``waiting``,
+    #: ``no_car`` or ``fault``). Any other state is shown as read, without a
+    #: verdict.
     run_mode_conditions: Mapping[str, str] = field(default_factory=dict)
     #: A ``bms_connect_state`` telemetry state → the condition the battery
     #: detail promotes for it (``bms_disconnected``): an explicit hardware

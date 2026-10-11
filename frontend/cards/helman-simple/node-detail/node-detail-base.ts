@@ -2,7 +2,7 @@ import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { LocalizeFunction } from "../../localize/localize";
-import type { ForecastPayload, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
+import type { ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
@@ -193,7 +193,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         else this._overview = { status: "loading" };
         try {
             const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<O>({ node: this._node }, { fresh: fresh || previous !== undefined });
+                .getNodeDetail<O>(this._detailRequest(), { fresh: fresh || previous !== undefined });
             if (request !== this._overviewRequest) return;
             if (!previous) this._overviewStates = this._overviewSignature(payload);
             this._overview = { status: "ready", payload };
@@ -205,6 +205,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
             // A refresh that fails keeps what was shown, with its own as-of.
             if (this._overview.status !== "ready") this._overview = { status: "error" };
         }
+    }
+
+    /** The `helman/get_node_detail` request for the overview, or for `section`. */
+    protected _detailRequest(section?: string): Omit<GetNodeDetailRequest, "type"> {
+        return section ? { node: this._node, section } : { node: this._node };
     }
 
     /** The forecast, kept on a failed refresh; reloaded on shared changes once asked for. */

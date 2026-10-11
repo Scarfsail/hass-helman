@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from ..controllables.config import iter_devices, peek_controllable_id, peek_controllable_kind
+from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
 from .battery import async_battery_section, build_battery_overview
+from .ev_charger import async_ev_charger_section, build_ev_charger_overview
 from .grid import async_grid_section, build_grid_overview
 from .house import async_house_section, build_house_overview
 from .inverter import async_inverter_section, build_inverter_overview
@@ -31,13 +34,17 @@ class NodeDetailError(Exception):
 
 @dataclass(frozen=True)
 class NodeDetail:
-    """One node's detail: its overview, and the sections it answers."""
+    """One node's detail: its overview, and the sections it answers.
 
-    overview: Callable[[Any, Mapping[str, Any], datetime], dict[str, Any]]
-    section: Callable[[Any, Mapping[str, Any], str, datetime], Awaitable[dict[str, Any]]]
+    A device node's builders also take the device's config.
+    """
+
+    overview: Callable[..., dict[str, Any]]
+    section: Callable[..., Awaitable[dict[str, Any]]]
     sections: frozenset[str]
-    #: Whether the node is one of several devices, named by ``device_id``.
-    takes_device: bool = False
+    #: The kind of consumer the node is one of, named by ``device_id``;
+    #: ``None`` for a node that is not a device.
+    device_kind: str | None = None
 
 
 NODE_DETAILS: dict[str, NodeDetail] = {
@@ -66,6 +73,12 @@ NODE_DETAILS: dict[str, NodeDetail] = {
         section=async_house_section,
         sections=frozenset({"today", "pattern"}),
     ),
+    "ev_charger": NodeDetail(
+        overview=build_ev_charger_overview,
+        section=async_ev_charger_section,
+        sections=frozenset({"today", "segment"}),
+        device_kind=CONTROLLABLE_KIND_EV_CHARGER,
+    ),
 }
 
 
@@ -82,14 +95,41 @@ async def async_get_node_detail(
     detail = NODE_DETAILS.get(node)
     if detail is None:
         raise NodeDetailError("unknown_node", f"No node detail for {node!r}")
-    if device_id is not None and not detail.takes_device:
-        raise NodeDetailError(
-            "invalid_device", f"The {node} detail does not take a device_id"
-        )
+    if detail.device_kind is None:
+        if device_id is not None:
+            raise NodeDetailError(
+                "invalid_device", f"The {node} detail does not take a device_id"
+            )
+        device_args: tuple[Mapping[str, Any], ...] = ()
+    else:
+        device = _find_device(config, device_id, detail.device_kind)
+        if device is None:
+            raise NodeDetailError(
+                "invalid_device",
+                f"No {detail.device_kind} device with id {device_id!r}",
+            )
+        device_args = (device,)
     if section is None:
-        return detail.overview(hass, config, now)
+        return detail.overview(hass, config, now, *device_args)
     if section not in detail.sections:
         raise NodeDetailError(
             "unknown_section", f"The {node} detail has no section {section!r}"
         )
-    return await detail.section(hass, config, section, now)
+    return await detail.section(hass, config, section, now, *device_args)
+
+
+def _find_device(
+    config: Mapping[str, Any], device_id: str | None, kind: str
+) -> Mapping[str, Any] | None:
+    """The configured consumer of ``kind`` whose id is ``device_id``, at any depth."""
+    if device_id is None:
+        return None
+    return next(
+        (
+            device
+            for device, _parent in iter_devices(config)
+            if peek_controllable_id(device) == device_id
+            and peek_controllable_kind(device) == kind
+        ),
+        None,
+    )
