@@ -23,7 +23,10 @@ import {
 } from "../config/config-document";
 import {
     assignGroup,
+    assignPhase,
     canHaveChildren,
+    DEVICE_PHASES,
+    isDevicePhase,
     deviceChildren,
     deviceKind,
     findDeviceByKey,
@@ -115,9 +118,6 @@ const APPLIANCE_ICON_SELECTOR = {
 } as const;
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-
-/** The house phases a consumer can be wired to, as `phase` stores them. */
-const DEVICE_PHASES = ["L1", "L2", "L3", "3ph"] as const;
 
 /** A device card's sections, each named by its `editor.sections.*` key. */
 type SectionKey =
@@ -1045,17 +1045,14 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                     .value=${live(phase)}
                     @change=${(event: Event) => {
                         const value = (event.currentTarget as HTMLSelectElement).value;
-                        this._mutate(path, (draft) => {
-                            if (value) setValueAtPath(draft, [...path, "phase"], value);
-                            else unsetValueAtPath(draft, [...path, "phase"]);
-                        });
+                        this._mutate(path, (draft) => assignPhase(draft, path, value || null));
                     }}
                 >
                     <option value="" ?selected=${phase === ""}>${this.t("editor.device_phases.unassigned")}</option>
                     ${DEVICE_PHASES.map((option) => html`
                         <option value=${option} ?selected=${option === phase}>${this._phaseLabel(option)}</option>
                     `)}
-                    ${phase && !(DEVICE_PHASES as readonly string[]).includes(phase)
+                    ${phase && !isDevicePhase(phase)
                         ? html`<option value=${phase} selected>${phase}</option>`
                         : nothing}
                 </select>
@@ -1065,7 +1062,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     }
 
     private _phaseLabel(phase: string): string {
-        return (DEVICE_PHASES as readonly string[]).includes(phase) ? this.t(`editor.device_phases.${phase}`) : phase;
+        return isDevicePhase(phase) ? this.t(`editor.device_phases.${phase}`) : phase;
     }
 
     /** The device's kind; a hardware profile fixes it, so under one it is locked. */

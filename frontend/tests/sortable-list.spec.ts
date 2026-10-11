@@ -305,7 +305,7 @@ test("moving a device edited as YAML returns it to visual mode", async ({ page }
     await openTab(page, "Devices");
 
     const panel = page.locator("helman-config-editor-panel");
-    const firstCard = panel.locator(".list-card").first();
+    const firstCard = panel.locator(".list-card.device-card").first();
     await firstCard.locator(".mode-toggle button", { hasText: "YAML" }).click();
     await expect(firstCard).toHaveClass(/scope-yaml/);
 

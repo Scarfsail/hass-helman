@@ -57,7 +57,7 @@
     },
     "sections": {
       "card_labels_and_history": "Historie a skupiny karty",
-      "device_groupings": "Seskupení zařízení",
+      "device_groupings": "Seskupení a fáze",
       "house": "Dům",
       "solar": "Solár",
       "forecast": "Předpověď",
@@ -88,7 +88,7 @@
       "children": "Podřízená zařízení"
     },
     "notes": {
-      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne.",
+      "device_groupings": "Seskupte zařízení podle rozvaděče, místnosti nebo režimu. Každé seskupení je na kartě jedním čipem; zařízení patří nejvýše do jedné skupiny každého seskupení: přetáhněte ho mezi skupinami a „Nezařazená“. Zařízení patří do skupiny jen vlastním přiřazením, které nastaví i sekce „Skupiny“ v jeho editoru. Zkratka je odznak, který členské zařízení zobrazí. Odstranění skupiny nebo seskupení ji odebere i ze všech zařízení. Id je to, na co odkazují zařízení a akce helman.group_action / helman.get_group_entities; zařízení změnu id následují, automatizace používající staré id ne. Karta Fáze domu přetažením nastaví vlastní fázi každého zařízení, stejně jako pole „Fáze v domě“ v jeho editoru; zařízení bez přiřazení pod jednofázovým nadřazeným zařízením se počítá na fázi nadřazeného.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
@@ -121,6 +121,8 @@
     },
     "card": {
       "grouping": "Seskupení",
+      "phases": "Fáze",
+      "house_phases": "Fáze domu",
       "daily_energy_entity": "Entita denní energie",
       "import_window": "Importní okno",
       "local_time_window": "Lokální časové okno",

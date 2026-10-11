@@ -235,7 +235,7 @@ test("the device settings sit above the list and the regex renames the cards", a
     const sections = page.locator("helman-config-editor-panel").locator("details.section-card");
     expect(await tabSections(page)).toEqual([
         { label: "Device settings", open: false },
-        { label: "Device groupings", open: false },
+        { label: "Groupings and phases", open: false },
         { label: "Consumers", open: false },
     ]);
     await expect
@@ -642,7 +642,7 @@ test("reordering devices closes an add picker tied to the old parent path", asyn
     const panel = page.locator("helman-config-editor-panel");
     await panel.locator(".add-device").first().dispatchEvent("click");
     await expect(panel.locator(".add-device-picker")).toHaveCount(1);
-    await panel.locator("ha-sortable").first().evaluate((sortable) => {
+    await panel.locator("ha-sortable:has(> .list-stack)").first().evaluate((sortable) => {
         sortable.dispatchEvent(new CustomEvent("item-moved", {
             detail: { oldIndex: 0, newIndex: 1 }, bubbles: true, composed: true,
         }));

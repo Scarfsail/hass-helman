@@ -112,7 +112,7 @@ async function openGroupings(page: Page): Promise<void> {
 
 function section(page: Page) {
     return page.locator("helman-config-editor-panel").locator("details.section-card", {
-        has: page.locator(":scope > summary .section-summary-label", { hasText: "Device groupings" }),
+        has: page.locator(":scope > summary .section-summary-label", { hasText: "Groupings and phases" }),
     });
 }
 
