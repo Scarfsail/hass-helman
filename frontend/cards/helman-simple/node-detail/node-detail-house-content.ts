@@ -26,18 +26,18 @@ import { INVERTER_CONTROLLABLE_ID, isScheduleApplianceActionEnabled } from "../.
 import { todayIso } from "../../shared/today-iso";
 import "../../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
-import { readingNumber } from "./node-detail-readings";
+import { powerUnitFactor, readingNumber } from "./node-detail-readings";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
 
+/** How often a stale day's figures are retried after midnight. */
+const NEW_DAY_RETRY_MS = 30_000;
+
 /** The forecast's canonical slot. */
 const SLOT_MS = 15 * 60_000;
-
-/** Power units a reading converts from, to W; any other is no reading. */
-const WATTS: Record<string, number> = { W: 1, kW: 1000, MW: 1_000_000 };
 
 /** The house's sources, in the order every split and row shows them. */
 const SOURCES = [
@@ -105,11 +105,13 @@ export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: stri
     const loads: PhaseLoad[] = [];
     let houseRemainderW: number | null = null;
 
-    const walk = (item: TreeItem, parentPhase: DevicePhase | null, parentName: string | null): void => {
+    // `phaseFrom` is the device whose own phase the parent's is, so a load
+    // inheriting through a device without one names where the phase is set.
+    const walk = (item: TreeItem, parentPhase: DevicePhase | null, phaseFrom: string | null): void => {
         const own = item.phase ?? null;
         const inherited = own === null && parentPhase !== null && parentPhase !== "3ph";
         const phase = own ?? (inherited ? parentPhase : null);
-        const inheritedFrom = inherited ? parentName : null;
+        const inheritedFrom = inherited ? phaseFrom : null;
         const add = (watts: number | null, isOwn: boolean) =>
             loads.push({ label: item.name, own: isOwn, phase, inheritedFrom, watts });
         if (!item.children.length) {
@@ -117,7 +119,7 @@ export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: stri
             return;
         }
         const remainder = item.children.find((child) => child.isUnmeasured);
-        for (const child of item.children) if (!child.isUnmeasured) walk(child, phase, item.name);
+        for (const child of item.children) if (!child.isUnmeasured) walk(child, phase, inherited ? phaseFrom : item.name);
         // Without a power sensor the parent has no remainder: its own share is unknown.
         add(remainder ? read(remainder.powerSensorId) : null, true);
     };
@@ -266,14 +268,22 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _patternRequest = 0;
     private _patternRequestedAt = 0;
     private _rankingRequest = 0;
+    /** The planned runs, read several times a render; cleared before each update. */
+    private _runsCache?: PlannedRun[];
 
     willUpdate(changed: Map<string, unknown>): void {
+        this._runsCache = undefined;
         super.willUpdate(changed);
         // "Today so far" is re-read on a new day, and otherwise at most every
         // few minutes, only while the page is visible.
         if (document.hidden) return;
-        const stale = (period: { start: string }, requestedAt: number) =>
-            !this._isToday(period.start) || Date.now() - requestedAt > TODAY_REFRESH_MS;
+        // The house re-renders on every device's power tick: a new day is
+        // retried at most every NEW_DAY_RETRY_MS, never once per render while
+        // a request is in flight or after one failed.
+        const stale = (period: { start: string }, requestedAt: number) => {
+            const age = Date.now() - requestedAt;
+            return age > TODAY_REFRESH_MS || (!this._isToday(period.start) && age > NEW_DAY_RETRY_MS);
+        };
         if (this._today?.status === "ready" && stale(this._today.payload.period, this._todayRequestedAt)) void this._loadToday();
         if (this._pattern?.status === "ready" && stale(this._pattern.payload.period, this._patternRequestedAt)) void this._loadPattern();
     }
@@ -790,6 +800,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * condition is not met, is kept and marked: the executor does not run it.
      */
     private _plannedRuns(): PlannedRun[] {
+        return this._runsCache ??= this._readPlannedRuns();
+    }
+
+    private _readPlannedRuns(): PlannedRun[] {
         const slots = this._schedule?.slots ?? [];
         if (!slots.length) return [];
         const now = Date.now();
@@ -828,7 +842,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             }
         }
         return runs
-            .filter((run) => (run.endMs === null || run.endMs > now) && days.includes(dayKey(run.startMs, this._timeZone)))
+            // A run started yesterday and still going is kept: it is running now.
+            .filter((run) => (run.endMs === null || run.endMs > now) && (run.startMs <= now || days.includes(dayKey(run.startMs, this._timeZone))))
             .sort((a, b) => a.startMs - b.startMs);
     }
 
@@ -1005,10 +1020,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _phaseEstimate(): PhaseEstimate {
         return estimatePhaseLoads(this.params.houseNode, (entityId) => {
             const value = readingNumber(this.hass, entityId);
-            if (value === null || !entityId) return null;
-            const unit = this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined;
-            const factor = unit ? WATTS[unit] : 1;
-            return factor === undefined ? null : Math.max(0, value * factor);
+            const factor = powerUnitFactor(this.hass, entityId);
+            return value === null || factor === null ? null : Math.max(0, value * factor);
         });
     }
 
@@ -1058,13 +1071,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             return value === null ? nothing : this._row(`L${phase}`, value, `eps-l${phase}`);
         });
         const minutes = readingNumber(this.hass, overview.entities.time_to_empty);
-        const total = minutes === null || minutes <= 0 ? null : Math.round(minutes);
         return html`
             <div class="section-title">${this._t("phases.eps_title")}</div>
             ${rows.every((row) => row === nothing) ? html`<p class="note">${this._t("phases.eps_unavailable")}</p>` : rows}
-            ${this._row(this._t("phases.runtime"), total === null
+            ${this._row(this._t("phases.runtime"), minutes === null || minutes <= 0
                 ? this._t("phases.runtime_none")
-                : fillTemplate(this._t("phases.runtime_value"), { duration: total >= 60 ? `${Math.floor(total / 60)} h ${total % 60} min` : `${total} min` }), "runtime", this._t("phases.runtime_scope"))}
+                : fillTemplate(this._t("phases.runtime_value"), { duration: this._duration(minutes) }), "runtime", this._t("phases.runtime_scope"))}
         `;
     }
 
@@ -1114,9 +1126,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _powerNow(): number | null {
         const entityId = this._overview.status === "ready" ? this._overview.payload.entities.power : null;
         if (!entityId || readingNumber(this.hass, entityId) === null) return null;
-        const unit = this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined;
-        const factor = unit ? WATTS[unit] : 1;
-        return factor === undefined ? null : this.params.power * factor;
+        const factor = powerUnitFactor(this.hass, entityId);
+        return factor === null ? null : this.params.power * factor;
     }
 
     private _periodText(payload: { period: { start: string }; asOf: string }): string {
@@ -1125,10 +1136,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     private _money(value: number, currency: string | null): string {
         return "≈ " + this._formatMoney(value, currencyFromPriceUnit(currency));
-    }
-
-    private _share(share: number): string {
-        return Math.round(share * 100) + " %";
     }
 
     private _signedShare(share: number): string {

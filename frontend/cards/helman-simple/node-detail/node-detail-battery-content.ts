@@ -351,10 +351,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const attributes = entityId ? this.hass.states[entityId]?.attributes ?? {} : {};
         const target = Number(attributes.target_soc);
         const at = Date.parse(String(attributes.target_time ?? ""));
-        // Rounded once, so 119.7 minutes reads 2 h 0 min, never 1 h 60 min.
-        const total = Math.round(minutes);
-        const hours = Math.floor(total / 60);
-        const duration = hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
+        const duration = this._duration(minutes);
         const text = fillTemplate(this._t(power > 0 ? "reserve.to_full" : "reserve.to_empty"), {
             duration,
             soc: Number.isFinite(target) ? this._percent(target) : "?",

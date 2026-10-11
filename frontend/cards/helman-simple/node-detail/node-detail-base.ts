@@ -368,6 +368,17 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         return formatScheduleTime(ms, this._locale, this._timeZone);
     }
 
+    protected _share(share: number): string {
+        return Math.round(share * 100) + " %";
+    }
+
+    /** Minutes as "1 h 5 min", rounded once, so 119.7 reads 2 h 0 min, never 1 h 60 min. */
+    protected _duration(minutes: number): string {
+        const total = Math.round(minutes);
+        const hours = Math.floor(total / 60);
+        return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
+    }
+
     protected _formatMoney(value: number, currency: string): string {
         return (value.toFixed(2) + " " + currency).trim();
     }

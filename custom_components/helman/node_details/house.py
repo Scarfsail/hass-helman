@@ -252,7 +252,7 @@ def top_consumers(nodes: Sequence[Mapping[str, Any]], count: int = TOP_CONSUMERS
                     unmeasured = child.get("kwh") or 0.0
                 else:
                     loads.append(load(child, own_of=parent))
-            elif child.get("children"):
+            elif any(grandchild in by_id for grandchild in child.get("children") or []):
                 walk(child)
             else:
                 loads.append(load(child))
@@ -336,14 +336,19 @@ def compare_same_weekdays(
     Hours are matched by local hour of day: only the hours today has a reading
     for are compared, and an earlier day counts only when it has every one of
     them, so a partial day is never compared with a full one. ``used`` is the
-    number of earlier days that did; ``average`` is ``None`` without one.
+    number of earlier days that did; ``average`` is ``None`` without one. A
+    local hour that occurs twice (the DST fall-back) is no single hour of day:
+    it is left out of that day, never summed into one.
     """
     def by_hour(values: Mapping[datetime, float]) -> dict[int, float]:
         hourly: dict[int, float] = {}
+        repeated: set[int] = set()
         for start, kwh in values.items():
             hour = dt_util.as_local(start).hour
-            hourly[hour] = hourly.get(hour, 0.0) + max(0.0, kwh)
-        return hourly
+            if hour in hourly:
+                repeated.add(hour)
+            hourly[hour] = max(0.0, kwh)
+        return {hour: kwh for hour, kwh in hourly.items() if hour not in repeated}
 
     result: dict[str, Any] = {
         "elapsedHours": elapsed_hours,

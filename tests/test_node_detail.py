@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -1536,6 +1536,19 @@ def test_top_consumers_count_every_load_once():
     assert result["top"][2]["money"]["paid"] is None
 
 
+def test_a_parent_whose_children_left_the_report_is_a_load_itself():
+    from custom_components.helman.node_details.house import top_consumers
+
+    # The ranking dropped the kitchen's children: its whole kWh is the load.
+    nodes = [node for node in HOUSE_NODES if node["id"] not in ("oven", "kitchen_unmeasured")]
+
+    result = top_consumers(nodes)
+
+    assert ("kitchen", None) in [(item["id"], item["ownOf"]) for item in result["top"]]
+    total = sum(item["kwh"] for item in result["top"]) + result["others"]["kwh"] + result["unmeasuredKwh"]
+    assert total == pytest.approx(20.0)
+
+
 def test_the_today_section_reuses_todays_ranking_report():
     house = {**HOUSE_NODES[0], "sources": {"solar": 8.0, "battery": 4.0, "grid": 6.0, "unattributed": 2.0}}
     report = {
@@ -1595,6 +1608,26 @@ def test_same_weekdays_are_compared_over_the_hours_today_knows():
     assert [day["knownHours"] for day in result["days"]] == [12, 12, 11, 0]
     assert result["used"] == 2
     assert result["averageKwh"] == pytest.approx(6.0)
+    assert result["ratio"] == pytest.approx(1.0)
+
+
+def test_the_repeated_fall_back_hour_is_left_out_not_summed():
+    from custom_components.helman.node_details.house import compare_same_weekdays
+
+    # 2026-10-25 is Prague's fall-back Sunday: 02:00 local occurs twice.
+    today = date(2026, 10, 25)
+    earlier = today - timedelta(days=7)
+    start = datetime(2026, 10, 25, 0, 0, tzinfo=PRAGUE).astimezone(UTC)
+    today_hours = {start + timedelta(hours=offset): 1.0 for offset in range(5)}
+    days = [(today, today_hours), (earlier, {hour(earlier, h): 1.0 for h in range(4)})]
+    assert len({dt_util.as_local(at).hour for at in today_hours}) == 4
+
+    result = compare_same_weekdays(days, elapsed_hours=5)
+
+    # Hours 0, 1 and 3 on both days; neither day's 02:00 is compared.
+    assert result["comparedHours"] == 3
+    assert result["todayKwh"] == pytest.approx(3.0)
+    assert result["averageKwh"] == pytest.approx(3.0)
     assert result["ratio"] == pytest.approx(1.0)
 
 
@@ -1679,6 +1712,15 @@ def test_an_overnight_without_readings_is_no_minimum_not_zero():
 
     payload, _ = house_detail(cfg=house_config(power=False), section="pattern")
     assert payload["overnight"]["unavailable"] == "no_power_sensor"
+
+
+def test_a_unit_less_house_sensor_reads_as_watts():
+    now = datetime(2026, 10, 10, 6, 0, tzinfo=PRAGUE)
+    stats = {HOUSE_POWER: {**power_day([(at(0), 420.0), (at(1), 180.0)]), "unit": None}}
+    payload, _ = house_detail(section="pattern", now=now, day_stats_result=stats)
+
+    assert payload["overnight"]["unavailable"] is None
+    assert payload["overnight"]["minimum"]["watts"] == 180.0
 
 
 def test_the_learned_profile_is_the_forecasts_base_load_monday_first():

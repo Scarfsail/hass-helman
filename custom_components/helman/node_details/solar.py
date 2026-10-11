@@ -163,10 +163,12 @@ async def async_solar_section(
 def in_watts(day: Mapping[str, Any], *, inverted: bool = False) -> dict[str, Any] | None:
     """A day of power in W, production positive; ``None`` in a unit not known.
 
+    A sensor without a unit is W, as the card reads it.
+
     An inverted sensor reads production negative: its values are negated, and
     its lowest reading becomes the highest production.
     """
-    factor = _WATTS.get(day.get("unit") or "")
+    factor = _WATTS.get(day.get("unit") or "W")
     if factor is None:
         return None
     scale = -factor if inverted else factor
