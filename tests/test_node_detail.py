@@ -382,10 +382,15 @@ class FakeRecorder:
         self.metadata_ids = metadata_ids
         self.calls = []
 
-    def get_metadata(self, hass, *, statistic_ids, statistic_type):
-        self.calls.append(("metadata", statistic_type))
+    def get_metadata(self, hass, *, statistic_ids=None, statistic_type=None, statistic_source=None):
+        # Mirrors the recorder, which refuses a type/source filter with ids.
+        if statistic_ids is not None and (statistic_type or statistic_source):
+            raise ValueError(
+                "Providing statistic_type and statistic_source is mutually exclusive of statistic_ids"
+            )
+        self.calls.append(("metadata",))
         return {
-            sid: (1, {"unit_of_measurement": "°C"})
+            sid: (1, {"unit_of_measurement": "°C", "mean_type": self.metadata_ids[sid]})
             for sid in statistic_ids
             if sid in self.metadata_ids
         }
@@ -419,22 +424,27 @@ def run_day_stats(recorder, entity_ids, now, hass=None):
 
 
 def test_statistics_are_used_where_present_and_history_elsewhere():
-    recorder = FakeRecorder({TEMPERATURE})
+    # A sum-only statistic (mean_type NONE) has no mean to read, so it falls
+    # back to recorded history like an entity without statistics.
+    recorder = FakeRecorder({TEMPERATURE: 1, "sensor.sum_only": 0})
     now = datetime(2026, 10, 10, 0, 30, tzinfo=PRAGUE)
 
-    result = run_day_stats(recorder, [TEMPERATURE, "sensor.no_stats", None, TEMPERATURE], now)
+    result = run_day_stats(
+        recorder, [TEMPERATURE, "sensor.no_stats", "sensor.sum_only", None, TEMPERATURE], now
+    )
 
     assert result[TEMPERATURE]["source"] == "statistics"
     assert result["sensor.no_stats"]["source"] == "history"
+    assert result["sensor.sum_only"]["source"] == "history"
     assert ("statistics", "5minute", [TEMPERATURE]) in recorder.calls
-    assert ("history", ["sensor.no_stats"]) in recorder.calls
+    assert ("history", ["sensor.no_stats", "sensor.sum_only"]) in recorder.calls
     # Half an hour elapsed: six history buckets, none after now.
     assert len(result["sensor.no_stats"]["points"]) == 6
     assert result["sensor.no_stats"]["coverage"] == pytest.approx(1.0)
 
 
 def test_statistics_carry_their_stored_unit_and_history_the_live_one():
-    recorder = FakeRecorder({TEMPERATURE})
+    recorder = FakeRecorder({TEMPERATURE: 1})
     now = datetime(2026, 10, 10, 0, 30, tzinfo=PRAGUE)
     # The display unit changed to °F; the statistics are still stored in °C.
     hass = fake_hass({TEMPERATURE: "105", "sensor.no_stats": "95"}, unit="°F")

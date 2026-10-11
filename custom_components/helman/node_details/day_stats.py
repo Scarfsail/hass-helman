@@ -221,11 +221,19 @@ async def async_day_stats(
             statistics_during_period,
         )
 
-        metadata = get_metadata(hass, statistic_ids=set(ids), statistic_type="mean")
+        # The recorder rejects ``statistic_type`` alongside ``statistic_ids``,
+        # so filter for mean-carrying statistics here.
+        metadata = {
+            entity_id: meta
+            for entity_id, (_meta_id, meta) in get_metadata(
+                hass, statistic_ids=set(ids)
+            ).items()
+            if meta.get("mean_type")
+        }
         with_statistics = {entity_id for entity_id in ids if entity_id in metadata}
         statistic_units = {
             entity_id: meta.get("unit_of_measurement")
-            for entity_id, (_meta_id, meta) in metadata.items()
+            for entity_id, meta in metadata.items()
         }
         statistics = (
             statistics_during_period(
