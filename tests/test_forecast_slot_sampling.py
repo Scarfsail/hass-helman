@@ -10,25 +10,13 @@ slot, else whatever was standing".
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-    (
-        "custom_components.helman.solar_bias_correction",
-        ROOT / "custom_components" / "helman" / "solar_bias_correction",
-    ),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages("solar_bias_correction")
 
 from custom_components.helman.solar_bias_correction.forecast_slot_sampling import (  # noqa: E402
     resolve_forecast_slot_values,

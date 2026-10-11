@@ -10,12 +10,12 @@ import unittest
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
-ROOT = Path(__file__).resolve().parents[1]
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 
@@ -137,25 +137,7 @@ def _install_voluptuous_stub() -> None:
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
+    install_helman_packages("scheduling")
 
     battery_builder_mod = types.ModuleType(
         "custom_components.helman.battery_capacity_forecast_builder"
@@ -194,29 +176,13 @@ def _install_import_stubs() -> None:
     tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
 
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-    homeassistant_pkg.__path__ = []
-
-    core_mod = sys.modules.get("homeassistant.core")
-    if core_mod is None:
-        core_mod = types.ModuleType("homeassistant.core")
-        sys.modules["homeassistant.core"] = core_mod
+    stub_module("homeassistant", __path__=[])
+    core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
-    components_pkg = sys.modules.get("homeassistant.components")
-    if components_pkg is None:
-        components_pkg = types.ModuleType("homeassistant.components")
-        sys.modules["homeassistant.components"] = components_pkg
-    components_pkg.__path__ = []
-
-    websocket_api_mod = sys.modules.get("homeassistant.components.websocket_api")
-    if websocket_api_mod is None:
-        websocket_api_mod = types.ModuleType("homeassistant.components.websocket_api")
-        sys.modules["homeassistant.components.websocket_api"] = websocket_api_mod
+    components_pkg = stub_module("homeassistant.components", __path__=[])
+    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
     websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
     websocket_api_mod.async_register_command = lambda hass, command: None
     websocket_api_mod.async_response = lambda func: func
@@ -231,55 +197,30 @@ def _install_import_stubs() -> None:
     websocket_api_mod.websocket_command = websocket_command
     components_pkg.websocket_api = websocket_api_mod
 
-    recorder_mod = sys.modules.get("homeassistant.components.recorder")
-    if recorder_mod is None:
-        recorder_mod = types.ModuleType("homeassistant.components.recorder")
-        sys.modules["homeassistant.components.recorder"] = recorder_mod
+    recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
     recorder_mod.__path__ = []
 
-    history_mod = sys.modules.get("homeassistant.components.recorder.history")
-    if history_mod is None:
-        history_mod = types.ModuleType("homeassistant.components.recorder.history")
-        sys.modules["homeassistant.components.recorder.history"] = history_mod
+    history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     history_mod.get_significant_states = lambda *args, **kwargs: {}
 
     # The house consumption trainer splices its window's tail out of hourly
     # long-term statistics, so importing the coordinator now reaches this
     # module too. Nothing here exercises that read; it answers with nothing.
-    statistics_mod = sys.modules.get("homeassistant.components.recorder.statistics")
-    if statistics_mod is None:
-        statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-        sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+    statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    energy_pkg = sys.modules.get("homeassistant.components.energy")
-    if energy_pkg is None:
-        energy_pkg = types.ModuleType("homeassistant.components.energy")
-        sys.modules["homeassistant.components.energy"] = energy_pkg
-    energy_pkg.__path__ = []
-
-    energy_data_mod = sys.modules.get("homeassistant.components.energy.data")
-    if energy_data_mod is None:
-        energy_data_mod = types.ModuleType("homeassistant.components.energy.data")
-        sys.modules["homeassistant.components.energy.data"] = energy_data_mod
+    stub_module("homeassistant.components.energy", __path__=[])
+    energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
         return SimpleNamespace(async_listen_updates=lambda callback: lambda: None)
 
     energy_data_mod.async_get_manager = async_get_manager
 
-    helpers_pkg = sys.modules.get("homeassistant.helpers")
-    if helpers_pkg is None:
-        helpers_pkg = types.ModuleType("homeassistant.helpers")
-        sys.modules["homeassistant.helpers"] = helpers_pkg
-    helpers_pkg.__path__ = []
-
-    event_mod = sys.modules.get("homeassistant.helpers.event")
-    if event_mod is None:
-        event_mod = types.ModuleType("homeassistant.helpers.event")
-        sys.modules["homeassistant.helpers.event"] = event_mod
+    helpers_pkg = stub_module("homeassistant.helpers", __path__=[])
+    event_mod = stub_module("homeassistant.helpers.event")
     event_mod.async_track_time_change = lambda hass, callback, **kwargs: lambda: None
     event_mod.async_track_time_interval = (
         lambda hass, callback, interval: lambda: None
@@ -287,10 +228,7 @@ def _install_import_stubs() -> None:
 
     # Mirrors the real helper: fires at once when HA is already running, which
     # is the state a test's fake hass is always in.
-    start_mod = sys.modules.get("homeassistant.helpers.start")
-    if start_mod is None:
-        start_mod = types.ModuleType("homeassistant.helpers.start")
-        sys.modules["homeassistant.helpers.start"] = start_mod
+    start_mod = stub_module("homeassistant.helpers.start")
 
     def _async_at_started(hass, at_start_cb):
         at_start_cb(hass)
@@ -302,10 +240,7 @@ def _install_import_stubs() -> None:
         lambda hass, entity_ids, action: lambda: None
     )
 
-    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
-    if debounce_mod is None:
-        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
-        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+    debounce_mod = stub_module("homeassistant.helpers.debounce")
 
     class _Debouncer:
         def __init__(self, *args, **kwargs) -> None:
@@ -316,10 +251,7 @@ def _install_import_stubs() -> None:
 
     debounce_mod.Debouncer = _Debouncer
 
-    storage_mod = sys.modules.get("homeassistant.helpers.storage")
-    if storage_mod is None:
-        storage_mod = types.ModuleType("homeassistant.helpers.storage")
-        sys.modules["homeassistant.helpers.storage"] = storage_mod
+    storage_mod = stub_module("homeassistant.helpers.storage")
 
     class DummyStore:
         def __init__(self, hass, version, key) -> None:
@@ -333,27 +265,9 @@ def _install_import_stubs() -> None:
 
     storage_mod.Store = DummyStore
 
-    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
-    if entity_registry_mod is None:
-        entity_registry_mod = types.ModuleType(
-            "homeassistant.helpers.entity_registry"
-        )
-        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
-
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-    util_pkg.__path__ = []
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    dt_mod.now = lambda: REFERENCE_TIME
+    stub_module("homeassistant.helpers.entity_registry")
+    util_pkg = stub_module("homeassistant.util", __path__=[])
+    dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod
 
 

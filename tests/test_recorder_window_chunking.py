@@ -10,29 +10,21 @@ once per day.
 from __future__ import annotations
 
 import math
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
+
 PRAGUE = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 METER = "sensor.solar_total_energy"
 
 
 def _install_import_stubs() -> None:
-    for name, path in [
-        ("custom_components", ROOT / "custom_components"),
-        ("custom_components.helman", ROOT / "custom_components" / "helman"),
-    ]:
-        pkg = sys.modules.get(name) or types.ModuleType(name)
-        pkg.__path__ = [str(path)]
-        sys.modules[name] = pkg
+    install_helman_packages()
 
 
 _install_import_stubs()

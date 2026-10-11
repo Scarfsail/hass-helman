@@ -4,26 +4,15 @@ import sys
 import types
 import unittest
 from datetime import date, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
 
 def _install_import_stubs() -> None:
-    for name, path in [
-        ("custom_components", ROOT / "custom_components"),
-        ("custom_components.helman", ROOT / "custom_components" / "helman"),
-        (
-            "custom_components.helman.solar_bias_correction",
-            ROOT / "custom_components" / "helman" / "solar_bias_correction",
-        ),
-    ]:
-        pkg = sys.modules.get(name) or types.ModuleType(name)
-        pkg.__path__ = [str(path)]
-        sys.modules[name] = pkg
+    install_helman_packages("solar_bias_correction")
 
     ha_mod = types.ModuleType("homeassistant")
     ha_mod.__path__ = []

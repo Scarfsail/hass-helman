@@ -6,12 +6,17 @@ import sys
 import types
 import unittest
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from _ha_stubs import (
+    install_helman_packages,
+    restore_modules,
+    snapshot_modules,
+    stub_module,
+)
 
-ROOT = Path(__file__).resolve().parents[1]
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
@@ -41,29 +46,9 @@ _STUBBED_MODULES = (
 
 
 def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = {
-        module_name: sys.modules.get(module_name) for module_name in _STUBBED_MODULES
-    }
+    previous_modules = snapshot_modules(_STUBBED_MODULES)
 
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
+    install_helman_packages("scheduling")
 
     battery_builder_mod = types.ModuleType(
         "custom_components.helman.battery_capacity_forecast_builder"
@@ -160,156 +145,24 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
 
-    try:
-        import homeassistant.components.energy.data  # type: ignore  # noqa: F401
-        import homeassistant.core  # type: ignore  # noqa: F401
-        import homeassistant.helpers.event  # type: ignore  # noqa: F401
-        import homeassistant.helpers.storage  # type: ignore  # noqa: F401
-        import homeassistant.util.dt  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        homeassistant_pkg = sys.modules.get("homeassistant")
-        if homeassistant_pkg is None:
-            homeassistant_pkg = types.ModuleType("homeassistant")
-            sys.modules["homeassistant"] = homeassistant_pkg
-        homeassistant_pkg.__path__ = []
+    import homeassistant.components.energy.data  # type: ignore  # noqa: F401
+    import homeassistant.core  # type: ignore  # noqa: F401
+    import homeassistant.helpers.event  # type: ignore  # noqa: F401
+    import homeassistant.helpers.storage  # type: ignore  # noqa: F401
+    import homeassistant.util.dt  # type: ignore  # noqa: F401
 
-        core_mod = sys.modules.get("homeassistant.core")
-        if core_mod is None:
-            core_mod = types.ModuleType("homeassistant.core")
-            sys.modules["homeassistant.core"] = core_mod
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-        core_mod.callback = lambda func: func
-
-        components_pkg = sys.modules.get("homeassistant.components")
-        if components_pkg is None:
-            components_pkg = types.ModuleType("homeassistant.components")
-            sys.modules["homeassistant.components"] = components_pkg
-        components_pkg.__path__ = []
-
-        recorder_mod = sys.modules.get("homeassistant.components.recorder")
-        if recorder_mod is None:
-            recorder_mod = types.ModuleType("homeassistant.components.recorder")
-            sys.modules["homeassistant.components.recorder"] = recorder_mod
-        recorder_mod.get_instance = lambda hass: None
-        recorder_mod.__path__ = []
-
-        history_mod = sys.modules.get("homeassistant.components.recorder.history")
-        if history_mod is None:
-            history_mod = types.ModuleType("homeassistant.components.recorder.history")
-            sys.modules["homeassistant.components.recorder.history"] = history_mod
-        history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-        history_mod.get_significant_states = lambda *args, **kwargs: {}
-
-        energy_pkg = sys.modules.get("homeassistant.components.energy")
-        if energy_pkg is None:
-            energy_pkg = types.ModuleType("homeassistant.components.energy")
-            sys.modules["homeassistant.components.energy"] = energy_pkg
-        energy_pkg.__path__ = []
-
-        energy_data_mod = sys.modules.get("homeassistant.components.energy.data")
-        if energy_data_mod is None:
-            energy_data_mod = types.ModuleType("homeassistant.components.energy.data")
-            sys.modules["homeassistant.components.energy.data"] = energy_data_mod
-
-        async def async_get_manager(hass):
-            return types.SimpleNamespace(
-                async_listen_updates=lambda callback: lambda: None
-            )
-
-        energy_data_mod.async_get_manager = async_get_manager
-
-        helpers_pkg = sys.modules.get("homeassistant.helpers")
-        if helpers_pkg is None:
-            helpers_pkg = types.ModuleType("homeassistant.helpers")
-            sys.modules["homeassistant.helpers"] = helpers_pkg
-        helpers_pkg.__path__ = []
-
-        event_mod = sys.modules.get("homeassistant.helpers.event")
-        if event_mod is None:
-            event_mod = types.ModuleType("homeassistant.helpers.event")
-            sys.modules["homeassistant.helpers.event"] = event_mod
-        event_mod.async_track_time_change = (
-            lambda hass, callback, **kwargs: lambda: None
-        )
-        event_mod.async_track_time_interval = (
-            lambda hass, callback, interval: lambda: None
-        )
-
-        # Mirrors the real helper: fires at once when HA is already running, which
-        # is the state a test's fake hass is always in.
-        start_mod = sys.modules.get("homeassistant.helpers.start")
-        if start_mod is None:
-            start_mod = types.ModuleType("homeassistant.helpers.start")
-            sys.modules["homeassistant.helpers.start"] = start_mod
-
-        def _async_at_started(hass, at_start_cb):
-            at_start_cb(hass)
-            return lambda: None
-
-        start_mod.async_at_started = _async_at_started
-        helpers_pkg.start = start_mod
-
-        storage_mod = sys.modules.get("homeassistant.helpers.storage")
-        if storage_mod is None:
-            storage_mod = types.ModuleType("homeassistant.helpers.storage")
-            sys.modules["homeassistant.helpers.storage"] = storage_mod
-
-        class DummyStore:
-            def __init__(self, hass, version, key) -> None:
-                self._data = None
-
-            async def async_load(self):
-                return self._data
-
-            async def async_save(self, data) -> None:
-                self._data = data
-
-        storage_mod.Store = DummyStore
-
-        entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
-        if entity_registry_mod is None:
-            entity_registry_mod = types.ModuleType(
-                "homeassistant.helpers.entity_registry"
-            )
-            sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
-
-        util_pkg = sys.modules.get("homeassistant.util")
-        if util_pkg is None:
-            util_pkg = types.ModuleType("homeassistant.util")
-            sys.modules["homeassistant.util"] = util_pkg
-        util_pkg.__path__ = []
-
-        dt_mod = sys.modules.get("homeassistant.util.dt")
-        if dt_mod is None:
-            dt_mod = types.ModuleType("homeassistant.util.dt")
-            sys.modules["homeassistant.util.dt"] = dt_mod
-        dt_mod.parse_datetime = datetime.fromisoformat
-        dt_mod.as_local = lambda value: value
-        dt_mod.as_utc = lambda value: value
-        dt_mod.now = lambda: REFERENCE_TIME
-        util_pkg.dt = dt_mod
-
-    recorder_mod = sys.modules.get("homeassistant.components.recorder")
-    if recorder_mod is None:
-        recorder_mod = types.ModuleType("homeassistant.components.recorder")
-        sys.modules["homeassistant.components.recorder"] = recorder_mod
+    recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
     recorder_mod.__path__ = []
 
-    history_mod = sys.modules.get("homeassistant.components.recorder.history")
-    if history_mod is None:
-        history_mod = types.ModuleType("homeassistant.components.recorder.history")
-        sys.modules["homeassistant.components.recorder.history"] = history_mod
+    history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     history_mod.get_significant_states = lambda *args, **kwargs: {}
 
     # ``automation.day_context_store`` builds a ``storage.Store``; force a
-    # lightweight stub even when the real ``homeassistant`` package is importable
-    # (the ``except`` branch above is skipped then), so a ``FakeHass`` without a
-    # real ``data``/``config`` can still back the store.
-    helpers_pkg = sys.modules.setdefault(
-        "homeassistant.helpers", types.ModuleType("homeassistant.helpers")
-    )
+    # lightweight stub over the real ``homeassistant`` one, so a ``FakeHass``
+    # without a real ``data``/``config`` can still back the store.
+    helpers_pkg = stub_module("homeassistant.helpers")
     storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
 
     class _HelperStore:
@@ -327,14 +180,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     helpers_pkg.storage = storage_helper_mod
 
     return previous_modules
-
-
-def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> None:
-    for module_name, previous_module in previous_modules.items():
-        if previous_module is None:
-            sys.modules.pop(module_name, None)
-            continue
-        sys.modules[module_name] = previous_module
 
 
 _original_helman_modules = {
@@ -356,7 +201,7 @@ try:
         "custom_components.helman.scheduling.schedule"
     )
 finally:
-    _restore_modules(_previous_modules)
+    restore_modules(_previous_modules)
     for module_name in list(sys.modules):
         if (
             module_name not in _original_helman_modules

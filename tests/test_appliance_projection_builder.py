@@ -7,6 +7,8 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from _ha_stubs import restore_modules, snapshot_modules
+
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 _STUBBED_MODULES = (
@@ -20,9 +22,7 @@ _STUBBED_MODULES = (
 
 
 def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = {
-        module_name: sys.modules.get(module_name) for module_name in _STUBBED_MODULES
-    }
+    previous_modules = snapshot_modules(_STUBBED_MODULES)
     custom_components_pkg = types.ModuleType("custom_components")
     custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
     sys.modules["custom_components"] = custom_components_pkg
@@ -43,27 +43,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
-    try:
-        import homeassistant.util.dt  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        homeassistant_pkg = sys.modules.get("homeassistant")
-        if homeassistant_pkg is None:
-            homeassistant_pkg = types.ModuleType("homeassistant")
-            sys.modules["homeassistant"] = homeassistant_pkg
-
-        util_pkg = sys.modules.get("homeassistant.util")
-        if util_pkg is None:
-            util_pkg = types.ModuleType("homeassistant.util")
-            sys.modules["homeassistant.util"] = util_pkg
-
-        dt_mod = sys.modules.get("homeassistant.util.dt")
-        if dt_mod is None:
-            dt_mod = types.ModuleType("homeassistant.util.dt")
-            sys.modules["homeassistant.util.dt"] = dt_mod
-
-        dt_mod.parse_datetime = datetime.fromisoformat
-        dt_mod.as_local = lambda value: value
-        util_pkg.dt = dt_mod
+    import homeassistant.util.dt  # type: ignore  # noqa: F401
 
     dt_mod = sys.modules["homeassistant.util.dt"]
     dt_mod.parse_datetime = datetime.fromisoformat
@@ -71,14 +51,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     dt_mod.as_utc = lambda value: value
     sys.modules["homeassistant.util"].dt = dt_mod
     return previous_modules
-
-
-def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> None:
-    for module_name, previous_module in previous_modules.items():
-        if previous_module is None:
-            sys.modules.pop(module_name, None)
-            continue
-        sys.modules[module_name] = previous_module
 
 
 _previous_modules = _install_import_stubs()
@@ -96,7 +68,7 @@ try:
     )
     state_module = importlib.import_module("custom_components.helman.appliances.state")
 finally:
-    _restore_modules(_previous_modules)
+    restore_modules(_previous_modules)
 
 build_appliance_projection_plan = projection_builder_module.build_appliance_projection_plan
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry

@@ -11,22 +11,14 @@ over the hours the house meter measured, so a fixture with a house gap opts out.
 from __future__ import annotations
 
 import importlib
-import sys
-import types
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 model = importlib.import_module("custom_components.helman.span_history_model")
 dataset_mod = importlib.import_module("custom_components.helman.device_reports.dataset")

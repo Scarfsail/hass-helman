@@ -22,21 +22,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from _ha_stubs import install_helman_packages
+
 ROOT = Path(__file__).resolve().parents[1]
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+install_helman_packages()
 
 from custom_components.helman import tree_builder  # noqa: E402
 from custom_components.helman.appliances.config import (  # noqa: E402

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from _ha_stubs import install_helman_packages, stub_module
 
-ROOT = Path(__file__).resolve().parents[1]
+
 PRAGUE = ZoneInfo("Europe/Prague")
 _NOW = datetime(2026, 7, 10, 12, 0, tzinfo=PRAGUE)
 
@@ -44,44 +42,19 @@ class _FakeStore:
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    install_helman_packages("automation")
 
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    automation_pkg = sys.modules.get("custom_components.helman.automation")
-    if automation_pkg is None:
-        automation_pkg = types.ModuleType("custom_components.helman.automation")
-        sys.modules["custom_components.helman.automation"] = automation_pkg
-    automation_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "automation")
-    ]
-
-    def _ensure(name: str) -> types.ModuleType:
-        mod = sys.modules.get(name)
-        if mod is None:
-            mod = types.ModuleType(name)
-            sys.modules[name] = mod
-        return mod
-
-    homeassistant_pkg = _ensure("homeassistant")
-    core_mod = _ensure("homeassistant.core")
+    homeassistant_pkg = stub_module("homeassistant")
+    core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = object
-    helpers_pkg = _ensure("homeassistant.helpers")
-    storage_mod = _ensure("homeassistant.helpers.storage")
+    helpers_pkg = stub_module("homeassistant.helpers")
+    storage_mod = stub_module("homeassistant.helpers.storage")
     storage_mod.Store = _FakeStore
     helpers_pkg.storage = storage_mod
     homeassistant_pkg.helpers = helpers_pkg
 
-    util_pkg = _ensure("homeassistant.util")
-    dt_mod = _ensure("homeassistant.util.dt")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_module("homeassistant.util.dt")
 
     def _as_local(value: datetime) -> datetime:
         if value.tzinfo is None:

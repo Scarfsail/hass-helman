@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sys
-import types
 import unittest
 from pathlib import Path
+
+from _ha_stubs import install_helman_packages
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,36 +13,9 @@ HELMAN_ROOT = ROOT / "custom_components" / "helman"
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    install_helman_packages("scheduling")
 
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(HELMAN_ROOT)]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [str(HELMAN_ROOT / "scheduling")]
-
-    try:
-        import homeassistant.core  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        homeassistant_pkg = sys.modules.get("homeassistant")
-        if homeassistant_pkg is None:
-            homeassistant_pkg = types.ModuleType("homeassistant")
-            sys.modules["homeassistant"] = homeassistant_pkg
-
-        core_mod = types.ModuleType("homeassistant.core")
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-        core_mod.callback = lambda func: func
-        sys.modules["homeassistant.core"] = core_mod
+    import homeassistant.core  # type: ignore  # noqa: F401
 
 
 _install_import_stubs()

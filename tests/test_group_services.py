@@ -9,22 +9,14 @@ block it, and one failing entity does not stop the rest.
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 import voluptuous as vol  # noqa: E402
 from homeassistant.core import SupportsResponse  # noqa: E402

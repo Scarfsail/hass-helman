@@ -6,64 +6,31 @@ import types
 import unittest
 from pathlib import Path
 
+from _ha_stubs import install_helman_packages, stub_module
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    core_mod = sys.modules.get("homeassistant.core")
-    if core_mod is None:
-        core_mod = types.ModuleType("homeassistant.core")
-        sys.modules["homeassistant.core"] = core_mod
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-
-    components_pkg = sys.modules.get("homeassistant.components")
-    if components_pkg is None:
-        components_pkg = types.ModuleType("homeassistant.components")
-        sys.modules["homeassistant.components"] = components_pkg
-
-    frontend_mod = sys.modules.get("homeassistant.components.frontend")
-    if frontend_mod is None:
-        frontend_mod = types.ModuleType("homeassistant.components.frontend")
-        sys.modules["homeassistant.components.frontend"] = frontend_mod
-    frontend_mod.removed_panels = []
+    install_helman_packages()
+    stub_module("homeassistant")
+    stub_module("homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}))
+    components_pkg = stub_module("homeassistant.components")
+    frontend_mod = stub_module("homeassistant.components.frontend", removed_panels=[])
 
     def async_remove_panel(_hass, path):
         frontend_mod.removed_panels.append(path)
 
     frontend_mod.async_remove_panel = async_remove_panel
 
-    panel_custom_mod = sys.modules.get("homeassistant.components.panel_custom")
-    if panel_custom_mod is None:
-        panel_custom_mod = types.ModuleType("homeassistant.components.panel_custom")
-        sys.modules["homeassistant.components.panel_custom"] = panel_custom_mod
-    panel_custom_mod.calls = []
+    panel_custom_mod = stub_module("homeassistant.components.panel_custom", calls=[])
 
     async def async_register_panel(*args, **kwargs):
         panel_custom_mod.calls.append((args, kwargs))
 
     panel_custom_mod.async_register_panel = async_register_panel
 
-    http_mod = sys.modules.get("homeassistant.components.http")
-    if http_mod is None:
-        http_mod = types.ModuleType("homeassistant.components.http")
-        sys.modules["homeassistant.components.http"] = http_mod
+    http_mod = stub_module("homeassistant.components.http")
 
     class StaticPathConfig:
         def __init__(self, url_path, path, cache_headers=False) -> None:
@@ -75,10 +42,7 @@ def _install_import_stubs() -> None:
 
     # `panel.py` reaches into `frontend.py` for the version-stamped card URL,
     # which asks the loader for the integration's manifest version.
-    loader_mod = sys.modules.get("homeassistant.loader")
-    if loader_mod is None:
-        loader_mod = types.ModuleType("homeassistant.loader")
-        sys.modules["homeassistant.loader"] = loader_mod
+    loader_mod = stub_module("homeassistant.loader")
 
     async def async_get_integration(_hass, _domain):
         return types.SimpleNamespace(version="1.2.3")

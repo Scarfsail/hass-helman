@@ -4,17 +4,14 @@ import importlib
 import sys
 import types
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from _ha_stubs import install_helman_packages, restore_modules
 from test_solar_bias_response import (
     REFERENCE_TIME,
     _install_coordinator_import_stubs,
-    _restore_modules,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_coordinator_module():
@@ -24,7 +21,7 @@ def _load_coordinator_module():
         sys.modules.pop("custom_components.helman.coordinator", None)
         return importlib.import_module("custom_components.helman.coordinator")
     finally:
-        _restore_modules(previous_modules)
+        restore_modules(previous_modules)
         sys.modules.pop("custom_components.helman.coordinator", None)
 
 
@@ -43,17 +40,7 @@ def _load_sensor_module():
     ]:
         sys.modules.pop(module_name, None)
 
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
+    install_helman_packages()
 
     homeassistant_pkg = types.ModuleType("homeassistant")
     sys.modules["homeassistant"] = homeassistant_pkg

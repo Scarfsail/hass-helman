@@ -10,22 +10,14 @@ breaker whose meterless children split what its sub-meters do not measure.
 from __future__ import annotations
 
 import importlib
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 series = importlib.import_module("custom_components.helman.recorder_hourly_series")
 devices = importlib.import_module("custom_components.helman.controllables.config")
