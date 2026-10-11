@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The house section's grouped view on `devices.groupings` (#363).
@@ -11,11 +11,6 @@ import { resolve } from "node:path";
  * lifted into it (#365, see house-grouping-lift.spec.ts), and the unmeasured
  * remainder is never filed.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const GROUPINGS = [
     {
@@ -54,9 +49,7 @@ const DEVICES = [
 ];
 
 async function mountSection(page: Page, uiConfig: Record<string, unknown>): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-house-devices-section"));
+    await loadBundle(page, "helman-house-devices-section");
     await page.evaluate(
         async ({ devices, uiConfig }) => {
             const el = document.createElement("helman-house-devices-section") as any;

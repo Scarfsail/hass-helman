@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * A device card's sections (#389).
@@ -16,15 +16,6 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
  * history average, an AC breaker whose climate children draw from its meter,
  * and an EV charger with use modes, eco gears and a vehicle.
  */
-
-const EDITOR_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
-const CARD_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const HEATER = {
     id: "heater",
@@ -110,9 +101,7 @@ async function mountEditor(
     validation: unknown = VALID,
     inverter: unknown = null,
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, report }) => {
@@ -359,9 +348,7 @@ test("the device edit dialog shows every section collapsed, and no Children", as
         devices: { consumers: [BREAKER] },
         automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] },
     };
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("node-detail-device-content"));
+    await loadBundle(page, "node-detail-device-content");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((config) => {
         const content = document.createElement("node-detail-device-content") as any;

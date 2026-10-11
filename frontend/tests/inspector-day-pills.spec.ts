@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
 import { FIXED_NOW_ISO, FIXED_TODAY, installFixedClock } from "./support/fixed-clock";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The solar inspector's day pills.
@@ -14,11 +14,6 @@ import { FIXED_NOW_ISO, FIXED_TODAY, installFixedClock } from "./support/fixed-c
  * actually loads the day, and that each of its two bars writes the figures it
  * draws: solar's total, and the SoC band's two ends.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 /** Days the inspector offers, counting today as day 0 — one pill each. As many
  * as a real horizon, since how the row copes with them is half of its design. */
@@ -33,9 +28,7 @@ async function loadCardBundle(page: Page): Promise<void> {
     // The fixture is dated from the page's clock and the expectations below are
     // built from the same one. See `fixed-clock`.
     await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 }
 
 /**
@@ -753,7 +746,6 @@ test.describe("solar inspector past days", () => {
     test("picking a day inside the month leaves the month where it is", async ({ page }) => {
         const month = daysOfThisMonth();
         const pastDays = month.filter((day) => day < dayAt(0)).length;
-        test.skip(pastDays === 0, "the 1st has no past day in its own month");
         await pressMore(page);
         await waitForDays(page, month);
         await waitForHistoryPills(page, pastDays);
@@ -780,7 +772,6 @@ test.describe("solar inspector past days", () => {
         const month = daysOfThisMonth();
         await waitForDays(page, month);
         const pastDays = month.filter((day) => day < dayAt(0)).length;
-        test.skip(pastDays === 0, "the 1st has no past day in its own month");
         await waitForHistoryPills(page, pastDays);
 
         const pills = await readMonthPills(page);
@@ -795,7 +786,6 @@ test.describe("solar inspector past days", () => {
     test("the month's figures are one read, and picking a day inside it is none", async ({ page }) => {
         const month = daysOfThisMonth();
         const pastDays = month.filter((day) => day < dayAt(0)).length;
-        test.skip(pastDays === 0, "the 1st has no past day in its own month");
         await pressMore(page);
         await waitForDays(page, month);
         await waitForHistoryPills(page, pastDays);
@@ -825,7 +815,6 @@ test.describe("solar inspector past days", () => {
      * where the row happens to start.
      */
     test("the pill for yesterday still names itself inside the month", async ({ page }) => {
-        test.skip(dayAt(-1) < daysOfThisMonth()[0], "yesterday is in the previous month");
         await pressMore(page);
         await waitForDays(page, daysOfThisMonth());
 

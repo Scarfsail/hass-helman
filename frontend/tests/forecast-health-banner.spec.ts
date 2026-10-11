@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The forecast-health banner is the only user-visible signal that the backend's
@@ -10,25 +10,12 @@ import { resolve } from "node:path";
  * half and how old.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 type Health = {
     generatedAt: string | null;
     isStale: boolean;
     reason: string | null;
     hint: string | null;
 };
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() =>
-        !!customElements.get("helman-forecast-health-banner"),
-    );
-}
 
 /** Mount the banner with the given items and return its rendered text (empty when it draws nothing). */
 async function renderBanner(
@@ -76,7 +63,7 @@ function staleAt(minutesAgo: number): Health {
 
 test.describe("helman-forecast-health-banner", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-forecast-health-banner");
     });
 
     test("draws nothing while every forecast is healthy", async ({ page }) => {

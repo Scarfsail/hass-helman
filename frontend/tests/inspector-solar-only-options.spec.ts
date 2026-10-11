@@ -1,10 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
 import {
     HOUSE_INSPECTOR_EMBED_CONFIG,
     SOLAR_INSPECTOR_EMBED_CONFIG,
 } from "../config-editor/solar-inspector-embed";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The solar-only options on `helman-solar-inspector-card`:
@@ -21,11 +21,6 @@ import {
  * its own, `hide_aggregate_views` and `house_focus`; its config is covered at
  * the end of this file, for the same reason the solar one is covered here.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 /**
  * The config the Training tab's solar Diagnostics mounts the card with.
@@ -47,9 +42,7 @@ const BATT_COLOR = "#22c55e";
 /** Mount the wrapper card against the fake backend with the given config. */
 async function mountCard(page: Page, config: Record<string, unknown>): Promise<void> {
     await page.goto("about:blank");
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector-card"));
+    await loadBundle(page, "helman-solar-inspector-card");
     await installFakeHass(page, { pillDays: 4 });
 
     await page.evaluate((cfg) => {

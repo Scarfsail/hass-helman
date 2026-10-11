@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
+import { loadBundle } from "./card-page";
 import { installFixedClock } from "./fixed-clock";
 
 /**
@@ -16,11 +16,6 @@ import { installFixedClock } from "./fixed-clock";
  * month -- which month it is depends on when the suite runs.
  */
 
-export const BUNDLE = resolve(
-    __dirname,
-    "../../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 /** Toggle stops, narrowest first: three slot widths, then day and month. */
 export const STOP_MONTH_VIEW = 3;
 export const STOP_YEAR_VIEW = 4;
@@ -30,9 +25,7 @@ export async function loadCardBundle(page: Page): Promise<void> {
     // Before anything is mounted: the fixtures below are generated from the
     // page's own clock, so the clock has to be settled first. See `fixed-clock`.
     await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 }
 
 /**

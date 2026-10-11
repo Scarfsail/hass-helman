@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * A day the recorder has purged the raw states of.
@@ -13,18 +13,7 @@ import { resolve } from "node:path";
  * must be entirely unaffected.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2025-06-11";
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
-}
 
 /**
  * The inspector on an actuals-only day at the given granularity.
@@ -121,7 +110,7 @@ async function notes(page: Page): Promise<string[]> {
 
 test.describe("a day drawn from hourly statistics", () => {
     test("offers no width finer than the data, and says why", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 60);
 
         expect(await widthStops(page)).toEqual([
@@ -139,7 +128,7 @@ test.describe("a day drawn from hourly statistics", () => {
     });
 
     test("clamps the width toggle up to the hour it opened at 15", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 60);
 
         const active = await page.evaluate(() => {
@@ -150,7 +139,7 @@ test.describe("a day drawn from hourly statistics", () => {
     });
 
     test("keeps its last hour, which the 15-minute cover rule would have dropped", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 60);
 
         // A wider bucket is only history once the actuals span all of it. That
@@ -169,7 +158,7 @@ test.describe("a day drawn from hourly statistics", () => {
     });
 
     test("draws its actuals with no forecast at all", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 60);
 
         // `hasActuals` alone keeps the chart on screen; a day with a forecast
@@ -187,7 +176,7 @@ test.describe("a day drawn from hourly statistics", () => {
 
 test.describe("a day still held in raw states", () => {
     test("keeps every width stop and shows no purge marker", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 15);
 
         expect((await widthStops(page)).map((stop) => stop.disabled)).toEqual([

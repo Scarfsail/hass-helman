@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
 
 /**
  * The solar inspector embedded in the Training tab's solar Diagnostics.
@@ -25,15 +25,6 @@ import { installFakeHass } from "./support/fake-hass";
  * The page is served over http rather than assembled with `setContent`: a
  * dynamic import of a root-relative URL needs a document with a real base URL.
  */
-
-const EDITOR_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
-const CARD_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const ORIGIN = "http://helman.test";
 /** The one URL under test, stamp included, exactly as the backend builds it. */

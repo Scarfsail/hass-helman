@@ -1,5 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import {
@@ -9,6 +8,7 @@ import {
     selectDaySlots,
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
+import { loadBundle } from "./support/card-page";
 
 /**
  * A device box's name opens that device's detail.
@@ -24,11 +24,6 @@ import {
  * records the history-graph config it was built with, and `ha-dialog` only
  * shows its content while open.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const TODAY_KWH = 1.25;
 const LAST_HOUR_KWH = 0.3;
@@ -104,9 +99,7 @@ async function mountCard(
     stats: Record<string, unknown> = {},
     schedulableBoiler = false,
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-card"));
+    await loadBundle(page, "helman-card");
     await installHaStubs(page);
 
     const tree = {

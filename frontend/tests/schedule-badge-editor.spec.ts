@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Pressing a scheduling badge opens the shared day editor.
@@ -14,23 +14,12 @@ import { resolve } from "node:path";
  * state rather than a guess between the group's children.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 interface FakeNode {
     id: string;
     name: string;
     deferrable?: boolean;
     controllableIds?: string[];
     children?: FakeNode[];
-}
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-day-editor-host"));
 }
 
 /**
@@ -222,7 +211,7 @@ async function editorState(page: Page): Promise<{
 
 test.describe("opening the day editor from a scheduling badge", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "scheduling-day-editor-host");
         await installFakeBackend(page);
     });
 

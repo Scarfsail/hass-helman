@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The `required_appliance_planned_later` badge against an optimizer card
@@ -15,11 +15,6 @@ import { resolve } from "node:path";
  * validation report with the warning at a specific path shows the badge on
  * exactly the card that path names, and no other.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const SCHEMA = {
     version: 2,
@@ -110,9 +105,7 @@ const VALIDATION_REPORT = {
 };
 
 async function mountEditor(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ schema, config, validation }) => {

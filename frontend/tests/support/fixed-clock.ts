@@ -33,10 +33,10 @@ export const FIXED_YEAR = Number(FIXED_NOW_ISO.slice(0, 4));
 /**
  * Freeze the page's clock at `FIXED_NOW_ISO`.
  *
- * Called by the two entry points every spec goes through — `loadCardBundle` and
- * `installFakeHass` — so a spec gets the fixed clock by mounting anything at
- * all, rather than by remembering to ask for it. Node-side date arithmetic in
- * the specs has to use the constants above to match.
+ * Called by `installFakeHass` and by the date-dependent specs' own mount
+ * wrappers before `loadBundle`, which leaves the clock to its caller.
+ * Node-side date arithmetic in the specs has to use the constants above to
+ * match.
  */
 export async function installFixedClock(
     page: Page,

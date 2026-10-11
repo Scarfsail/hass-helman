@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The simple card reading power sensors that are not on the house convention.
@@ -19,11 +19,6 @@ import { resolve } from "node:path";
  * the whole card would test the renderer instead of the arithmetic.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const BATTERY = "sensor.battery_power";
 const HOUSE = "sensor.house_power";
 
@@ -38,9 +33,7 @@ async function readEnergy(
     states: Record<string, string>,
     map: Record<string, unknown>,
 ): Promise<Reading> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
+    await loadBundle(page, "helman-simple-card");
 
     return page.evaluate(({ states, map }) => {
         const card = document.createElement("helman-simple-card") as HTMLElement &

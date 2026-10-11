@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * A device's groups and house phase in its own editor (#376, #424).
@@ -18,11 +18,6 @@ import { resolve } from "node:path";
  * child holding a stale phase, a boiler in a group of each grouping, and a
  * lamp naming a group the grouping does not have.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const BREAKERS = {
     id: "breakers",
@@ -77,9 +72,7 @@ declare global {
 }
 
 async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES]): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config }) => {

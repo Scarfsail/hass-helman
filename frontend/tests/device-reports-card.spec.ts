@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
 import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
+import { loadBundle } from "./support/card-page";
 
 /**
  * `helman-device-reports-card` against a fake backend.
@@ -13,11 +13,6 @@ import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
  * and poll from Node, since `page.waitForFunction` would poll on the very
  * timers it took away.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const FIVE_MINUTES = 5 * 60_000;
 
@@ -57,11 +52,7 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
     } else {
         await installFixedClock(page);
     }
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await expect.poll(() => page.evaluate(
-        () => !!customElements.get("helman-device-reports-card"),
-    )).toBe(true);
+    await loadBundle(page, "helman-device-reports-card");
 
     await page.evaluate((opts: FakeOptions) => {
         const node = (fields: Record<string, unknown>) => ({

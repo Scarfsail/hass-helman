@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * Every badge in an entity group is legible, on a light theme and a dark one.
@@ -17,11 +17,6 @@ import { resolve } from "node:path";
  * `--rgb-*-color` state variables unset, so what is measured is the fallback
  * the element ships with. That is the one case this bundle fully controls.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
@@ -50,9 +45,7 @@ const PALETTES = {
 const AA_NORMAL_TEXT = 4.5;
 
 async function mountEditor(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, gridKey, facts }) => {

@@ -1,5 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import {
     STOP_MONTH_VIEW,
     clickStop,
@@ -9,6 +8,7 @@ import {
     mountInspector as mountAggregateInspector,
     waitForAggregateChart,
 } from "./support/inspector-aggregate-harness";
+import { loadBundle } from "./support/card-page";
 
 /**
  * What a pointer sweep across the inspector is allowed to cost.
@@ -34,11 +34,6 @@ import {
  * this test without proving anything about the caches.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
 const SLOT_MINUTES = 30;
 
@@ -57,12 +52,6 @@ declare global {
     interface Window {
         __hoverCounts: Counts;
     }
-}
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
 }
 
 /**
@@ -248,7 +237,7 @@ const NO_REBUILDS: Counts = {
 test.describe("what a hover over the inspector costs", () => {
     test.beforeEach(async ({ page }) => {
         await page.setViewportSize({ width: 1100, height: 900 });
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page);
         await installCounters(page);
     });

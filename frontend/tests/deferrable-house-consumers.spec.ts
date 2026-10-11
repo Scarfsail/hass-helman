@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The power card marks shiftable house consumers.
@@ -13,11 +13,6 @@ import { resolve } from "node:path";
  * band and a card box for the same appliance are the same colour, which is the
  * point of the flag.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 // DEFERRABLE_HOUSE_COLOR — the same shade the inspector's composition panel
 // paints its shiftable rows with — at the heavier alpha the box tint needs to
@@ -52,12 +47,6 @@ interface RenderedRow {
     tag: string;
     /** The badge's inline colour, or null when the box draws no badge. */
     badgeColor: string | null;
-}
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
 }
 
 /**
@@ -205,7 +194,7 @@ async function readRows(page: Page): Promise<RenderedRow[]> {
 
 test.describe("deferrable house consumers on the power card", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-tree-item-list");
         await installFakeBackend(page);
     });
 

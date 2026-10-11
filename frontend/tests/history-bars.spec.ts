@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Regression guard for the history-bar source-attribution colours.
@@ -22,23 +22,9 @@ import { resolve } from "node:path";
  * old bottom-up flex columns laid them out in.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const SOLAR = "#facc15"; // canonical solar colour (color-utils SOLAR_COLOR)
 const SOLAR_RGB = "rgb(250, 204, 21)";
 const FALLBACK_RGB = "rgb(122, 59, 59)"; // the node's own "weird" fallback colour
-
-/** Load a bare page with the card bundle so its custom elements are registered. */
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() =>
-        !!customElements.get("helman-power-history-bars"),
-    );
-}
 
 /** Mount the bars element with the given props and return its rendered segment colours. */
 async function renderSegmentColours(
@@ -76,7 +62,7 @@ async function renderSegmentColours(
 
 test.describe("helman-power-history-bars source attribution", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-power-history-bars");
     });
 
     test("paints buckets with the source colour when attribution is present", async ({ page }) => {

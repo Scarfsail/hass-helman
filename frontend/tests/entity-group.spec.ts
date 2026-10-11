@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The entity group: a picker, the settings that qualify it, and a reading.
@@ -17,11 +17,6 @@ import { resolve } from "node:path";
  * that learns to say something new must not spray key names across an editor
  * bundle that has not caught up.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 /** The group under test, and the key the editor derives for it from its path. */
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
@@ -142,9 +137,7 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
         },
     } = options;
 
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, withSaved, gridKey, draftFacts, savedFacts, factsByKey, dependsOnByKey, savedKeys }) => {

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The Devices tab (#332): the `devices` tree as nested cards.
@@ -15,11 +15,6 @@ import { resolve } from "node:path";
  * is no device: it sits at `energy_nodes.inverter`, edited first on the Energy
  * nodes tab.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const INVERTER = {
     controls: {
@@ -139,9 +134,7 @@ async function mountEditor(
     inverter: unknown = INVERTER,
     vendors: unknown = null,
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, placeholders, report, vendors }) => {
