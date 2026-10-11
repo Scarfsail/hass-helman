@@ -344,6 +344,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const solarRaw = raw(solarNode?.powerSensorId);
         const gridNode = gridProducerNode ?? gridConsumerNode;
         const gridRaw = raw(gridNode?.powerSensorId);
+        const houseRaw = raw(houseNode?.powerSensorId);
 
         const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
 
@@ -352,7 +353,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
             solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
             gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
-            housePower: houseNode?.powerValue ?? 0,
+            housePower: houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType)),
             solarPower: solarNode?.powerValue ?? 0,
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
