@@ -128,20 +128,39 @@ export function ownPhase(device: JsonObject): string | undefined {
 }
 
 /**
- * Every consumer, in {@link iterDevices} order, with its own house phase as
- * its `group`. Only a direct assignment counts, as in {@link consumerGroups}:
- * a child with none is unassigned, though the house detail counts it on its
- * single-phase parent's phase.
+ * The consumers whose house phase is the user's choice: every top-level
+ * device, and a child whose parent is one of them and wired `3ph`. Under a
+ * single-phase or unassigned parent a child is on its parent's phase, so it
+ * carries none of its own. The one place this rule lives.
+ */
+export function phaseAssignableDevices(config: JsonObject | null | undefined): Set<JsonObject> {
+  const assignable = new Set<JsonObject>();
+  // In document order, so a parent is decided before its children.
+  for (const { device, parent } of iterDevices(config)) {
+    if (parent === null || (assignable.has(parent) && ownPhase(parent) === "3ph")) assignable.add(device);
+  }
+  return assignable;
+}
+
+/**
+ * Every {@link phaseAssignableDevices phase-assignable} consumer, in
+ * {@link iterDevices} order, with its own house phase as its `group`. Only a
+ * direct assignment counts, as in {@link consumerGroups}.
  */
 export function consumerPhases(config: JsonObject | null | undefined): GroupedDeviceEntry[] {
-  return iterDevices(config).map((entry) => ({ ...entry, group: ownPhase(entry.device) ?? null }));
+  const assignable = phaseAssignableDevices(config);
+  return iterDevices(config)
+    .filter((entry) => assignable.has(entry.device))
+    .map((entry) => ({ ...entry, group: ownPhase(entry.device) ?? null }));
 }
 
 /**
  * Wires the consumer at `devicePath` to `phase`, or unassigns it (`null`).
  * The one setter behind both the House phases card's drag and drop and the
- * device editor's picker. `false` when that path is no consumer or nothing
- * changes.
+ * device editor's picker. `false` when that path is no consumer, nothing
+ * changes, or a phase is set on a device that is not
+ * {@link phaseAssignableDevices phase-assignable}; unassigning one still
+ * deletes its stale value.
  *
  * Compared against the stored key rather than {@link ownPhase}: an invalid
  * `phase: ""` or `phase: 3` reads as unassigned, yet unassigning must still
@@ -151,9 +170,28 @@ export function assignPhase(config: JsonObject, devicePath: readonly PathSegment
   const device = consumerAt(config, devicePath);
   if (!device) return false;
   if (phase === null ? !("phase" in device) : device.phase === phase) return false;
+  if (phase !== null && !phaseAssignableDevices(config).has(device)) return false;
   if (phase !== null) device.phase = phase;
   else delete device.phase;
   return true;
+}
+
+/**
+ * Deletes `phase` from every consumer that is not
+ * {@link phaseAssignableDevices phase-assignable}, so a saved config never
+ * stores wiring that cannot exist. Run at save, not while editing: a parent
+ * switched back to `3ph` before saving keeps its children's phases. `true`
+ * when anything was deleted.
+ */
+export function pruneUnassignablePhases(config: JsonObject): boolean {
+  const assignable = phaseAssignableDevices(config);
+  let changed = false;
+  for (const { device } of iterDevices(config)) {
+    if (assignable.has(device) || !("phase" in device)) continue;
+    delete device.phase;
+    changed = true;
+  }
+  return changed;
 }
 
 /** The Devices tab's filter: every device, or only the schedulable or passive ones. */

@@ -9,11 +9,14 @@ import { resolve } from "node:path";
  * phase picker and one picker per grouping: "None", then the grouping's
  * groups. Picking writes the device's own `groups.<grouping>`, "None" removes
  * the key and a `groups` map left empty. A config without groupings has no
- * group to pick, so the section holds the phase picker alone.
+ * group to pick, so the section holds the phase picker alone. A device whose
+ * phase is not its own to choose -- a child under a single-phase or
+ * unassigned device (#464) -- gets no picker but a read-only line naming the
+ * phase it inherits and the device it comes from.
  *
  * The fixture: an AC breaker in "Technická FV" with an ungrouped climate
- * child, a boiler in a group of each grouping, and a lamp naming a group the
- * grouping does not have.
+ * child holding a stale phase, a boiler in a group of each grouping, and a
+ * lamp naming a group the grouping does not have.
  */
 
 const BUNDLE = resolve(
@@ -48,6 +51,7 @@ const AC = {
             schedulable: true,
             controls: { climate: { entity_id: "climate.klima" } },
             consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 0.5 } },
+            phase: "L3",
         },
     ],
 };
@@ -182,7 +186,7 @@ test("the Groups and phase section is collapsed and its badges name the assigned
     await expect(groupsSection(page, "boiler")).not.toHaveAttribute("open", "");
     expect((await badges(page, "boiler")).map((text) => text.trim())).toEqual(["Technická síť", "Vypnout na noc"]);
     expect((await badges(page, "ac")).map((text) => text.trim())).toEqual(["Technická FV"]);
-    // An ungrouped child shows the section, with no badge.
+    // An ungrouped child shows the section, with no badge: its stale phase is none either.
     await expect(groupsSection(page, "klima")).toHaveCount(1);
     await expect(groupsSection(page, "klima").locator(":scope > summary .section-summary-badge")).toHaveCount(0);
 
@@ -229,28 +233,54 @@ test("a config without groupings shows the phase picker alone", async ({ page })
     await expect(groupsSection(page, "boiler").locator(".field > label")).toHaveText(["House phase"]);
 });
 
+/** Pick a phase in a device's own phase picker. */
+async function choosePhase(page: Page, id: string, value: string): Promise<void> {
+    await groupsSection(page, id)
+        .locator("select.device-phase")
+        .evaluate((select, next) => {
+            (select as HTMLSelectElement).value = next;
+            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        }, value);
+}
+
 test("the phase picker sets, badges and clears the device's own phase", async ({ page }) => {
     await mountEditor(page);
-    const phase = groupsSection(page, "klima").locator("select.device-phase");
+    const phase = groupsSection(page, "ac").locator("select.device-phase");
     await expect(phase.locator("option")).toHaveText(["Unassigned", "L1", "L2", "L3", "Three-phase"]);
     await expect(phase).toHaveValue("");
 
-    const choose = (value: string) => phase.evaluate((select, next) => {
-        (select as HTMLSelectElement).value = next;
-        select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    }, value);
-    const stored = () => page.evaluate(() => window.__editorConfig().devices.consumers[0].children[0].phase);
+    const stored = () => page.evaluate(() => window.__editorConfig().devices.consumers[0].phase);
 
-    await choose("L2");
+    await choosePhase(page, "ac", "L2");
     await expect.poll(stored).toBe("L2");
-    expect((await badges(page, "klima")).map((text) => text.trim())).toEqual(["L2"]);
-    // The parent keeps its own: a child's phase is its own.
-    expect(await page.evaluate(() => window.__editorConfig().devices.consumers[0].phase)).toBeUndefined();
+    expect((await badges(page, "ac")).map((text) => text.trim())).toEqual(["L2", "Technická FV"]);
 
-    await choose("");
-    await expect.poll(() => page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[0].children[0])).toBe(false);
+    await choosePhase(page, "ac", "");
+    await expect.poll(() => page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[0])).toBe(false);
     // Groups are untouched.
     await expect.poll(() => memberships(page)).toEqual(INITIAL);
+});
+
+test("a child under a single-phase or unassigned device shows its inherited phase, not a picker", async ({
+    page,
+}) => {
+    await mountEditor(page);
+    const klima = groupsSection(page, "klima");
+    const inherited = klima.locator("input.device-phase-inherited");
+
+    await expect(klima.locator("select.device-phase")).toHaveCount(0);
+    await expect(klima.locator(".field > label").first()).toHaveText("House phase");
+    await expect(inherited).toHaveValue("Inherited from AC breaker: Unassigned");
+
+    await choosePhase(page, "ac", "L1");
+    await expect(inherited).toHaveValue("Inherited from AC breaker: L1");
+    await expect(klima.locator("select.device-phase")).toHaveCount(0);
+
+    // Under a three-phase device the child picks its own, its stored phase intact.
+    await choosePhase(page, "ac", "3ph");
+    await expect(inherited).toHaveCount(0);
+    await expect(klima.locator("select.device-phase")).toHaveValue("L3");
+    expect((await badges(page, "klima")).map((text) => text.trim())).toEqual(["L3"]);
 });
 
 test("a group id the grouping does not have shows as selected", async ({ page }) => {

@@ -12,7 +12,7 @@ import {
     setValueAtPath,
     unsetValueAtPath,
 } from "../config/config-document";
-import { findDeviceByKey } from "../config/devices";
+import { findDeviceByKey, pruneUnassignablePhases } from "../config/devices";
 import { EntityInspectionController } from "../config/entity-inspection-controller";
 import { formatError, stringValue } from "../config/form-fields";
 import { configFormStyles } from "../config/form-styles";
@@ -377,12 +377,17 @@ export class HelmanDeviceEditDialog extends LitElement {
                 };
                 return;
             }
+            // As the config editor does: a phase no device can carry is not saved.
+            const config = cloneJson(view.config);
+            pruneUnassignablePhases(config);
             const response = await this.hass.callWS<SaveConfigResponse>({
                 type: "helman/save_config",
-                config: view.config,
+                config,
             });
             this._validation = response.validation ?? null;
             if (response.validation?.valid !== false) {
+                // What was written is the draft from here on.
+                this._view = { ...view, config };
                 // The write landed, so the stored document is the new baseline
                 // -- see `helman-optimizer-edit-dialog._handleSave`.
                 await this._rebaseline();

@@ -95,9 +95,11 @@ export interface PhaseEstimate {
  *
  * Every load is counted once, the way the card's tree accounts for it: a
  * device with children is its children plus its own remainder, never its
- * meter beside them. A load without its own phase is on its parent's only
- * when that parent is single-phase; behind a three-phase device it could be
- * on any, so it stays unassigned. A three-phase load splits in thirds, an
+ * meter beside them. A load's own phase counts only where it is the user's
+ * choice, as in `phaseAssignableDevices`: at the top level or behind a
+ * three-phase device. Anywhere else it is on its parent's phase, a stale own
+ * one notwithstanding. Behind a three-phase device a load without its own
+ * phase could be on any, so it stays unassigned. A three-phase load splits in thirds, an
  * estimate rather than a measured balance. A load without a reading is
  * unknown, never 0 W, and is in no total.
  */
@@ -107,8 +109,8 @@ export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: stri
 
     // `phaseFrom` is the device whose own phase the parent's is, so a load
     // inheriting through a device without one names where the phase is set.
-    const walk = (item: TreeItem, parentPhase: DevicePhase | null, phaseFrom: string | null): void => {
-        const own = item.phase ?? null;
+    const walk = (item: TreeItem, parentPhase: DevicePhase | null, phaseFrom: string | null, assignable: boolean): void => {
+        const own = assignable ? item.phase ?? null : null;
         const inherited = own === null && parentPhase !== null && parentPhase !== "3ph";
         const phase = own ?? (inherited ? parentPhase : null);
         const inheritedFrom = inherited ? phaseFrom : null;
@@ -119,14 +121,14 @@ export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: stri
             return;
         }
         const remainder = item.children.find((child) => child.isUnmeasured);
-        for (const child of item.children) if (!child.isUnmeasured) walk(child, phase, inherited ? phaseFrom : item.name);
+        for (const child of item.children) if (!child.isUnmeasured) walk(child, phase, inherited ? phaseFrom : item.name, own === "3ph");
         // Without a power sensor the parent has no remainder: its own share is unknown.
         add(remainder ? read(remainder.powerSensorId) : null, true);
     };
 
     for (const child of house?.children ?? []) {
         if (child.isUnmeasured) houseRemainderW = read(child.powerSensorId);
-        else walk(child, null, null);
+        else walk(child, null, null, true);
     }
 
     const perPhase = { L1: 0, L2: 0, L3: 0 };

@@ -62,10 +62,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const rest = (parent: string) => item(`${parent}_unmeasured`, "", `sensor.helman_unmeasured_power_${parent}`, { isUnmeasured: true });
         const phase = (value: string) => (v.noPhases ? {} : { phase: value });
         const houseChildren = [
-            // A metered L1 kitchen: an oven without its own phase, and its own rest.
+            // A metered L1 kitchen: an oven on its phase, a stale own L2 notwithstanding, and its own rest.
             item("sensor.kitchen_energy", "Kitchen", "sensor.kitchen_power", {
                 ...phase("L1"),
-                children: [item("sensor.oven_energy", "Oven", "sensor.oven_power"), rest("kitchen_energy")],
+                children: [item("sensor.oven_energy", "Oven", "sensor.oven_power", phase("L2")), rest("kitchen_energy")],
             }),
             item("sensor.heatpump_energy", "Heat pump", "sensor.heatpump_power", phase("3ph")),
             item("sensor.ev_energy", "EV", "sensor.ev_power", { ...phase("L2"), controllableIds: ["ev"] }),
