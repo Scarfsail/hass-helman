@@ -1,50 +1,20 @@
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from _ha_stubs import install_helman_packages, stub_module
 
-ROOT = Path(__file__).resolve().parents[1]
+
 PRAGUE = ZoneInfo("Europe/Prague")
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    automation_pkg = sys.modules.get("custom_components.helman.automation")
-    if automation_pkg is None:
-        automation_pkg = types.ModuleType("custom_components.helman.automation")
-        sys.modules["custom_components.helman.automation"] = automation_pkg
-    automation_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "automation")
-    ]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
+    install_helman_packages("automation")
+    stub_module("homeassistant")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_module("homeassistant.util.dt")
 
     def _as_local(value: datetime) -> datetime:
         if value.tzinfo is None:

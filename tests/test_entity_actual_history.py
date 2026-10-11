@@ -2,59 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from _ha_stubs import install_helman_packages, stub_module
 
-ROOT = Path(__file__).resolve().parents[1]
+
 PRAGUE = ZoneInfo("Europe/Prague")
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    install_helman_packages("scheduling")
 
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
-
-    def _ensure(name: str) -> types.ModuleType:
-        mod = sys.modules.get(name)
-        if mod is None:
-            mod = types.ModuleType(name)
-            sys.modules[name] = mod
-        return mod
-
-    homeassistant_pkg = _ensure("homeassistant")
-    components_pkg = _ensure("homeassistant.components")
-    recorder_pkg = _ensure("homeassistant.components.recorder")
+    homeassistant_pkg = stub_module("homeassistant")
+    components_pkg = stub_module("homeassistant.components")
+    recorder_pkg = stub_module("homeassistant.components.recorder")
     recorder_pkg.get_instance = lambda hass: _FakeRecorder()
-    history_mod = _ensure("homeassistant.components.recorder.history")
+    history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     history_mod.get_significant_states = lambda *args, **kwargs: {}
     components_pkg.recorder = recorder_pkg
-    core_mod = _ensure("homeassistant.core")
+    core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = object
     homeassistant_pkg.components = components_pkg
 
-    util_pkg = _ensure("homeassistant.util")
-    dt_mod = _ensure("homeassistant.util.dt")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_module("homeassistant.util.dt")
     # The real helper converts into the configured zone; an identity stub would
     # leave UTC timestamps looking like local ones and shift every slot.
     dt_mod.as_local = lambda value: (

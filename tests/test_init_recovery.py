@@ -6,6 +6,8 @@ import types
 import unittest
 from pathlib import Path
 
+from _ha_stubs import stub_module
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -16,34 +18,12 @@ def _load_helman_init_with_stubs():
         ):
             sys.modules.pop(module_name)
 
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    stub_module("custom_components", __path__=[str(ROOT / "custom_components")])
+    import homeassistant.config_entries  # type: ignore  # noqa: F401
 
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    try:
-        import homeassistant.config_entries as config_entries_mod  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        config_entries_mod = types.ModuleType("homeassistant.config_entries")
-        config_entries_mod.ConfigEntry = type("ConfigEntry", (), {})
-        sys.modules["homeassistant.config_entries"] = config_entries_mod
-
-    # Prefer the real ``homeassistant.core`` when the package is importable
-    # (dev container / CI): a partial stub shadows it and breaks the many
-    # transitive ``from homeassistant.core import ...`` in real HA helpers.
-    try:
-        import homeassistant.core as core_mod  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        core_mod = types.ModuleType("homeassistant.core")
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-        core_mod.callback = lambda func: func
-        sys.modules["homeassistant.core"] = core_mod
+    # Use the real ``homeassistant.core``: a partial stub shadows it and breaks
+    # the many transitive ``from homeassistant.core import ...`` in real HA helpers.
+    import homeassistant.core  # type: ignore  # noqa: F401
 
     frontend_mod = types.ModuleType("custom_components.helman.frontend")
 

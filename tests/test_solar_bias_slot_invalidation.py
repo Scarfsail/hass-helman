@@ -1,34 +1,14 @@
 from __future__ import annotations
 
-import sys
-import types
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
+
 TZ = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    solar_pkg = sys.modules.get("custom_components.helman.solar_bias_correction")
-    if solar_pkg is None:
-        solar_pkg = types.ModuleType("custom_components.helman.solar_bias_correction")
-        sys.modules["custom_components.helman.solar_bias_correction"] = solar_pkg
-    solar_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "solar_bias_correction")
-    ]
+    install_helman_packages("solar_bias_correction")
 
 
 _install_import_stubs()

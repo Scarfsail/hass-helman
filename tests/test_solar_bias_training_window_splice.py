@@ -18,26 +18,17 @@ fifteen-minute measurement -- and most of what follows is that claim, tested.
 from __future__ import annotations
 
 import importlib
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
 
 def _install_package_stubs() -> None:
-    for name, path in [
-        ("custom_components", ROOT / "custom_components"),
-        ("custom_components.helman", ROOT / "custom_components" / "helman"),
-    ]:
-        pkg = sys.modules.get(name) or types.ModuleType(name)
-        pkg.__path__ = [str(path)]
-        sys.modules[name] = pkg
+    install_helman_packages()
 
 
 _install_package_stubs()

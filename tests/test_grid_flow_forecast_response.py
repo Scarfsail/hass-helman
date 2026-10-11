@@ -1,37 +1,19 @@
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    recorder_mod = sys.modules.get("custom_components.helman.recorder_hourly_series")
-    if recorder_mod is None:
-        recorder_mod = types.ModuleType(
-            "custom_components.helman.recorder_hourly_series"
-        )
-        sys.modules["custom_components.helman.recorder_hourly_series"] = recorder_mod
+    install_helman_packages()
+    recorder_mod = stub_module("custom_components.helman.recorder_hourly_series")
     recorder_mod.get_local_current_slot_start = (
         lambda reference_time, *, interval_minutes: reference_time.replace(
             minute=(reference_time.minute // interval_minutes) * interval_minutes,
@@ -42,23 +24,9 @@ def _install_import_stubs() -> None:
     recorder_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    dt_mod.parse_datetime = datetime.fromisoformat
+    stub_module("homeassistant")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod
 
 

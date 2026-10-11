@@ -4,9 +4,8 @@ import sys
 import types
 import unittest
 from datetime import datetime
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
 
 def _install_voluptuous_stub() -> None:
@@ -126,47 +125,14 @@ def _install_voluptuous_stub() -> None:
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    core_mod = sys.modules.get("homeassistant.core")
-    if core_mod is None:
-        core_mod = types.ModuleType("homeassistant.core")
-        sys.modules["homeassistant.core"] = core_mod
+    install_helman_packages("scheduling")
+    stub_module("homeassistant")
+    core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
-    components_pkg = sys.modules.get("homeassistant.components")
-    if components_pkg is None:
-        components_pkg = types.ModuleType("homeassistant.components")
-        sys.modules["homeassistant.components"] = components_pkg
-
-    websocket_api_mod = sys.modules.get("homeassistant.components.websocket_api")
-    if websocket_api_mod is None:
-        websocket_api_mod = types.ModuleType("homeassistant.components.websocket_api")
-        sys.modules["homeassistant.components.websocket_api"] = websocket_api_mod
+    components_pkg = stub_module("homeassistant.components")
+    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
     websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
     websocket_api_mod.async_register_command = lambda hass, command: None
     websocket_api_mod.async_response = lambda func: func
@@ -181,15 +147,8 @@ def _install_import_stubs() -> None:
     websocket_api_mod.websocket_command = websocket_command
     components_pkg.websocket_api = websocket_api_mod
 
-    helpers_pkg = sys.modules.get("homeassistant.helpers")
-    if helpers_pkg is None:
-        helpers_pkg = types.ModuleType("homeassistant.helpers")
-        sys.modules["homeassistant.helpers"] = helpers_pkg
-
-    storage_mod = sys.modules.get("homeassistant.helpers.storage")
-    if storage_mod is None:
-        storage_mod = types.ModuleType("homeassistant.helpers.storage")
-        sys.modules["homeassistant.helpers.storage"] = storage_mod
+    helpers_pkg = stub_module("homeassistant.helpers")
+    storage_mod = stub_module("homeassistant.helpers.storage")
 
     class DummyStore:
         def __init__(self, hass, version, key) -> None:
@@ -206,28 +165,14 @@ def _install_import_stubs() -> None:
 
     # A hardware profile with a mode table looks Helman's own mode select up
     # by unique id; an empty registry leaves it at its suggested entity id.
-    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
-    if entity_registry_mod is None:
-        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
-        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    entity_registry_mod = stub_module("homeassistant.helpers.entity_registry")
     entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
         async_get_entity_id=lambda domain, platform, unique_id: None
     )
     helpers_pkg.entity_registry = entity_registry_mod
 
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    dt_mod.now = lambda: datetime.fromisoformat("2026-04-05T12:00:00+00:00")
-    dt_mod.parse_datetime = datetime.fromisoformat
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_ha_dt(datetime.fromisoformat("2026-04-05T12:00:00+00:00"))
     util_pkg.dt = dt_mod
 
 

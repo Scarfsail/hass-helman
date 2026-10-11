@@ -1,45 +1,20 @@
 from __future__ import annotations
 
-import sys
 import types
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
+
+from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
 
-ROOT = Path(__file__).resolve().parents[1]
 TZ = timezone(timedelta(hours=2))
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    dt_mod.now = lambda: datetime(2026, 7, 10, 12, 0, tzinfo=TZ)
+    install_helman_packages()
+    stub_module("homeassistant")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_ha_dt(datetime(2026, 7, 10, 12, 0, tzinfo=TZ))
     util_pkg.dt = dt_mod
 
 

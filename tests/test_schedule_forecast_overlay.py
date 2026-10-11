@@ -1,56 +1,19 @@
 from __future__ import annotations
 
 import sys
-import types
 import unittest
 from datetime import datetime, timedelta
-from pathlib import Path
+
+from _ha_stubs import install_helman_packages
 
 
-ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    install_helman_packages("scheduling")
 
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
-
-    try:
-        import homeassistant.util.dt  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        homeassistant_pkg = sys.modules.get("homeassistant")
-        if homeassistant_pkg is None:
-            homeassistant_pkg = types.ModuleType("homeassistant")
-            sys.modules["homeassistant"] = homeassistant_pkg
-
-        util_pkg = sys.modules.get("homeassistant.util")
-        if util_pkg is None:
-            util_pkg = types.ModuleType("homeassistant.util")
-            sys.modules["homeassistant.util"] = util_pkg
-
-        dt_mod = sys.modules.get("homeassistant.util.dt")
-        if dt_mod is None:
-            dt_mod = types.ModuleType("homeassistant.util.dt")
-            sys.modules["homeassistant.util.dt"] = dt_mod
-
-        util_pkg.dt = dt_mod
+    import homeassistant.util.dt  # type: ignore  # noqa: F401
 
     util_pkg = sys.modules["homeassistant.util"]
     dt_mod = sys.modules["homeassistant.util.dt"]

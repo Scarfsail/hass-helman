@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 import unittest
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from _ha_stubs import install_helman_packages
 
-ROOT = Path(__file__).resolve().parents[1]
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 NEXT_SLOT_ID = "2026-03-20T21:15:00+01:00"
@@ -17,83 +15,11 @@ AFTER_NEXT_SLOT_BOUNDARY = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    install_helman_packages("scheduling")
 
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [
-        str(ROOT / "custom_components" / "helman" / "scheduling")
-    ]
-
-    try:
-        import homeassistant.core  # type: ignore  # noqa: F401
-        import homeassistant.helpers.event  # type: ignore  # noqa: F401
-        import homeassistant.util.dt  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        homeassistant_pkg = sys.modules.get("homeassistant")
-        if homeassistant_pkg is None:
-            homeassistant_pkg = types.ModuleType("homeassistant")
-            sys.modules["homeassistant"] = homeassistant_pkg
-
-        core_mod = sys.modules.get("homeassistant.core")
-        if core_mod is None:
-            core_mod = types.ModuleType("homeassistant.core")
-            sys.modules["homeassistant.core"] = core_mod
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-        core_mod.callback = lambda func: func
-
-        helpers_pkg = sys.modules.get("homeassistant.helpers")
-        if helpers_pkg is None:
-            helpers_pkg = types.ModuleType("homeassistant.helpers")
-            sys.modules["homeassistant.helpers"] = helpers_pkg
-
-        event_mod = sys.modules.get("homeassistant.helpers.event")
-        if event_mod is None:
-            event_mod = types.ModuleType("homeassistant.helpers.event")
-            sys.modules["homeassistant.helpers.event"] = event_mod
-        event_mod.async_track_time_interval = (
-            lambda hass, callback, interval: lambda: None
-        )
-
-        # Mirrors the real helper: fires at once when HA is already running, which
-        # is the state a test's fake hass is always in.
-        start_mod = sys.modules.get("homeassistant.helpers.start")
-        if start_mod is None:
-            start_mod = types.ModuleType("homeassistant.helpers.start")
-            sys.modules["homeassistant.helpers.start"] = start_mod
-
-        def _async_at_started(hass, at_start_cb):
-            at_start_cb(hass)
-            return lambda: None
-
-        start_mod.async_at_started = _async_at_started
-        helpers_pkg.start = start_mod
-
-        util_pkg = sys.modules.get("homeassistant.util")
-        if util_pkg is None:
-            util_pkg = types.ModuleType("homeassistant.util")
-            sys.modules["homeassistant.util"] = util_pkg
-
-        dt_mod = sys.modules.get("homeassistant.util.dt")
-        if dt_mod is None:
-            dt_mod = types.ModuleType("homeassistant.util.dt")
-            sys.modules["homeassistant.util.dt"] = dt_mod
-        dt_mod.parse_datetime = datetime.fromisoformat
-        dt_mod.as_local = lambda value: value
-        dt_mod.now = lambda: REFERENCE_TIME
-        util_pkg.dt = dt_mod
+    import homeassistant.core  # type: ignore  # noqa: F401
+    import homeassistant.helpers.event  # type: ignore  # noqa: F401
+    import homeassistant.util.dt  # type: ignore  # noqa: F401
 
 
 _install_import_stubs()
