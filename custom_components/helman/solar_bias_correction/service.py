@@ -596,7 +596,9 @@ class SolarBiasCorrectionService:
         days: list[dict[str, Any]] = []
         for key in bucket_keys(start_date, end_date, bucket):
             min_pct, max_pct = soc_by_bucket.get(key, (None, None))
-            cost, gain = money_by_bucket.get(key, (None, None))
+            cost, gain, cost_kwh, gain_kwh = money_by_bucket.get(
+                key, (None, None, None, None)
+            )
             row: dict[str, Any] = {
                 "date": key,
                 "solarWh": _round_wh(solar_kwh.get(key)),
@@ -609,6 +611,10 @@ class SolarBiasCorrectionService:
                 "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
                 "moneyCost": None if cost is None else round(cost, 3),
                 "moneyGain": None if gain is None else round(gain, 3),
+                # The kWh each side priced, so a reader can tell a partly
+                # priced direction from a fully priced one.
+                "moneyCostKwh": _round_kwh(cost_kwh),
+                "moneyGainKwh": _round_kwh(gain_kwh),
                 "houseBreakdown": _bucket_house_breakdown(
                     breakdown_consumers,
                     consumer_kwh_by_entity,
@@ -3278,8 +3284,8 @@ def _money_by_bucket(
     *,
     bucket: str,
     local_tz: ZoneInfo,
-) -> dict[str, tuple[float | None, float | None]]:
-    """Cost and gain per bucket, priced hour by hour.
+) -> dict[str, tuple[float | None, float | None, float | None, float | None]]:
+    """Cost and gain per bucket, priced hour by hour, with the kWh each priced.
 
     Never a bucket's kWh times a bucket's mean rate: the expensive hours are
     rarely the ones the house imported in, which is the same reason
@@ -3319,11 +3325,14 @@ def _money_by_bucket(
     lets the *live* export feed override the recorder; history has no live feed,
     so that does not carry over.
 
-    Returns ``{bucket_key: (cost, gain)}`` with either side None where nothing in
-    the bucket could be priced.
+    Returns ``{bucket_key: (cost, gain, cost_kwh, gain_kwh)}``: either side
+    None where nothing in the bucket could be priced, and the kWh each side
+    priced beside it.
     """
     cost: dict[str, float] = {}
     gain: dict[str, float] = {}
+    cost_kwh: dict[str, float] = {}
+    gain_kwh: dict[str, float] = {}
 
     for utc_hour, kwh in import_kwh_by_hour.items():
         rate = import_rate.get(utc_hour)
@@ -3331,6 +3340,7 @@ def _money_by_bucket(
             continue
         key = bucket_key(utc_hour, bucket, local_tz)
         cost[key] = cost.get(key, 0.0) + kwh * rate
+        cost_kwh[key] = cost_kwh.get(key, 0.0) + kwh
 
     for utc_hour, kwh in export_kwh_by_hour.items():
         rate = export_rate.get(utc_hour)
@@ -3338,8 +3348,12 @@ def _money_by_bucket(
             continue
         key = bucket_key(utc_hour, bucket, local_tz)
         gain[key] = gain.get(key, 0.0) + kwh * rate
+        gain_kwh[key] = gain_kwh.get(key, 0.0) + kwh
 
-    return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
+    return {
+        key: (cost.get(key), gain.get(key), cost_kwh.get(key), gain_kwh.get(key))
+        for key in cost.keys() | gain.keys()
+    }
 
 
 def _house_forecast_by_bucket(

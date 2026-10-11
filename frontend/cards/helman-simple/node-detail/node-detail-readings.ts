@@ -1,0 +1,61 @@
+import type { HomeAssistant } from "../../../hass-frontend/src/types";
+import { convertToKWh, isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
+
+/**
+ * A reading as a node detail shows it: its state and unit, `null` when the
+ * entity is missing, unavailable or unknown. A switch reads through `onOff`.
+ */
+export function readingText(
+    hass: HomeAssistant,
+    entityId: string | null | undefined,
+    onOff: (on: boolean) => string,
+): string | null {
+    const stateObj = entityId ? hass.states[entityId] : undefined;
+    if (!stateObj || stateObj.state === "unavailable" || stateObj.state === "unknown") return null;
+    if (stateObj.state === "on" || stateObj.state === "off") return onOff(stateObj.state === "on");
+    const unit = stateObj.attributes.unit_of_measurement as string | undefined;
+    return unit ? stateObj.state + " " + unit : stateObj.state;
+}
+
+/** Power units a reading converts from, to W; any other is no reading. */
+export const WATTS: Record<string, number> = { W: 1, kW: 1000, MW: 1_000_000 };
+
+/**
+ * What a power reading multiplies by to be W: a unit-less sensor is W, as on
+ * the card; `null` in a unit not known.
+ */
+export function powerUnitFactor(hass: HomeAssistant, entityId: string | null | undefined): number | null {
+    const unit = entityId ? hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
+    return unit ? WATTS[unit] ?? null : 1;
+}
+
+/** A reading as a number, `null` when missing or not numeric. */
+export function readingNumber(hass: HomeAssistant, entityId: string | null | undefined): number | null {
+    const raw = entityId ? hass.states[entityId]?.state : undefined;
+    const value = raw === undefined ? NaN : parseFloat(raw);
+    return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * An energy reading in kWh; `null` when missing, not numeric or in a unit
+ * `convertToKWh` does not know, never a guess. A reading with no unit is Wh,
+ * the repository's legacy convention, unless `allowUnitless` is false.
+ */
+export function readEnergyKWh(hass: HomeAssistant, entityId: string | null | undefined, allowUnitless = true): number | null {
+    const value = readingNumber(hass, entityId);
+    if (value === null) return null;
+    const unit = hass.states[entityId!]?.attributes.unit_of_measurement as string | undefined;
+    if (!unit) return allowUnitless ? convertToKWh(value, unit) : null;
+    return isSupportedEnergyUnit(unit) ? convertToKWh(value, unit) : null;
+}
+
+/**
+ * Fired by a node detail with the entity ids it reads live. The card only
+ * re-renders on entities it watches, so it adds these while the detail is open.
+ */
+export const WATCH_ENTITIES_EVENT = "helman-watch-entities";
+
+export function announceWatchedEntities(element: HTMLElement, entityIds: Iterable<string | null | undefined>): void {
+    const ids = [...new Set([...entityIds].filter((id): id is string => !!id))];
+    element.dispatchEvent(new CustomEvent<string[]>(WATCH_ENTITIES_EVENT, { detail: ids, bubbles: true, composed: true }));
+}

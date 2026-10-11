@@ -175,6 +175,29 @@ class ChargeOrigin:
 
 
 @dataclass(frozen=True)
+class SolarTotals:
+    """Where the period's measured solar went, summed hour by hour.
+
+    The same per-hour flows the source mix and the charge origin are solved
+    from, so the three agree: in an hour with a source mix, solar goes to the
+    house, the battery or the grid, and whatever of it the meters do not
+    explain stays in the hour's solar without a destination. An hour without a
+    mix (a source meter had no row) says nothing about where its solar went.
+    """
+
+    #: Solar measured in the hours with a source mix.
+    attributed_kwh: float = 0.0
+    #: Solar measured in hours without one.
+    unattributed_kwh: float = 0.0
+    #: Of the attributed solar: straight to the house, into the battery, exported.
+    house_kwh: float = 0.0
+    battery_kwh: float = 0.0
+    export_kwh: float = 0.0
+    #: Export measured in the hours with a source mix, from any source.
+    measured_export_kwh: float = 0.0
+
+
+@dataclass(frozen=True)
 class DeviceDataset:
     """Everything a report reads, and nothing it would have to read itself."""
 
@@ -190,6 +213,7 @@ class DeviceDataset:
     nodes: list[DatasetNode]
     mix: dict[datetime, HourMix]
     charge_origin: ChargeOrigin
+    solar_totals: SolarTotals
     import_rate: dict[datetime, float]
     import_rate_source: dict[datetime, str]
     export_rate: dict[datetime, float]
@@ -260,6 +284,7 @@ def build_device_dataset(
         nodes=nodes,
         mix=mix,
         charge_origin=_charge_origin(flows, history),
+        solar_totals=_solar_totals(flows),
         import_rate=history.import_rate,
         import_rate_source=history.import_rate_source,
         export_rate=history.export_rate,
@@ -419,6 +444,12 @@ class _HourFlows:
     charged: float
     grid_to_battery: float
     solar_to_battery: float
+    solar: float = 0.0
+    exported: float = 0.0
+    solar_to_house: float = 0.0
+    solar_to_grid: float = 0.0
+    #: The hour has a source mix: every configured source meter measured it.
+    attributable: bool = False
 
 
 def _hourly_mix(
@@ -469,7 +500,9 @@ def _hourly_mix(
         I, E, S, C, D, H = (max(0.0, series[key].get(hour, 0.0)) for key in "IESCDH")
         attributable = bool(meters.grid_import) and all(hour in samples for samples in source_series)
         if not attributable:
-            flows[hour] = _HourFlows(charged=C, grid_to_battery=0.0, solar_to_battery=0.0)
+            flows[hour] = _HourFlows(
+                charged=C, grid_to_battery=0.0, solar_to_battery=0.0, solar=S, exported=E
+            )
             mix[hour] = _UNATTRIBUTED_HOUR
             continue
 
@@ -492,6 +525,11 @@ def _hourly_mix(
             charged=C,
             grid_to_battery=grid_to_battery,
             solar_to_battery=solar_to_battery,
+            solar=S,
+            exported=E,
+            solar_to_house=solar_to_house,
+            solar_to_grid=solar_to_grid,
+            attributable=True,
         )
         if demand <= _EPSILON_KWH:
             mix[hour] = HourMix(
@@ -555,6 +593,19 @@ def _charge_origin(flows: dict[datetime, _HourFlows], history: SpanHistory) -> C
         unknown=max(0.0, 1.0 - explained / charged),
         paid_rate=paid_money / rated_grid if rated_grid > _EPSILON_KWH else None,
         forgone_rate=forgone_money / solar_priced if solar_priced > _EPSILON_KWH else None,
+    )
+
+
+def _solar_totals(flows: dict[datetime, _HourFlows]) -> SolarTotals:
+    """The per-hour solar flows summed, by whether the hour has a source mix."""
+    attributed = [flow for flow in flows.values() if flow.attributable]
+    return SolarTotals(
+        attributed_kwh=sum(flow.solar for flow in attributed),
+        unattributed_kwh=sum(flow.solar for flow in flows.values() if not flow.attributable),
+        house_kwh=sum(flow.solar_to_house for flow in attributed),
+        battery_kwh=sum(flow.solar_to_battery for flow in attributed),
+        export_kwh=sum(flow.solar_to_grid for flow in attributed),
+        measured_export_kwh=sum(flow.exported for flow in attributed),
     )
 
 

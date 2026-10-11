@@ -50,25 +50,115 @@ export const nodeDetailSharedStyles = css`
         margin-top: 4px;
     }
 
-    .tree-item-wrapper {
-        display: flex;
-        width: 100%;
-    }
+`;
 
-    .tree-items-dual {
-        display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
+/** The question-led node details: the overview summary, answer rows and tables. */
+export const nodeDetailQuestionStyles = css`
+    .content {
         gap: 8px;
-        width: 100%;
     }
-
-    .tree-item-section {
+    .summary {
         display: flex;
         flex-direction: column;
-        flex: 1;
-        min-width: 160px;
-        gap: 4px;
+        gap: 8px;
+        padding-bottom: 8px;
     }
-
+    .status {
+        margin: 0;
+        font-size: 0.95rem;
+    }
+    .figures {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+        gap: 8px;
+    }
+    .figure {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+    }
+    .figure-label {
+        font-size: 0.75rem;
+        color: var(--secondary-text-color);
+    }
+    .figure-value {
+        font-size: 1.05rem;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+    }
+    .next {
+        margin: 0;
+        font-size: 0.9rem;
+        color: var(--secondary-text-color);
+    }
+    .exception {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border-left: 3px solid var(--warning-color, #ffa600);
+        background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
+        font-size: 0.9rem;
+    }
+    .link-button {
+        font: inherit;
+        background: none;
+        border: none;
+        padding: 4px 0;
+        color: var(--primary-color);
+        font-weight: 600;
+        cursor: pointer;
+        min-height: 32px;
+    }
+    .rows {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        font-size: 0.9rem;
+    }
+    .row .label {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .row .value {
+        text-align: right;
+        overflow-wrap: anywhere;
+        min-width: 0;
+        max-width: 60%;
+    }
+    .note {
+        margin: 0;
+        font-size: 0.82rem;
+        color: var(--secondary-text-color);
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        font-variant-numeric: tabular-nums;
+    }
+    th, td {
+        padding: 3px 4px;
+        text-align: right;
+        overflow-wrap: anywhere;
+    }
+    th:first-child, td:first-child {
+        text-align: left;
+    }
+    th {
+        color: var(--secondary-text-color);
+        font-weight: 600;
+    }
+    .plan {
+        margin: 0 -8px;
+    }
 `;

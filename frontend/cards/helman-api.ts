@@ -67,7 +67,12 @@ export interface TreeItemDTO extends TreeItemDTOBase {
     energyEntityId: string | null;
     /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
     isEstimated: boolean;
+    /** A house device's own wiring, `null` when unassigned and for every other node. */
+    phase?: DevicePhase | null;
 }
+
+/** The house phase a device is wired to: one of the three, or all three. */
+export type DevicePhase = "L1" | "L2" | "L3" | "3ph";
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────
 
@@ -365,6 +370,20 @@ export interface SolarForecastDTO {
     actualHistory: ForecastPointDTO[];
     points: ForecastPointDTO[]; // forecast points at the returned response granularity
     adjustedPoints?: ForecastPointDTO[];
+    /** What the bias correction is trained on and whether it applies; absent before it ever ran. */
+    biasCorrection?: SolarBiasCorrectionDTO;
+}
+
+export interface SolarBiasCorrectionDTO {
+    status: string;
+    /** `adjusted` when `adjustedPoints` are the corrected forecast, else `raw`. */
+    effectiveVariant: string | null;
+    explainability: {
+        fallbackReason: string | null;
+        trainedAt: string | null;
+        usableDays: number;
+        droppedDays: number;
+    };
 }
 
 export function getEffectiveSolarForecastPoints(
@@ -825,6 +844,402 @@ export interface ApplianceProjectionsPayload {
 
 export interface GetApplianceProjectionsRequest {
     type: "helman/get_appliance_projections";
+}
+
+// --- Node details (helman/get_node_detail) ----------------------------------
+
+/** The nodes the backend serves a detail for. */
+export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar" | "house";
+
+/** Without `section`: the node's overview. With one: only that section's history. */
+export interface GetNodeDetailRequest {
+    type: "helman/get_node_detail";
+    node: NodeDetailNode;
+    device_id?: string;
+    section?: string;
+}
+
+/**
+ * One reading over a local day, in five-minute buckets. A missing bucket is a
+ * gap, never a zero; `coverage` is the known share of the elapsed time. The
+ * extrema are the statistics' own bucket extrema (`bucket_statistics`) or the
+ * raw recorded ones (`recorded`).
+ */
+export interface DayStatsDTO {
+    entityId: string;
+    unit: string | null;
+    source: "statistics" | "history";
+    extrema: "bucket_statistics" | "recorded";
+    bucketMinutes: number;
+    points: Array<{ start: string; mean: number; min: number; max: number; coverage: number }>;
+    mean: number | null;
+    min: number | null;
+    minAt: string | null;
+    max: number | null;
+    maxAt: string | null;
+    coverage: number;
+}
+
+/** One mode register the last command writes, and what it reads now. */
+export interface ModeRegisterDTO {
+    entityId: string;
+    expected: string | number;
+    actual: string | null;
+    /** `null`: the register has no readable state. */
+    matches: boolean | null;
+}
+
+/**
+ * Whether the hardware's mode registers hold the last command. A
+ * configuration check, not proof of the inverter's physical response.
+ */
+export interface ModeAgreementDTO {
+    status: "match" | "mismatch" | "unknown";
+    reason: "no_profile" | "no_command" | "not_bound" | "unavailable" | null;
+    commanded: ScheduleActionKind | null;
+    observedOption: ScheduleActionKind | null;
+    registers: ModeRegisterDTO[];
+}
+
+export interface InverterDetailPayload {
+    node: "inverter";
+    asOf: string;
+    configured: boolean;
+    /** `null` for a Custom inverter: no telemetry keys in `entities` then. */
+    profile: { id: string; label: string } | null;
+    mode: { entityId: string; actionOptions: Partial<Record<ScheduleActionKind, string>> } | null;
+    /** Metric key → entity id; a key the profile has but the registry lacks is `null`. */
+    entities: Record<string, string | null>;
+    maxAllowedExportPower: number | null;
+    agreement: ModeAgreementDTO;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** The action kind the mode control's live option selects, if it maps to one. */
+export function commandedModeKind(
+    mode: InverterDetailPayload["mode"],
+    states: Record<string, { state: string } | undefined>,
+): ScheduleActionKind | null {
+    if (!mode) return null;
+    const live = states[mode.entityId]?.state;
+    const match = Object.entries(mode.actionOptions).find(([, option]) => option === live);
+    return match ? match[0] as ScheduleActionKind : null;
+}
+
+export interface InverterTemperatureSectionPayload {
+    node: "inverter";
+    section: "temperature";
+    asOf: string;
+    period: { start: string; end: string };
+    temperature: DayStatsDTO | null;
+}
+
+/**
+ * The grid detail's overview. `entities` carries the profile's grid telemetry
+ * (absent for a Custom inverter, `null` where the registry lacks one) and the
+ * grid's own today meters. `phasePowerPolarity` says which way the
+ * `grid_power_l*` readings are positive.
+ */
+export interface GridDetailPayload {
+    node: "grid";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    phasePowerPolarity: "positive_is_import" | "positive_is_export" | null;
+    maxAllowedExportPower: number | null;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/**
+ * Today's phase voltages. `spread` is the largest difference between the
+ * compared phases' means within one five-minute bucket all of them know;
+ * `coverage` is the share of the elapsed day they were known together.
+ */
+export interface GridVoltageSectionPayload {
+    node: "grid";
+    section: "voltage";
+    asOf: string;
+    period: { start: string; end: string };
+    /** By phase number; `null` for a phase without a resolved sensor. */
+    phases: Record<"1" | "2" | "3", DayStatsDTO | null>;
+    spread: { phases: number[]; max: number | null; maxAt: string | null; coverage: number };
+}
+
+/**
+ * The battery detail's overview. `entities` carries the battery's config meters
+ * (`soc`, `remaining_energy`, `min_soc`, `max_soc`, `today_charge`,
+ * `today_discharge`), Helman's `time_to_full`/`time_to_empty` sensors and the
+ * profile's battery telemetry (absent for a Custom inverter, `null` where the
+ * registry lacks one).
+ */
+export interface BatteryDetailPayload {
+    node: "battery";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    /** Helman's planning ceilings from the battery's forecast config, W. */
+    configured: { maxChargePowerW: number | null; maxDischargePowerW: number | null };
+    /**
+     * `(lifetime in + out) / (2 × nominal capacity)`: throughput, not health.
+     * `cycles` is `null` with a `reason` without valid counters and capacity.
+     */
+    cycles: {
+        cycles: number | null;
+        inputKwh: number | null;
+        outputKwh: number | null;
+        capacityKwh: number | null;
+        reason: "no_counters" | "invalid_counters" | "no_capacity" | null;
+    };
+    /** A condition the hardware explicitly reports: the BMS state first, then the run mode. */
+    condition: { kind: "bms_disconnected" | "off_grid" | "fault"; state: string; entityId: string } | null;
+    sections: string[];
+}
+
+/**
+ * Today's battery charge by what charged it, from the device reports'
+ * `charge_origin` in kWh. What charged the battery in the period, not what is
+ * stored in it now. A money side is `0` without kWh and `null` with kWh but no rate.
+ */
+export interface BatteryChargeDTO {
+    chargedKwh: number;
+    solarKwh: number;
+    gridKwh: number;
+    unknownKwh: number;
+    gridPricedKwh: number;
+    gridTariffKwh: number;
+    gridUnpricedKwh: number;
+    solarPricedKwh: number;
+    solarUnpricedKwh: number;
+    /** Energy-weighted import rate over the priced grid charge. */
+    paidRate: number | null;
+    /** Energy-weighted export rate over the priced solar charge. */
+    forgoneRate: number | null;
+    paidCost: number | null;
+    forgoneValue: number | null;
+}
+
+export interface BatteryChargeSectionPayload {
+    node: "battery";
+    section: "charge";
+    asOf: string;
+    period: { start: string; end: string };
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    complete: boolean;
+    /** Why there is no charge origin: the reports cannot be built. */
+    unavailable: string | null;
+    charge: BatteryChargeDTO | null;
+}
+
+/**
+ * The solar detail's overview. `entities` carries the solar node's `power` and
+ * `today_energy` meters, the lifetime counter (`lifetime_energy`), the grid's
+ * `today_export` and the profile's string, cap and setting telemetry (absent
+ * for a Custom inverter, `null` where the registry lacks one). `strings` are
+ * the strings whose power the profile resolves.
+ */
+export interface SolarDetailPayload {
+    node: "solar";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    strings: number[];
+    /** The solar node's configured `max_power`, W: configured capacity, not a measurement. */
+    configuredMaxPowerW: number | null;
+    maxAllowedExportPower: number | null;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** Today's solar power in W, production positive; `power` is `null` in a unit not known. */
+export interface SolarProductionSectionPayload {
+    node: "solar";
+    section: "production";
+    asOf: string;
+    period: { start: string; end: string };
+    power: DayStatsDTO | null;
+    /** The sensor's own unit. */
+    unit: string | null;
+}
+
+/**
+ * Today's string powers (W) and energies. A string's `kwh` integrates its
+ * known time only; `common` compares the strings over the buckets all of them
+ * know, so their shares compare like with like.
+ */
+export interface SolarStringsSectionPayload {
+    node: "solar";
+    section: "strings";
+    asOf: string;
+    period: { start: string; end: string };
+    strings: Record<string, { entityId: string; unit: string | null; day: DayStatsDTO | null } | null>;
+    energy: {
+        strings: Record<string, { kwh: number | null; coverage: number }>;
+        common: { strings: number[]; coverage: number; kwh: Record<string, number> | null };
+    };
+}
+
+/**
+ * Where a period's measured solar went, estimated from the same per-hour
+ * flows the reports solve: solar the meters do not explain, and solar in
+ * hours without a source mix, stays unresolved:
+ * `house + battery + export + unresolved = produced`.
+ */
+export interface SolarDestinationsDTO {
+    producedKwh: number;
+    /** Solar in the hours with a source mix, the only ones the shares cover. */
+    attributedKwh: number;
+    /** Solar in hours without a source mix; part of `unresolvedKwh`. */
+    unattributedKwh: number;
+    houseKwh: number;
+    batteryKwh: number;
+    exportKwh: number;
+    unresolvedKwh: number;
+    measuredExportKwh: number;
+    /** Measured export the solar did not account for: the battery's. */
+    otherExportKwh: number;
+}
+
+export interface SolarDestinationsSectionPayload {
+    node: "solar";
+    section: "destinations";
+    asOf: string;
+    period: { start: string; end: string };
+    currency: string | null;
+    complete: boolean;
+    /** Why there are no destinations: the reports cannot be built, or there is no solar meter. */
+    unavailable: string | null;
+    destinations: SolarDestinationsDTO | null;
+    /** Today's battery charge origin, for the solar charge's forgone export value. */
+    charge: BatteryChargeDTO | null;
+}
+
+/**
+ * The house detail's overview. `entities` carries the house `power` meter,
+ * Helman's live source-ratio sensors (`solar_ratio`, `battery_ratio`,
+ * `grid_ratio`), its battery `time_to_empty` and the profile's EPS phase
+ * readings (`eps_power_l1..3`, absent for a Custom inverter).
+ */
+export interface HouseDetailPayload {
+    node: "house";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** A ranking node's attributed money: estimates, not a bill. An amount is `null` when nothing was priced. */
+export interface HouseMoneyDTO {
+    paid: number | null;
+    paidPricedKwh: number;
+    paidUnpricedKwh: number;
+    forgone: number | null;
+    forgonePricedKwh: number;
+    forgoneUnpricedKwh: number;
+}
+
+/** One load of the house, counted once: a device, or a metered parent's own share (`ownOf`). */
+export interface HouseLoadDTO {
+    id: string;
+    label: string;
+    ownOf: string | null;
+    estimated: boolean;
+    kwh: number;
+    coverage: number;
+    money: HouseMoneyDTO;
+}
+
+/** Today's house figures, from the ranking report. */
+export interface HouseTodaySectionPayload {
+    node: "house";
+    section: "today";
+    asOf: string;
+    period: { start: string; end: string };
+    currency: string | null;
+    complete: boolean;
+    unavailable: string | null;
+    house: {
+        kwh: number;
+        coverage: number;
+        sources: { solar: number; battery: number; grid: number; unattributed: number };
+        money: HouseMoneyDTO;
+        ambiguousKwh: number;
+        mismatchKwh: number;
+    } | null;
+    /** `(house − grid − unattributed) / house`; `null` without house energy. */
+    independence: { share: number; gridShare: number; unknownShare: number } | null;
+    /** `(solar → house + solar → battery) / matched solar`; `share` `null` with a `reason`. */
+    selfConsumption: {
+        share: number | null;
+        reason: "no_solar_meter" | "no_matched_solar" | null;
+        destinations: SolarDestinationsDTO | null;
+    } | null;
+    consumers: {
+        top: HouseLoadDTO[];
+        others: { count: number; kwh: number };
+        /** The house's own remainder: what no device meter explains. */
+        unmeasuredKwh: number | null;
+        overallocatedKwh: number;
+    } | null;
+}
+
+/** Today against earlier same weekdays, the overnight minimum and the learned profile. */
+export interface HousePatternSectionPayload {
+    node: "house";
+    section: "pattern";
+    asOf: string;
+    period: { start: string; end: string };
+    comparison: {
+        unavailable: "no_energy_meter" | "no_elapsed_hour" | null;
+        /** The end of the completed hours compared. */
+        until: string;
+        elapsedHours: number;
+        comparedHours: number;
+        todayKwh: number | null;
+        averageKwh: number | null;
+        ratio: number | null;
+        used: number;
+        days: Array<{ date: string; kwh: number | null; knownHours: number }>;
+    };
+    overnight: {
+        start: string;
+        end: string;
+        complete: boolean;
+        unavailable: "no_power_sensor" | "unit" | null;
+        minimum: { watts: number; at: string; coverage: number } | null;
+        coverage: number;
+    };
+    /** kWh per hour, Monday first; `null` while no profile is fitted. */
+    profile: { historyDays: number; trainedAt: string | null; kwh: number[][] } | null;
+}
+
+/**
+ * One local day of `helman/solar_bias/day_aggregates`, as far as the grid
+ * detail reads it. Money is priced hour by hour; each side is `null` where
+ * nothing was priced, and `moneyCostKwh`/`moneyGainKwh` are the kWh it priced.
+ */
+export interface GridDayAggregateDTO {
+    date: string;
+    gridImportKwh: number | null;
+    gridExportKwh: number | null;
+    moneyCost: number | null;
+    moneyGain: number | null;
+    moneyCostKwh: number | null;
+    moneyGainKwh: number | null;
+}
+
+export interface GridDayAggregatesPayload {
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    days: GridDayAggregateDTO[];
+}
+
+/** One local day's measured grid figures and their money, from the inspector's span read. */
+export function fetchGridDayAggregates(hass: Pick<HomeAssistantLike, "callWS">, date: string): Promise<GridDayAggregatesPayload> {
+    return hass.callWS({ type: "helman/solar_bias/day_aggregates", start_date: date, end_date: date });
 }
 
 // --- Automation optimizer decision-matrix trace -----------------------------

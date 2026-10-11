@@ -93,6 +93,21 @@ def device_groups(device: Device) -> dict[str, str]:
     }
 
 
+#: The phases a consumer can be wired to: one of the three, or all three.
+DEVICE_PHASES = ("L1", "L2", "L3", "3ph")
+
+
+def device_phase(device: Device) -> str | None:
+    """A device's own ``phase``, the house wiring it is on; ``None`` when unassigned.
+
+    Anything but a known phase reads as unassigned; the validator reports it.
+    A child without one of its own may be on its parent's: that is the node
+    detail's to decide, not this reader's.
+    """
+    phase = device.get("phase")
+    return phase if phase in DEVICE_PHASES else None
+
+
 def group_exists(
     config: Mapping[str, Any] | None, grouping_id: str, group_id: str
 ) -> bool:

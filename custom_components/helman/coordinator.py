@@ -1841,6 +1841,11 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         )
 
+    @property
+    def house_profile(self) -> tuple[HouseConsumptionProfile | None, str | None]:
+        """The fitted house profile the forecast serves, and when it was trained."""
+        return self._house_profile, self._house_profile_trained_at
+
     def _adopt_stored_house_profile(self, *, config_fingerprint: str) -> str | None:
         """Adopt the stored house profile; return why a refit is due, or None.
 

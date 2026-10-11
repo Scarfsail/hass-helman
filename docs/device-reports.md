@@ -82,6 +82,8 @@ With `F` = the three `→ house` flows and `D_h = max(H, F)`:
 
 The card shows a note when ambiguous, unattributed or mismatch is more than 1 % of the house.
 
+**Solar totals.** Every report also carries `solar_totals`: the per-hour solar flows summed over the period — solar straight to the house, into the battery and to the grid, from the same flows the source mix and the charge origin are solved from — with the solar and the export the meters measured in the hours that have a source mix, and the solar measured in hours without one. The solar detail reads where solar went from them; solar the meters do not explain, and all solar in hours without a mix, stays unresolved rather than being forced into a destination.
+
 **Missing meters.** A meter that is not configured counts as 0, and the card warns that the source colours are incomplete. Without a grid import meter, nothing says how much of the house the grid carried, so every device's energy is unattributed.
 
 ---

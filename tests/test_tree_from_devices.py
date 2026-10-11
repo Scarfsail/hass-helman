@@ -494,6 +494,62 @@ class DeviceGroupsTests(unittest.TestCase):
         self.assertEqual(tree["uiConfig"]["device_groupings"], [])
 
 
+class DevicePhaseTests(unittest.TestCase):
+    """A device's own ``phase`` reaches its row, metered or meterless; no other row has one."""
+
+    CONFIG = {
+        "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "devices": {
+            "consumers": [
+                {
+                    "id": "breaker",
+                    "phase": "3ph",
+                    "consumption": {
+                        "energy_entity_id": "sensor.breaker_energy",
+                        "power_entity_id": "sensor.breaker_power",
+                    },
+                    "children": [
+                        {
+                            "kind": "climate",
+                            "id": "ac",
+                            "phase": "L2",
+                            "controls": {"climate": {"entity_id": "climate.ac"}},
+                        },
+                        {
+                            "id": "oven",
+                            "consumption": {
+                                "energy_entity_id": "sensor.oven_energy",
+                                "power_entity_id": "sensor.oven_power",
+                            },
+                        },
+                    ],
+                },
+                {"id": "fridge", "phase": "L9", "consumption": {"energy_entity_id": "sensor.fridge_energy"}},
+            ]
+        },
+    }
+
+    def test_each_row_carries_its_own_phase(self) -> None:
+        house = _house(_build(self.CONFIG))
+        rows = {}
+
+        def walk(nodes):
+            for node in nodes:
+                rows[node["id"]] = node["phase"]
+                walk(node["children"])
+
+        walk(house["children"])
+
+        self.assertIsNone(house["phase"])
+        self.assertEqual(rows["sensor.breaker_energy"], "3ph")
+        self.assertEqual(rows["ac"], "L2")
+        # Not inherited here: the house detail decides what a child is on.
+        self.assertIsNone(rows["sensor.oven_energy"])
+        self.assertIsNone(rows["sensor_breaker_energy_unmeasured"])
+        # An unknown value is unassigned; validation reports it.
+        self.assertIsNone(rows["sensor.fridge_energy"])
+
+
 class NameResolutionTests(unittest.TestCase):
     """Every surface names an unnamed device alike, cleaned by ``devices.name_cleaner_regex``."""
 

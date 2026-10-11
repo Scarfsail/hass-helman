@@ -20,15 +20,17 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import (
-    DOMAIN,
-    INVERTER_MODE_ENTITY_ID,
-    INVERTER_MODE_UNIQUE_ID,
-    SCHEDULE_ACTION_STOP_EXPORT,
-)
+from .const import DOMAIN, INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
 from .controllables.spec import CONTROLLABLE_KIND_INVERTER, CONTROLLABLE_SPECS
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import VendorProfile, find_mode_vendor, resolve_unique_ids
+from .vendors.modes import (
+    ModeWritesError,
+    bind_mode_writes,
+    first_matching_option,
+    mode_write_templates,
+    register_matches,
+)
 
 
 async def async_setup_entry(
@@ -112,14 +114,13 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
 
     def _vendor_option(self) -> str | None:
         """The first option whose writes the vendor entities already match."""
+        bound = {}
         for option in self.options:
             try:
-                writes = self._writes(option)
+                bound[option] = self._writes(option)
             except HomeAssistantError:
-                continue
-            if all(self._in_target(entity_id, target) for entity_id, target in writes):
-                return option
-        return None
+                bound[option] = None
+        return first_matching_option(bound, self.hass.states.get)
 
     def _writes(self, option: str) -> list[tuple[str, str | float]]:
         """The vendor writes for ``option``, in order, as ``(entity id, target)``.
@@ -128,50 +129,17 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         setting fails the option without applying half of it.
         """
         profile = self._profile
-        if option == SCHEDULE_ACTION_STOP_EXPORT:
-            export_limit: Any = 0
-        else:
-            export_limit = (
-                self._coordinator.config.get("energy_nodes", {})
-                .get("grid", {})
-                .get("max_allowed_export_power")
+        try:
+            writes = mode_write_templates(profile, option, self._coordinator.config)
+            entity_ids = resolve_unique_ids(
+                self.hass,
+                profile,
+                self._vendor_entry,
+                [template for template, _ in writes],
             )
-            if export_limit is None:
-                raise HomeAssistantError(
-                    "energy_nodes.grid.max_allowed_export_power is not configured; "
-                    f"the {profile.label} profile restores the export limit to it"
-                )
-        writes = [*profile.modes[option]]
-        if profile.export_limit is not None:
-            writes.append((profile.export_limit, export_limit))
-        entity_ids = resolve_unique_ids(
-            self.hass, profile, self._vendor_entry, [template for template, _ in writes]
-        )
-        missing = sorted(
-            {
-                f"{domain} {template}"
-                for (domain, template), _ in writes
-                if entity_ids[(domain, template)] is None
-            }
-        )
-        if missing:
-            raise HomeAssistantError(
-                f"The {profile.label} profile cannot apply {option!r}: no "
-                f"{profile.platform} entity for {', '.join(missing)}"
-            )
-        return [(entity_ids[template], target) for template, target in writes]
+            return bind_mode_writes(profile, option, writes, entity_ids)
+        except ModeWritesError as err:
+            raise HomeAssistantError(str(err)) from err
 
     def _in_target(self, entity_id: str, target: str | float) -> bool:
-        state = self.hass.states.get(entity_id)
-        if state is None:
-            return False
-        if entity_id.startswith("number."):
-            return _as_float(state.state) == float(target)
-        return state.state == target
-
-
-def _as_float(value: str) -> float | None:
-    try:
-        return float(value)
-    except ValueError:
-        return None
+        return register_matches(self.hass.states.get(entity_id), entity_id, target) is True

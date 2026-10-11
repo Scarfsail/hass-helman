@@ -17,6 +17,7 @@ export function hydrateItem(dto: TreeItemDTO, historyBuckets: number, localize: 
     item.deviceKeyIsMeter = !!dto.energyEntityId;
     item.valueType = dto.valueType;
     item.groups = dto.groups;
+    item.phase = dto.phase ?? null;
     if (dto.groupBadgeTexts.length > 0) item.groupBadgeTexts = dto.groupBadgeTexts;
     if (dto.icon) item.icon = dto.icon;
     item.compact = dto.compact;

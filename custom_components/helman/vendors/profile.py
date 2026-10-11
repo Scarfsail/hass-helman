@@ -65,6 +65,11 @@ class VendorProfile:
     A profile with ``modes`` is driven through Helman's own inverter mode
     select, and one with ``charging`` through Helman's own EV charging switch;
     each points its owned control there.
+
+    ``telemetry`` names read-only readings the node details show, by metric
+    key (``inverter_temperature``, ...). They are not config: they never
+    enter the config document or :attr:`owned_config_paths`, and resolve
+    through :func:`~custom_components.helman.vendors.resolve_vendor_telemetry`.
     """
 
     id: str
@@ -89,6 +94,19 @@ class VendorProfile:
     #: ``stop_export``, the grid's ``max_allowed_export_power`` otherwise.
     export_limit: EntityTemplate | None = None
     charging: ChargingControl | None = None
+    telemetry: Mapping[str, EntityTemplate] = field(default_factory=dict)
+    #: A ``run_mode`` telemetry state → the condition the inverter detail
+    #: promotes for it: ``off_grid`` or ``fault``. Any other state is shown as
+    #: read, without a verdict.
+    run_mode_conditions: Mapping[str, str] = field(default_factory=dict)
+    #: A ``bms_connect_state`` telemetry state → the condition the battery
+    #: detail promotes for it (``bms_disconnected``): an explicit hardware
+    #: report, never inferred from other readings.
+    bms_connect_conditions: Mapping[str, str] = field(default_factory=dict)
+    #: Which way the ``grid_power_l*`` telemetry reads positive
+    #: (``positive_is_import`` or ``positive_is_export``), the vocabulary of the
+    #: grid's ``power_polarity``; ``None`` when the profile has no phase power.
+    grid_phase_power_polarity: str | None = None
 
     @property
     def owned_config_paths(self) -> list[str]:

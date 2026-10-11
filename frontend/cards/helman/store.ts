@@ -4,6 +4,7 @@ import type {
     AppliancesPayload,
     ControllableEntitiesPayload,
     EntityActualHistoryPayload,
+    GetNodeDetailRequest,
     HistoryPayload,
     SchedulePayload,
     SetScheduleExecutionResponse,
@@ -33,6 +34,7 @@ export interface HelmanStore {
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
     getDeviceTree(): Promise<TreePayload>;
     getHistory(): Promise<HistoryPayload>;
+    getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T>;
 }
 
 export function getSharedHelmanStore(hass: HomeAssistant): HelmanStore {
@@ -151,5 +153,15 @@ class HelmanStoreImpl implements HelmanStore {
 
     public getHistory(): Promise<HistoryPayload> {
         return this._dedupe("get_history", () => this._client.getHistory());
+    }
+
+    /**
+     * De-duplicated per node, device and section: the card's cell and its dialog
+     * ask together. `fresh` skips joining a request sent before a state changed.
+     */
+    public getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T> {
+        if (options?.fresh) return this._client.getNodeDetail<T>(request);
+        const key = `get_node_detail:${request.node}:${request.device_id ?? ""}:${request.section ?? ""}`;
+        return this._dedupe(key, () => this._client.getNodeDetail<T>(request));
     }
 }

@@ -206,8 +206,8 @@ test.describe("editing a device from its detail", () => {
         };
         await mountDetail(page, { config: grouped });
         await openEdit(page);
-        // The Groups section starts collapsed.
-        await dialog(page).locator("summary", { hasText: /^\s*Groups\s*$/ }).click();
+        // The Groups and phase section starts collapsed.
+        await dialog(page).locator("summary", { hasText: /^\s*Groups and phase\s*$/ }).click();
         await dialog(page).locator("select.device-group[data-grouping-id=breakers]").selectOption("garage");
         await dialog(page).getByText("Save and reload").click();
 
@@ -217,6 +217,23 @@ test.describe("editing a device from its detail", () => {
         expect(saved.config).toEqual({
             ...grouped,
             devices: { ...grouped.devices, consumers: [{ ...BOILER, groups: { breakers: "garage" } }] },
+        });
+    });
+
+    test("setting the house phase saves it on the device only", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        // Beside group membership, with no grouping configured at all.
+        await openSection(page, "Groups and phase");
+        await dialog(page).locator("select.device-phase").selectOption("3ph");
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect.poll(async () =>
+            (await calls(page)).filter((call) => call.type === "helman/save_config").length).toBe(1);
+        const saved = (await calls(page)).find((call) => call.type === "helman/save_config")!;
+        expect(saved.config).toEqual({
+            ...CONFIG,
+            devices: { consumers: [{ ...BOILER, phase: "3ph" }] },
         });
     });
 

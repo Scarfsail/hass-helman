@@ -3,11 +3,10 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { TreeItem } from "./tree-item";
-import type { BatteryNodeConfig } from "./energy-node-config";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { TreeItemDTO, TreePayload } from "../helman-api";
+import { applyValueType, TreeItemDTO, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
@@ -71,6 +70,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private _watchedEntityIds: Set<string> = new Set();
     /** Entity ids the schedule editor host resolved, folded into the filter. */
     private _scheduleWatchedIds: Set<string> = new Set();
+    /** The readings the open node detail announced it reads live. */
+    private _detailEntityIds: string[] = [];
     private _latestHass?: HomeAssistant;
 
     // 5. State properties
@@ -252,6 +253,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     .open=${true}
                     .params=${dialogParams}
                     @closed=${this._closeNodeDetail}
+                    @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
             ` : ""}
         `;
@@ -265,6 +267,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._dialogRequest = (event as CustomEvent<{ nodeType: NodeType }>).detail.nodeType;
     };
 
+    /** The open detail's own readings: watched while it is open, the latest handed down now. */
+    private _onDetailWatch = (event: CustomEvent<string[]>): void => {
+        event.stopPropagation();
+        this._detailEntityIds = event.detail;
+        this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
+    };
+
     private _handleShowDeviceDetail = (event: Event): void => {
         event.stopPropagation();
         this._dialogRequest = (event as CustomEvent<{ item: TreeItem }>).detail.item;
@@ -272,6 +282,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     private _closeNodeDetail(): void {
         this._dialogRequest = null;
+        this._detailEntityIds = [];
+        this._rebuildWatchedEntityIds();
     }
 
     /**
@@ -315,36 +327,37 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private _buildNodeDetailContext(): NodeDetailContext {
-        const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
+        const { sourcesChildren, consumersChildren, houseNode } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
         const gridProducerNode = sourcesChildren.find((device) => device.sourceType === "grid") ?? null;
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
         const batteryProducerNode = sourcesChildren.find((device) => device.sourceType === "battery") ?? null;
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
-        const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
-        const batterySocEntityId = batteryConfig?.entities.capacity ?? null;
-        const batterySocState = batterySocEntityId ? this._hass?.states[batterySocEntityId] : null;
-        const rawBatterySoc = batterySocState ? parseFloat(batterySocState.state) : NaN;
+        // The open detail reads the sensors' current states, signed as the
+        // simple card signs them; the tree's powerValue moves only on history ticks.
+        const raw = (entityId: string | null | undefined): number | null => {
+            const value = entityId ? parseFloat(this._hass?.states[entityId]?.state ?? "") : NaN;
+            return Number.isFinite(value) ? value : null;
+        };
+        const batteryNode = batteryProducerNode ?? batteryConsumerNode;
+        const batteryRaw = raw(batteryNode?.powerSensorId);
+        const solarRaw = raw(solarNode?.powerSensorId);
+        const gridNode = gridProducerNode ?? gridConsumerNode;
+        const gridRaw = raw(gridNode?.powerSensorId);
+        const houseRaw = raw(houseNode?.powerSensorId);
+
+        const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
 
         return {
-            batteryPower: (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0),
-            batterySoc: Number.isFinite(rawBatterySoc) ? Math.max(0, Math.min(100, rawBatterySoc)) : 0,
-            batterySocEntityId,
-            batteryRemainingEnergyEntityId: batteryConfig?.entities.remaining_energy ?? null,
-            batteryProducerNode,
-            batteryConsumerNode,
-            solarNode,
-            gridProducerNode,
-            gridConsumerNode,
-            productionNode: sourcesNode ?? null,
-            consumptionNode: consumerNode ?? null,
-            housePower: houseNode?.powerValue ?? 0,
-            houseDevices: [...houseDevices],
+            batteryPower,
+            batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
+            solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
+            gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
+            housePower: houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType)),
+            solarPower: solarNode?.powerValue ?? 0,
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
             historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,
-            historyRevision: this._historyRevision,
-            uiConfig: this._uiConfig,
         };
     }
 
@@ -462,6 +475,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             ids.add(id);
         }
 
+        for (const id of this._detailEntityIds) ids.add(id);
         this._watchedEntityIds = ids;
     }
 

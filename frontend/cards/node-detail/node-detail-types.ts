@@ -1,54 +1,68 @@
 import type { TreeItem } from "../helman/tree-item";
-import type { HelmanUiConfig } from "../helman-api";
 
-export type NodeType = "solar" | "battery" | "grid" | "house";
+export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 
+/**
+ * The battery. Its readings come from `helman/get_node_detail`; the power is
+ * the card's own live figure, with the polarity the card already applied.
+ */
 export interface BatteryDetailParams {
     nodeType: "battery";
-    power: number;
-    soc: number;
-    socEntityId: string | null;
-    remainingEnergyEntityId: string | null;
-    batteryProducerNode: TreeItem | null;
-    batteryConsumerNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    consumptionNode?: TreeItem | null;
+    /** Battery power: positive charges, negative discharges, W; `null` without a reading. */
+    power: number | null;
+    /** The card's power-history window, which Helman's time estimates average over. */
     historyBuckets: number;
     historyBucketDuration: number;
-    historyRevision: number;
 }
 
+/**
+ * The solar node. Its readings come from `helman/get_node_detail`; the powers
+ * are the card's own live figures, with the polarity the card already applied.
+ */
 export interface SolarDetailParams {
     nodeType: "solar";
-    solarNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
+    /** Solar production, W; `null` without a reading. */
+    power: number | null;
+    /** Battery power: positive charges, W; `null` without a reading. */
+    batteryPower: number | null;
+    /** Grid power, import positive, W; `null` without a reading. */
+    gridPower: number | null;
 }
 
+/**
+ * The grid. Its readings come from `helman/get_node_detail`; the total power is
+ * the card's own live figure, with the polarity the card already applied.
+ */
 export interface GridDetailParams {
     nodeType: "grid";
-    gridProducerNode: TreeItem | null;
-    gridConsumerNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    consumptionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
+    /** Grid power: positive imports, negative exports, W. */
+    /** Signed import-positive; `null` when the grid sensor has no reading. */
+    gridPower: number | null;
 }
 
+/**
+ * The house. Its readings come from `helman/get_node_detail`; the power is the
+ * card's own live figure, with the polarity the card already applied, and the
+ * house tree is the card's own, which the phase answer estimates from.
+ */
 export interface HouseDetailParams {
     nodeType: "house";
+    /** House consumption, W. */
     power: number;
-    devices: TreeItem[];
-    parentPowerHistory?: number[];
-    consumptionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
-    uiConfig?: HelmanUiConfig;
     houseNode: TreeItem | null;
+}
+
+/**
+ * The inverter, opened from the card's centre. Its readings come from
+ * `helman/get_node_detail`; the DC context is the card's own live figures, so
+ * the detail reads them with the polarity the card already applied.
+ */
+export interface InverterDetailParams {
+    nodeType: "inverter";
+    /** Solar production, W. */
+    solarPower: number;
+    /** Battery power on the house convention: positive charges, W. */
+    batteryPower: number;
 }
 
 /**
@@ -65,4 +79,5 @@ export type NodeDetailParams =
     | SolarDetailParams
     | GridDetailParams
     | HouseDetailParams
+    | InverterDetailParams
     | DeviceDetailParams;

@@ -3,13 +3,13 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
-import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, applyValueType } from "../helman-api";
+import { mdiCurrentAc } from "@mdi/js";
+import { fillTemplate, getLocalizeFunction, LocalizeFunction } from "../localize/localize";
+import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload, applyValueType, commandedModeKind } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
 import { TreeItem } from "../helman/tree-item";
 import { hydrateItem } from "../helman/tree-item-hydrator";
-import type { BatteryNodeConfig } from "../helman/energy-node-config";
 import type { NodeType, NodeDetailParams } from "./node-detail/node-detail-types";
 import {
     buildNodeDetailParams,
@@ -58,15 +58,25 @@ interface EnergyEntityMap {
 
 interface EnergyValues {
     solarPower:   number;
+    /** `solarPower`, `null` without a reading rather than 0. */
+    solarPowerReading: number | null;
     gridPower:    number;
+    /**
+     * The grid meter signed import-positive, export-negative. `gridPower` keeps
+     * only the source side (a `positive` grid node clamps export to zero) and
+     * the card derives export from the balance; the grid detail reports the meter.
+     */
+    gridPowerSigned: number | null;
     batteryPower: number;
+    /** The battery meter, positive charging; `null` without a reading, never 0. */
+    batteryPowerReading: number | null;
     batterySoc:   number;
     batteryMinSoc:number;
     housePower:   number;
 }
 
 const EMPTY_ENERGY: EnergyValues = {
-    solarPower: 0, gridPower: 0, batteryPower: 0,
+    solarPower: 0, solarPowerReading: null, gridPower: 0, gridPowerSigned: null, batteryPower: 0, batteryPowerReading: null,
     batterySoc: 0, batteryMinSoc: 10,
     housePower: 0,
 };
@@ -156,6 +166,48 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             100% { stroke-dashoffset: -18; }
         }
 
+        /* The inverter sits where the flows cross: drawn over them, kept small. */
+        .center-cell {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .inverter-cell {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            min-height: 26px;
+            padding: 2px 7px 2px 5px;
+            border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+            border-radius: 13px;
+            background: var(--card-background-color, #fff);
+            color: var(--primary-text-color);
+            font: inherit;
+            font-size: 0.68rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .inverter-cell:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 1px;
+        }
+        .inverter-cell svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--secondary-text-color);
+            flex: none;
+        }
+        .inverter-link {
+            font-weight: 400;
+            color: var(--secondary-text-color);
+        }
+
         .loading {
             display: flex;
             justify-content: center;
@@ -172,6 +224,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _localize?: LocalizeFunction;
     private _latestHass?: HomeAssistant;
     private _watchedEntityIds: Set<string> = new Set();
+    /** The readings the open node detail announced it reads live. */
+    private _detailEntityIds: string[] = [];
     private _solarDTO:           TreeItemDTO | null = null;
     private _gridDTO:            TreeItemDTO | null = null;
     private _batteryDTO:         TreeItemDTO | null = null;
@@ -211,7 +265,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     @state() private _loading = true;
     /** What the node detail dialog shows: a top-level node by type, or one device. */
     @state() private _dialogRequest: NodeType | TreeItem | null = null;
-    @state() private _houseDevices: TreeItem[] = [];
+    /** The inverter overview behind the centre cell; `null` until loaded, or when it failed. */
+    @state() private _inverter: InverterDetailPayload | null = null;
 
     // 7. HA-specific property setter
     public set hass(hass: HomeAssistant) {
@@ -364,13 +419,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     <div class="energy-grid" style=${gridStyle}>
 
                         <!-- ── Row 1: Solar  ─── connector ─── Grid ── -->
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'solar'}>
+                        <div class="node-cell" @click=${() => this._openNode("solar")}>
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
                             ${solarExportingToGrid ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, solarToGridT, 22.5, 33) : ""}
                         </div>
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'grid'}>
+                        <div class="node-cell" @click=${() => this._openNode("grid")}>
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
                         </div>
 
@@ -378,18 +433,18 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                         <div class="connector-v">
                             ${solarActive ? this._flowV(solarFlowColor, this._flowGlows!.solar, false, solarToHouseT) : ""}
                         </div>
-                        <div></div>
+                        <div class="center-cell">${this._renderInverterCell()}</div>
                         <div class="connector-v">
                             ${(gridImport && battCharge) ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, gridToBattT) : ""}
                             ${battToGridPower > 50 ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, battToGridT) : ""}
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'house'}>
+                        <div class="node-cell" @click=${() => this._openNode("house")}>
                             <simple-card-house .power=${housePower} .sourceColor=${houseSourceColor}></simple-card-house>
                         </div>
                         <div class="connector-h"></div>
-                        <div class="node-cell" @click=${() => this._dialogRequest = 'battery'}>
+                        <div class="node-cell" @click=${() => this._openNode("battery")}>
                             <simple-card-battery
                                 .power=${batteryPower}
                                 .soc=${batterySoc}
@@ -409,7 +464,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .localize=${this._localize!}
                     .open=${true}
                     .params=${this._buildDialogParams(this._dialogRequest)}
-                    @closed=${() => { this._dialogRequest = null; }}
+                    @closed=${() => { this._dialogRequest = null; this._detailEntityIds = []; this._rebuildWatchedEntityIds(); }}
+                    @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
             ` : ''}
             <scheduling-day-editor-host
@@ -420,6 +476,75 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     // 12. Private helper methods
+
+    /**
+     * The inverter's centre cell: its commanded mode and, when the link is
+     * short of perfect, a neutral communication cue with its value. Not a
+     * fault verdict: the detail's trust question explains it.
+     */
+    private _renderInverterCell() {
+        const inverter = this._inverter;
+        if (!inverter?.configured || !this._localize) return "";
+        const states = this._hass?.states ?? {};
+        const live = inverter.mode ? states[inverter.mode.entityId]?.state : undefined;
+        const kind = commandedModeKind(inverter.mode, states);
+        const label = kind
+            ? this._localize(`node_detail.inverter.mode_short.${kind}`)
+            : live && live !== "unavailable" && live !== "unknown" ? live : "–";
+        const number = (key: string): number | null => {
+            const entityId = inverter.entities[key];
+            const value = entityId ? parseFloat(states[entityId]?.state ?? "") : NaN;
+            return Number.isFinite(value) ? value : null;
+        };
+        const rate = number("link_success_rate");
+        const quarantined = number("link_quarantined_registers");
+        const cue = rate !== null && rate < 100
+            // Rounded down to one decimal, so 99.97 never reads as 100.
+            ? String(Math.floor(rate * 10) / 10) + " %"
+            : quarantined !== null && quarantined > 0 ? String(quarantined) : null;
+        const ariaLabel = fillTemplate(this._localize("node_detail.inverter.cell_label"), { mode: label })
+            + (cue ? ". " + fillTemplate(this._localize("node_detail.inverter.link_cue"), { value: cue }) : "");
+        return html`
+            <button
+                class="inverter-cell"
+                aria-label=${ariaLabel}
+                title=${ariaLabel}
+                @click=${(event: Event) => { event.stopPropagation(); this._openNode("inverter"); }}
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${mdiCurrentAc}></path></svg>
+                <span class="inverter-mode">${label}</span>
+                ${cue ? html`<span class="inverter-link">${cue}</span>` : ""}
+            </button>
+        `;
+    }
+
+    private _openNode(node: NodeType): void {
+        this._dialogRequest = node;
+        this._detailEntityIds = [];
+        this._rebuildWatchedEntityIds();
+    }
+
+    /** The open detail's own readings: watched while it is open, the latest handed down now. */
+    private _onDetailWatch = (event: CustomEvent<string[]>): void => {
+        event.stopPropagation();
+        this._detailEntityIds = event.detail;
+        this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
+    };
+
+    /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
+    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+        try {
+            const payload = await getSharedHelmanStore(this._latestHass!)
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+            if (obsolete()) return;
+            this._inverter = payload;
+            this._rebuildWatchedEntityIds();
+            this._hass = this._latestHass;
+        } catch (err) {
+            if (!obsolete()) console.error("helman-simple-card: failed to load the inverter overview", err);
+        }
+    }
 
     private _handleOpenScheduleEditor = (event: Event): void => {
         event.stopPropagation();
@@ -448,6 +573,16 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         addNode(this._batteryConsumerNode);
         addNode(this._gridConsumerNode);
         addNode(this._houseNode);
+        for (const id of this._detailEntityIds) ids.add(id);
+        // The centre cell's mode and link cue.
+        const inverter = this._inverter;
+        if (inverter) {
+            if (inverter.mode) ids.add(inverter.mode.entityId);
+            for (const key of ["link_success_rate", "link_quarantined_registers"]) {
+                const entityId = inverter.entities[key];
+                if (entityId) ids.add(entityId);
+            }
+        }
         this._watchedEntityIds = ids;
     }
 
@@ -490,7 +625,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             if (this._houseDTO) {
                 this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
                 if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
-                this._houseDevices = this._houseNode.children;
             }
 
             this._productionNode  = payload.productionTotalSensorId
@@ -518,6 +652,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
+            void this._loadInverter(obsolete);
             return true;
         } catch (err) {
             // Logged even for an obsolete load: the guard is there to keep stale data
@@ -586,27 +721,16 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _buildNodeDetailContext(): NodeDetailContext {
         const historyBuckets = this._uiConfig?.history_buckets ?? 60;
         const historyBucketDuration = this._uiConfig?.history_bucket_duration ?? 60;
-        const batteryConfig = (this._batteryProducerNode?.nodeConfig ?? this._batteryConsumerNode?.nodeConfig) as BatteryNodeConfig | undefined;
-
         return {
             batteryPower: this._energy.batteryPower,
-            batterySoc: this._energy.batterySoc,
-            batterySocEntityId: this._entityMap?.batterySocEntityId ?? null,
-            batteryRemainingEnergyEntityId: batteryConfig?.entities.remaining_energy ?? null,
-            batteryProducerNode: this._batteryProducerNode,
-            batteryConsumerNode: this._batteryConsumerNode,
-            solarNode: this._solarNode,
-            gridProducerNode: this._gridProducerNode,
-            gridConsumerNode: this._gridConsumerNode,
-            productionNode: this._productionNode,
-            consumptionNode: this._consumptionNode,
+            batteryPowerReading: this._energy.batteryPowerReading,
+            solarPowerReading: this._energy.solarPowerReading,
+            gridPower: this._energy.gridPowerSigned,
             housePower: this._energy.housePower,
-            houseDevices: this._houseDevices,
+            solarPower: this._energy.solarPower,
             houseNode: this._houseNode,
             historyBuckets,
             historyBucketDuration,
-            historyRevision: this._historyRevision,
-            uiConfig: this._uiConfig,
         };
     }
 
@@ -626,13 +750,22 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             entityId ? parseFloat(hass.states[entityId]?.state ?? "0") || 0 : 0;
 
         const batterySoc = Math.max(0, Math.min(100, rawPower(map.batterySocEntityId)));
+        const gridRaw = map.gridPowerEntityId ? parseFloat(hass.states[map.gridPowerEntityId]?.state ?? "") : NaN;
+        const gridReading = Number.isFinite(gridRaw) ? gridRaw : null;
+        const batteryRaw = map.batteryPowerEntityId ? parseFloat(hass.states[map.batteryPowerEntityId]?.state ?? "") : NaN;
+        const batteryReading = Number.isFinite(batteryRaw) ? (map.batteryInverted ? -batteryRaw : batteryRaw) : null;
+        const solarRaw = map.solarPowerEntityId ? parseFloat(hass.states[map.solarPowerEntityId]?.state ?? "") : NaN;
+        const solarPower = applyValueType(Number.isFinite(solarRaw) ? solarRaw : 0, map.solarValueType);
 
         return {
-            solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
+            solarPower,
+            solarPowerReading: Number.isFinite(solarRaw) ? solarPower : null,
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
+            gridPowerSigned: gridReading === null ? null : map.gridValueType === "negative" ? -gridReading : gridReading,
             batteryPower: map.batteryInverted
                 ? -rawPower(map.batteryPowerEntityId)
                 : rawPower(map.batteryPowerEntityId),
+            batteryPowerReading: batteryReading,
             batterySoc,
             batteryMinSoc: rawPower(map.batteryMinSocEntityId) || 10,
             // applyValueType("default") passes the raw value through, so the

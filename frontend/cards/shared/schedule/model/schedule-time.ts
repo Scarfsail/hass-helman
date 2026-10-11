@@ -356,13 +356,13 @@ function _dayStepsFrom(dayKey: string): { dayKey: string; next: string; previous
 
     DAY_STEP_MEMO = {
         dayKey,
-        next: _addDaysToDayKey(dayKey, 1),
-        previous: _addDaysToDayKey(dayKey, -1),
+        next: addDaysToDayKey(dayKey, 1),
+        previous: addDaysToDayKey(dayKey, -1),
     };
     return DAY_STEP_MEMO;
 }
 
-function _addDaysToDayKey(dayKey: string, days: number): string {
+export function addDaysToDayKey(dayKey: string, days: number): string {
     const date = new Date(`${dayKey}T00:00:00Z`);
     date.setUTCDate(date.getUTCDate() + days);
     return date.toISOString().slice(0, 10);

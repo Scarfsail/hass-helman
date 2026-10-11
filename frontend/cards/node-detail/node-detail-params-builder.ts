@@ -1,31 +1,19 @@
 import type { TreeItem } from "../helman/tree-item";
-import type { HelmanUiConfig } from "../helman-api";
 import type { NodeDetailParams, NodeType } from "./node-detail-types";
 
 export interface NodeDetailContext {
     batteryPower: number;
-    batterySoc: number;
-    batterySocEntityId: string | null;
-    batteryRemainingEnergyEntityId: string | null;
-    batteryProducerNode: TreeItem | null;
-    batteryConsumerNode: TreeItem | null;
-    solarNode: TreeItem | null;
-    gridProducerNode: TreeItem | null;
-    gridConsumerNode: TreeItem | null;
-    productionNode: TreeItem | null;
-    consumptionNode: TreeItem | null;
+    /** The battery meter, positive charging; `null` without a reading. */
+    batteryPowerReading: number | null;
+    /** Solar production as its node carries it, W; `null` without a reading. */
+    solarPowerReading: number | null;
+    /** Grid power: positive imports, negative exports, W. */
+    gridPower: number | null;
     housePower: number;
-    houseDevices: TreeItem[];
+    solarPower: number;
     houseNode: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
-    /**
-     * Bumped once per history tick by the card that owns the `HistoryEngine`. The
-     * panels draw the very same rows the card does, off the very same in-place
-     * buffers, so they need the same signal that the buckets moved.
-     */
-    historyRevision: number;
-    uiConfig?: HelmanUiConfig;
 }
 
 export function buildNodeDetailParams(context: NodeDetailContext, nodeType: NodeType): NodeDetailParams {
@@ -33,50 +21,33 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
         case "battery":
             return {
                 nodeType: "battery",
-                power: context.batteryPower,
-                soc: context.batterySoc,
-                socEntityId: context.batterySocEntityId,
-                remainingEnergyEntityId: context.batteryRemainingEnergyEntityId,
-                batteryProducerNode: context.batteryProducerNode,
-                batteryConsumerNode: context.batteryConsumerNode,
-                productionNode: context.productionNode,
-                consumptionNode: context.consumptionNode,
+                power: context.batteryPowerReading,
                 historyBuckets: context.historyBuckets,
                 historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
             };
         case "solar":
             return {
                 nodeType: "solar",
-                solarNode: context.solarNode,
-                productionNode: context.productionNode,
-                historyBuckets: context.historyBuckets,
-                historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
+                power: context.solarPowerReading,
+                batteryPower: context.batteryPowerReading,
+                gridPower: context.gridPower,
             };
         case "grid":
             return {
                 nodeType: "grid",
-                gridProducerNode: context.gridProducerNode,
-                gridConsumerNode: context.gridConsumerNode,
-                productionNode: context.productionNode,
-                consumptionNode: context.consumptionNode,
-                historyBuckets: context.historyBuckets,
-                historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
+                gridPower: context.gridPower,
             };
         case "house":
             return {
                 nodeType: "house",
                 power: context.housePower,
-                devices: context.houseDevices,
-                parentPowerHistory: context.houseNode?.powerHistory,
-                consumptionNode: context.consumptionNode,
-                historyBuckets: context.historyBuckets,
-                historyBucketDuration: context.historyBucketDuration,
-                historyRevision: context.historyRevision,
-                uiConfig: context.uiConfig,
                 houseNode: context.houseNode,
+            };
+        case "inverter":
+            return {
+                nodeType: "inverter",
+                solarPower: context.solarPower,
+                batteryPower: context.batteryPower,
             };
     }
 }

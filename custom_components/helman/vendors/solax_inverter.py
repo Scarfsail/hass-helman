@@ -15,6 +15,12 @@ behind ``input_select.rezim_fv`` made on prod: the use mode first, then, in
 Manual Mode, the manual mode. The export limit follows every mode; its value
 is the user's grid contract, never the profile's.
 
+The ``telemetry`` the inverter detail reads is taken from the prod registry
+(2026-10-10), each under the domain it is registered in: the unique id does not
+follow the entity id (``number.solax_inverter_eps_min_soc`` is
+``SolaX_eps_min_soc``), and several of these are numbers, selects or a switch
+rather than sensors.
+
 Site facts (``max_power``, the ``forecast`` blocks other than the house total,
 prices, efficiencies) are deliberately absent: they are the user's config,
 whatever hardware sits behind them.
@@ -129,4 +135,121 @@ PROFILE = VendorProfile(
     },
     device_paths=(MODE_DEVICE_PATH,),
     export_limit=("number", "{name}_export_control_user_limit"),
+    telemetry={
+        "use_mode": _USE_MODE,
+        "manual_mode": _MANUAL_MODE,
+        "run_mode": ("sensor", "{name}_run_mode"),
+        "export_limit": ("number", "{name}_export_control_user_limit"),
+        "pv_power_limit": ("number", "{name}_remotecontrol_pv_power_limit"),
+        "main_breaker_limit": ("number", "{name}_main_breaker_current_limit"),
+        "battery_charge_max_current": ("number", "{name}_battery_charge_max_current"),
+        "battery_discharge_max_current": (
+            "number",
+            "{name}_battery_discharge_max_current",
+        ),
+        "eps_min_soc": ("number", "{name}_eps_min_soc"),
+        "eps_restart_soc": ("number", "{name}_eps_restart_soc"),
+        "remote_control": ("select", "{name}_remotecontrol_power_control"),
+        "remote_control_mode": ("select", "{name}_remotecontrol_power_control_mode"),
+        "active_power_target": ("sensor", "{name}_active_power_target"),
+        "active_power_real": ("sensor", "{name}_active_power_real"),
+        **{
+            f"ac_{quantity}_l{phase}": ("sensor", f"{{name}}_inverter_{quantity}_l{phase}")
+            for quantity in ("power", "voltage", "current", "frequency")
+            for phase in (1, 2, 3)
+        },
+        "phase_balance": ("switch", "{name}_phase_power_balance_x3"),
+        "inverter_temperature": ("sensor", "{name}_inverter_temperature"),
+        "link_success_rate": ("sensor", "{name}_communication_success_rate"),
+        "link_quarantined_registers": (
+            "sensor",
+            "{name}_communication_quarantined_registers",
+        ),
+        "firmware": ("sensor", "{name}_software_version"),
+        "hardware_version": ("sensor", "{name}_hardware_version"),
+        "rated_power": ("sensor", "{name}_inverter_power_type"),
+        "mppt_count": ("sensor", "{name}_mppt_count"),
+        "lock_state": ("select", "{name}_lock_state"),
+        "grid_mode_runtime": ("sensor", "{name}_grid_mode_runtime"),
+        "eps_mode_runtime": ("sensor", "{name}_eps_mode_runtime"),
+        # The grid detail: the meter's per-phase power and import/export power,
+        # and the grid frequency the inverter reads.
+        **{
+            f"grid_power_l{phase}": ("sensor", f"{{name}}_measured_power_l{phase}")
+            for phase in (1, 2, 3)
+        },
+        "grid_import": ("sensor", "{name}_grid_import"),
+        "grid_export": ("sensor", "{name}_grid_export"),
+        "grid_frequency": ("sensor", "{name}_grid_frequency"),
+        # The battery detail. Units per solax_modbus plugin_solax.py: V, A
+        # (signed), °C, Wh (``chargeable_energy``: to 100 % SoC), W, kWh (the
+        # lifetime totals), V (cells). ``max_charge_rate`` is the plugin's
+        # BMS charge current × battery voltage, falling back to the inverter's
+        # charge current setting when the BMS current is not read; the BMS
+        # currents, lifetime totals, cells, type, temperature extremes and
+        # connect state are disabled by default in the plugin.
+        "battery_voltage": ("sensor", "{name}_battery_voltage_charge"),
+        "battery_current": ("sensor", "{name}_battery_current_charge"),
+        "battery_temperature": ("sensor", "{name}_battery_temperature"),
+        "chargeable_energy": ("sensor", "{name}_chargeable_battery_capacity"),
+        "max_charge_rate": ("sensor", "{name}_bms_max_charge"),
+        "bdc_status": ("sensor", "{name}_bdc_status"),
+        "bms_charge_max_current": ("sensor", "{name}_bms_charge_max_current"),
+        "bms_discharge_max_current": ("sensor", "{name}_bms_discharge_max_current"),
+        "input_energy_total": ("sensor", "{name}_battery_input_energy_total"),
+        "output_energy_total": ("sensor", "{name}_battery_output_energy_total"),
+        "cell_voltage_high": ("sensor", "{name}_cell_voltage_high"),
+        "cell_voltage_low": ("sensor", "{name}_cell_voltage_low"),
+        "cell_voltage_difference": (
+            "sensor",
+            "{name}_battery_voltage_cell_difference",
+        ),
+        "battery_type": ("sensor", "{name}_battery_type"),
+        "battery_temp_high": ("sensor", "{name}_battery_temp_high"),
+        "battery_temp_low": ("sensor", "{name}_battery_temp_low"),
+        "bms_connect_state": ("sensor", "{name}_bms_connect_state"),
+        "battery_heating": ("switch", "{name}_battery_heating"),
+        **{
+            f"battery_heating_{edge}_{period}": (
+                "time",
+                f"{{name}}_battery_heating_{edge}_time_{period}",
+            )
+            for period in (1, 2)
+            for edge in ("start", "end")
+        },
+        # The house detail: the EPS output's measured active power per phase
+        # (W), what the house draws from the inverter while off-grid.
+        **{
+            f"eps_power_l{phase}": ("sensor", f"{{name}}_eps_power_active_l{phase}")
+            for phase in (1, 2, 3)
+        },
+        # The solar detail: each MPPT string's DC power (W), voltage (V) and
+        # current (A), and the shade-tolerance (``Off``/``Low``/``Middle``/
+        # ``High``) setting per string, a select.
+        **{
+            f"pv_{quantity}_{string}": ("sensor", f"{{name}}_pv_{quantity}_{string}")
+            for quantity in ("power", "voltage", "current")
+            for string in (1, 2)
+        },
+        **{
+            f"shade_fix_pv{string}": (
+                "select",
+                f"{{name}}_shadow_fix_function_level_pv{string}_gmppt",
+            )
+            for string in (1, 2)
+        },
+    },
+    # ``measured_power_l*`` reads positive while feeding in: on the dev mirror
+    # (2026-10-10) ``measured_power`` +405 W sat beside the energy dashboard's
+    # grid power -405 W, whose own polarity is positive_is_import.
+    grid_phase_power_polarity="positive_is_export",
+    # Gen4+ run_mode strings (solax_modbus plugin_solax.py, register 0x9).
+    run_mode_conditions={
+        "Off-Grid": "off_grid",
+        "Fault": "fault",
+        "Permanent Fault Mode": "fault",
+    },
+    # Gen4 register 0x17 (solax_modbus plugin_solax.py); Gen6 swaps the
+    # numbers but keeps the strings.
+    bms_connect_conditions={"Disconnected": "bms_disconnected"},
 )
