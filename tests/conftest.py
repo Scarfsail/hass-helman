@@ -7,6 +7,11 @@ package present, others need it absent), so importing them all into one process
 causes cross-file pollution and spurious failures. Run each file in its own
 process instead -- use ``scripts/run_tests.sh`` locally and in CI.
 
+Shared stub moves (registering the helman packages, get-or-create a stub
+module, the fixed-clock ``homeassistant.util.dt``, snapshot/restore of
+``sys.modules`` entries) live in ``_ha_stubs.py``; import them with
+``from _ha_stubs import ...``. Each file still decides which modules it stubs.
+
 This conftest is intentionally minimal: it only pins Home Assistant's default
 time zone for modules that use the *real* ``homeassistant`` package. It never
 imports ``homeassistant`` at collection time, so modules that stub it themselves

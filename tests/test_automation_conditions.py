@@ -6,14 +6,12 @@ that would otherwise have to be written five times.
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from copy import deepcopy
 from datetime import datetime
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 SLOT_0 = "2026-03-20T21:00:00+01:00"
 SLOT_1 = "2026-03-20T21:15:00+01:00"
@@ -21,41 +19,10 @@ SLOT_2 = "2026-03-20T21:30:00+01:00"
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [str(ROOT / "custom_components" / "helman" / "scheduling")]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
+    install_helman_packages("scheduling")
+    stub_module("homeassistant")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod
 
 

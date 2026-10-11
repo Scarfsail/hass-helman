@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import { loadBundle } from "./support/card-page";
 
 /**
  * `dim_incomplete_slots` on `helman-solar-inspector-card`.
@@ -14,17 +14,10 @@ import { installFakeHass } from "./support/fake-hass";
  * be a matter of taste; a total quietly reading low is a fact about the number.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 /** Mount the wrapper card against the fake backend with the given config. */
 async function mountCard(page: Page, config: Record<string, unknown>): Promise<void> {
     await page.goto("about:blank");
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector-card"));
+    await loadBundle(page, "helman-solar-inspector-card");
     await installFakeHass(page, { pillDays: 4 });
 
     await page.evaluate((cfg) => {

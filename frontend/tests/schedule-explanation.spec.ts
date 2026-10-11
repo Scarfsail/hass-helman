@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The lane explanation, as one slot at a time.
@@ -23,11 +23,6 @@ import { resolve } from "node:path";
  * - **One optimizer gets no tab strip**, where a lone chip could only restate
  *   what the diagram under it is already about.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DATE = "2026-07-31";
 const RUN_AT = `${DATE}T20:15:00+02:00`;
@@ -251,9 +246,7 @@ const CANDIDATE_PAYLOAD = {
     ],
 };
 async function mountPanel(page: Page, payload: unknown, slotIndex: number | null): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
+    await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(({ fixture, slotId }) => {
         const panel = document.createElement("scheduling-explanation-panel") as HTMLElement

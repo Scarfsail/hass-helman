@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The battery node detail on the simple card.
@@ -16,8 +16,7 @@ import { installFixedClock } from "./support/fixed-clock";
  * an efficiency and throughput cycles are not health.
  */
 
-const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
-const SCREENS = process.env.P3_SCREENS;
+const SCREENS = process.env.SCREENS;
 
 type Variant = {
     profile?: boolean;
@@ -214,7 +213,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
     }, variant);
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
@@ -549,25 +548,24 @@ test.describe("a Custom inverter", () => {
     });
 });
 
-test.describe("screenshots", () => {
-    test.skip(!SCREENS, "set P3_SCREENS to a directory to capture the review screenshots");
+test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
         test(`overview and an expanded answer at ${name}`, async ({ page }) => {
             await page.setViewportSize({ width, height });
             await mount(page);
             await openDetail(page);
-            await page.screenshot({ path: `${SCREENS}/${name}-overview.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/battery-${name}-overview.png`, fullPage: true });
             await header(page, "limits").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-limits.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/battery-${name}-limits.png`, fullPage: true });
             await evidence(page, "limits").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-limits-evidence.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/battery-${name}-limits-evidence.png`, fullPage: true });
             await header(page, "charge").click();
             await expect(question(page, "charge").locator("[data-row='charged']")).toBeVisible();
             await evidence(page, "charge").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-charge.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/battery-${name}-charge.png`, fullPage: true });
             await header(page, "reserve").click();
             await evidence(page, "reserve").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-reserve.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/battery-${name}-reserve.png`, fullPage: true });
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             expect(overflow).toBeLessThanOrEqual(0);
         });

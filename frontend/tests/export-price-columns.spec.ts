@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * How the price strip turns the day payload's two rails into drawable columns.
@@ -18,22 +18,11 @@ import { resolve } from "node:path";
  * pair per slot.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
 
 type Column = { startMinutes: number; endMinutes: number; value: number };
 type Rails = { importColumns: Column[]; exportColumns: Column[]; unit: string };
 type RailPoint = { slot: string; value: number };
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-price-strip"));
-}
 
 /**
  * Mount the strip with a day's price rails and return the columns it publishes,
@@ -166,7 +155,7 @@ async function labelsFor(
 
 test.describe("price columns", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-price-strip");
     });
 
     test("both rails land on identical cells, whatever their own resolutions", async ({ page }) => {

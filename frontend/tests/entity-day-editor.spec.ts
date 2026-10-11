@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The single-entity day editor, end to end through its own DOM.
@@ -10,11 +10,6 @@ import { resolve } from "node:path";
  * block, move its edge, save -- and assert on the slot patches that come out,
  * which is the only place a mistranslation would be visible.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DAY_ONE = "2026-07-24";
 const DAY_TWO = "2026-07-25";
@@ -27,9 +22,7 @@ async function loadCardBundle(page: Page): Promise<void> {
     // fictional morning the fixture is built around, or every drafted slot is
     // long elapsed by the time the press lands.
     await page.clock.setFixedTime(NOW_MS);
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-editor"));
+    await loadBundle(page, "scheduling-entity-day-editor");
 }
 
 /**

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The schema-driven optimizer card, end to end in a bare page.
@@ -12,11 +12,6 @@ import { resolve } from "node:path";
  * group's override sub-form is the same form as the master block with the
  * inherited values as placeholders.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 /** The schema the backend serves, trimmed to the kinds these tests exercise. */
 const SCHEMA = {
@@ -124,11 +119,7 @@ async function mountEditor(
     config: unknown = CONFIG,
     schemaDocument: unknown = SCHEMA,
 ): Promise<Locator> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(
-        () => !!customElements.get("helman-config-editor-panel"),
-    );
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
     await page.evaluate(
         ({ schema, config: initialConfig }) => {
             // A card enters YAML mode only once `ha-yaml-editor` is defined --

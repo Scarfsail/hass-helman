@@ -7,9 +7,15 @@ from types import SimpleNamespace
 import unittest
 import unittest.mock
 from datetime import datetime, timedelta
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import (
+    install_helman_packages,
+    restore_modules,
+    snapshot_modules,
+    stub_ha_dt,
+    stub_module,
+)
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 _STUBBED_MODULES = (
@@ -53,26 +59,8 @@ _original_helman_modules = {
 
 
 def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = {
-        module_name: sys.modules.get(module_name) for module_name in _STUBBED_MODULES
-    }
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
-    if scheduling_pkg is None:
-        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
-        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
-    scheduling_pkg.__path__ = [str(ROOT / "custom_components" / "helman" / "scheduling")]
+    previous_modules = snapshot_modules(_STUBBED_MODULES)
+    install_helman_packages("scheduling")
 
     battery_builder_mod = types.ModuleType(
         "custom_components.helman.battery_capacity_forecast_builder"
@@ -271,74 +259,42 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    core_mod = sys.modules.get("homeassistant.core")
-    if core_mod is None:
-        core_mod = types.ModuleType("homeassistant.core")
-        sys.modules["homeassistant.core"] = core_mod
+    stub_module("homeassistant")
+    core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
-    components_pkg = sys.modules.get("homeassistant.components")
-    if components_pkg is None:
-        components_pkg = types.ModuleType("homeassistant.components")
-        sys.modules["homeassistant.components"] = components_pkg
+    components_pkg = stub_module("homeassistant.components")
     components_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``scheduling.actual_history`` reads what really happened from the
     # recorder; the coordinator imports it at module level.
-    recorder_mod = sys.modules.get("homeassistant.components.recorder")
-    if recorder_mod is None:
-        recorder_mod = types.ModuleType("homeassistant.components.recorder")
-        sys.modules["homeassistant.components.recorder"] = recorder_mod
+    recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
     recorder_mod.__path__ = []
 
-    history_mod = sys.modules.get("homeassistant.components.recorder.history")
-    if history_mod is None:
-        history_mod = types.ModuleType("homeassistant.components.recorder.history")
-        sys.modules["homeassistant.components.recorder.history"] = history_mod
+    history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     history_mod.get_significant_states = lambda *args, **kwargs: {}
 
     # The house consumption trainer splices its window's tail out of hourly
     # long-term statistics, so importing the coordinator now reaches this
     # module too. Nothing here exercises that read; it answers with nothing.
-    statistics_mod = sys.modules.get("homeassistant.components.recorder.statistics")
-    if statistics_mod is None:
-        statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-        sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+    statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    energy_pkg = sys.modules.get("homeassistant.components.energy")
-    if energy_pkg is None:
-        energy_pkg = types.ModuleType("homeassistant.components.energy")
-        sys.modules["homeassistant.components.energy"] = energy_pkg
-
-    energy_data_mod = sys.modules.get("homeassistant.components.energy.data")
-    if energy_data_mod is None:
-        energy_data_mod = types.ModuleType("homeassistant.components.energy.data")
-        sys.modules["homeassistant.components.energy.data"] = energy_data_mod
+    stub_module("homeassistant.components.energy")
+    energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
         return types.SimpleNamespace(async_listen_updates=lambda callback: lambda: None)
 
     energy_data_mod.async_get_manager = async_get_manager
 
-    helpers_pkg = sys.modules.get("homeassistant.helpers")
-    if helpers_pkg is None:
-        helpers_pkg = types.ModuleType("homeassistant.helpers")
-        sys.modules["homeassistant.helpers"] = helpers_pkg
+    helpers_pkg = stub_module("homeassistant.helpers")
     helpers_pkg.__path__ = []  # mark as package so sub-imports work
 
-    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
-    if debounce_mod is None:
-        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
-        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+    debounce_mod = stub_module("homeassistant.helpers.debounce")
     debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
 
     # ``automation.day_context_store`` does ``from homeassistant.helpers import
@@ -360,10 +316,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
     helpers_pkg.storage = storage_helper_mod
 
-    event_mod = sys.modules.get("homeassistant.helpers.event")
-    if event_mod is None:
-        event_mod = types.ModuleType("homeassistant.helpers.event")
-        sys.modules["homeassistant.helpers.event"] = event_mod
+    event_mod = stub_module("homeassistant.helpers.event")
     event_mod.async_track_state_change_event = (
         lambda hass, entity_ids, action: lambda: None
     )
@@ -376,10 +329,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     # Mirrors the real helper: fires at once when HA is already running, which
     # is the state a test's fake hass is always in.
-    start_mod = sys.modules.get("homeassistant.helpers.start")
-    if start_mod is None:
-        start_mod = types.ModuleType("homeassistant.helpers.start")
-        sys.modules["homeassistant.helpers.start"] = start_mod
+    start_mod = stub_module("homeassistant.helpers.start")
 
     def _async_at_started(hass, at_start_cb):
         at_start_cb(hass)
@@ -388,34 +338,11 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     start_mod.async_at_started = _async_at_started
     helpers_pkg.start = start_mod
 
-    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
-    if entity_registry_mod is None:
-        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
-        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
-
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.now = lambda: REFERENCE_TIME
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
+    stub_module("homeassistant.helpers.entity_registry")
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod
     return previous_modules
-
-
-def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> None:
-    for module_name, previous_module in previous_modules.items():
-        if previous_module is None:
-            sys.modules.pop(module_name, None)
-            continue
-        sys.modules[module_name] = previous_module
 
 
 _previous_modules = _install_import_stubs()
@@ -423,7 +350,7 @@ try:
     const_module = importlib.import_module("custom_components.helman.const")
     coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 finally:
-    _restore_modules(_previous_modules)
+    restore_modules(_previous_modules)
     sys.modules.pop("custom_components.helman.coordinator", None)
     for module_name in list(sys.modules):
         if (

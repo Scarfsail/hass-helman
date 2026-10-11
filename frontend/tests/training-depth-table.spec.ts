@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
 
 /**
  * The Training tab's per-entity depth table (issue #172).
@@ -15,15 +15,6 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
  * for the same target key.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
-
-const CARD_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 // Served over http, as the solar inspector embed's spec does: the device
 // detail dialog is loaded from the card artifact by this URL, never bundled.
 const ORIGIN = "http://helman.test";
@@ -139,7 +130,7 @@ async function mountEditor(
         await page.goto(`${ORIGIN}/`);
         await page.addScriptTag({ content: HA_DIALOG_STUB });
     }
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
     await page.evaluate(

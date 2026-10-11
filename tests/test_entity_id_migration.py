@@ -21,6 +21,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from _ha_stubs import stub_module
+
 ROOT = Path(__file__).resolve().parents[1]
 
 ENTRY_ID = "entry-1"
@@ -102,11 +104,7 @@ def _load_helman_init_with_stubs():
         ):
             sys.modules.pop(module_name)
 
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+    stub_module("custom_components", __path__=[str(ROOT / "custom_components")])
 
     # Stub the submodules async_setup_entry pulls in that this test does not
     # exercise -- same approach as test_init_recovery.py.

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * What the flow arrows are allowed to cost while nobody is looking at them.
@@ -18,11 +18,6 @@ import { resolve } from "node:path";
  * and an IntersectionObserver, and a dashboard mounts and unmounts cards freely.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 /** A 3-phase 25 A house, so the widths below are a readable fraction of it. */
 const MAX_POWER = 25 * 230 * 3;
 
@@ -34,7 +29,7 @@ const PAGE = `<!doctype html><html><body style="margin:0">
 
 async function mountArrows(page: Page, powers: (number | null)[]): Promise<void> {
     await page.setContent(PAGE);
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("power-flow-arrows"));
     await page.evaluate(async (opts) => {
         const el = document.createElement("power-flow-arrows") as any;

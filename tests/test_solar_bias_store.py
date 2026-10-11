@@ -13,6 +13,8 @@ import pytest
 from pathlib import Path
 import types
 
+from _ha_stubs import stub_module
+
 # Ensure Python can import the local custom_components package and a minimal
 # homeassistant package used by the integration during import.
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,16 +142,8 @@ def _make_versioned_fake_store_backend():
 
 
 def _install_service_import_stubs() -> None:
-    util_mod = sys.modules.get("homeassistant.util")
-    if util_mod is None:
-        util_mod = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_mod
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
-    dt_mod.now = lambda: None
+    util_mod = stub_module("homeassistant.util")
+    dt_mod = stub_module("homeassistant.util.dt", now=lambda: None)
     dt_mod.as_local = lambda value: value
     util_mod.dt = dt_mod
 

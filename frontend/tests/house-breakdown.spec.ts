@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Coverage for the solar-inspector's house-composition panel.
@@ -14,18 +14,6 @@ import { resolve } from "node:path";
  * Note the unmeasured remainder is NOT the forecast's non-deferrable base load;
  * it is the analogue of the power card's "unmeasured" node.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
-/** Load a bare page with the card bundle so its custom elements are registered. */
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
-}
 
 type Appliance = {
     /** null for a scheduled appliance with no meter configured. */
@@ -520,7 +508,7 @@ const APPLIANCES: Appliance[] = [
 
 test.describe("solar inspector house composition", () => {
     test("selecting a slot shows one box per consumer plus the unmeasured remainder", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
         // No panel until a slot is selected.
@@ -552,7 +540,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("the remainder reads the power card's Unmeasured label", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: APPLIANCES,
@@ -647,7 +635,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("hides the unmeasured box when the slot's whole demand is metered", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // The remainder is zero: every watt is metered, so no dead 0% row.
         await mountInspector(page, {
             withBreakdown: true,
@@ -665,7 +653,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("hides appliances that drew nothing in the slot", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: [
@@ -683,7 +671,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("clicking a consumer box opens its power sensor — the one the card reads", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: [
@@ -708,7 +696,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("clicking a consumer box falls back to its energy sensor when the tree knows no power sensor", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: APPLIANCES,
@@ -725,7 +713,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("the unmeasured box is inert — it has no entity behind it", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: APPLIANCES,
@@ -741,7 +729,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("a consumer with a switch gets the card's control badge", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: [
@@ -765,7 +753,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("clicking the control badge opens the switch, not the energy sensor", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: [
@@ -821,7 +809,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("no composition panel when the backend supplied no breakdown", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, { withBreakdown: false, appliances: [], unmeasuredWh: 180 });
 
         await selectNoonSlot(page);
@@ -843,7 +831,7 @@ test.describe("solar inspector house composition", () => {
      * worth pinning.
      */
     test("bars are coloured by the source that fed the house in the slot", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // 80 Wh a slot, all of it imported from the grid: grid is negative.
         await mountInspector(page, {
             withBreakdown: true,
@@ -858,7 +846,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("battery discharge colours the bars", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // 80 Wh a slot, half from the battery discharging, the rest unaccounted
         // for by either meter — so it must read as solar.
         await mountInspector(page, {
@@ -875,7 +863,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("a charging battery is not a source — it consumes, it does not feed", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // Positive battery energy is charging. It takes energy off the bus rather
         // than putting any on it, so the house's 80 Wh is left entirely to solar;
         // a flipped sign here would paint the bars battery-green instead.
@@ -892,7 +880,7 @@ test.describe("solar inspector house composition", () => {
     });
 
     test("solar takes the remainder rather than the raw production series", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // Everything the house drew came off the meters, so nothing is left for
         // solar even though the fixture's production series is non-zero: energy
         // that went to export or into the battery never reached the house.
@@ -916,7 +904,7 @@ test.describe("solar inspector house composition", () => {
      * legible rather than rounding them all away to "0.0 kWh".
      */
     test("energy figures are formatted the same everywhere", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         const dailySolarTotal = () =>
             page.evaluate(() => {
                 const el = document.querySelector("helman-solar-inspector") as any;
@@ -1089,7 +1077,7 @@ async function houseTooltipRows(
 
 test.describe("solar inspector deferrable house load", () => {
     test("the measured house draws two bands, non-deferrable against the baseline", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // 180 Wh a slot: 50 shiftable, 130 not (30 metered fridge + 100 unmeasured).
         await mountInspector(page, {
             withBreakdown: true,
@@ -1111,7 +1099,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("a slot with nothing shiftable draws the house as a single band", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
         expect(await bandExtent(page, DEFERRABLE_FILL)).toBeNull();
@@ -1120,7 +1108,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("the composition panel tints and tags the deferrable rows, and only those", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1142,7 +1130,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("the panel files consumers under a base and a deferrable group", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1162,7 +1150,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("a slot with nothing shiftable keeps a single group", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
         await selectNoonSlot(page);
 
@@ -1172,7 +1160,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("an opened group stays open when another slot is picked", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1193,7 +1181,7 @@ test.describe("solar inspector deferrable house load", () => {
     test("the hover popup subdivides the house row when the slot had shiftable load", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1212,7 +1200,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("the hover popup pairs each half with its own forecast", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // 80 Wh of base plus a 40 Wh scheduled run per 15-min slot, against a
         // measured 130 + 50.
         await mountInspector(page, {
@@ -1234,7 +1222,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("an uncomposed stretch of forecast collapses the popup to the totals", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // The composition starts at 18:00, as it does on today: everything before
         // is the recorder's archive of the forecast sensor, a scalar whose parts
         // nothing kept.
@@ -1259,7 +1247,7 @@ test.describe("solar inspector deferrable house load", () => {
     });
 
     test("the hover popup keeps one house row when nothing was shiftable", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
         expect(await houseTooltipRows(page)).toEqual([
@@ -1292,7 +1280,7 @@ test.describe("solar inspector forecast composition", () => {
     test("the forecast stack draws two house bands, non-deferrable against the baseline", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1313,7 +1301,7 @@ test.describe("solar inspector forecast composition", () => {
     });
 
     test("a forecast with nothing scheduled draws one house band", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1328,7 +1316,7 @@ test.describe("solar inspector forecast composition", () => {
     test("selecting a slot itemises the forecast beside the actual composition", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1358,7 +1346,7 @@ test.describe("solar inspector forecast composition", () => {
     });
 
     test("a bucket the composition only partly covers still itemises", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // The composition starts at 12:30, halfway through the selected hour —
         // the shape of the slot in progress, whose earlier samples predate the
         // live pipeline's horizon.
@@ -1385,7 +1373,7 @@ test.describe("solar inspector forecast composition", () => {
     });
 
     test("two scheduled appliances behind one shared meter are two boxes", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // Two air conditioners on one breaker meter, both scheduled into the
         // slot. The forecast is per controllable, so they arrive as two rows on
         // the same entityId — which must stay two boxes, each with its own badge,
@@ -1413,7 +1401,7 @@ test.describe("solar inspector forecast composition", () => {
     });
 
     test("a scheduled appliance with no meter is named but opens nothing", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,
@@ -1437,7 +1425,7 @@ test.describe("solar inspector forecast composition", () => {
     test("the slot in progress reads as forecast: itemised, and with no actual beside it", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         // Noon is the slot in progress: the measurements stop at its start, and the
         // composition begins there. This is the shape the backend now serves — one
         // slot, one vintage, forecast on both halves of the panel.
@@ -1466,7 +1454,7 @@ test.describe("solar inspector forecast composition", () => {
     test("a day whose forecast composition was never recorded shows only the actual panel", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
             appliances: MIXED_APPLIANCES,

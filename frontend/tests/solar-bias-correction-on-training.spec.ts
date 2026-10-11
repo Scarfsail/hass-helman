@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * Solar bias correction is edited on the Training tab (issue #306), and its
@@ -8,11 +8,6 @@ import { resolve } from "node:path";
  * So the round trip is the claim -- edit on Training, save, and the document
  * the backend receives holds every solar bias setting in that one block.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const CONFIG = {
     config_version: 19,
@@ -63,9 +58,7 @@ const TRAINING_STATUS = {
 };
 
 async function mountEditor(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, trainingStatus }) => {

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The solar node detail on the simple card.
@@ -17,8 +17,7 @@ import { installFixedClock } from "./support/fixed-clock";
  * destination.
  */
 
-const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
-const SCREENS = process.env.P4_SCREENS;
+const SCREENS = process.env.SCREENS;
 
 const DAY = "2026-10-21";
 const DAY_START = Date.parse(`${DAY}T00:00:00Z`);
@@ -309,7 +308,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
     }, { v: variant, points: forecastPoints(!!variant.night) });
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
@@ -670,30 +669,29 @@ test.describe("a Custom inverter", () => {
     });
 });
 
-test.describe("screenshots", () => {
-    test.skip(!SCREENS, "set P4_SCREENS to a directory to capture the review screenshots");
+test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
         test(`overview and an expanded answer at ${name}`, async ({ page }) => {
             await page.setViewportSize({ width, height });
             await mount(page);
             await openDetail(page);
-            await page.screenshot({ path: `${SCREENS}/${name}-overview.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-overview.png`, fullPage: true });
             await header(page, "production").click();
             await expect(question(page, "production").locator("[data-row='peak']")).toContainText("7.8 kW");
-            await page.screenshot({ path: `${SCREENS}/${name}-production.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-production.png`, fullPage: true });
             await header(page, "destinations").click();
             await expect(question(page, "destinations").locator("[data-row='produced']")).toBeVisible();
             await evidence(page, "destinations").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-destinations.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-destinations.png`, fullPage: true });
             await header(page, "limits").click();
             await evidence(page, "limits").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-limits.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-limits.png`, fullPage: true });
             await header(page, "strings").click();
             await expect(question(page, "strings").locator("helman-day-line-chart")).toHaveCount(1);
-            await page.screenshot({ path: `${SCREENS}/${name}-strings.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-strings.png`, fullPage: true });
             await header(page, "outlook").click();
             await evidence(page, "outlook").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-outlook.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/solar-${name}-outlook.png`, fullPage: true });
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             expect(overflow).toBeLessThanOrEqual(0);
         });

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The house node detail on the simple card.
@@ -17,8 +17,7 @@ import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
  * full-day comparison against a partial today.
  */
 
-const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
-const SCREENS = process.env.P5_SCREENS;
+const SCREENS = process.env.SCREENS;
 
 type Variant = {
     profile?: boolean;
@@ -297,7 +296,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
     }, variant);
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
@@ -645,19 +644,18 @@ test.describe("a Custom inverter", () => {
     });
 });
 
-test.describe("screenshots", () => {
-    test.skip(!SCREENS, "set P5_SCREENS to a directory to capture the review screenshots");
+test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
         test(`overview and expanded answers at ${name}`, async ({ page }) => {
             await page.setViewportSize({ width, height });
             await mount(page, { offGrid: true });
             await openDetail(page);
-            await page.screenshot({ path: `${SCREENS}/${name}-overview.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/house-${name}-overview.png`, fullPage: true });
             for (const id of ["sources", "consumers", "next", "pattern", "phases"]) {
                 await header(page, id).click();
                 await evidence(page, id).click();
                 await page.waitForTimeout(300);
-                await page.screenshot({ path: `${SCREENS}/${name}-${id}.png`, fullPage: true });
+                await page.screenshot({ path: `${SCREENS}/house-${name}-${id}.png`, fullPage: true });
             }
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             expect(overflow).toBeLessThanOrEqual(0);

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Level 3: the logic that produced one slot, as AND/OR blocks.
@@ -25,11 +25,6 @@ import { resolve } from "node:path";
  *   reduced opacity: deleting it would make "checked and irrelevant"
  *   indistinguishable from "never checked".
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DATE = "2026-07-31";
 const RUN_AT = `${DATE}T20:15:00+02:00`;
@@ -805,9 +800,7 @@ async function mountPanel(
     fixture: unknown = PAYLOAD,
     translations: Record<string, string> = {},
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
+    await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(([fixture, translations]) => {
         const panel = document.createElement("scheduling-explanation-panel") as HTMLElement

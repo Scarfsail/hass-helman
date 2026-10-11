@@ -1,5 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
 import {
     STOP_MONTH_VIEW,
@@ -9,6 +8,7 @@ import {
     mountInspector as mountAggregateInspector,
     pageBack,
 } from "./support/inspector-aggregate-harness";
+import { loadBundle } from "./support/card-page";
 
 /**
  * #195 -- the card holds its height and its last drawn content across a load,
@@ -30,15 +30,8 @@ const MIN_HEIGHT_FLOOR = 400;
 /** Days the inspector offers, counting today as day 0. */
 const PILL_DAYS = 4;
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 async function mountDayViewInspector(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
     await installFakeHass(page, { pillDays: PILL_DAYS });
 
     await page.evaluate(() => {

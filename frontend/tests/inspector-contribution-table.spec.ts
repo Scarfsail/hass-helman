@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The training-contribution table on a past day whose forecast curve is gone.
@@ -18,20 +18,13 @@ import { resolve } from "node:path";
  * explainability entry.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const PAST_DAY = "2026-07-10";
 
 async function mountPurgedPastDay(
     page: Page,
     { biasRatioDefault }: { biasRatioDefault: boolean },
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, biasRatioDefault }) => {
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];

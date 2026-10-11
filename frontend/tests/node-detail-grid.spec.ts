@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The grid node detail on the simple card.
@@ -15,8 +15,7 @@ import { installFixedClock } from "./support/fixed-clock";
  * descriptive references, current is an estimate, and money keeps its coverage.
  */
 
-const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
-const SCREENS = process.env.P2_SCREENS;
+const SCREENS = process.env.SCREENS;
 
 type Variant = {
     profile?: boolean;
@@ -197,7 +196,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
     }, variant);
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
@@ -471,24 +470,23 @@ test.describe("a Custom inverter", () => {
     });
 });
 
-test.describe("screenshots", () => {
-    test.skip(!SCREENS, "set P2_SCREENS to a directory to capture the review screenshots");
+test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
         test(`overview and an expanded answer at ${name}`, async ({ page }) => {
             await page.setViewportSize({ width, height });
             await mount(page);
             await openDetail(page);
-            await page.screenshot({ path: `${SCREENS}/${name}-overview.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/grid-${name}-overview.png`, fullPage: true });
             await header(page, "voltage").click();
             await expect(question(page, "voltage").locator("helman-day-line-chart svg")).toBeVisible();
-            await page.screenshot({ path: `${SCREENS}/${name}-voltage.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/grid-${name}-voltage.png`, fullPage: true });
             await evidence(page, "voltage").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-voltage-evidence.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/grid-${name}-voltage-evidence.png`, fullPage: true });
             await header(page, "phases").click();
             await evidence(page, "phases").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-phases.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/grid-${name}-phases.png`, fullPage: true });
             await header(page, "money").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-money.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/grid-${name}-money.png`, fullPage: true });
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             expect(overflow).toBeLessThanOrEqual(0);
         });

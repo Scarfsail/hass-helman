@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * A history tick has to reach the bars.
@@ -19,21 +19,10 @@ import { resolve } from "node:path";
  * can only have come from the counter.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const SOLAR = "#facc15";
 const GRID = "#38bdf8";
 const SOLAR_RGB = "rgb(250, 204, 21)";
 const GRID_RGB = "rgb(56, 189, 248)";
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
-}
 
 /**
  * Install a page-side helper that reads back the bar colours of every rendered
@@ -99,7 +88,7 @@ function fakeNode(id: string, name: string, groups: Record<string, string> = {})
 
 test.describe("history tick reaches the rendered bars", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-tree-item-list");
         await installReader(page);
     });
 
@@ -188,7 +177,7 @@ test.describe("history tick reaches the rendered bars", () => {
  */
 test.describe("an unchanged history costs nothing", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-tree-item-list");
     });
 
     test("repeated hass replacements re-render the row but rebuild no paths", async ({ page }) => {
@@ -254,7 +243,7 @@ test.describe("an unchanged history costs nothing", () => {
  */
 test.describe("sorting follows the histories", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-tree-item-list");
         await installOrderReader(page);
     });
 

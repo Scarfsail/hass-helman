@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Editing the deciding optimizer from the slot it decided.
@@ -18,11 +18,6 @@ import { resolve } from "node:path";
  *   dialog open and says so, and an optimizer the config no longer has is
  *   named rather than rendered as a blank card.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DATE = "2026-07-31";
 const RUN_AT = `${DATE}T20:15:00+02:00`;
@@ -160,9 +155,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
         schema = SCHEMA,
     } = options;
 
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
+    await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(
         ({ fixture, slotId, admin, schema, configs, save, strings, appliance }) => {

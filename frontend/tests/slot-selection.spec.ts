@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Regression guard for the solar-inspector chart's click-to-select alignment.
@@ -14,18 +14,6 @@ import { resolve } from "node:path";
  * This pins the contract that a click anywhere inside a slot's pixel span selects
  * that slot — matching hover — so selection and hover never disagree.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
-/** Load a bare page with the card bundle so its custom elements are registered. */
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
-}
 
 /** A "HH:MM" slot label for a minute-of-day. */
 function slotLabel(minutes: number): string {
@@ -207,7 +195,7 @@ test.describe("solar inspector slot selection alignment", () => {
     const targetSlotStart = 720; // 12:00
 
     test("clicking the LEFT half of a slot selects that slot", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page);
         const geom = await chartGeom(page);
 
@@ -219,7 +207,7 @@ test.describe("solar inspector slot selection alignment", () => {
     });
 
     test("clicking the RIGHT half of a slot selects that same slot, not the next one", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page);
         const geom = await chartGeom(page);
 
@@ -233,7 +221,7 @@ test.describe("solar inspector slot selection alignment", () => {
     });
 
     test("click selection agrees with hover across the whole slot span", async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page);
         const geom = await chartGeom(page);
 
@@ -273,7 +261,7 @@ test.describe("solar inspector selection on a partly forecast day", () => {
     test("a morning click selects its own slot when only the afternoon has forecast", async ({
         page,
     }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page);
 
         await page.evaluate(() => {

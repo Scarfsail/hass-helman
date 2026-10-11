@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Regression guard for the house breakdown's "top N" cut.
@@ -13,23 +13,12 @@ import { resolve } from "node:path";
  * The container therefore drops invisible nodes BEFORE it takes its top N.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 interface FakeNode {
     id: string;
     name: string;
     powerValue: number;
     powerHistory: number[];
     isUnmeasured?: boolean;
-}
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-tree-item-list"));
 }
 
 /** Mount the container with the given nodes and return the row names it painted. */
@@ -81,7 +70,7 @@ const NODES = (unmeasuredNow: number): FakeNode[] => [
 
 test.describe("house breakdown top-N cut", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-tree-item-list");
     });
 
     test("a hidden unmeasured row gives its slot to the next real device", async ({ page }) => {

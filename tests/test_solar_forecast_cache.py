@@ -10,10 +10,10 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from _ha_stubs import restore_modules
 from test_solar_bias_response import (
     REFERENCE_TIME,
     _install_coordinator_import_stubs,
-    _restore_modules,
 )
 
 
@@ -137,7 +137,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             # Restore the module table, but let the failure speak: swallowing it
             # here turns a missing stub into a baffling unpack error in every
             # caller.
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
             raise
 
@@ -216,7 +216,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 solar_snapshot=solar_snapshot,
             )
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_refresh_forecast_republishes_registered_forecast_entities(
@@ -276,7 +276,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
             forecast_entity.async_write_ha_state.assert_called_once_with()
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_battery_forecast_sensors_publish_only_on_the_slot_aligned_rebuild(
@@ -364,7 +364,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                     0
                 ].async_write_ha_state.assert_called_once_with()
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_refresh_forecast_skips_unadded_forecast_entities(self) -> None:
@@ -422,7 +422,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
             forecast_entity.async_write_ha_state.assert_not_called()
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_get_forecast_serves_previous_slot_snapshots_without_rebuilding(
@@ -476,7 +476,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["solar"]["points"][0]["value"], 900.5)
             self.assertIs(coordinator._cached_forecast["status"], "available")
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_get_forecast_blanks_house_snapshot_when_fingerprint_changed(
@@ -549,7 +549,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 rebuilt,
             )
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_get_forecast_reports_staleness_for_both_halves(self) -> None:
@@ -608,7 +608,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                             staleness["hint"] is None, not expected_stale
                         )
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_second_trigger_joins_the_refresh_already_in_flight(self) -> None:
@@ -641,7 +641,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._async_run_forecast_refresh.assert_awaited_once()
             self.assertIsNone(coordinator._forecast_refresh_task)
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_joining_caller_survives_a_failing_refresh(self) -> None:
@@ -670,7 +670,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 await first
             coordinator._async_run_forecast_refresh.assert_awaited_once()
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_solar_bias_event_rebuilds_immediately(self) -> None:
@@ -697,7 +697,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 [("helman_data_changed", {"kind": "solar_bias"})],
             )
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_get_forecast_uses_cached_corrected_points_without_rebuilding_solar_snapshot(self) -> None:
@@ -831,7 +831,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("rawPoints", result["solar"])
             coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_build_canonical_solar_forecast_keeps_raw_points_and_corrected_points_separate(self) -> None:
@@ -881,7 +881,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 "adjusted",
             )
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
 
@@ -983,7 +983,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIs(result.forecast_refreshed, False)
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_a_fresh_install_still_adopts_its_first_build(self) -> None:
@@ -1011,7 +1011,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(coordinator._cached_solar_forecast, empty)
             self.assertIs(result.forecast_refreshed, True)
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_a_partial_build_still_replaces_a_full_one(self) -> None:
@@ -1043,7 +1043,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(coordinator._cached_solar_forecast, partial)
             self.assertIs(result.forecast_refreshed, True)
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
     async def test_the_preserved_forecast_renders_and_ages_into_the_banner(
@@ -1101,7 +1101,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(staleness["isStale"], True)
             self.assertEqual(staleness["reason"], "stale_forecast")
         finally:
-            _restore_modules(previous_modules)
+            restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
 
 

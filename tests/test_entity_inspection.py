@@ -19,23 +19,16 @@ asserting on prose, the boundary this package exists to hold has moved.
 from __future__ import annotations
 
 import asyncio
-import sys
 import types
 import unittest
 import unittest.mock
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 from custom_components.helman.entity_inspection import (  # noqa: E402
     FALLBACK_EVALUATOR,

@@ -6,21 +6,13 @@ not be imported comes back as data for the caller to log or present.
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from copy import deepcopy
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 from custom_components.helman.controllables.energy_import import (  # noqa: E402
     EnergyImportConflict,

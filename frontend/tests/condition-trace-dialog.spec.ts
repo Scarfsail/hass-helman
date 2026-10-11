@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { HA_PANEL_RESOLVER_FAILING_STUB, HA_TRACE_STUB } from "./support/ha-trace-stub";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The custom-conditions block, opened into its last evaluation.
@@ -25,11 +25,6 @@ import { HA_PANEL_RESOLVER_FAILING_STUB, HA_TRACE_STUB } from "./support/ha-trac
  *   is kept while the explanation record accumulates, so a trace newer than the
  *   row that opened it has to say so.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DATE = "2026-07-31";
 const SLOT_ID = `${DATE}T14:00:00+02:00`;
@@ -173,7 +168,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
     } else {
         await page.addScriptTag({ content: HA_TRACE_STUB });
     }
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
     await page.evaluate(({ fixture, trace, reject, slotId }) => {

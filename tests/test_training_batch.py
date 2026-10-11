@@ -2,29 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
+
 REFERENCE_TIME = datetime.fromisoformat("2026-08-02T03:00:00+02:00")
 
 
 def _install_package_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
+    install_helman_packages()
 
 
 _install_package_stubs()

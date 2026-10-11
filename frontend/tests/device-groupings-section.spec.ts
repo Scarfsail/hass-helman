@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The Devices tab's groupings section (#363): `devices.groupings` edited in place.
@@ -11,11 +11,6 @@ import { resolve } from "node:path";
  * naming a group that is gone -- it fails validation -- so a removal strips,
  * and an id change rewrites, every device reference in the same mutation.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const BREAKERS = {
     id: "breakers",
@@ -58,9 +53,7 @@ declare global {
 }
 
 async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES]): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config }) => {

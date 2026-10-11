@@ -8,16 +8,14 @@ asked for.
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages, stub_module
+
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 DAY = datetime(2026, 5, 10, 0, 0, tzinfo=TZ)
@@ -25,60 +23,25 @@ ENTITY_ID = "sensor.battery_soc"
 
 
 def _install_import_stubs() -> None:
-    custom_components_pkg = sys.modules.get("custom_components")
-    if custom_components_pkg is None:
-        custom_components_pkg = types.ModuleType("custom_components")
-        sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-    helman_pkg = sys.modules.get("custom_components.helman")
-    if helman_pkg is None:
-        helman_pkg = types.ModuleType("custom_components.helman")
-        sys.modules["custom_components.helman"] = helman_pkg
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-
-    homeassistant_pkg = sys.modules.get("homeassistant")
-    if homeassistant_pkg is None:
-        homeassistant_pkg = types.ModuleType("homeassistant")
-        sys.modules["homeassistant"] = homeassistant_pkg
-
-    core_mod = sys.modules.get("homeassistant.core")
-    if core_mod is None:
-        core_mod = types.ModuleType("homeassistant.core")
-        sys.modules["homeassistant.core"] = core_mod
+    install_helman_packages()
+    stub_module("homeassistant")
+    core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    components_pkg = sys.modules.get("homeassistant.components")
-    if components_pkg is None:
-        components_pkg = types.ModuleType("homeassistant.components")
-        sys.modules["homeassistant.components"] = components_pkg
-
-    recorder_mod = sys.modules.get("homeassistant.components.recorder")
-    if recorder_mod is None:
-        recorder_mod = types.ModuleType("homeassistant.components.recorder")
-        sys.modules["homeassistant.components.recorder"] = recorder_mod
+    stub_module("homeassistant.components")
+    recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
 
-    history_mod = sys.modules.get("homeassistant.components.recorder.history")
-    if history_mod is None:
-        history_mod = types.ModuleType("homeassistant.components.recorder.history")
-        sys.modules["homeassistant.components.recorder.history"] = history_mod
+    history_mod = stub_module("homeassistant.components.recorder.history")
     if not hasattr(history_mod, "state_changes_during_period"):
         history_mod.state_changes_during_period = lambda *args, **kwargs: {}
     if not hasattr(history_mod, "get_significant_states"):
         history_mod.get_significant_states = lambda *args, **kwargs: {}
 
-    util_pkg = sys.modules.get("homeassistant.util")
-    if util_pkg is None:
-        util_pkg = types.ModuleType("homeassistant.util")
-        sys.modules["homeassistant.util"] = util_pkg
-
-    dt_mod = sys.modules.get("homeassistant.util.dt")
-    if dt_mod is None:
-        dt_mod = types.ModuleType("homeassistant.util.dt")
-        sys.modules["homeassistant.util.dt"] = dt_mod
+    util_pkg = stub_module("homeassistant.util")
+    dt_mod = stub_module("homeassistant.util.dt")
     if not hasattr(dt_mod, "as_local"):
         dt_mod.as_local = lambda value: value
     if not hasattr(dt_mod, "as_utc"):

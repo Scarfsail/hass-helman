@@ -8,20 +8,12 @@ a device the inspector offers no control for either.
 from __future__ import annotations
 
 import importlib
-import sys
-import types
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from _ha_stubs import install_helman_packages
 
-for _name, _path in [
-    ("custom_components", ROOT / "custom_components"),
-    ("custom_components.helman", ROOT / "custom_components" / "helman"),
-]:
-    _pkg = sys.modules.get(_name) or types.ModuleType(_name)
-    _pkg.__path__ = [str(_path)]
-    sys.modules[_name] = _pkg
+
+install_helman_packages()
 
 module = importlib.import_module("custom_components.helman.house_device_consumers")
 extract = module.extract_house_device_consumers
