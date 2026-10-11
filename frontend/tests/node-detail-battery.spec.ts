@@ -33,6 +33,7 @@ type Variant = {
     timeToEmpty?: string;
     temperatureUnit?: string;
     forecastFails?: boolean;
+    remainingUnit?: string;
 };
 
 declare global {
@@ -97,7 +98,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s("4200", "W"), "sensor.grid": s("-300", "W"), "sensor.battery": s(v.power ?? "-2100", "W"),
             "sensor.house": s("1200", "W"),
-            "sensor.soc": s("67", "%"), "sensor.remaining": s("11577", "Wh"),
+            "sensor.soc": s("67", "%"), "sensor.remaining": s("11577", v.remainingUnit ?? "Wh"),
             "number.min_soc": s("10", "%"), "number.max_soc": s("100", "%"),
             "sensor.battery_in_today": s("6.2", "kWh"), "sensor.battery_out_today": s("4.1", "kWh"),
             "sensor.helman_battery_time_to_empty": s(v.timeToEmpty ?? "280", "min", { target_time: "2026-10-21T16:40:00+00:00", target_soc: 10 }),
@@ -356,6 +357,13 @@ test.describe("limits", () => {
         await expect(cold).toContainText("this reading alone does not show that is happening");
         await expect(question(page, "limits")).not.toContainText(/derat|because of the cold|due to/i);
     });
+});
+
+test("a remaining energy in an unsupported unit gives no reserve, never a guess", async ({ page }) => {
+    await mount(page, { remainingUnit: "MJ" });
+    await openDetail(page);
+    await header(page, "reserve").click();
+    await expect(question(page, "reserve").locator("[data-row='usable']")).toHaveCount(0);
 });
 
 test("a cold reading in °F is compared in °C", async ({ page }) => {

@@ -28,6 +28,7 @@ import {
 } from "./node-detail-schedule";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { BatteryDetailParams } from "./node-detail-types";
+import { isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
 import { readKWh } from "./node-detail-utils";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
@@ -274,11 +275,10 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      */
     private _reserve(overview: BatteryDetailPayload): Reserve | null {
         const soc = this._number(overview, "soc");
-        // A remaining energy with no unit is not guessed at, as in the forecast.
+        // A remaining energy in no known energy unit is not guessed at, as in the forecast.
         const remainingId = overview.entities.remaining_energy ?? null;
-        const remainingKwh = remainingId && this.hass.states[remainingId]?.attributes.unit_of_measurement
-            ? readKWh(this.hass, remainingId)
-            : null;
+        const remainingUnit = remainingId ? this.hass.states[remainingId]?.attributes.unit_of_measurement as string | undefined : undefined;
+        const remainingKwh = remainingId && isSupportedEnergyUnit(remainingUnit) ? readKWh(this.hass, remainingId) : null;
         if (soc === null || remainingKwh === null || soc <= 0 || soc > 100 || remainingKwh < 0) return null;
         const capacityKwh = remainingKwh / (soc / 100);
         const minSoc = this._number(overview, "min_soc");
