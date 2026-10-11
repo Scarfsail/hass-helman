@@ -6,7 +6,7 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { TreeItemDTO, TreePayload } from "../helman-api";
+import { applyValueType, TreeItemDTO, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
@@ -327,27 +327,31 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private _buildNodeDetailContext(): NodeDetailContext {
-        const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
+        const { sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
         const gridProducerNode = sourcesChildren.find((device) => device.sourceType === "grid") ?? null;
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
         const batteryProducerNode = sourcesChildren.find((device) => device.sourceType === "battery") ?? null;
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
-        const batterySensorId = batteryProducerNode?.powerSensorId ?? batteryConsumerNode?.powerSensorId;
-        const batteryReadable = !!batterySensorId && Number.isFinite(parseFloat(this._hass?.states[batterySensorId]?.state ?? ""));
-        const gridSensorId = gridProducerNode?.powerSensorId ?? gridConsumerNode?.powerSensorId;
-        const gridReadable = !!gridSensorId && Number.isFinite(parseFloat(this._hass?.states[gridSensorId]?.state ?? ""));
+        // The open detail reads the sensors' current states, signed as the
+        // simple card signs them; the tree's powerValue moves only on history ticks.
+        const raw = (entityId: string | null | undefined): number | null => {
+            const value = entityId ? parseFloat(this._hass?.states[entityId]?.state ?? "") : NaN;
+            return Number.isFinite(value) ? value : null;
+        };
+        const batteryNode = batteryProducerNode ?? batteryConsumerNode;
+        const batteryRaw = raw(batteryNode?.powerSensorId);
+        const solarRaw = raw(solarNode?.powerSensorId);
+        const gridNode = gridProducerNode ?? gridConsumerNode;
+        const gridRaw = raw(gridNode?.powerSensorId);
 
         const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
 
         return {
             batteryPower,
-            batteryPowerReading: batteryReadable ? batteryPower : null,
-            solarNode,
-            gridPower: gridReadable
-                ? (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0)
-                : null,
-            productionNode: sourcesNode ?? null,
+            batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
+            solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
+            gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
             consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,
             solarPower: solarNode?.powerValue ?? 0,

@@ -123,6 +123,7 @@ export class NodeDetailDialog extends LitElement {
                 return html`
                     <node-detail-solar-content
                         .hass=${this.hass}
+                        .localize=${this.localize}
                         .params=${this.params}
                     ></node-detail-solar-content>
                 `;

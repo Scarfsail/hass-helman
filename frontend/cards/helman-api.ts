@@ -365,6 +365,20 @@ export interface SolarForecastDTO {
     actualHistory: ForecastPointDTO[];
     points: ForecastPointDTO[]; // forecast points at the returned response granularity
     adjustedPoints?: ForecastPointDTO[];
+    /** What the bias correction is trained on and whether it applies; absent before it ever ran. */
+    biasCorrection?: SolarBiasCorrectionDTO;
+}
+
+export interface SolarBiasCorrectionDTO {
+    status: string;
+    /** `adjusted` when `adjustedPoints` are the corrected forecast, else `raw`. */
+    effectiveVariant: string | null;
+    explainability: {
+        fallbackReason: string | null;
+        trainedAt: string | null;
+        usableDays: number;
+        droppedDays: number;
+    };
 }
 
 export function getEffectiveSolarForecastPoints(
@@ -830,7 +844,7 @@ export interface GetApplianceProjectionsRequest {
 // --- Node details (helman/get_node_detail) ----------------------------------
 
 /** The nodes the backend serves a detail for. */
-export type NodeDetailNode = "inverter" | "grid" | "battery";
+export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
 export interface GetNodeDetailRequest {
@@ -1011,6 +1025,89 @@ export interface BatteryChargeSectionPayload {
     complete: boolean;
     /** Why there is no charge origin: the reports cannot be built. */
     unavailable: string | null;
+    charge: BatteryChargeDTO | null;
+}
+
+/**
+ * The solar detail's overview. `entities` carries the solar node's `power` and
+ * `today_energy` meters, the lifetime counter (`lifetime_energy`), the grid's
+ * `today_export` and the profile's string, cap and setting telemetry (absent
+ * for a Custom inverter, `null` where the registry lacks one). `strings` are
+ * the strings whose power the profile resolves.
+ */
+export interface SolarDetailPayload {
+    node: "solar";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    strings: number[];
+    /** The solar node's configured `max_power`, W: configured capacity, not a measurement. */
+    configuredMaxPowerW: number | null;
+    maxAllowedExportPower: number | null;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** Today's solar power in W, production positive; `power` is `null` in a unit not known. */
+export interface SolarProductionSectionPayload {
+    node: "solar";
+    section: "production";
+    asOf: string;
+    period: { start: string; end: string };
+    power: DayStatsDTO | null;
+    /** The sensor's own unit. */
+    unit: string | null;
+}
+
+/**
+ * Today's string powers (W) and energies. A string's `kwh` integrates its
+ * known time only; `common` compares the strings over the buckets all of them
+ * know, so their shares compare like with like.
+ */
+export interface SolarStringsSectionPayload {
+    node: "solar";
+    section: "strings";
+    asOf: string;
+    period: { start: string; end: string };
+    strings: Record<string, { entityId: string; unit: string | null; day: DayStatsDTO | null } | null>;
+    energy: {
+        strings: Record<string, { kwh: number | null; coverage: number }>;
+        common: { strings: number[]; coverage: number; kwh: Record<string, number> | null };
+    };
+}
+
+/**
+ * Where a period's measured solar went, estimated from the same per-hour
+ * flows the reports solve: solar the meters do not explain, and solar in
+ * hours without a source mix, stays unresolved:
+ * `house + battery + export + unresolved = produced`.
+ */
+export interface SolarDestinationsDTO {
+    producedKwh: number;
+    /** Solar in the hours with a source mix, the only ones the shares cover. */
+    attributedKwh: number;
+    /** Solar in hours without a source mix; part of `unresolvedKwh`. */
+    unattributedKwh: number;
+    houseKwh: number;
+    batteryKwh: number;
+    exportKwh: number;
+    unresolvedKwh: number;
+    measuredExportKwh: number;
+    /** Measured export the solar did not account for: the battery's. */
+    otherExportKwh: number;
+}
+
+export interface SolarDestinationsSectionPayload {
+    node: "solar";
+    section: "destinations";
+    asOf: string;
+    period: { start: string; end: string };
+    currency: string | null;
+    complete: boolean;
+    /** Why there are no destinations: the reports cannot be built, or there is no solar meter. */
+    unavailable: string | null;
+    destinations: SolarDestinationsDTO | null;
+    /** Today's battery charge origin, for the solar charge's forgone export value. */
     charge: BatteryChargeDTO | null;
 }
 

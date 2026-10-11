@@ -17,6 +17,7 @@ from typing import Any
 from .battery import async_battery_section, build_battery_overview
 from .grid import async_grid_section, build_grid_overview
 from .inverter import async_inverter_section, build_inverter_overview
+from .solar import async_solar_section, build_solar_overview
 
 
 class NodeDetailError(Exception):
@@ -53,6 +54,11 @@ NODE_DETAILS: dict[str, NodeDetail] = {
         overview=build_battery_overview,
         section=async_battery_section,
         sections=frozenset({"charge"}),
+    ),
+    "solar": NodeDetail(
+        overview=build_solar_overview,
+        section=async_solar_section,
+        sections=frozenset({"production", "strings", "destinations"}),
     ),
 }
 

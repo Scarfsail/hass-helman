@@ -980,3 +980,354 @@ def test_the_charge_section_says_why_without_reports():
 
     assert payload["charge"] is None
     assert payload["unavailable"] == "no_house_meter"
+
+
+# --- The solar detail ---------------------------------------------------------
+
+PV_POWER = {string: f"sensor.solax_pv_power_{string}" for string in (1, 2)}
+SOLAR_TELEMETRY = {
+    "run_mode": RUN_MODE,
+    **{f"pv_power_{string}": entity_id for string, entity_id in PV_POWER.items()},
+    "pv_voltage_1": "sensor.solax_pv_voltage_1",
+    "rated_power": "sensor.solax_inverter_power_type",
+    "export_limit": EXPORT_LIMIT,
+    "shade_fix_pv1": "select.solax_shadow_fix_function_level_pv1_gmppt",
+}
+
+
+def solar_config(*, profile=True, max_power=11600, polarity=None):
+    cfg = config(profile=profile)
+    entities = {"power": "sensor.solar_power", "today_energy": "sensor.solar_today"}
+    if polarity:
+        entities["power_polarity"] = polarity
+    cfg["energy_nodes"]["solar"] = {"entities": entities, "max_power": max_power}
+    cfg["energy_nodes"]["grid"]["entities"] = {"today_export": "sensor.today_export"}
+    cfg["training"] = {"solar_bias": {"total_energy_entity_id": "sensor.solar_total"}}
+    return cfg
+
+
+def solar_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, states=None, report=None):
+    calls = []
+    reports = []
+
+    async def fake_day_stats(hass, entity_ids, *, start, end, now):
+        calls.append(list(entity_ids))
+        return day_stats_result or {}
+
+    async def device_report(name, query):
+        reports.append((name, query))
+        return report
+
+    hass = fake_hass(states or {})
+    hass.data = {"helman": {"coordinator": NS(async_device_report=device_report)}}
+    with (
+        patch(
+            "custom_components.helman.node_details.solar.resolve_vendor_telemetry",
+            return_value=telemetry(SOLAR_TELEMETRY) if tele is None else tele,
+        ),
+        patch(
+            "custom_components.helman.node_details.solar.async_day_stats",
+            side_effect=fake_day_stats,
+        ),
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                hass,
+                solar_config() if cfg is None else cfg,
+                node="solar",
+                device_id=None,
+                section=section,
+                now=NOW,
+            )
+        )
+    return payload, calls, reports
+
+
+def power_day(points, *, unit="W", maximum=None, minimum=None):
+    """A day_stats summary of power: a point is ``(start, mean)`` or ``(start, mean, coverage)``."""
+    rows = [
+        {
+            "start": point[0],
+            "mean": point[1],
+            "min": point[1],
+            "max": point[1],
+            "coverage": point[2] if len(point) > 2 else 1.0,
+        }
+        for point in points
+    ]
+    high = max(rows, key=lambda row: row["max"], default=None)
+    low = min(rows, key=lambda row: row["min"], default=None)
+    return {
+        "entityId": "sensor.x",
+        "unit": unit,
+        "source": "statistics",
+        "extrema": "bucket_statistics",
+        "bucketMinutes": 5,
+        "points": rows,
+        "mean": None,
+        "min": minimum if minimum is not None else (low and low["min"]),
+        "minAt": low and low["start"],
+        "max": maximum if maximum is not None else (high and high["max"]),
+        "maxAt": high and high["start"],
+        "coverage": 1.0,
+    }
+
+
+def test_the_solar_overview_carries_its_mappings_and_reads_no_history():
+    payload, calls, reports = solar_detail(states={RUN_MODE: "Normal Mode"})
+
+    assert calls == [] and reports == []
+    assert payload["node"] == "solar"
+    assert payload["entities"]["power"] == "sensor.solar_power"
+    assert payload["entities"]["today_energy"] == "sensor.solar_today"
+    assert payload["entities"]["today_export"] == "sensor.today_export"
+    assert payload["entities"]["lifetime_energy"] == "sensor.solar_total"
+    assert payload["entities"]["pv_power_2"] == PV_POWER[2]
+    # A key the profile has but the registry lacks is a typed null.
+    assert payload["entities"]["pv_current_1"] is None
+    # Grid- and battery-only telemetry stays with their details.
+    assert "grid_power_l1" not in payload["entities"]
+    assert "battery_voltage" not in payload["entities"]
+    assert payload["strings"] == [1, 2]
+    assert payload["configuredMaxPowerW"] == 11600.0
+    assert payload["maxAllowedExportPower"] == 9900
+    assert payload["condition"] is None
+    assert payload["sections"] == ["production", "strings", "destinations"]
+
+
+def test_one_mapped_string_has_no_string_comparison():
+    payload, _, _ = solar_detail(tele=telemetry({**SOLAR_TELEMETRY, "pv_power_2": None}))
+
+    assert payload["strings"] == [1]
+    assert "strings" not in payload["sections"]
+
+
+def test_a_custom_solar_node_has_no_telemetry_and_no_strings():
+    payload, _, _ = solar_detail(cfg=solar_config(profile=False), tele={})
+
+    assert payload["profile"] is None
+    assert "pv_power_1" not in payload["entities"]
+    assert payload["strings"] == []
+    assert payload["sections"] == ["production", "destinations"]
+
+
+@pytest.mark.parametrize("max_power", [0, -5, "abc", None, True, float("nan")])
+def test_a_configured_capacity_that_divides_nothing_is_none(max_power):
+    payload, _, _ = solar_detail(cfg=solar_config(max_power=max_power))
+
+    assert payload["configuredMaxPowerW"] is None
+
+
+def test_the_production_section_reports_the_peak_in_watts():
+    stats = {"sensor.solar_power": power_day([(at(12), 7.5), (at(12, 5), 9.8)], unit="kW")}
+
+    payload, calls, _ = solar_detail(section="production", day_stats_result=stats)
+
+    assert calls == [["sensor.solar_power"]]
+    assert payload["unit"] == "kW"
+    power = payload["power"]
+    assert power["unit"] == "W"
+    assert power["max"] == pytest.approx(9800.0)
+    assert power["maxAt"] == at(12, 5)
+    assert power["points"][0]["mean"] == pytest.approx(7500.0)
+
+
+def test_an_inverted_solar_sensor_peaks_at_its_lowest_reading():
+    stats = {"sensor.solar_power": power_day([(at(12), -7500.0), (at(13), -9800.0)])}
+
+    payload, _, _ = solar_detail(
+        cfg=solar_config(polarity="negative_is_production"),
+        section="production",
+        day_stats_result=stats,
+    )
+
+    assert payload["power"]["max"] == pytest.approx(9800.0)
+    assert payload["power"]["maxAt"] == at(13)
+    assert payload["power"]["min"] == pytest.approx(7500.0)
+
+
+def test_power_in_an_unknown_unit_is_not_guessed_at():
+    stats = {"sensor.solar_power": power_day([(at(12), 7.5)], unit="hp")}
+
+    payload, _, _ = solar_detail(section="production", day_stats_result=stats)
+
+    assert payload["power"] is None
+    assert payload["unit"] == "hp"
+
+
+def test_string_energy_integrates_covered_time_and_keeps_gaps_missing():
+    from custom_components.helman.node_details.solar import string_energy
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 12, 0, tzinfo=PRAGUE)
+    days = {
+        # 6000 W for two full buckets and a half-known third: 12.5 min of 6 kW.
+        "1": power_day([(at(10), 6000.0), (at(10, 5), 6000.0), (at(10, 10), 6000.0, 0.5)]),
+        # Known only in the first bucket; its later gap is not a zero.
+        "2": power_day([(at(10), 3000.0)]),
+    }
+
+    energy = string_energy(days, start=start, stop=stop)
+
+    assert energy["strings"]["1"]["kwh"] == pytest.approx(1.25)
+    assert energy["strings"]["2"]["kwh"] == pytest.approx(0.25)
+    # Compared only over the bucket both know: 0.5 kWh against 0.25 kWh.
+    assert energy["common"]["strings"] == [1, 2]
+    assert energy["common"]["kwh"] == {"1": pytest.approx(0.5), "2": pytest.approx(0.25)}
+    assert energy["common"]["coverage"] == pytest.approx(300 / (12 * 3600))
+
+
+def test_string_shares_compare_each_bucket_at_its_least_known_string():
+    from custom_components.helman.node_details.solar import string_energy
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 12, 0, tzinfo=PRAGUE)
+    days = {
+        "1": power_day([(at(10), 6000.0, 1.0)]),
+        "2": power_day([(at(10), 6000.0, 0.5)]),
+    }
+
+    energy = string_energy(days, start=start, stop=stop)
+
+    assert energy["strings"]["1"]["kwh"] == pytest.approx(0.5)
+    assert energy["strings"]["2"]["kwh"] == pytest.approx(0.25)
+    # Equal power over the same known time is an equal share.
+    assert energy["common"]["kwh"]["1"] == pytest.approx(energy["common"]["kwh"]["2"])
+
+
+def test_a_lone_string_compares_nothing_and_negative_power_is_zero():
+    from custom_components.helman.node_details.solar import string_energy
+
+    start = datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE)
+    stop = datetime(2026, 10, 10, 12, 0, tzinfo=PRAGUE)
+
+    energy = string_energy(
+        {"1": power_day([(at(10), -40.0)]), "2": None}, start=start, stop=stop
+    )
+
+    assert energy["strings"]["1"]["kwh"] == 0.0
+    assert energy["strings"]["2"] == {"kwh": None, "coverage": 0.0}
+    assert energy["common"] == {"strings": [1], "coverage": 0.0, "kwh": None}
+
+
+def test_the_strings_section_reads_each_string_in_watts():
+    stats = {
+        PV_POWER[1]: power_day([(at(10), 2.0)], unit="kW"),
+        PV_POWER[2]: power_day([(at(10), 1500.0)]),
+    }
+
+    payload, calls, _ = solar_detail(section="strings", day_stats_result=stats)
+
+    assert calls == [[PV_POWER[1], PV_POWER[2]]]
+    assert payload["strings"]["1"]["unit"] == "kW"
+    assert payload["strings"]["1"]["day"]["points"][0]["mean"] == pytest.approx(2000.0)
+    assert payload["energy"]["common"]["kwh"] == {
+        "1": pytest.approx(2000 * 300 / 3_600_000, abs=1e-3),
+        "2": pytest.approx(1500 * 300 / 3_600_000, abs=1e-3),
+    }
+
+
+def ranking(*, attributed=10.0, unattributed=0.0, house=3.0, battery=3.0, export=4.0, measured_export=None, charged=5.0, solar_fraction=0.6, **origin_fractions):
+    return {
+        "currency": "CZK/kWh",
+        "complete": False,
+        "meters": {"grid": True, "solar": True, "battery": True, "house": True},
+        "nodes": [{"id": "house", "sources": {"solar": house, "battery": 1.0, "grid": 2.0, "unattributed": 0.0}}],
+        "charge_origin": origin(
+            charged,
+            solar_priced=solar_fraction,
+            unknown=1.0 - solar_fraction,
+            forgone_rate=1.2,
+            **origin_fractions,
+        ),
+        "solar_totals": {
+            "attributed_kwh": attributed,
+            "unattributed_kwh": unattributed,
+            "house_kwh": house,
+            "battery_kwh": battery,
+            "export_kwh": export,
+            "measured_export_kwh": export if measured_export is None else measured_export,
+        },
+    }
+
+
+def balanced(destinations):
+    return (
+        destinations["houseKwh"]
+        + destinations["batteryKwh"]
+        + destinations["exportKwh"]
+        + destinations["unresolvedKwh"]
+    )
+
+
+def test_solar_destinations_read_the_summed_hourly_flows():
+    from custom_components.helman.node_details.solar import solar_destinations
+
+    destinations = solar_destinations(ranking())
+
+    assert destinations["houseKwh"] == pytest.approx(3.0)
+    assert destinations["batteryKwh"] == pytest.approx(3.0)
+    assert destinations["exportKwh"] == pytest.approx(4.0)
+    assert destinations["unresolvedKwh"] == pytest.approx(0.0)
+    assert destinations["otherExportKwh"] == pytest.approx(0.0)
+    assert balanced(destinations) == pytest.approx(destinations["producedKwh"])
+
+
+def test_solar_the_meters_do_not_explain_stays_unresolved():
+    from custom_components.helman.node_details.solar import solar_destinations
+
+    # 10 kWh produced, 3 + 3 used and charged, only 1.5 exported.
+    destinations = solar_destinations(ranking(export=1.5))
+
+    assert destinations["exportKwh"] == pytest.approx(1.5)
+    assert destinations["unresolvedKwh"] == pytest.approx(2.5)
+    assert balanced(destinations) == pytest.approx(10.0)
+
+
+def test_export_the_solar_does_not_explain_is_left_to_other_sources():
+    from custom_components.helman.node_details.solar import solar_destinations
+
+    destinations = solar_destinations(ranking(measured_export=6.0))
+
+    assert destinations["exportKwh"] == pytest.approx(4.0)
+    assert destinations["otherExportKwh"] == pytest.approx(2.0)
+def test_solar_in_hours_without_a_source_mix_is_unresolved():
+    from custom_components.helman.node_details.solar import solar_destinations
+
+    destinations = solar_destinations(ranking(unattributed=2.0))
+
+    assert destinations["producedKwh"] == pytest.approx(12.0)
+    assert destinations["unattributedKwh"] == pytest.approx(2.0)
+    assert destinations["unresolvedKwh"] == pytest.approx(2.0)
+    assert balanced(destinations) == pytest.approx(12.0)
+
+
+def test_the_destinations_section_reuses_todays_ranking_report():
+    payload, calls, reports = solar_detail(section="destinations", report=ranking())
+
+    assert calls == []
+    assert len(reports) == 1
+    name, query = reports[0]
+    assert name == "ranking"
+    assert query.start_date == query.end_date == NOW.date()
+    assert payload["unavailable"] is None
+    assert payload["currency"] == "CZK/kWh"
+    assert payload["destinations"]["batteryKwh"] == pytest.approx(3.0)
+    # The solar charge's forgone export value, from the same charge origin.
+    assert payload["charge"]["solarKwh"] == pytest.approx(3.0)
+    assert payload["charge"]["forgoneValue"] == pytest.approx(3.6)
+    assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
+
+
+@pytest.mark.parametrize(
+    ("report", "reason"),
+    [
+        ({"unavailable": "no_house_meter"}, "no_house_meter"),
+        ({**ranking(), "meters": {"solar": False}}, "no_solar_meter"),
+    ],
+)
+def test_the_destinations_section_says_why_it_has_none(report, reason):
+    payload, _, _ = solar_detail(section="destinations", report=report)
+
+    assert payload["destinations"] is None
+    assert payload["unavailable"] == reason

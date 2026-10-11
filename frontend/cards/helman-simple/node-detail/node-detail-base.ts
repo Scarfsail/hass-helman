@@ -2,7 +2,8 @@ import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { LocalizeFunction } from "../../localize/localize";
-import type { ForecastPayload, NodeDetailNode } from "../../helman-api";
+import type { ForecastPayload, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
+import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { ForecastLoader } from "../../helman/forecast-loader";
@@ -287,8 +288,8 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         `;
     }
 
-    /** The focused inspector embed of `id`, created once and kept. */
-    protected _inspector(id: Q, config: HelmanSolarInspectorCardConfig): HTMLElement {
+    /** The focused inspector embed of `id` (a question, or its evidence), created once and kept. */
+    protected _inspector(id: string, config: HelmanSolarInspectorCardConfig): HTMLElement {
         let card = this._inspectors.get(id);
         if (!card) {
             card = document.createElement("helman-solar-inspector-card") as InspectorCardElement;
@@ -331,6 +332,22 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     protected _number(overview: O, key: string): number | null {
         return readingNumber(this.hass, overview.entities[key]);
+    }
+
+    /**
+     * A non-negative reading in a base unit, through `scale` (unit → factor);
+     * `null` when missing, negative or in a unit `scale` does not know.
+     */
+    protected _scaled(overview: O, key: string, scale: Record<string, number>): number | null {
+        const value = this._number(overview, key);
+        const entityId = overview.entities[key];
+        const unit = entityId ? this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
+        const factor = unit ? scale[unit] : undefined;
+        return value === null || factor === undefined || value < 0 ? null : value * factor;
+    }
+
+    protected _actionLabel(action: ScheduleActionDTO): string {
+        return getScheduleActionLabel(action, this.localize);
     }
 
     protected _name(entityId: string): string {

@@ -58,6 +58,8 @@ interface EnergyEntityMap {
 
 interface EnergyValues {
     solarPower:   number;
+    /** `solarPower`, `null` without a reading rather than 0. */
+    solarPowerReading: number | null;
     gridPower:    number;
     /**
      * The grid meter signed import-positive, export-negative. `gridPower` keeps
@@ -74,7 +76,7 @@ interface EnergyValues {
 }
 
 const EMPTY_ENERGY: EnergyValues = {
-    solarPower: 0, gridPower: 0, gridPowerSigned: null, batteryPower: 0, batteryPowerReading: null,
+    solarPower: 0, solarPowerReading: null, gridPower: 0, gridPowerSigned: null, batteryPower: 0, batteryPowerReading: null,
     batterySoc: 0, batteryMinSoc: 10,
     housePower: 0,
 };
@@ -724,9 +726,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return {
             batteryPower: this._energy.batteryPower,
             batteryPowerReading: this._energy.batteryPowerReading,
-            solarNode: this._solarNode,
+            solarPowerReading: this._energy.solarPowerReading,
             gridPower: this._energy.gridPowerSigned,
-            productionNode: this._productionNode,
             consumptionNode: this._consumptionNode,
             housePower: this._energy.housePower,
             solarPower: this._energy.solarPower,
@@ -759,9 +760,12 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const gridReading = Number.isFinite(gridRaw) ? gridRaw : null;
         const batteryRaw = map.batteryPowerEntityId ? parseFloat(hass.states[map.batteryPowerEntityId]?.state ?? "") : NaN;
         const batteryReading = Number.isFinite(batteryRaw) ? (map.batteryInverted ? -batteryRaw : batteryRaw) : null;
+        const solarRaw = map.solarPowerEntityId ? parseFloat(hass.states[map.solarPowerEntityId]?.state ?? "") : NaN;
+        const solarPower = applyValueType(Number.isFinite(solarRaw) ? solarRaw : 0, map.solarValueType);
 
         return {
-            solarPower:   applyValueType(rawPower(map.solarPowerEntityId),   map.solarValueType),
+            solarPower,
+            solarPowerReading: Number.isFinite(solarRaw) ? solarPower : null,
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
             gridPowerSigned: gridReading === null ? null : map.gridValueType === "negative" ? -gridReading : gridReading,
             batteryPower: map.batteryInverted

@@ -13,7 +13,6 @@ import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
@@ -570,7 +569,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             `;
         }
         const payload = section.payload;
-        const period = this._row(this._t("charge.period_label"), fillTemplate(this._t("charge.period"), { time: this._time(Date.now()) }), "period");
+        const period = this._row(this._t("charge.period_label"), fillTemplate(this._t("charge.period"), { time: this._time(Date.parse(payload.asOf)) }), "period");
         const charge = payload.charge;
         if (!charge) {
             // The house meter is the one thing a user can configure; the rest is
@@ -716,18 +715,6 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     /** A voltage in V, `null` when missing, not numeric or in another unit. */
     private _volts(overview: BatteryDetailPayload, key: string): number | null {
         return this._scaled(overview, key, { V: 1, mV: 0.001 });
-    }
-
-    private _scaled(overview: BatteryDetailPayload, key: string, scale: Record<string, number>): number | null {
-        const value = this._number(overview, key);
-        const entityId = overview.entities[key];
-        const unit = entityId ? this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
-        const factor = unit ? scale[unit] : undefined;
-        return value === null || factor === undefined || value < 0 ? null : value * factor;
-    }
-
-    private _actionLabel(action: ScheduleActionDTO): string {
-        return getScheduleActionLabel(action, this.localize);
     }
 
     private _percent(value: number): string {

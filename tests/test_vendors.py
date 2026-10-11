@@ -975,6 +975,10 @@ def test_every_solax_telemetry_key_resolves_on_the_prod_registry():
     assert inverter.entities["cell_voltage_difference"] == "sensor.solax_battery_voltage_cell_difference"
     assert inverter.entities["battery_heating"] == "switch.solax_inverter_battery_heating"
     assert inverter.entities["battery_heating_start_2"] == "time.solax_inverter_battery_heating_start_time_2"
+    # The solar detail's strings, and the shade setting registered as a select.
+    assert inverter.entities["pv_power_2"] == "sensor.solax_pv_power_2"
+    assert inverter.entities["pv_current_1"] == "sensor.solax_pv_current_1"
+    assert inverter.entities["shade_fix_pv1"] == "select.solax_shadow_fix_function_level_pv1_gmppt"
 
 
 def test_telemetry_is_read_in_its_domain_only():
