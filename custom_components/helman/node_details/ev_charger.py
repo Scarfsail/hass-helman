@@ -192,16 +192,17 @@ def charging_segment_start(
     """
     ordered = sorted(states, key=lambda state: state.last_changed)
     since = None
-    held_until = now
+    # When the run mode was last known after the states walked so far: a run
+    # of consecutive gap states is measured as one gap.
+    known_from = now
     for state in reversed(ordered):
         if state.state in _GAP_STATES:
-            if held_until - state.last_changed > SEGMENT_MAX_GAP:
+            if known_from - state.last_changed > SEGMENT_MAX_GAP:
                 return None
-        elif conditions.get(state.state) == "charging":
-            since = state.last_changed
-        else:
+            continue
+        if conditions.get(state.state) != "charging":
             return since
-        held_until = state.last_changed
+        since = known_from = state.last_changed
     return None
 
 

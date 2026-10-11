@@ -590,6 +590,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * projected energy against what the car needs from its live SoC, never on
      * the projection's rounded SoC. A projection from before the slot in
      * progress, or one whose points the plan no longer holds, is stale.
+     *
+     * The projection fills the car through candidate slots too, so a candidate
+     * before an effective slot caps what that slot is projected to deliver:
+     * past such a candidate the cumulative energy no longer says what the
+     * effective slots alone would do, and short of the limit there is no estimate.
      */
     private _completion(selection: VehicleSelection, payload: ApplianceProjectionsPayload): Completion {
         const unsupported = (reason: string): Completion => ({ kind: "unsupported", reason });
@@ -612,6 +617,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
         const boundaries = new Map(this._boundaries().map((slot) => [slot.id, slot]));
         const actions = new Map(schedule.slots.map((slot) => [slot.id, slot.controllables[this.deviceId] as ScheduleEvChargerActionDTO | undefined]));
+        const firstCandidateMs = Math.min(...schedule.slots.map((slot) => {
+            const action = actions.get(slot.id);
+            const bounds = boundaries.get(slot.id);
+            return action?.charge && action.conditionMet === false && action.vehicleId === car.vehicle.id
+                && bounds && (bounds.endMs === null || bounds.endMs > now) ? bounds.startMs : Infinity;
+        }));
         let suppliedKwh = 0;
         let reachMs: number | null = null;
         let endMs: number | null = null;
@@ -625,6 +636,10 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             const action = actions.get(point.slotId);
             if (!action?.charge || action.conditionMet === false || action.vehicleId !== car.vehicle.id) continue;
             if (slot.endMs !== null && slot.endMs <= now) continue;
+            if (slot.startMs > firstCandidateMs) {
+                if (reachMs !== null) break;
+                return unsupported("candidate_first");
+            }
             if (!Number.isFinite(point.energyKwh) || point.energyKwh < 0) return unsupported("no_projection");
             suppliedKwh += point.energyKwh;
             counted += 1;

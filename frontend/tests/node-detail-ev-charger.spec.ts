@@ -518,6 +518,27 @@ test.describe("plan", () => {
         await expect(question(page, "plan").locator("[data-completion='candidates_only']")).toBeVisible();
     });
 
+    test("a candidate before the planned windows caps them in the projection: no estimate short of the limit", async ({ page }) => {
+        await openCharger(page, { windows: [
+            { from: 11.75, to: 13, candidate: true, vehicleId: "kona" },
+            { from: 13, to: 14, vehicleId: "kona" },
+        ] });
+        await header(page, "plan").click();
+        await expect(question(page, "plan").locator("[data-completion='candidate_first']")).toBeVisible();
+        await expect(question(page, "plan").locator("[data-row='end-soc']")).toHaveCount(0);
+    });
+
+    test("the limit reached before a candidate window still has its time", async ({ page }) => {
+        // 5 % of 64 kWh: 3.2 kWh, reached in the second planned slot, before tonight's candidate.
+        await openCharger(page, { soc: "75", windows: [
+            { from: 11.75, to: 13, vehicleId: "kona" },
+            { from: 13, to: 14, candidate: true, vehicleId: "kona" },
+            { from: 14, to: 15, vehicleId: "kona" },
+        ] });
+        await header(page, "plan").click();
+        await expect(question(page, "plan").locator("[data-row='reach']")).toContainText("12:30");
+    });
+
     test("a projection from an earlier slot is stale", async ({ page }) => {
         await openCharger(page, { projectionGeneratedAt: "2026-10-21T11:40:00+00:00" });
         await header(page, "plan").click();

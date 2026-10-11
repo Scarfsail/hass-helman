@@ -1104,6 +1104,7 @@
           "no_plan": "Bez plánu se dokončení neodhaduje.",
           "execution_off": "Provádění plánu je vypnuté, plán tedy dokončení nezaručuje.",
           "candidates_only": "Okna tohoto auta jsou kandidáti, jejichž podmínka není splněna: dokončení z nich neplyne.",
+          "candidate_first": "Před plánovanými okny tohoto auta je okno kandidáta a projekce přes něj auto nabíjí: nelze z ní určit, co dodají samotná plánovaná okna.",
           "no_windows": "Žádné okno nenabíjí toto auto, proto se dokončení neodhaduje.",
           "stale": "Projekce byla spočítána pro dřívější slot nebo jiný plán, proto se nepoužije.",
           "no_projection": "Projekce plánu nemá pro okna tohoto auta žádnou energii."

@@ -1203,6 +1203,7 @@
           "no_plan": "Without the plan no completion is estimated.",
           "execution_off": "Schedule execution is off, so the plan does not establish a completion.",
           "candidates_only": "This car's windows are candidates whose condition is not met: they do not establish a completion.",
+          "candidate_first": "A candidate window comes before this car's planned ones, and the projection fills the car through it: it cannot tell what the planned windows alone would deliver.",
           "no_windows": "No window charges this car, so no completion is estimated.",
           "stale": "The projection was computed for an earlier slot or another plan, so it is not used.",
           "no_projection": "The plan's projection has no energy for this car's windows."

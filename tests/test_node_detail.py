@@ -1922,6 +1922,13 @@ def test_the_hardware_session_counters_are_separate_from_the_charging_segment():
              run_mode_state("unavailable", 30), run_mode_state("Charging", 10)],
             None,
         ),
+        # Several gap states in a row are one gap, measured whole.
+        (
+            [run_mode_state("Preparing", 90), run_mode_state("Charging", 60),
+             run_mode_state("unavailable", 34), run_mode_state("unknown", 26),
+             run_mode_state("unavailable", 18), run_mode_state("Charging", 10)],
+            None,
+        ),
         # Charging since before the history read: unknown, not its window start.
         ([run_mode_state("Charging", 40)], None),
     ],
