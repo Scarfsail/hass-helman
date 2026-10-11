@@ -62,7 +62,7 @@ else
   files=(tests/test_*.py)
 fi
 
-jobs_max="${JOBS:-$(nproc)}"
+jobs_max="${JOBS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)}"
 if ! [[ "$jobs_max" =~ ^[1-9][0-9]*$ ]]; then
   echo "error: JOBS must be a positive integer, got '$jobs_max'" >&2
   exit 2
