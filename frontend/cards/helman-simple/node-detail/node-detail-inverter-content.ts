@@ -1,39 +1,34 @@
-import { LitElement, css, html, nothing, type TemplateResult } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../hass-frontend/src/types";
-import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
+import { fillTemplate } from "../../localize/localize";
 import type {
     InverterDetailPayload,
-    InverterRuntimeDTO,
     InverterTemperatureSectionPayload,
     ScheduleActionDTO,
     ScheduleActionKind,
     SchedulePayload,
 } from "../../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { getSharedHelmanStore } from "../../helman/store";
 import { commandedModeKind } from "../../helman-api";
 import { formatPower } from "../../power-format";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import {
-    formatScheduleTime,
-    addDaysToDayKey,
-    getScheduleDayKey,
-    resolveScheduleSlotBoundaries,
-} from "../../shared/schedule/model/schedule-time";
-import { getScheduleActionLabel, getScheduleReasonLabel } from "../../shared/schedule/model/schedule-labels";
-import { INVERTER_CONTROLLABLE_ID } from "../../shared/schedule/schedule-types";
-import {
-    EVIDENCE_TOGGLE_EVENT,
-    QUESTION_TOGGLE_EVENT,
-    type QuestionToggleDetail,
-} from "../../shared/node-question";
-import "../../shared/node-question";
+import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
-import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
+import { NodeDetailContentBase, type SectionState } from "./node-detail-base";
+import {
+    currentRun,
+    currentRuntime,
+    dayKey,
+    nextChange,
+    renderCurrentSlot,
+    runtimeText,
+    scheduleRuns,
+    todayAndTomorrow,
+    type ScheduleRun,
+} from "./node-detail-schedule";
+import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
@@ -45,7 +40,8 @@ const PHASES = [1, 2, 3] as const;
  * schedule strip, on the dialog's surface. Prices, money and the month/year
  * views answer other questions, so they are hidden; the bias diagnostics stay
  * off. Mirrors the Training tab's embed configs in
- * `config-editor/solar-inspector-embed.ts`.
+ * `config-editor/solar-inspector-embed.ts`. The battery detail's plan answer
+ * shows the same view.
  */
 export const INVERTER_PLAN_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
     type: "custom:helman-solar-inspector-card",
@@ -57,22 +53,6 @@ export const INVERTER_PLAN_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
     daylight_only_default: false,
     chart_series: ["batterySocForecast", "batterySocActual"],
 };
-
-type InspectorCardElement = HTMLElement & {
-    setConfig(config: HelmanSolarInspectorCardConfig): void;
-    hass: unknown;
-};
-
-interface ScheduleRun {
-    startMs: number;
-    endMs: number | null;
-    action: ScheduleActionDTO;
-}
-
-type SectionState<T> =
-    | { status: "loading" }
-    | { status: "ready"; payload: T }
-    | { status: "error" };
 
 /**
  * The inverter detail: what Helman commanded, what the hardware shows, and
@@ -88,94 +68,8 @@ type SectionState<T> =
  * History (today's temperature) is requested only while its question is open.
  */
 @customElement("node-detail-inverter-content")
-export class NodeDetailInverterContent extends LitElement {
-    static styles = [nodeDetailSharedStyles, css`
-        .content {
-            gap: 8px;
-        }
-        .summary {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding-bottom: 8px;
-        }
-        .status {
-            margin: 0;
-            font-size: 0.95rem;
-        }
-        .figures {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-            gap: 8px;
-        }
-        .figure {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            min-width: 0;
-        }
-        .figure-label {
-            font-size: 0.75rem;
-            color: var(--secondary-text-color);
-        }
-        .figure-value {
-            font-size: 1.05rem;
-            font-weight: 600;
-            overflow-wrap: anywhere;
-        }
-        .next {
-            margin: 0;
-            font-size: 0.9rem;
-            color: var(--secondary-text-color);
-        }
-        .exception {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 4px 8px;
-            padding: 8px 10px;
-            border-radius: 8px;
-            border-left: 3px solid var(--warning-color, #ffa600);
-            background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
-            font-size: 0.9rem;
-        }
-        .link-button {
-            font: inherit;
-            background: none;
-            border: none;
-            padding: 4px 0;
-            color: var(--primary-color);
-            font-weight: 600;
-            cursor: pointer;
-            min-height: 32px;
-        }
-        .rows {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            gap: 12px;
-            font-size: 0.9rem;
-        }
-        .row .label {
-            flex: 1 1 auto;
-            min-width: 0;
-        }
-        .row .value {
-            text-align: right;
-            overflow-wrap: anywhere;
-            min-width: 0;
-            max-width: 60%;
-        }
-        .note {
-            margin: 0;
-            font-size: 0.82rem;
-            color: var(--secondary-text-color);
-        }
+export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload, QuestionId> {
+    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
         .runs {
             list-style: none;
             margin: 0;
@@ -206,120 +100,59 @@ export class NodeDetailInverterContent extends LitElement {
             color: var(--secondary-text-color);
             margin-top: 4px;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-            font-variant-numeric: tabular-nums;
-        }
-        th, td {
-            padding: 3px 4px;
-            text-align: right;
-            overflow-wrap: anywhere;
-        }
-        th:first-child, td:first-child {
-            text-align: left;
-        }
-        th {
-            color: var(--secondary-text-color);
-            font-weight: 600;
-        }
-        .plan {
-            margin: 0 -8px;
-        }
     `];
 
-    @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public localize!: LocalizeFunction;
+    protected readonly _node = "inverter" as const;
+
     @property({ attribute: false }) public params!: InverterDetailParams;
 
-    @state() private _overview: SectionState<InverterDetailPayload> = { status: "loading" };
     @state() private _schedule: SchedulePayload | null = null;
-    @state() private _open: QuestionId | null = null;
-    @state() private _evidenceOpen = false;
     @state() private _temperature: SectionState<InverterTemperatureSectionPayload> | null = null;
 
-    private _overviewRequest = 0;
     private _temperatureRequest = 0;
-    /** The compared registers' states the current overview was computed from. */
-    private _comparedStates = "";
     private _unsubscribeSchedule?: () => void;
-    private _unsubscribeDataChanged?: () => void;
     /** `_runs()` for the update in progress; several answers read it per render. */
     private _runsCache?: ScheduleRun[];
-    private _planCard?: InspectorCardElement;
-
-    connectedCallback(): void {
-        super.connectedCallback();
-        this.addEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
-        this.addEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
-        if (this.hass) this._start();
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
-        this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
-        this._unsubscribeSchedule?.();
-        this._unsubscribeSchedule = undefined;
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
-        // Whatever is still in flight answers nobody.
-        this._overviewRequest += 1;
-        this._temperatureRequest += 1;
-    }
 
     willUpdate(changed: Map<string, unknown>): void {
         this._runsCache = undefined;
-        if (changed.has("hass") && this.hass) {
-            if (!this._unsubscribeSchedule) this._start();
-            else if (this._overview.status === "ready" && this._comparedSignature(this._overview.payload) !== this._comparedStates) {
-                void this._loadOverview();
-            }
-            if (this._planCard) this._planCard.hass = this.hass;
-        }
+        super.willUpdate(changed);
     }
 
-    private _start(): void {
+    protected _start(): void {
         this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
             this._schedule = snapshot.schedule;
         });
+        super._start();
+    }
+
+    protected _stop(): void {
+        this._unsubscribeSchedule?.();
+        this._unsubscribeSchedule = undefined;
+        this._temperatureRequest += 1;
+    }
+
+    protected _onDataChanged(): void {
         // A config change (another client) can re-map what the overview reads.
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => {
-            void this._loadOverview(true);
-            if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
-        });
-        void this._loadOverview();
+        super._onDataChanged();
+        if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
+    }
+
+    /** The states the backend compared: a change in any of them re-reads the comparison. */
+    protected _overviewSignature(payload: InverterDetailPayload): string {
+        const ids = [payload.mode?.entityId, ...payload.agreement.registers.map((register) => register.entityId), payload.entities.run_mode];
+        return ids.map((id) => (id ? this.hass.states[id]?.state ?? "" : "")).join("|");
+    }
+
+    protected _watchedEntities(payload: InverterDetailPayload) {
+        return [
+            payload.mode?.entityId,
+            ...Object.values(payload.entities),
+            ...payload.agreement.registers.map((register) => register.entityId),
+        ];
     }
 
     // ── Data ────────────────────────────────────────────────────────────────
-
-    /** `fresh`: never join a request sent before a change was announced. */
-    private async _loadOverview(fresh = false): Promise<void> {
-        const request = ++this._overviewRequest;
-        const previous = this._overview.status === "ready" ? this._overview.payload : undefined;
-        // A refresh compares the states as they are now, when it is sent: a
-        // change while it is in flight re-reads, a failure does not.
-        if (previous) this._comparedStates = this._comparedSignature(previous);
-        else this._overview = { status: "loading" };
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: fresh || previous !== undefined });
-            if (request !== this._overviewRequest) return;
-            if (!previous) this._comparedStates = this._comparedSignature(payload);
-            this._overview = { status: "ready", payload };
-            announceWatchedEntities(this, [
-                payload.mode?.entityId,
-                ...Object.values(payload.entities),
-                ...payload.agreement.registers.map((register) => register.entityId),
-            ]);
-        } catch (error) {
-            if (request !== this._overviewRequest) return;
-            console.error("node-detail-inverter: failed to load the overview", error);
-            // A refresh that fails keeps what was shown, with its own as-of.
-            if (this._overview.status !== "ready") this._overview = { status: "error" };
-        }
-    }
 
     private async _loadTemperature(): Promise<void> {
         const request = ++this._temperatureRequest;
@@ -336,32 +169,10 @@ export class NodeDetailInverterContent extends LitElement {
         }
     }
 
-    /** The states the backend compared: a change in any of them re-reads the comparison. */
-    private _comparedSignature(payload: InverterDetailPayload): string {
-        const ids = [payload.mode?.entityId, ...payload.agreement.registers.map((register) => register.entityId), payload.entities.run_mode];
-        return ids.map((id) => (id ? this.hass.states[id]?.state ?? "" : "")).join("|");
-    }
-
     // ── Disclosure ──────────────────────────────────────────────────────────
 
-    private _onQuestionToggle = (event: CustomEvent<QuestionToggleDetail>): void => {
-        event.stopPropagation();
-        const id = event.detail.id as QuestionId;
-        const header = event.composedPath()[0] as HTMLElement | undefined;
-        this._setOpen(this._open === id ? null : id);
-        // Opening one closes the one above it, which would move this header
-        // out from under the pointer: keep it where it is in view.
-        void this.updateComplete.then(() => header?.scrollIntoView?.({ block: "nearest" }));
-    };
-
-    private _onEvidenceToggle = (event: CustomEvent<QuestionToggleDetail>): void => {
-        event.stopPropagation();
-        this._evidenceOpen = !this._evidenceOpen;
-    };
-
-    private _setOpen(id: QuestionId | null): void {
-        this._open = id;
-        this._evidenceOpen = false;
+    protected _setOpen(id: QuestionId | null): void {
+        super._setOpen(id);
         // A closed answer's history request is obsolete; it is re-read on reopen.
         this._temperatureRequest += 1;
         this._temperature = null;
@@ -373,17 +184,8 @@ export class NodeDetailInverterContent extends LitElement {
     // ── Rendering ───────────────────────────────────────────────────────────
 
     render() {
-        if (this._overview.status === "loading") {
-            return html`<div class="content"><p class="note">${this._t("loading")}</p></div>`;
-        }
-        if (this._overview.status === "error") {
-            return html`
-                <div class="content">
-                    <p class="note">${this._t("load_failed")}</p>
-                    <button class="link-button" @click=${() => this._loadOverview()}>${this._t("retry")}</button>
-                </div>
-            `;
-        }
+        const notReady = this._renderNotReady();
+        if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         return html`
             <div class="content">
@@ -394,30 +196,6 @@ export class NodeDetailInverterContent extends LitElement {
                 ${this._question("operating", this._operatingPreview(overview), () => this._renderOperating(overview), () => this._renderOperatingEvidence(overview), "technical")}
                 ${overview.profile ? this._question("trust", this._trustPreview(overview), () => this._renderTrust(overview), () => this._renderTrustEvidence(overview), "technical") : nothing}
             </div>
-        `;
-    }
-
-    private _question(
-        id: QuestionId,
-        preview: string | null,
-        answer: () => TemplateResult,
-        evidence: () => TemplateResult | typeof nothing,
-        evidenceKind: "evidence" | "technical",
-    ) {
-        const open = this._open === id;
-        return html`
-            <helman-node-question
-                data-question=${id}
-                question-id=${id}
-                .question=${this._t(`q.${id}`)}
-                .preview=${preview}
-                ?open=${open}
-                ?evidence-open=${open && this._evidenceOpen}
-                .evidenceLabel=${this._t(evidenceKind)}
-            >
-                ${open ? html`<div slot="answer" class="rows">${answer()}</div>` : nothing}
-                ${open && this._evidenceOpen ? html`<div slot="evidence" class="rows">${evidence()}</div>` : nothing}
-            </helman-node-question>
         `;
     }
 
@@ -494,7 +272,7 @@ export class NodeDetailInverterContent extends LitElement {
                 ? this._scheduledText(run)
                 : this._t("why.nothing_scheduled"), "scheduled")}
             ${this._schedule ? this._row(this._t("why.execution"), this._t(this._schedule.executionEnabled ? "why.execution_on" : "why.execution_off"), "execution") : nothing}
-            ${this._row(this._t("why.executor"), runtime ? this._runtimeText(runtime) : this._t("why.no_runtime"), "executor")}
+            ${this._row(this._t("why.executor"), runtime ? runtimeText(runtime, this.localize) : this._t("why.no_runtime"), "executor")}
             ${this._row(this._t("why.last_command"), commanded ? this._modeLabel(commanded) : this._commandedRaw(overview) ?? this._t("unavailable"), "last-command")}
             ${overview.agreement.reason !== "no_profile" ? this._row(this._t("why.observed"), this._agreementText(overview), "agreement") : nothing}
             <p class="note">${this._t("why.explain")}</p>
@@ -549,15 +327,6 @@ export class NodeDetailInverterContent extends LitElement {
         return text;
     }
 
-    private _runtimeText(runtime: InverterRuntimeDTO): string {
-        const parts = [this._t(`runtime.action.${runtime.actionKind}`), this._t(`runtime.outcome.${runtime.outcome}`)];
-        if (runtime.executedAction) parts.push(this._actionLabel(runtime.executedAction));
-        const reason = getScheduleReasonLabel(runtime.reason, this.localize);
-        if (reason) parts.push(reason);
-        if (runtime.outcome === "failed" && runtime.message) parts.push(runtime.message);
-        return parts.join(" · ");
-    }
-
     // Next ----------------------------------------------------------------------
 
     private _nextPreview(): string | null {
@@ -591,33 +360,12 @@ export class NodeDetailInverterContent extends LitElement {
                 </ul>
             ` : html`<p class="note">${this._t("no_change")}</p>`}
             <p class="note">${this._t("next.explain")}</p>
-            <div class="plan" data-plan>${this._planInspector()}</div>
+            <div class="plan" data-plan>${this._inspector("next", INVERTER_PLAN_INSPECTOR_CONFIG)}</div>
         `;
-    }
-
-    private _planInspector(): HTMLElement {
-        if (!this._planCard) {
-            const card = document.createElement("helman-solar-inspector-card") as InspectorCardElement;
-            card.setConfig(INVERTER_PLAN_INSPECTOR_CONFIG);
-            this._planCard = card;
-        }
-        this._planCard.hass = this.hass;
-        return this._planCard;
     }
 
     private _renderNextEvidence() {
-        const run = this._currentRun();
-        const runtime = this._currentRuntime();
-        const action = run?.action;
-        return html`
-            <div class="section-title">${this._t("next.slot")}</div>
-            ${this._row(this._t("next.kind"), action ? this._actionLabel(action) : this._t("why.nothing_scheduled"))}
-            ${action?.targetSoc !== undefined ? this._row(this._t("next.target"), action.targetSoc + " %") : nothing}
-            ${action?.setBy ? this._row(this._t("next.set_by"), this._t(`next.set_by_${action.setBy}`)) : nothing}
-            ${action ? this._row(this._t("next.condition"), this._t(action.conditionMet === false ? "next.condition_not_met" : "next.condition_met")) : nothing}
-            ${this._row(this._t("next.runtime_reason"), getScheduleReasonLabel(runtime?.reason, this.localize) ?? this._t("next.reason_not_provided"))}
-            <p class="note">${this._t("next.optimizer_note")}</p>
-        `;
+        return renderCurrentSlot(this._currentRun(), this._currentRuntime(), this.localize, (label, value) => this._row(label, value));
     }
 
     // Limits --------------------------------------------------------------------
@@ -800,30 +548,6 @@ export class NodeDetailInverterContent extends LitElement {
 
     // ── Rows and readings ───────────────────────────────────────────────────
 
-    private _row(label: string, value: string, key?: string, scope?: string) {
-        return html`
-            <div class="row" data-row=${key ?? nothing}>
-                <span class="label">${label}${scope ? html`<br><span class="note">${scope}</span>` : nothing}</span>
-                <span class="value">${value}</span>
-            </div>
-        `;
-    }
-
-    /** A technical row, hidden when its reading is unavailable. */
-    private _optionalRow(overview: InverterDetailPayload, key: string, labelKey: string) {
-        const value = this._reading(overview, key);
-        return value === null ? nothing : this._row(this._t(labelKey), value, key);
-    }
-
-    /** A reading as shown: its state and unit, `null` when missing or unavailable. */
-    private _reading(overview: InverterDetailPayload, key: string): string | null {
-        return readingText(this.hass, overview.entities[key], (on) => this._t(on ? "on" : "off"));
-    }
-
-    private _number(overview: InverterDetailPayload, key: string): number | null {
-        return readingNumber(this.hass, overview.entities[key]);
-    }
-
     /** The phases' AC power summed, only when every phase reads. */
     private _acPower(overview: InverterDetailPayload): number | null {
         const values = PHASES.map((phase) => this._number(overview, "ac_power_l" + phase));
@@ -849,76 +573,36 @@ export class NodeDetailInverterContent extends LitElement {
         return live && live !== "unavailable" && live !== "unknown" ? live : null;
     }
 
-    private _name(entityId: string): string {
-        return (this.hass.states[entityId]?.attributes.friendly_name as string | undefined) ?? entityId;
-    }
-
     // ── Schedule ────────────────────────────────────────────────────────────
 
     /** The inverter's actions from the current slot on, merged into runs. */
-    private _runs(): ScheduleRun[] {
-        return this._runsCache ??= this._computeRuns();
+    /** The slot in progress and the next change are read off the clock. */
+    protected *_clockBoundaries(): Iterable<number> {
+        for (const run of this._runs()) {
+            yield run.startMs;
+            if (run.endMs !== null) yield run.endMs;
+        }
     }
 
-    private _computeRuns(): ScheduleRun[] {
-        const slots = this._schedule?.slots ?? [];
-        if (!slots.length) return [];
-        const byId = new Map(slots.map((slot) => [slot.id, slot]));
-        const now = Date.now();
-        const runs: ScheduleRun[] = [];
-        for (const boundary of resolveScheduleSlotBoundaries(slots.map((slot) => slot.id))) {
-            if (boundary.endMs !== null && boundary.endMs <= now) continue;
-            const action = (byId.get(boundary.id)?.controllables[INVERTER_CONTROLLABLE_ID] as ScheduleActionDTO | undefined)
-                ?? { kind: "empty" as const };
-            const last = runs[runs.length - 1];
-            if (last && last.endMs === boundary.startMs && sameAction(last.action, action)) {
-                last.endMs = boundary.endMs;
-            } else {
-                runs.push({ startMs: boundary.startMs, endMs: boundary.endMs, action });
-            }
-        }
-        return runs;
+    private _runs(): ScheduleRun[] {
+        return this._runsCache ??= scheduleRuns(this._schedule, Date.now());
     }
 
     private _currentRun(): ScheduleRun | null {
-        const run = this._runs()[0];
-        return run && run.startMs <= Date.now() && run.action.kind !== "empty" ? run : null;
+        return currentRun(this._runs(), Date.now());
     }
 
-    /** The executor's record, only when it is for the slot in progress. */
-    private _currentRuntime(): InverterRuntimeDTO | null {
-        const runtime = this._schedule?.runtime;
-        if (!runtime) return null;
-        const slots = resolveScheduleSlotBoundaries((this._schedule?.slots ?? []).map((slot) => slot.id));
-        const now = Date.now();
-        const current = slots.find((slot) => slot.startMs <= now && (slot.endMs === null || now < slot.endMs));
-        if (!current || current.id !== runtime.activeSlotId) return null;
-        return (runtime.controllables[INVERTER_CONTROLLABLE_ID] as InverterRuntimeDTO | undefined) ?? null;
+    private _currentRuntime() {
+        return currentRuntime(this._schedule, Date.now());
     }
 
-    /**
-     * The first run today or tomorrow whose effective mode differs from the
-     * one before it. An empty stretch counts: the executor returns the
-     * inverter to its normal mode there, so it is reported as `normal`.
-     */
     private _nextChange(): ScheduleRun | null {
-        const now = Date.now();
-        const days = this._todayAndTomorrow();
-        // Before the first scheduled slot the inverter rests in normal mode.
-        let previous: ScheduleActionDTO = { kind: "normal" };
-        for (const run of this._runs()) {
-            const action = effectiveAction(run.action);
-            if (run.startMs > now && !sameAction(previous, action)) {
-                return days.includes(this._dayKey(run.startMs)) ? { ...run, action } : null;
-            }
-            previous = action;
-        }
-        return null;
+        return nextChange(this._runs(), Date.now(), this._timeZone);
     }
 
     /** Today's and tomorrow's runs, empty stretches left out. */
     private _upcomingRuns(): ScheduleRun[] {
-        const [today, tomorrow] = this._todayAndTomorrow();
+        const [today, tomorrow] = todayAndTomorrow(Date.now(), this._timeZone);
         return this._runs().filter((run) => {
             const day = this._dayKey(run.startMs);
             return run.action.kind !== "empty" && (day === today || day === tomorrow);
@@ -927,30 +611,12 @@ export class NodeDetailInverterContent extends LitElement {
 
     // ── Formatting ──────────────────────────────────────────────────────────
 
-    private get _timeZone(): string {
-        return this.hass.config?.time_zone || "UTC";
-    }
-
-    private get _locale(): string {
-        return this.hass.locale?.language ?? this.hass.language ?? "cs";
-    }
-
-    private _time(ms: number): string {
-        return formatScheduleTime(ms, this._locale, this._timeZone);
-    }
-
     private _range(run: ScheduleRun): string {
         return run.endMs === null ? this._time(run.startMs) + "+" : this._time(run.startMs) + "–" + this._time(run.endMs);
     }
 
-    /** Local calendar days, so a 25-hour DST day still has a tomorrow. */
-    private _todayAndTomorrow(): [string | null, string | null] {
-        const today = this._dayKey(Date.now());
-        return [today, today === null ? null : addDaysToDayKey(today, 1)];
-    }
-
     private _dayKey(ms: number): string | null {
-        return getScheduleDayKey(new Date(ms), this._timeZone);
+        return dayKey(ms, this._timeZone);
     }
 
     private _actionLabel(action: ScheduleActionDTO): string {
@@ -960,24 +626,6 @@ export class NodeDetailInverterContent extends LitElement {
     private _modeLabel(kind: ScheduleActionKind): string {
         return this._t(`mode_short.${kind}`);
     }
-
-    private _t(key: string): string {
-        return this.localize(`node_detail.inverter.${key}`);
-    }
-}
-
-/**
- * What the inverter does in a run: an empty stretch is its normal mode, and so
- * is a candidate whose condition is not met, which the executor strips.
- */
-function effectiveAction(action: ScheduleActionDTO): ScheduleActionDTO {
-    return action.kind === "empty" || action.conditionMet === false ? { kind: "normal" } : action;
-}
-
-function sameAction(left: ScheduleActionDTO, right: ScheduleActionDTO): boolean {
-    return left.kind === right.kind
-        && left.targetSoc === right.targetSoc
-        && (left.conditionMet !== false) === (right.conditionMet !== false);
 }
 
 declare global {

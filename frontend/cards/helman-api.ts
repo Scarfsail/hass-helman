@@ -830,7 +830,7 @@ export interface GetApplianceProjectionsRequest {
 // --- Node details (helman/get_node_detail) ----------------------------------
 
 /** The nodes the backend serves a detail for. */
-export type NodeDetailNode = "inverter" | "grid";
+export type NodeDetailNode = "inverter" | "grid" | "battery";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
 export interface GetNodeDetailRequest {
@@ -946,6 +946,72 @@ export interface GridVoltageSectionPayload {
     /** By phase number; `null` for a phase without a resolved sensor. */
     phases: Record<"1" | "2" | "3", DayStatsDTO | null>;
     spread: { phases: number[]; max: number | null; maxAt: string | null; coverage: number };
+}
+
+/**
+ * The battery detail's overview. `entities` carries the battery's config meters
+ * (`soc`, `remaining_energy`, `min_soc`, `max_soc`, `today_charge`,
+ * `today_discharge`), Helman's `time_to_full`/`time_to_empty` sensors and the
+ * profile's battery telemetry (absent for a Custom inverter, `null` where the
+ * registry lacks one).
+ */
+export interface BatteryDetailPayload {
+    node: "battery";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    /** Helman's planning ceilings from the battery's forecast config, W. */
+    configured: { maxChargePowerW: number | null; maxDischargePowerW: number | null };
+    /**
+     * `(lifetime in + out) / (2 × nominal capacity)`: throughput, not health.
+     * `cycles` is `null` with a `reason` without valid counters and capacity.
+     */
+    cycles: {
+        cycles: number | null;
+        inputKwh: number | null;
+        outputKwh: number | null;
+        capacityKwh: number | null;
+        reason: "no_counters" | "invalid_counters" | "no_capacity" | null;
+    };
+    /** A condition the hardware explicitly reports: the BMS state first, then the run mode. */
+    condition: { kind: "bms_disconnected" | "off_grid" | "fault"; state: string; entityId: string } | null;
+    sections: string[];
+}
+
+/**
+ * Today's battery charge by what charged it, from the device reports'
+ * `charge_origin` in kWh. What charged the battery in the period, not what is
+ * stored in it now. A money side is `0` without kWh and `null` with kWh but no rate.
+ */
+export interface BatteryChargeDTO {
+    chargedKwh: number;
+    solarKwh: number;
+    gridKwh: number;
+    unknownKwh: number;
+    gridPricedKwh: number;
+    gridTariffKwh: number;
+    gridUnpricedKwh: number;
+    solarPricedKwh: number;
+    solarUnpricedKwh: number;
+    /** Energy-weighted import rate over the priced grid charge. */
+    paidRate: number | null;
+    /** Energy-weighted export rate over the priced solar charge. */
+    forgoneRate: number | null;
+    paidCost: number | null;
+    forgoneValue: number | null;
+}
+
+export interface BatteryChargeSectionPayload {
+    node: "battery";
+    section: "charge";
+    asOf: string;
+    period: { start: string; end: string };
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    complete: boolean;
+    /** Why there is no charge origin: the reports cannot be built. */
+    unavailable: string | null;
+    charge: BatteryChargeDTO | null;
 }
 
 /**

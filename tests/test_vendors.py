@@ -970,6 +970,11 @@ def test_every_solax_telemetry_key_resolves_on_the_prod_registry():
     assert inverter.entities["phase_balance"] == "switch.solax_inverter_phase_power_balance_x3"
     assert inverter.entities["inverter_temperature"] == "sensor.solax_inverter_temperature"
     assert {f"ac_{q}_l{p}" for q in ("power", "voltage", "current", "frequency") for p in (1, 2, 3)} <= set(inverter.entities)
+    # The battery detail's: the entity id does not follow the unique id.
+    assert inverter.entities["max_charge_rate"] == "sensor.solax_inverter_battery_max_charge_rate"
+    assert inverter.entities["cell_voltage_difference"] == "sensor.solax_battery_voltage_cell_difference"
+    assert inverter.entities["battery_heating"] == "switch.solax_inverter_battery_heating"
+    assert inverter.entities["battery_heating_start_2"] == "time.solax_inverter_battery_heating_start_time_2"
 
 
 def test_telemetry_is_read_in_its_domain_only():

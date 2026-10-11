@@ -3,19 +3,17 @@ import type { HelmanUiConfig } from "../helman-api";
 
 export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 
+/**
+ * The battery. Its readings come from `helman/get_node_detail`; the power is
+ * the card's own live figure, with the polarity the card already applied.
+ */
 export interface BatteryDetailParams {
     nodeType: "battery";
-    power: number;
-    soc: number;
-    socEntityId: string | null;
-    remainingEnergyEntityId: string | null;
-    batteryProducerNode: TreeItem | null;
-    batteryConsumerNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    consumptionNode?: TreeItem | null;
+    /** Battery power: positive charges, negative discharges, W; `null` without a reading. */
+    power: number | null;
+    /** The card's power-history window, which Helman's time estimates average over. */
     historyBuckets: number;
     historyBucketDuration: number;
-    historyRevision: number;
 }
 
 export interface SolarDetailParams {

@@ -181,6 +181,42 @@ PROFILE = VendorProfile(
         "grid_import": ("sensor", "{name}_grid_import"),
         "grid_export": ("sensor", "{name}_grid_export"),
         "grid_frequency": ("sensor", "{name}_grid_frequency"),
+        # The battery detail. Units per solax_modbus plugin_solax.py: V, A
+        # (signed), °C, Wh (``chargeable_energy``: to 100 % SoC), W, kWh (the
+        # lifetime totals), V (cells). ``max_charge_rate`` is the plugin's
+        # BMS charge current × battery voltage, falling back to the inverter's
+        # charge current setting when the BMS current is not read; the BMS
+        # currents, lifetime totals, cells, type, temperature extremes and
+        # connect state are disabled by default in the plugin.
+        "battery_voltage": ("sensor", "{name}_battery_voltage_charge"),
+        "battery_current": ("sensor", "{name}_battery_current_charge"),
+        "battery_temperature": ("sensor", "{name}_battery_temperature"),
+        "chargeable_energy": ("sensor", "{name}_chargeable_battery_capacity"),
+        "max_charge_rate": ("sensor", "{name}_bms_max_charge"),
+        "bdc_status": ("sensor", "{name}_bdc_status"),
+        "bms_charge_max_current": ("sensor", "{name}_bms_charge_max_current"),
+        "bms_discharge_max_current": ("sensor", "{name}_bms_discharge_max_current"),
+        "input_energy_total": ("sensor", "{name}_battery_input_energy_total"),
+        "output_energy_total": ("sensor", "{name}_battery_output_energy_total"),
+        "cell_voltage_high": ("sensor", "{name}_cell_voltage_high"),
+        "cell_voltage_low": ("sensor", "{name}_cell_voltage_low"),
+        "cell_voltage_difference": (
+            "sensor",
+            "{name}_battery_voltage_cell_difference",
+        ),
+        "battery_type": ("sensor", "{name}_battery_type"),
+        "battery_temp_high": ("sensor", "{name}_battery_temp_high"),
+        "battery_temp_low": ("sensor", "{name}_battery_temp_low"),
+        "bms_connect_state": ("sensor", "{name}_bms_connect_state"),
+        "battery_heating": ("switch", "{name}_battery_heating"),
+        **{
+            f"battery_heating_{edge}_{period}": (
+                "time",
+                f"{{name}}_battery_heating_{edge}_time_{period}",
+            )
+            for period in (1, 2)
+            for edge in ("start", "end")
+        },
     },
     # ``measured_power_l*`` reads positive while feeding in: on the dev mirror
     # (2026-10-10) ``measured_power`` +405 W sat beside the energy dashboard's
@@ -192,4 +228,7 @@ PROFILE = VendorProfile(
         "Fault": "fault",
         "Permanent Fault Mode": "fault",
     },
+    # Gen4 register 0x17 (solax_modbus plugin_solax.py); Gen6 swaps the
+    # numbers but keeps the strings.
+    bms_connect_conditions={"Disconnected": "bms_disconnected"},
 )

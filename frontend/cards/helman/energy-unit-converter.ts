@@ -45,6 +45,11 @@ export function convertToKWh(value: number, unitOfMeasurement: string | undefine
     }
 }
 
+/** Whether `convertToKWh` knows `unit`, rather than falling back to assuming Wh. */
+export function isSupportedEnergyUnit(unit: string | undefined): boolean {
+    return ["kwh", "kw⋅h", "wh", "w⋅h", "mwh", "mw⋅h", "gwh", "gw⋅h"].includes((unit ?? "").toLowerCase());
+}
+
 /**
  * Gets the appropriate display unit based on the magnitude of the kWh value
  * @param kwhValue - Value in kWh
