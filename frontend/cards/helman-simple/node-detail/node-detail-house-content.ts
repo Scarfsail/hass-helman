@@ -268,6 +268,9 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _patternRequest = 0;
     private _patternRequestedAt = 0;
     private _rankingRequest = 0;
+    private _rankingRequestedAt = 0;
+    /** The day the shown ranking was requested for. */
+    private _rankingDate = "";
     /** The planned runs, read several times a render; cleared before each update. */
     private _runsCache?: PlannedRun[];
 
@@ -280,12 +283,15 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         // The house re-renders on every device's power tick: a new day is
         // retried at most every NEW_DAY_RETRY_MS, never once per render while
         // a request is in flight or after one failed.
-        const stale = (period: { start: string }, requestedAt: number) => {
+        const stale = (isToday: boolean, requestedAt: number) => {
             const age = Date.now() - requestedAt;
-            return age > TODAY_REFRESH_MS || (!this._isToday(period.start) && age > NEW_DAY_RETRY_MS);
+            return age > TODAY_REFRESH_MS || (!isToday && age > NEW_DAY_RETRY_MS);
         };
-        if (this._today?.status === "ready" && stale(this._today.payload.period, this._todayRequestedAt)) void this._loadToday();
-        if (this._pattern?.status === "ready" && stale(this._pattern.payload.period, this._patternRequestedAt)) void this._loadPattern();
+        if (this._today?.status === "ready" && stale(this._isToday(this._today.payload.period.start), this._todayRequestedAt)) void this._loadToday();
+        if (this._pattern?.status === "ready" && stale(this._isToday(this._pattern.payload.period.start), this._patternRequestedAt)) void this._loadPattern();
+        // The full ranking only while its evidence is open.
+        if (this._open === "consumers" && this._evidenceOpen && this._ranking?.status === "ready"
+            && stale(this._rankingDate === todayIso(this._timeZone), this._rankingRequestedAt)) void this._loadRanking();
     }
 
     protected updated(changed: Map<string, unknown>): void {
@@ -393,9 +399,11 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const request = ++this._rankingRequest;
         if (this._ranking?.status !== "ready") this._ranking = { status: "loading" };
         const today = todayIso(this._timeZone);
+        this._rankingRequestedAt = Date.now();
         try {
             const payload = await fetchDeviceReport(this.hass, "ranking", { start_date: today, end_date: today });
             if (request !== this._rankingRequest) return;
+            this._rankingDate = today;
             this._ranking = { status: "ready", payload: isDeviceReportUnavailable(payload) ? null : payload as RankingReportPayload };
         } catch (error) {
             if (request !== this._rankingRequest) return;

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { installFixedClock } from "./support/fixed-clock";
+import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
 
 /**
  * The house node detail on the simple card.
@@ -393,6 +393,15 @@ test.describe("what used the most", () => {
         await expect(consumers.locator("helman-device-report-ranking")).toHaveCount(1);
         expect(await reportRequests(page)).toBe(1);
         await expect(consumers.locator("[data-row='money-1']")).toContainText("100 % priced");
+
+        // While the evidence stays open, the ranking is re-read as today moves on.
+        await page.clock.setFixedTime(new Date(Date.parse(FIXED_NOW_ISO) + 6 * 60_000));
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-simple-card") as any;
+            const hass = window.__hass;
+            card.hass = { ...hass, states: { ...hass.states, "sensor.ev_power": { state: "3", attributes: { unit_of_measurement: "kW" } } } };
+        });
+        await expect.poll(() => reportRequests(page)).toBe(2);
     });
 });
 
