@@ -35,6 +35,7 @@ type Variant = {
     forecastFails?: boolean;
     remainingUnit?: string;
     todayUnit?: string;
+    minSoc?: string;
 };
 
 declare global {
@@ -100,7 +101,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.solar": s("4200", "W"), "sensor.grid": s("-300", "W"), "sensor.battery": s(v.power ?? "-2100", "W"),
             "sensor.house": s("1200", "W"),
             "sensor.soc": s("67", "%"), "sensor.remaining": s("11577", v.remainingUnit ?? "Wh"),
-            "number.min_soc": s("10", "%"), "number.max_soc": s("100", "%"),
+            "number.min_soc": s(v.minSoc ?? "10", "%"), "number.max_soc": s("100", "%"),
             "sensor.battery_in_today": s("6.2", v.todayUnit ?? "kWh"), "sensor.battery_out_today": s("4.1", "kWh"),
             "sensor.helman_battery_time_to_empty": s(v.timeToEmpty ?? "280", "min", { target_time: "2026-10-21T16:40:00+00:00", target_soc: 10 }),
             "sensor.helman_battery_time_to_full": s("unknown", "min", { target_time: "", target_soc: null }),
@@ -371,6 +372,15 @@ test("today's meter in an unsupported unit gives no charge preview, never a gues
     await mount(page, { todayUnit: "MJ" });
     await openDetail(page);
     await expect(question(page, "charge")).not.toContainText("charged today");
+});
+
+test("an out-of-range SoC floor is no floor, never a usable figure above it", async ({ page }) => {
+    await mount(page, { minSoc: "120" });
+    await openDetail(page);
+    await header(page, "reserve").click();
+    const reserve = question(page, "reserve");
+    await expect(reserve).not.toContainText("120 %");
+    await expect(reserve.locator("[data-row='room']")).toContainText("5.7 kWh");
 });
 
 test("a cold reading in °F is compared in °C", async ({ page }) => {
