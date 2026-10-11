@@ -1,4 +1,5 @@
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
+import { convertToKWh, isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
 
 /**
  * A reading as a node detail shows it: its state and unit, `null` when the
@@ -21,6 +22,19 @@ export function readingNumber(hass: HomeAssistant, entityId: string | null | und
     const raw = entityId ? hass.states[entityId]?.state : undefined;
     const value = raw === undefined ? NaN : parseFloat(raw);
     return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * An energy reading in kWh; `null` when missing, not numeric or in a unit
+ * `convertToKWh` does not know, never a guess. A reading with no unit is Wh,
+ * the repository's legacy convention, unless `allowUnitless` is false.
+ */
+export function readEnergyKWh(hass: HomeAssistant, entityId: string | null | undefined, allowUnitless = true): number | null {
+    const value = readingNumber(hass, entityId);
+    if (value === null) return null;
+    const unit = hass.states[entityId!]?.attributes.unit_of_measurement as string | undefined;
+    if (!unit) return allowUnitless ? convertToKWh(value, unit) : null;
+    return isSupportedEnergyUnit(unit) ? convertToKWh(value, unit) : null;
 }
 
 /**

@@ -11,7 +11,6 @@ import {
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
-import { convertToKWh } from "../../helman/energy-unit-converter";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
@@ -20,7 +19,7 @@ import "../../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { readingNumber } from "./node-detail-readings";
+import { readEnergyKWh } from "./node-detail-readings";
 import type { GridDetailParams } from "./node-detail-types";
 
 type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
@@ -843,9 +842,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private _kwh(entityId: string | null | undefined): number | null {
-        const value = readingNumber(this.hass, entityId);
-        if (value === null) return null;
-        return convertToKWh(value, this.hass.states[entityId!]?.attributes.unit_of_measurement as string | undefined);
+        return readEnergyKWh(this.hass, entityId);
     }
 
     // ── Formatting ──────────────────────────────────────────────────────────

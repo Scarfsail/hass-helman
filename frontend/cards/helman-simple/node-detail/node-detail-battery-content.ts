@@ -16,7 +16,7 @@ import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
-import { readingNumber } from "./node-detail-readings";
+import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import {
     currentRun,
     currentRuntime,
@@ -28,8 +28,6 @@ import {
 } from "./node-detail-schedule";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { BatteryDetailParams } from "./node-detail-types";
-import { isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
-import { readKWh } from "./node-detail-utils";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
 
@@ -275,10 +273,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      */
     private _reserve(overview: BatteryDetailPayload): Reserve | null {
         const soc = this._number(overview, "soc");
-        // A remaining energy in no known energy unit is not guessed at, as in the forecast.
-        const remainingId = overview.entities.remaining_energy ?? null;
-        const remainingUnit = remainingId ? this.hass.states[remainingId]?.attributes.unit_of_measurement as string | undefined : undefined;
-        const remainingKwh = remainingId && isSupportedEnergyUnit(remainingUnit) ? readKWh(this.hass, remainingId) : null;
+        // A remaining energy with no or an unknown unit is not guessed at, as in the forecast.
+        const remainingKwh = readEnergyKWh(this.hass, overview.entities.remaining_energy, false);
         if (soc === null || remainingKwh === null || soc <= 0 || soc > 100 || remainingKwh < 0) return null;
         const capacityKwh = remainingKwh / (soc / 100);
         const minSoc = this._number(overview, "min_soc");
@@ -549,7 +545,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             return parts.join(" · ");
         }
         // Before the answer opens: today's charge from the battery's own meter.
-        const kwh = readKWh(this.hass, overview.entities.today_charge ?? null);
+        const kwh = readEnergyKWh(this.hass, overview.entities.today_charge);
         if (kwh === null) return null;
         return kwh <= 0 ? this._t("charge.none_today") : fillTemplate(this._t("charge.charged_short"), { kwh: formatGridEnergy(kwh) });
     }
@@ -607,8 +603,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     private _renderChargeEvidence(overview: BatteryDetailPayload) {
         const payload = this._charge?.status === "ready" ? this._charge.payload : null;
         const charge = payload?.charge;
-        const input = readKWh(this.hass, overview.entities.today_charge ?? null);
-        const output = readKWh(this.hass, overview.entities.today_discharge ?? null);
+        const input = readEnergyKWh(this.hass, overview.entities.today_charge);
+        const output = readEnergyKWh(this.hass, overview.entities.today_discharge);
         const unit = payload?.currency ?? null;
         return html`
             ${charge && charge.chargedKwh > 0 ? html`
