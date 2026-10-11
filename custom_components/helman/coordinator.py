@@ -209,7 +209,8 @@ from .training.house_consumption import (
 from .training.house_consumption import health_for as house_consumption_health_for
 from .span_history_model import SpanMeters, recorder_tail_start
 from .tree_builder import HelmanTreeBuilder
-from .vendors import resolve_vendor_config
+from .node_details.inverter import run_mode_condition
+from .vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_config, resolve_vendor_telemetry
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -700,6 +701,10 @@ class HelmanCoordinator:
         self._unmeasured_raw_history: dict[str, deque] = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
+        self._house_consumption_sensors: list[Any] = []
+        # The inverter's telemetry the measured house phases compute from,
+        # resolved per tree rebuild in _init_buffers.
+        self._inverter_telemetry: Any = None
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
         self._share_sensors: dict[str, Any] = {}
@@ -1020,6 +1025,7 @@ class HelmanCoordinator:
         source_ratio_sensors: dict | None = None,
         forecast_sensors: list[Any] | None = None,
         share_sensors: dict | None = None,
+        house_consumption_sensors: list | None = None,
     ) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
@@ -1028,6 +1034,7 @@ class HelmanCoordinator:
         self._share_sensors = share_sensors or {}
         self._consumption_total_sensor = total_power
         self._production_total_sensor = production_total
+        self._house_consumption_sensors = list(house_consumption_sensors or [])
         self._source_ratio_sensors = source_ratio_sensors or {}
         self._solar_forecast_sensors = list(forecast_sensors or [])
 
@@ -5693,6 +5700,9 @@ class HelmanCoordinator:
         # can drop or re-parent a node, and a stale window would then smooth the
         # new node's remainder with readings from a different set of children.
         self._unmeasured_raw_history = {}
+        self._inverter_telemetry = resolve_vendor_telemetry(
+            self._hass, self._active_config
+        ).get(INVERTER_TELEMETRY_KEY)
 
         # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
         self._power_history = {
@@ -5764,6 +5774,18 @@ class HelmanCoordinator:
             self._power_history[CONSUMPTION_TOTAL_ENTITY_ID].append(total)
         if self._consumption_total_sensor is not None:
             self._consumption_total_sensor.update_value(total)
+
+        # Measured house consumption, per phase and their sum
+        phase_powers = self._compute_house_phase_powers()
+        house_total = (
+            None
+            if any(watts is None for watts in phase_powers.values())
+            else sum(phase_powers.values())
+        )
+        for sensor in self._house_consumption_sensors:
+            sensor.update_value(
+                house_total if sensor.phase is None else phase_powers[sensor.phase]
+            )
 
         # Production total (source side)
         production = self._compute_production_total()
@@ -5950,6 +5972,43 @@ class HelmanCoordinator:
             )
         return total
 
+    def _compute_house_phase_powers(self) -> dict[int, float | None]:
+        """Measured house load per phase, ``{1: W, 2: W, 3: W}``; ``None`` unavailable.
+
+        On-grid the house draws what the inverter outputs plus what the meter
+        imports, plus the EPS output: ``ac − grid (export-positive) + eps``. A
+        missing EPS reading counts as 0 W; a missing inverter or meter reading
+        leaves the phase unknown. Off-grid the grid port is open and the EPS
+        output is the whole house, so the inverter's AC reading is not counted
+        twice. The inverter and the meter are polled at different moments, so a
+        fast change in export can briefly read below zero; a house never
+        exports, so a phase is floored at 0 W. Every phase is ``None`` without
+        an inverter profile.
+        """
+        telemetry = self._inverter_telemetry
+        if telemetry is None:
+            return {phase: None for phase in (1, 2, 3)}
+        entities = telemetry.entities
+        condition = run_mode_condition(self._hass, telemetry)
+        off_grid = condition is not None and condition["kind"] == "off_grid"
+        export_sign = (
+            1.0 if telemetry.profile.grid_phase_power_polarity == "positive_is_export" else -1.0
+        )
+        powers: dict[int, float | None] = {}
+        for phase in (1, 2, 3):
+            eps = self._read_power_or_none(entities.get(f"eps_power_l{phase}"), "default")
+            if off_grid:
+                powers[phase] = eps
+                continue
+            ac = self._read_power_or_none(entities.get(f"ac_power_l{phase}"), "default")
+            grid = self._read_power_or_none(entities.get(f"grid_power_l{phase}"), "default")
+            powers[phase] = (
+                None
+                if ac is None or grid is None
+                else max(0.0, ac - grid * export_sign + (eps or 0.0))
+            )
+        return powers
+
     def _compute_production_total(self) -> float:
         """Sum source-side top-level node powers (solar + battery_discharging + grid_import)."""
         if self._cached_tree is None:
@@ -6130,6 +6189,7 @@ class HelmanCoordinator:
         self._share_sensors = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
+        self._house_consumption_sensors = []
         self._source_ratio_sensors = {}
         self._source_ratio_entity_ids = {}
         self._solar_forecast_sensors = []

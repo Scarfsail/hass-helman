@@ -1432,6 +1432,13 @@ def test_the_house_overview_carries_its_mappings_and_reads_no_history():
     assert entities["grid_ratio"] == "sensor.helman_grid_source_ratio"
     assert entities["time_to_empty"] == "sensor.helman_battery_time_to_empty"
     assert entities["eps_power_l2"] == EPS[2]
+    # The measured phase formula's other inputs: present, null when unresolved.
+    assert "ac_power_l1" in entities and entities["ac_power_l1"] is None
+    assert "grid_power_l3" in entities and entities["grid_power_l3"] is None
+    assert entities["phase_power_l1"] == "sensor.helman_house_consumption_power_l1"
+    assert entities["phase_power_l3"] == "sensor.helman_house_consumption_power_l3"
+    assert entities["phase_power_total"] == "sensor.helman_house_consumption_power"
+    assert payload["phasePowerPolarity"] == "positive_is_export"
     assert payload["condition"] is None
 
 
@@ -1439,7 +1446,12 @@ def test_a_custom_house_has_no_eps_readings_and_without_meters_no_pattern():
     payload, _ = house_detail(cfg=house_config(profile=False, power=False, energy=False), tele={})
 
     assert payload["profile"] is None
-    assert not any(key.startswith("eps_power") for key in payload["entities"])
+    assert not any(
+        key.startswith(("eps_power", "ac_power", "grid_power")) for key in payload["entities"]
+    )
+    # Helman's measured sensors always exist; without a profile they are unavailable.
+    assert payload["entities"]["phase_power_total"] == "sensor.helman_house_consumption_power"
+    assert payload["phasePowerPolarity"] is None
     assert payload["entities"]["power"] is None
     assert payload["sections"] == ["today"]
 

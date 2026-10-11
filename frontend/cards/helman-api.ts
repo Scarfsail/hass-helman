@@ -1119,14 +1119,18 @@ export interface SolarDestinationsSectionPayload {
 /**
  * The house detail's overview. `entities` carries the house `power` meter,
  * Helman's live source-ratio sensors (`solar_ratio`, `battery_ratio`,
- * `grid_ratio`), its battery `time_to_empty` and the profile's EPS phase
- * readings (`eps_power_l1..3`, absent for a Custom inverter).
+ * `grid_ratio`), its battery `time_to_empty`, its measured house consumption
+ * (`phase_power_l1..3`, `phase_power_total`) and the profile's phase readings
+ * that is computed from (`ac_power_l1..3`, `grid_power_l1..3`,
+ * `eps_power_l1..3`, absent for a Custom inverter). `phasePowerPolarity` says
+ * which way the `grid_power_l*` readings are positive.
  */
 export interface HouseDetailPayload {
     node: "house";
     asOf: string;
     profile: { id: string; label: string } | null;
     entities: Record<string, string | null>;
+    phasePowerPolarity: "positive_is_import" | "positive_is_export" | null;
     condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
     sections: string[];
 }

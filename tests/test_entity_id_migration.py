@@ -1,6 +1,7 @@
-"""Covers ``async_migrate_entry`` (config entry version 1 -> 2): the entity
-registry rewrite that carries #194's unified entity ids and unique ids onto an
-install that already holds the old ones.
+"""Covers ``async_migrate_entry``: the entity registry rewrite that carries
+#194's unified entity ids and unique ids onto an install that already holds
+the old ones (version 1 -> 2), and #458's move of the consumer-side total off
+``house_consumption_power`` (version 2 -> 3).
 
 Reuses ``test_init_recovery.py``'s pattern of stubbing out Helman's heavier
 submodules (frontend/panel/websockets/storage/coordinator) so importing
@@ -204,10 +205,12 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
         (migrated,) = registry.entries_for_config_entry(ENTRY_ID)
-        self.assertEqual(migrated.entity_id, "sensor.helman_house_consumption_power")
-        self.assertEqual(migrated.unique_id, f"{ENTRY_ID}_house_consumption_power")
-        self.assertEqual(entry.version, 2)
-        self.assertEqual(hass.config_entries.update_calls, [(ENTRY_ID, 2)])
+        # Version 1 runs both steps, so the consumer-side total lands on its
+        # version 3 ids.
+        self.assertEqual(migrated.entity_id, "sensor.helman_consumer_total_power")
+        self.assertEqual(migrated.unique_id, f"{ENTRY_ID}_consumer_total_power")
+        self.assertEqual(entry.version, 3)
+        self.assertEqual(hass.config_entries.update_calls, [(ENTRY_ID, 2), (ENTRY_ID, 3)])
 
     async def test_user_renamed_entity_id_is_left_alone(self) -> None:
         registry = FakeEntityRegistry(
@@ -335,10 +338,11 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
         by_unique = {e.unique_id: e for e in registry.entries_for_config_entry(ENTRY_ID)}
         # The blocked row still gets its new unique id -- that is what keeps it
         # matched to the entity `sensor.py` creates -- but keeps its old entity
-        # id, so it goes on working with its history intact.
-        self.assertIn(f"{ENTRY_ID}_house_consumption_power", by_unique)
+        # id, so it goes on working with its history intact. Its old id is not
+        # the version 2 default either, so the version 3 step leaves it too.
+        self.assertIn(f"{ENTRY_ID}_consumer_total_power", by_unique)
         self.assertEqual(
-            by_unique[f"{ENTRY_ID}_house_consumption_power"].entity_id,
+            by_unique[f"{ENTRY_ID}_consumer_total_power"].entity_id,
             "sensor.helman_consumption_total",
         )
         # The row after it in the loop still migrates.
@@ -347,8 +351,8 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
             by_unique[f"{ENTRY_ID}_house_supply_power"].entity_id,
             "sensor.helman_house_supply_power",
         )
-        # And the entry still reaches version 2, so setup proceeds.
-        self.assertEqual(entry.version, 2)
+        # And the entry still reaches the current version, so setup proceeds.
+        self.assertEqual(entry.version, 3)
 
     async def test_second_run_is_a_no_op(self) -> None:
         registry = FakeEntityRegistry(
@@ -366,8 +370,8 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
         updates_after_first_run = list(registry.updates)
         self.assertTrue(updates_after_first_run)
 
-        # A second run against an already-migrated entry (version bumped to 2
-        # by the first run) is a genuine no-op: the function returns early.
+        # A second run against an already-migrated entry (version bumped to 3
+        # by the first run) is a genuine no-op: no step runs.
         await self.helman_init.async_migrate_entry(hass, entry)
         self.assertEqual(registry.updates, updates_after_first_run)
 
@@ -376,6 +380,91 @@ class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
         entry.version = 1
         await self.helman_init.async_migrate_entry(hass, entry)
         self.assertEqual(registry.updates, updates_after_first_run)
+
+    async def test_v2_moves_the_consumer_total_and_frees_the_house_id(self) -> None:
+        registry = FakeEntityRegistry(
+            [
+                FakeRegistryEntry(
+                    "sensor.helman_house_consumption_power",
+                    f"{ENTRY_ID}_house_consumption_power",
+                ),
+                FakeRegistryEntry(
+                    "sensor.helman_house_supply_power", f"{ENTRY_ID}_house_supply_power"
+                ),
+            ]
+        )
+        self._patch_registry(registry)
+        hass = FakeHass(registry)
+        entry = FakeConfigEntry(version=2)
+
+        result = await self.helman_init.async_migrate_entry(hass, entry)
+
+        self.assertTrue(result)
+        by_unique = {e.unique_id: e for e in registry.entries_for_config_entry(ENTRY_ID)}
+        self.assertEqual(
+            by_unique[f"{ENTRY_ID}_consumer_total_power"].entity_id,
+            "sensor.helman_consumer_total_power",
+        )
+        # The house id is free for the measured house consumption sensor.
+        self.assertNotIn(f"{ENTRY_ID}_house_consumption_power", by_unique)
+        self.assertNotIn(
+            "sensor.helman_house_consumption_power",
+            {e.entity_id for e in by_unique.values()},
+        )
+        # Only the version 3 step ran: the supply sensor is untouched.
+        self.assertEqual(
+            registry.updates,
+            [
+                (
+                    "sensor.helman_house_consumption_power",
+                    {
+                        "new_unique_id": f"{ENTRY_ID}_consumer_total_power",
+                        "new_entity_id": "sensor.helman_consumer_total_power",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(entry.version, 3)
+        self.assertEqual(hass.config_entries.update_calls, [(ENTRY_ID, 3)])
+
+    async def test_v2_user_renamed_consumer_total_keeps_its_entity_id(self) -> None:
+        registry = FakeEntityRegistry(
+            [
+                FakeRegistryEntry(
+                    "sensor.my_consumers", f"{ENTRY_ID}_house_consumption_power"
+                ),
+            ]
+        )
+        self._patch_registry(registry)
+        hass = FakeHass(registry)
+        entry = FakeConfigEntry(version=2)
+
+        await self.helman_init.async_migrate_entry(hass, entry)
+
+        (migrated,) = registry.entries_for_config_entry(ENTRY_ID)
+        self.assertEqual(migrated.entity_id, "sensor.my_consumers")
+        self.assertEqual(migrated.unique_id, f"{ENTRY_ID}_consumer_total_power")
+
+    async def test_v2_second_run_is_a_no_op(self) -> None:
+        registry = FakeEntityRegistry(
+            [
+                FakeRegistryEntry(
+                    "sensor.helman_house_consumption_power",
+                    f"{ENTRY_ID}_house_consumption_power",
+                ),
+            ]
+        )
+        self._patch_registry(registry)
+        hass = FakeHass(registry)
+        entry = FakeConfigEntry(version=2)
+
+        await self.helman_init.async_migrate_entry(hass, entry)
+        updates_after_first_run = list(registry.updates)
+        self.assertTrue(updates_after_first_run)
+
+        await self.helman_init.async_migrate_entry(hass, entry)
+        self.assertEqual(registry.updates, updates_after_first_run)
+        self.assertEqual(entry.version, 3)
 
 
 if __name__ == "__main__":

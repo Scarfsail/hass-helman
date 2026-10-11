@@ -2,8 +2,9 @@
 
 The overview carries the entity ids the card reads live: the house power
 meter, Helman's live source-ratio sensors, Helman's battery time-to-empty
-sensor and the hardware profile's EPS phase readings (telemetry) for the
-off-grid answer. The device tree the phase answer estimates from, the forecast
+sensor, Helman's measured house consumption per phase and the hardware
+profile's phase readings it is computed from (telemetry: inverter output, grid
+meter, EPS) for the phase and off-grid answers. The device tree the phase answer estimates from, the forecast
 and the plan come from the card and the existing forecast and schedule clients,
 so they are not repeated.
 
@@ -32,7 +33,11 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from ..const import DOMAIN
+from ..const import (
+    DOMAIN,
+    HOUSE_CONSUMPTION_ENTITY_ID,
+    house_consumption_phase_entity_id,
+)
 from ..consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
 from ..power_polarity import is_power_inverted
 from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
@@ -43,8 +48,28 @@ from .solar import in_watts, node_config, node_entity, solar_destinations
 
 PHASES = (1, 2, 3)
 
-#: The telemetry the house answers read, by metric key.
-_TELEMETRY_KEYS = (*(f"eps_power_l{phase}" for phase in PHASES), "run_mode")
+#: The telemetry the house answers read, by metric key: the measured phase
+#: formula's inputs and the run mode that switches it off-grid.
+_TELEMETRY_KEYS = (
+    *(
+        f"{quantity}_l{phase}"
+        for quantity in ("ac_power", "grid_power", "eps_power")
+        for phase in PHASES
+    ),
+    "run_mode",
+)
+
+#: Helman's measured house consumption, per phase and in total.
+_PHASE_POWER_SENSORS = {
+    **{
+        f"phase_power_l{phase}": (
+            f"house_consumption_power_l{phase}",
+            house_consumption_phase_entity_id(phase),
+        )
+        for phase in PHASES
+    },
+    "phase_power_total": ("house_consumption_power", HOUSE_CONSUMPTION_ENTITY_ID),
+}
 
 #: Helman's live source-ratio sensors: each source's share of the power
 #: supplied now, the mix the card colours its consumers with.
@@ -84,7 +109,12 @@ def build_house_overview(
     entities["power"] = node_entity(house, "power")
     entities.update(
         helman_sensor_ids(
-            hass, {**_RATIO_SENSORS, "time_to_empty": TIME_SENSORS["time_to_empty"]}
+            hass,
+            {
+                **_RATIO_SENSORS,
+                **_PHASE_POWER_SENSORS,
+                "time_to_empty": TIME_SENSORS["time_to_empty"],
+            },
         )
     )
 
@@ -100,6 +130,9 @@ def build_house_overview(
             else {"id": telemetry.profile.id, "label": telemetry.profile.label}
         ),
         "entities": entities,
+        "phasePowerPolarity": (
+            None if telemetry is None else telemetry.profile.grid_phase_power_polarity
+        ),
         "condition": run_mode_condition(hass, telemetry),
         "sections": sections,
     }

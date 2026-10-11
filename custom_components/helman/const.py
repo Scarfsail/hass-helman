@@ -77,7 +77,18 @@ SCHEDULE_EXECUTOR_INTERVAL_SECONDS = 30
 # ably exceed a re-plan's duration so the re-plan -> execute hop settles inside
 # the window and does not bounce back and forth.
 AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS = 30
-CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_house_consumption_power"
+#: The consumer-side total: house + battery charging + grid export. It sat on
+#: ``house_consumption_power`` until config entry version 3 moved it here.
+CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_consumer_total_power"
+#: Measured house consumption, the sum of the per-phase sensors below.
+HOUSE_CONSUMPTION_ENTITY_ID = "sensor.helman_house_consumption_power"
+
+
+def house_consumption_phase_entity_id(phase: int) -> str:
+    """The measured house consumption sensor of one phase (1-3)."""
+    return f"{HOUSE_CONSUMPTION_ENTITY_ID}_l{phase}"
+
+
 PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_house_supply_power"
 #: The import rate Helman itself publishes so the recorder archives it. Nothing
 #: else records what a kilowatt-hour cost, because the rate is computed from the
@@ -139,6 +150,12 @@ SENSOR_UNIQUE_ID_MIGRATIONS: tuple[tuple[str, str, bool], ...] = (
     ("energy_production_d6", "solar_forecast_d6", True),
     ("energy_production_d7", "solar_forecast_d7", True),
     ("energy_production_today_remaining", "solar_forecast_today_remaining", True),
+)
+#: The version 2 -> 3 rows, same shape as above: the consumer-side total moves
+#: off ``house_consumption_power`` so the measured house consumption sensor can
+#: take that id with a clean history.
+SENSOR_UNIQUE_ID_MIGRATIONS_V3: tuple[tuple[str, str, bool], ...] = (
+    ("house_consumption_power", "consumer_total_power", True),
 )
 #: Suffix that marks a unique id as an unmeasured-power sensor under the old
 #: scheme (``f"{entry_id}_{node_id}_unmeasured_power"``), for the migration's

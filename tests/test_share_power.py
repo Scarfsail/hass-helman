@@ -256,6 +256,7 @@ class SharePowerTests(unittest.TestCase):
         c._share_sensors = {f"klima-{room}": _Sensor() for room in ROOMS}
         c._battery_time_to_full = c._battery_time_to_empty = None
         c._consumption_total_sensor = c._production_total_sensor = None
+        c._house_consumption_sensors = []
         c._source_ratio_sensors = {}
         c._source_sensor_ids = []
 

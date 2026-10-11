@@ -12,8 +12,9 @@ import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
  * clock (Wednesday 12:00 UTC). What is pinned is the shared disclosure
  * contract and the house answers' honesty: no device tree in the dialog, each
  * load counted once in the phase estimate and the top consumers, a three-phase
- * load in thirds and unmapped load unassigned, no diagnosis from the overnight
- * minimum, and no full-day comparison against a partial today.
+ * load in thirds and unmapped load unassigned, the measured phases against what
+ * their devices explain, no diagnosis from the overnight minimum, and no
+ * full-day comparison against a partial today.
  */
 
 const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
@@ -26,6 +27,8 @@ type Variant = {
     offGrid?: boolean;
     /** The device tree carries no phases. */
     noPhases?: boolean;
+    /** Helman's measured house phase sensors are unavailable. */
+    noMeasured?: boolean;
     /** Today's report cannot be built. */
     todayUnavailable?: boolean;
     /** Schedule execution is switched off. */
@@ -108,17 +111,38 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.solax_eps_power_active_l1": s("1200", "W"),
             "sensor.solax_eps_power_active_l2": s("800", "W"),
             "sensor.solax_eps_power_active_l3": s("400", "W"),
+            // The formula inputs; the meter reads positive while exporting.
+            "sensor.solax_inverter_power_l1": s("2000", "W"),
+            "sensor.solax_inverter_power_l2": s("1500", "W"),
+            "sensor.solax_inverter_power_l3": s("1100", "W"),
+            "sensor.solax_measured_power_l1": s("-1000", "W"),
+            "sensor.solax_measured_power_l2": s("-1000", "W"),
+            "sensor.solax_measured_power_l3": s("-1200", "W"),
         };
+        // Measured against the estimate (L1 2.6, L2 3.1, L3 1.1 kW): L1 and L3
+        // carry load no assigned device explains, L2 has more assigned than measured.
+        // Without an inverter profile Helman's sensors publish unavailable.
+        const measured = profile && !v.noMeasured;
+        for (const [phase, watts] of [[1, "3000"], [2, "2500"], [3, "2300"]] as const) {
+            states[`sensor.helman_house_consumption_power_l${phase}`] = s(measured ? watts : "unavailable", "W");
+        }
+        states["sensor.helman_house_consumption_power"] = s(measured ? "7800" : "unavailable", "W");
         const entities: Record<string, string | null> = {
             power: "sensor.house",
             solar_ratio: "sensor.helman_solar_source_ratio",
             battery_ratio: "sensor.helman_battery_source_ratio",
             grid_ratio: "sensor.helman_grid_source_ratio",
             time_to_empty: "sensor.helman_battery_time_to_empty",
+            phase_power_total: "sensor.helman_house_consumption_power",
         };
+        for (const p of [1, 2, 3]) entities[`phase_power_l${p}`] = `sensor.helman_house_consumption_power_l${p}`;
         if (profile) {
             entities.run_mode = "sensor.solax_run_mode";
-            for (const p of [1, 2, 3]) entities[`eps_power_l${p}`] = `sensor.solax_eps_power_active_l${p}`;
+            for (const p of [1, 2, 3]) {
+                entities[`eps_power_l${p}`] = `sensor.solax_eps_power_active_l${p}`;
+                entities[`ac_power_l${p}`] = `sensor.solax_inverter_power_l${p}`;
+                entities[`grid_power_l${p}`] = `sensor.solax_measured_power_l${p}`;
+            }
         }
         const period = { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" };
         const overview = {
@@ -126,6 +150,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             asOf: "2026-10-21T12:00:00+00:00",
             profile: profile ? { id: "solax_inverter", label: "SolaX inverter" } : null,
             entities,
+            phasePowerPolarity: profile ? "positive_is_export" : null,
             condition: v.offGrid ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
             sections: ["today", "pattern"],
         };
@@ -329,7 +354,7 @@ test.describe("the house overview", () => {
         await expect(question(page, "consumers").locator(".preview")).toHaveText("Most: EV 6.0 kWh");
         // 0.3 kWh in the slot in progress and 47 × 0.25 kWh to midnight.
         await expect(question(page, "next").locator(".preview")).toHaveText("≈ 12 kWh for the rest of today · Boiler at 13:00");
-        await expect(question(page, "phases").locator(".preview")).toHaveText("L1 2.6 kW · L2 3.1 kW · L3 1.1 kW (est.)");
+        await expect(question(page, "phases").locator(".preview")).toHaveText("L1 3.0 kW · L2 2.5 kW · L3 2.3 kW");
     });
 
     test("an unreadable house sensor is no reading, never 0 W", async ({ page }) => {
@@ -481,33 +506,76 @@ test.describe("is today unusual", () => {
 });
 
 test.describe("phases", () => {
-    test("each load once, a three-phase load in thirds, unmapped load unassigned and a missing reading unknown", async ({ page }) => {
+    test("measured, assigned and the difference per phase, each with its devices, and a No phase group", async ({ page }) => {
         await mount(page);
         await openDetail(page);
         await header(page, "phases").click();
         const phases = question(page, "phases");
+        await expect(phases.locator("[data-phase-measured]")).toBeVisible();
+        const phase = (id: string) => phases.locator(`[data-phase='${id}']`);
         // L1: oven 1.0 (on the kitchen's phase) + kitchen rest 0.5, not the kitchen
         // meter again; + a third of the heat pump and of the breaker's rest.
-        await expect(phases.locator("[data-phase='L1']")).toContainText("≈ 2.6 kW");
-        await expect(phases.locator("[data-phase='L2']")).toContainText("≈ 3.1 kW");
-        await expect(phases.locator("[data-phase='L3']")).toContainText("≈ 1.1 kW");
+        await expect(phase("L1").locator("[data-measured]")).toHaveText("3.0 kW");
+        await expect(phase("L1").locator("[data-assigned]")).toHaveText("assigned ≈ 2.6 kW");
+        await expect(phase("L1").locator("[data-difference]")).toHaveText("400 W no assigned device explains");
+        await expect(phase("L2").locator("[data-assigned]")).toHaveText("assigned ≈ 3.1 kW");
+        await expect(phase("L2").locator("[data-difference]")).toHaveText("600 W more assigned than measured: a device is likely on another phase");
+        await expect(phase("L3").locator("[data-difference]")).toHaveText("1.2 kW no assigned device explains");
         // The lamp, the pump behind a three-phase breaker and the house's own rest.
         await expect(phases.locator("[data-row='unassigned']")).toContainText("1.0 kW");
         await expect(phases.locator("[data-row='coverage']")).toContainText("6.8 kW, 87 % of the house load");
         await expect(phases.locator("[data-unknown-loads]")).toContainText("Boiler");
-        await expect(phases).toContainText("not a measured phase meter");
 
+        // Each phase's devices, collapsed until opened.
+        const devices = (id: string) => phases.locator(`[data-phase-devices='${id}']`);
+        const row = (id: string, name: string) => devices(id).locator("tr").filter({ has: page.locator("td:first-child", { hasText: new RegExp(`^\\s*${name}`) }) });
+        await expect(devices("L1").locator("summary")).toHaveText("Devices on L1 (4)");
+        await expect(devices("L1").locator("table")).toBeHidden();
+        await devices("L1").locator("summary").click();
+        await expect(row("L1", "Oven")).toContainText("via Kitchen");
+        await expect(row("L1", "Oven")).toContainText("1.0 kW");
+        await expect(row("L1", "Kitchen \\(rest\\)")).toContainText("500 W");
+        // A three-phase load is under every phase at its third, marked.
+        for (const id of ["L2", "L3"]) await devices(id).locator("summary").click();
+        for (const id of ["L1", "L2", "L3"]) {
+            await expect(row(id, "Heat pump")).toContainText("3ph");
+            await expect(row(id, "Heat pump")).toContainText("1.0 kW");
+        }
+        // No reading is not 0 W.
+        await expect(row("L3", "Boiler")).toContainText("no reading");
+        // Loads without a phase and the house's own remainder.
+        await expect(devices("none").locator("summary")).toHaveText("No phase (3)");
+        await devices("none").locator("summary").click();
+        await expect(row("none", "Lamp")).toContainText("100 W");
+        await expect(row("none", "Pump")).toContainText("600 W");
+        await expect(row("none", "Unmeasured house load")).toContainText("300 W");
+
+        // The evidence: the formula's inputs, the meter import-positive.
         await evidence(page, "phases").click();
-        const row = (name: string) => phases.locator("[data-phase-map] tr").filter({ has: page.locator("td:first-child", { hasText: new RegExp(`^\\s*${name}\\s*$`) }) });
-        await expect(row("Oven")).toContainText("L1 (from Kitchen)");
-        await expect(row("Kitchen \\(rest\\)")).toContainText("L1");
-        await expect(row("Pump")).toContainText("–");
-        await expect(row("Heat pump")).toContainText("3-phase");
-        await expect(row("Boiler")).toContainText("no reading");
+        await expect(phases.locator("[data-phase-input='L1']")).toContainText("2000 W");
+        await expect(phases.locator("[data-phase-input='L1'] td").nth(2)).toHaveText("1000 W");
+        await expect(phases.locator("[data-formula]")).toContainText("sum of the three phases");
     });
 
-    test("without a wiring map nothing is guessed", async ({ page }) => {
-        await mount(page, { noPhases: true });
+    test("falls back to the estimate while the measured sensors are unavailable", async ({ page }) => {
+        await mount(page, { noMeasured: true });
+        await openDetail(page);
+        await expect(question(page, "phases").locator(".preview")).toHaveText("L1 2.6 kW · L2 3.1 kW · L3 1.1 kW (est.)");
+        await header(page, "phases").click();
+        const phases = question(page, "phases");
+        await expect(phases.locator("[data-phase-measured]")).toHaveCount(0);
+        await expect(phases.locator("[data-phase='L1']")).toContainText("≈ 2.6 kW");
+        await expect(phases.locator("[data-phase='L2']")).toContainText("≈ 3.1 kW");
+        await expect(phases.locator("[data-phase='L3']")).toContainText("≈ 1.1 kW");
+        await expect(phases.locator("[data-difference]")).toHaveCount(0);
+        await expect(phases.locator("[data-row='unassigned']")).toContainText("1.0 kW");
+        await expect(phases).toContainText("not a measured phase meter");
+        // The device lists stay.
+        await expect(phases.locator("[data-phase-devices]")).toHaveCount(4);
+    });
+
+    test("without a wiring map or a measurement nothing is guessed", async ({ page }) => {
+        await mount(page, { noPhases: true, noMeasured: true });
         await openDetail(page);
         await expect(question(page, "phases").locator(".preview")).toHaveText("No devices mapped to a phase");
         await header(page, "phases").click();
@@ -541,11 +609,11 @@ test.describe("disclosure and live data", () => {
         await expect(header(page, "phases")).toBeFocused();
         await evidence(page, "phases").focus();
         await page.keyboard.press("Space");
-        await expect(question(page, "phases").locator("[data-phase-map]")).toBeVisible();
+        await expect(question(page, "phases").locator("[data-phase-inputs]")).toBeVisible();
 
         await header(page, "sources").click();
         await expect(header(page, "phases")).toHaveAttribute("aria-expanded", "false");
-        await expect(question(page, "phases").locator("[data-phase-estimate]")).toHaveCount(0);
+        await expect(question(page, "phases").locator("[data-phase-measured]")).toHaveCount(0);
 
         await page.locator("node-detail-dialog ha-dialog").evaluate((dialog: any) => dialog.close());
         await expect(content(page)).toHaveCount(0);
@@ -554,7 +622,7 @@ test.describe("disclosure and live data", () => {
     });
 
     test("live readings reach the open phase estimate", async ({ page }) => {
-        await mount(page);
+        await mount(page, { noMeasured: true });
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
