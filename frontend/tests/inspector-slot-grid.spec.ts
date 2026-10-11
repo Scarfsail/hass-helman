@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The inspector's vertical time grid.
@@ -14,18 +14,7 @@ import { resolve } from "node:path";
  * once there is a line every quarter hour.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
-}
 
 /**
  * The inspector on a full-day axis with solar and a battery SoC forecast, so
@@ -141,7 +130,7 @@ async function chartXForMinutes(page: Page, minutes: number): Promise<number> {
 test.describe("solar inspector slot grid", () => {
     test.beforeEach(async ({ page }) => {
         await page.setViewportSize({ width: 1100, height: 900 });
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
     });
 
     for (const slotMinutes of [15, 30, 60]) {
@@ -169,7 +158,7 @@ test.describe("solar inspector slot grid", () => {
 
     test("a narrow card drops to every third hour rather than colliding", async ({ page }) => {
         await page.setViewportSize({ width: 380, height: 900 });
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, 15);
         expect(await hourLabels(page)).toEqual(
             ["00", "03", "06", "09", "12", "15", "18", "21", "24"],

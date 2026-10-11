@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The backend's defaults, shown as placeholders on the fields that are unset.
@@ -17,11 +17,6 @@ import { resolve } from "node:path";
  * wording is unique on the Training tab -- the training-window labels are
  * deliberately shared between the solar bias and house consumption panels.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 /** One solar bias field set, its neighbours and the training time left unset. */
 const STORED_CONFIG = {
@@ -49,9 +44,7 @@ const ENABLED_LABEL = "Enable bias correction";
 const AGGREGATION_LABEL = "Aggregation method";
 
 async function mountEditor(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(({ config, defaults }) => {
         const calls: { type: string; config?: unknown }[] = [];

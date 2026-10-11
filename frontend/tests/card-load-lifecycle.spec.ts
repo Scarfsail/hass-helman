@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * A load that resolves after its card is gone must commit nothing.
@@ -18,11 +18,6 @@ import { resolve } from "node:path";
  * rather than a race, and they state hard zeros: not one timer, not one
  * animation frame, not one committed field.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 /** Bucket duration of the fixture, in seconds — the discriminator for its interval. */
 const BUCKET_SECONDS = 7;
@@ -173,7 +168,7 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
             },
         };
     }, bucketSeconds);
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card") && !!customElements.get("helman-simple-card"));
 }
 

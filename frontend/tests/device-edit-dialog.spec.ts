@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Editing a device from its detail dialog.
@@ -22,11 +22,6 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
  * - **Readings.** The dialog runs its own entity inspection, so the form's
  *   name placeholder is the backend's resolved name, as in the panel.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const BOILER = {
     id: "boiler",
@@ -74,9 +69,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
         hangSave = false,
         vendors = {},
     } = options;
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("node-detail-device-content"));
+    await loadBundle(page, "node-detail-device-content");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
 
     await page.evaluate(

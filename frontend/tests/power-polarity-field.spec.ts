@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The polarity select on every power device's section.
@@ -18,11 +18,6 @@ import { resolve } from "node:path";
  * The last test is not about polarity: it guards the option-label lookup these
  * fields share with the aggregation-method select, which had the same bug.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const STORED_CONFIG = {
     config_version: 6,
@@ -57,9 +52,7 @@ async function mountEditorWith(
     config: unknown,
     language = "en",
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(({ config, language }) => {
         const element = document.createElement(

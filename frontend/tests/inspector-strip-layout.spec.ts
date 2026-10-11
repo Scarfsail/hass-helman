@@ -1,15 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
+import { loadBundle } from "./support/card-page";
 
 async function mountInspector(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(() => {
         const date = "2026-07-18";

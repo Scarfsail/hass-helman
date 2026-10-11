@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Lifting children in the house section's grouped view (#365).
@@ -11,11 +11,6 @@ import { resolve } from "node:path";
  * buckets, so the group totals still add up to the house devices' total. The
  * shared items -- the plain view's -- are never changed.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const GROUPINGS = [
     {
@@ -73,9 +68,7 @@ const DEVICES = [
 ];
 
 async function mountSection(page: Page, devices: unknown[] = DEVICES): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-house-devices-section"));
+    await loadBundle(page, "helman-house-devices-section");
     await page.evaluate(
         async ({ devices, groupings }) => {
             const el = document.createElement("helman-house-devices-section") as any;

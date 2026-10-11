@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Whether a lane is on autopilot, said on the lane itself.
@@ -16,11 +16,6 @@ import { resolve } from "node:path";
  * - **That it is a control of its own.** Pressing it must not also select the
  *   lane underneath, which is the other thing a press on that row does.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DAY = "2026-07-24";
 const DAY_START_MS = Date.parse(`${DAY}T00:00:00Z`);
@@ -66,9 +61,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         stallReads = false,
     } = options;
 
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
+    await loadBundle(page, "scheduling-entity-day-band");
 
     await page.evaluate(({ dayStartMs, hourMs, config, columnLabels, schema, unauthorized, stallReads }) => {
         const calls: { type: string; config?: unknown }[] = [];

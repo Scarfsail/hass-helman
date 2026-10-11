@@ -12,6 +12,8 @@ export default defineConfig({
     forbidOnly: !!process.env.CI,
     retries: 0,
     workers: process.env.CI ? 4 : undefined,
+    // The node-detail review screenshots run only when `SCREENS` names a directory to write them to.
+    grepInvert: process.env.SCREENS ? undefined : /@screens/,
     reporter: [["html", { open: "never" }], ["list"]],
     timeout: 30_000,
     expect: { timeout: 5_000 },

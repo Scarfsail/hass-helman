@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * How the money strip draws a day's cost and gain.
@@ -13,21 +13,10 @@ import { resolve } from "node:path";
  * never both contribute and double the day.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
 
 type MoneyPoint = { slot: string; cost: number | null; gain: number | null };
 type Bar = { side: "cost" | "gain"; height: number; width: number };
-
-async function loadCardBundle(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-money-strip"));
-}
 
 /**
  * Mount the strip and read back the bars it drew. `nowMs` places the seam, so a
@@ -117,7 +106,7 @@ async function tooltipRowsAt(
 
 test.describe("money strip", () => {
     test.beforeEach(async ({ page }) => {
-        await loadCardBundle(page);
+        await loadBundle(page, "helman-solar-money-strip");
     });
 
     test("cost rises above the line and gain falls below it", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The dashed SoC forecast line across a stretch the forecast never covered.
@@ -13,11 +13,6 @@ import { resolve } from "node:path";
  * the card honest. The pen must lift instead.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
 
 /** The forecast is missing from 10:00 up to (not including) 12:00. */
@@ -25,9 +20,7 @@ const GAP_FROM = 600;
 const GAP_UNTIL = 720;
 
 async function mountInspector(page: Page, gap: boolean): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, withGap, gapFrom, gapUntil }) => {
         const socForecast: Array<{ slot: string; pct: number }> = [];

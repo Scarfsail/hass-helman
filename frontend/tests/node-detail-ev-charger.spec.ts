@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
+import { CARD_BUNDLE } from "./support/card-page";
 
 /**
  * The EV charger detail, opened from the charger's name on the power card.
@@ -21,8 +21,7 @@ import { installFixedClock } from "./support/fixed-clock";
  * The clock is fixed at 12:00 UTC; the schedule's 15-minute slots start 11:45.
  */
 
-const BUNDLE = resolve(__dirname, "../../custom_components/helman/frontend_compiled/helman-card.js");
-const SCREENS = process.env.EV_SCREENS;
+const SCREENS = process.env.SCREENS;
 
 type Window = { from: number; to: number; candidate?: boolean; vehicleId?: string | null; useMode?: string };
 
@@ -65,7 +64,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card"));
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((v) => {
@@ -719,19 +718,18 @@ test.describe("a Custom charger", () => {
     });
 });
 
-test.describe("screenshots", () => {
-    test.skip(!SCREENS, "set EV_SCREENS to a directory to capture the review screenshots");
+test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-390", 390, 844], ["desktop-1280", 1280, 900]] as const) {
         test(`overview and expanded answers at ${name}`, async ({ page }) => {
             await page.setViewportSize({ width, height });
             await openCharger(page, { twoCars: true });
-            await page.screenshot({ path: `${SCREENS}/${name}-overview.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-overview.png`, fullPage: true });
             await header(page, "plan").click();
             await expect(question(page, "plan").locator("[data-row='end-soc']")).toBeVisible();
-            await page.screenshot({ path: `${SCREENS}/${name}-plan.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-plan.png`, fullPage: true });
             await header(page, "progress").click();
             await evidence(page, "progress").click();
-            await page.screenshot({ path: `${SCREENS}/${name}-progress-evidence.png`, fullPage: true });
+            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-progress-evidence.png`, fullPage: true });
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             expect(overflow).toBeLessThanOrEqual(0);
         });

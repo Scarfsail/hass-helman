@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The day band as a read-only readout, which is how surfaces other than the
@@ -11,11 +11,6 @@ import { resolve } from "node:path";
  * nothing can be authored, that a press still reports which run it was -- is
  * the contract that lets the host own the decisions.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DAY = "2026-07-24";
 const DAY_START_MS = Date.parse(`${DAY}T00:00:00Z`);
@@ -62,9 +57,7 @@ interface MountOptions {
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
+    await loadBundle(page, "scheduling-entity-day-band");
 
     await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks, axis, widthPx }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;

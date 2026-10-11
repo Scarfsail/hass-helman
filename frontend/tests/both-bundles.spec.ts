@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
 
 /**
  * The two bundles have to survive being on the same page.
@@ -17,15 +17,6 @@ import { resolve } from "node:path";
  * both load orders are exercised: which bundle throws depends on which one got
  * to the shared tag first.
  */
-
-const CARD_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-const EDITOR_BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 /** Elements each bundle must still register with the other one present. */
 const CARD_TAGS = [

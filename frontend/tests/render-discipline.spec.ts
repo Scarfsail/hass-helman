@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The regression guard for `frontend/cards/README.md`, "Card rendering
@@ -36,10 +37,6 @@ import { installFakeHass } from "./support/fake-hass";
  * guard and the #56 measurements agree by construction.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 const PERF_INIT = resolve(__dirname, "../perf/perf-init.js");
 const PERF_INSTRUMENT = resolve(__dirname, "../perf/perf-instrument.js");
 
@@ -83,9 +80,7 @@ async function mountCard(page: Page): Promise<void> {
     // init script only runs on a navigation — so make one, or `window.__perf`
     // never exists and the instrument has nothing to fill in.
     await page.goto("about:blank");
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector-card"));
+    await loadBundle(page, "helman-solar-inspector-card");
     await page.addScriptTag({ path: PERF_INSTRUMENT });
     await installFakeHass(page, { pillDays: PILL_DAYS });
 

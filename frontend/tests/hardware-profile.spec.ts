@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The inverter's hardware profile picker, and what it hides (#429, #430).
@@ -21,11 +21,6 @@ import { resolve } from "node:path";
  * device back to Custom writes what its profile provided into the draft, but
  * Helman's own entities.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 const OWNED = [
     "energy_nodes.house.entities.power",
@@ -204,9 +199,7 @@ async function mountEditor(
     profile = PROFILE,
     { entities = {}, inverterResolved = RESOLVED, inverterValues = VALUES }: StubOptions = {},
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
         ({ config, profile, resolved, inverterValues, charger, chargerResolved, chargerValues, entities, modePath }) => {

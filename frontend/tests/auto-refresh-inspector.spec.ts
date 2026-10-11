@@ -1,5 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
 import { installFakeHass } from "./support/fake-hass";
 import {
     STOP_MONTH_VIEW,
@@ -7,6 +6,7 @@ import {
     clickStop,
     waitForAggregateChart,
 } from "./support/inspector-aggregate-harness";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The solar inspector refreshing under the user rather than at them.
@@ -33,18 +33,11 @@ import {
  * rather than a race.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 /** Days the inspector offers, counting today as day 0. */
 const PILL_DAYS = 4;
 
 async function mountInspector(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
     await installFakeHass(page, { pillDays: PILL_DAYS });
 
     await page.evaluate(() => {

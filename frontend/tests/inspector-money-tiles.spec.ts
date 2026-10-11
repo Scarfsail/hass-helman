@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * Which money the three tiles report, and where each figure comes from.
@@ -15,11 +15,6 @@ import { resolve } from "node:path";
  * count the running slot. The selection tiles sum the drawn series, which stops
  * before it — exactly as the selection's energy figures do.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
 
 const DAY = "2026-07-18";
 
@@ -46,9 +41,7 @@ async function mountInspector(
         totalsActual?: MoneyTotals | null;
     } = {},
 ): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, money, totals }) => {
         const impact: Array<Record<string, unknown>> = [];

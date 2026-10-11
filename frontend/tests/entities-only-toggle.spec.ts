@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
  * The entities-only view: every entity group, and nothing else.
@@ -20,11 +20,6 @@ import { resolve } from "node:path";
  * derived from it, so adding an entity to the tab is a deliberate one-line edit
  * here rather than a number nobody can check.
  */
-
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-config-editor.js",
-);
 
 /** A document with something picked at every Energy nodes entity path. */
 const CONFIG = {
@@ -121,9 +116,7 @@ const POWER_DEVICE_ENTITY_PATHS = [
 ].sort();
 
 async function mountEditor(page: Page): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
+    await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate((config) => {
         // The editor will not enter YAML mode until `ha-yaml-editor` is

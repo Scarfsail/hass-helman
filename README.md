@@ -440,6 +440,12 @@ npm --prefix frontend test                                         # run the who
 npm --prefix frontend test -- tests/node-detail-ev-charger.spec.ts # run specific specs
 ```
 
+The node-detail specs also capture review screenshots, tagged `@screens` and left out of the default run. To capture one spec's screenshots, point `SCREENS` at a directory:
+
+```bash
+SCREENS=/tmp/shots npm --prefix frontend test -- tests/node-detail-battery.spec.ts
+```
+
 #### CI
 
 CI (`.github/workflows/release.yml`) runs both suites on every push and pull request: the backend job runs `scripts/run_tests.sh` against `requirements-test.txt` (files in parallel, pip cached), and the frontend job runs `npm --prefix frontend test` with 4 Playwright workers. The release job depends on both passing, so a red test run blocks the release.

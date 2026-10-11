@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { loadBundle } from "./support/card-page";
 
 /**
  * The SoC strip at 30- and 60-minute widths.
@@ -12,11 +12,6 @@ import { resolve } from "node:path";
  * at 30 and 60 minutes while matching it exactly at 15.
  */
 
-const BUNDLE = resolve(
-    __dirname,
-    "../../custom_components/helman/frontend_compiled/helman-card.js",
-);
-
 const DAY = "2026-07-18";
 
 /** The battery charges from 10:00 to 12:00 and holds for the rest of the day. */
@@ -24,9 +19,7 @@ const CHARGE_FROM = 600;
 const CHARGE_UNTIL = 720;
 
 async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
-    await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, slot, chargeFrom, chargeUntil }) => {
         const socForecast: Array<{ slot: string; pct: number }> = [];
