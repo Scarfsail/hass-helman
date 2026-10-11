@@ -252,11 +252,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         } catch (error) {
             if (request !== this._projectionRequest) return;
             console.error("node-detail-ev_charger: failed to load the projection", error);
-            // One from before the slot in progress is stale: show the failure and its retry.
-            const slotStart = Math.floor(Date.now() / SLOT_MS) * SLOT_MS;
-            if (this._projection?.status !== "ready" || Date.parse(this._projection.payload.generatedAt) < slotStart) {
-                this._projection = { status: "error" };
-            }
+            // A refresh follows a plan change or a new slot: what was shown may be
+            // the old plan's, so the failure and its retry replace it.
+            this._projection = { status: "error" };
         }
     }
 

@@ -244,7 +244,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 if (msg.type === "helman/get_schedule") return schedule;
                 if (msg.type === "helman/get_appliances") return appliances;
                 if (msg.type === "helman/get_appliance_projections") {
-                    if (v.projectionFails) throw new Error("projection down");
+                    if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
                     return projection;
                 }
                 if (msg.type === "helman/get_node_detail") {
@@ -562,6 +562,19 @@ test.describe("plan", () => {
         await header(page, "plan").click();
         await expect(question(page, "plan").locator("[data-completion='no_target']")).toBeVisible();
         await expect(question(page, "plan").locator("[data-row='reach']")).toHaveCount(0);
+    });
+
+    test("a failed refresh after a plan change drops the old plan's completion", async ({ page }) => {
+        await openCharger(page);
+        await header(page, "plan").click();
+        await expect(question(page, "plan").locator("[data-row='end-soc']")).toBeVisible();
+        await page.evaluate(() => {
+            (window as any).__projectionDown = true;
+            // A plan change announced on the shared feed.
+            (window.__deepAll(document, "node-detail-ev-charger-content")[0] as any)._onDataChanged();
+        });
+        await expect(question(page, "plan")).toContainText("The projection could not be loaded.");
+        await expect(question(page, "plan").locator("[data-row='end-soc']")).toHaveCount(0);
     });
 
     test("a failed projection offers a retry", async ({ page }) => {
