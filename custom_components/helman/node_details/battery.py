@@ -146,6 +146,20 @@ def build_battery_overview(
     }
 
 
+async def today_ranking_report(hass: Any, local_now: datetime) -> Mapping[str, Any]:
+    """Today's ranking device report, or ``{"unavailable": reason}``.
+
+    The one report the battery's and the solar's "today so far" answers read.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if coordinator is None:
+        return {"unavailable": "not_loaded"}
+    today = local_now.date()
+    return await coordinator.async_device_report(
+        "ranking", ReportQuery(start_date=today, end_date=today)
+    )
+
+
 async def async_battery_section(
     hass: Any, config: Mapping[str, Any], section: str, now: datetime
 ) -> dict[str, Any]:
@@ -169,17 +183,13 @@ async def async_battery_section(
         "unavailable": None,
         "charge": None,
     }
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if coordinator is None:
-        return {**payload, "unavailable": "not_loaded"}
-    today = local_now.date()
-    report = await coordinator.async_device_report(
-        "ranking", ReportQuery(start_date=today, end_date=today)
-    )
+    report = await today_ranking_report(hass, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     return {
         **payload,
+        # The report's dataset can be a few minutes older than the request.
+        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
         "currency": report.get("currency"),
         "complete": bool(report.get("complete")),
         "charge": charge_origin_kwh(report["charge_origin"]),

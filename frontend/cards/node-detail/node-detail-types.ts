@@ -16,13 +16,18 @@ export interface BatteryDetailParams {
     historyBucketDuration: number;
 }
 
+/**
+ * The solar node. Its readings come from `helman/get_node_detail`; the powers
+ * are the card's own live figures, with the polarity the card already applied.
+ */
 export interface SolarDetailParams {
     nodeType: "solar";
-    solarNode: TreeItem | null;
-    productionNode?: TreeItem | null;
-    historyBuckets: number;
-    historyBucketDuration: number;
-    historyRevision: number;
+    /** Solar production, W; `null` without a reading. */
+    power: number | null;
+    /** Battery power: positive charges, W; `null` without a reading. */
+    batteryPower: number | null;
+    /** Grid power, import positive, W; `null` without a reading. */
+    gridPower: number | null;
 }
 
 /**

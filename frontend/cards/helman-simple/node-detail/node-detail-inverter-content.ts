@@ -13,7 +13,6 @@ import { getSharedHelmanStore } from "../../helman/store";
 import { commandedModeKind } from "../../helman-api";
 import { formatPower } from "../../power-format";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
 import { NodeDetailContentBase, type SectionState } from "./node-detail-base";
@@ -617,10 +616,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     private _dayKey(ms: number): string | null {
         return dayKey(ms, this._timeZone);
-    }
-
-    private _actionLabel(action: ScheduleActionDTO): string {
-        return getScheduleActionLabel(action, this.localize);
     }
 
     private _modeLabel(kind: ScheduleActionKind): string {

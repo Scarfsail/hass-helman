@@ -413,6 +413,59 @@ class TestChargeOrigin(DatasetTestCase):
         self.assertEqual(split.forgone.unpriced_kwh, 1.0)
 
 
+class TestSolarTotals(DatasetTestCase):
+    def test_solar_and_export_split_by_whether_the_hour_has_a_mix(self):
+        # Hour 1 has no import row: its solar cannot be placed, so it is kept
+        # apart, and its export with it.
+        dataset, _ = self.house_split(
+            {
+                0: {"H": 1, "S": 5, "E": 2, "C": 2},
+                1: {"H": 1, "S": 3, "E": 1, "I": None},
+            }
+        )
+        totals = dataset.solar_totals
+        self.assertAlmostEqual(totals.attributed_kwh, 5)
+        self.assertAlmostEqual(totals.unattributed_kwh, 3)
+        # Hour 0, solar first: 2 exported, 2 charged, 1 to the house.
+        self.assertAlmostEqual(totals.export_kwh, 2)
+        self.assertAlmostEqual(totals.battery_kwh, 2)
+        self.assertAlmostEqual(totals.house_kwh, 1)
+        self.assertAlmostEqual(totals.measured_export_kwh, 2)
+
+        payload = reports_mod.build_report(
+            "ranking",
+            dataset,
+            reports_mod.ReportQuery(START.date(), START.date()),
+            currency=None,
+            navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-10"},
+        )
+        self.assertEqual(
+            payload["solar_totals"],
+            {
+                "attributed_kwh": 5.0,
+                "unattributed_kwh": 3.0,
+                "house_kwh": 1.0,
+                "battery_kwh": 2.0,
+                "export_kwh": 2.0,
+                "measured_export_kwh": 2.0,
+            },
+        )
+
+    def test_battery_export_in_one_hour_never_absorbs_solar_left_over_in_another(self):
+        # Midday: 5 kWh solar, 1 used, nothing charged or exported, 4 unexplained.
+        # Evening: the battery exports 3 kWh. No solar was exported.
+        dataset, _ = self.house_split(
+            {
+                0: {"H": 1, "S": 5},
+                1: {"H": 0, "D": 3, "E": 3},
+            }
+        )
+        totals = dataset.solar_totals
+        self.assertAlmostEqual(totals.export_kwh, 0)
+        self.assertAlmostEqual(totals.measured_export_kwh, 3)
+        self.assertAlmostEqual(totals.house_kwh, 1)
+
+
 class TestMoney(DatasetTestCase):
     def test_a_solar_only_device_paid_nothing_and_nothing_is_unpriced(self):
         _, split = self.house_split({0: {"H": 1, "S": 3, "E": 2}}, export_rate={0: 0.5})

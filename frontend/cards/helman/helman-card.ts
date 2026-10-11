@@ -327,7 +327,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     private _buildNodeDetailContext(): NodeDetailContext {
-        const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
+        const { sourcesChildren, consumerNode, consumersChildren, houseNode, houseDevices } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
         const gridProducerNode = sourcesChildren.find((device) => device.sourceType === "grid") ?? null;
         const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
@@ -335,6 +335,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
         const batterySensorId = batteryProducerNode?.powerSensorId ?? batteryConsumerNode?.powerSensorId;
         const batteryReadable = !!batterySensorId && Number.isFinite(parseFloat(this._hass?.states[batterySensorId]?.state ?? ""));
+        const solarReadable = !!solarNode?.powerSensorId && Number.isFinite(parseFloat(this._hass?.states[solarNode.powerSensorId]?.state ?? ""));
         const gridSensorId = gridProducerNode?.powerSensorId ?? gridConsumerNode?.powerSensorId;
         const gridReadable = !!gridSensorId && Number.isFinite(parseFloat(this._hass?.states[gridSensorId]?.state ?? ""));
 
@@ -343,11 +344,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         return {
             batteryPower,
             batteryPowerReading: batteryReadable ? batteryPower : null,
-            solarNode,
+            solarPowerReading: solarReadable ? solarNode?.powerValue ?? 0 : null,
             gridPower: gridReadable
                 ? (gridProducerNode?.powerValue ?? 0) - (gridConsumerNode?.powerValue ?? 0)
                 : null,
-            productionNode: sourcesNode ?? null,
             consumptionNode: consumerNode ?? null,
             housePower: houseNode?.powerValue ?? 0,
             solarPower: solarNode?.powerValue ?? 0,

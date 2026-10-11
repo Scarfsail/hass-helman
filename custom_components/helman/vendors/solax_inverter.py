@@ -217,6 +217,21 @@ PROFILE = VendorProfile(
             for period in (1, 2)
             for edge in ("start", "end")
         },
+        # The solar detail: each MPPT string's DC power (W), voltage (V) and
+        # current (A), and the shade-tolerance (``Off``/``Low``/``Middle``/
+        # ``High``) setting per string, a select.
+        **{
+            f"pv_{quantity}_{string}": ("sensor", f"{{name}}_pv_{quantity}_{string}")
+            for quantity in ("power", "voltage", "current")
+            for string in (1, 2)
+        },
+        **{
+            f"shade_fix_pv{string}": (
+                "select",
+                f"{{name}}_shadow_fix_function_level_pv{string}_gmppt",
+            )
+            for string in (1, 2)
+        },
     },
     # ``measured_power_l*`` reads positive while feeding in: on the dev mirror
     # (2026-10-10) ``measured_power`` +405 W sat beside the energy dashboard's
