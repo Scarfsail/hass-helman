@@ -116,6 +116,9 @@ const APPLIANCE_ICON_SELECTOR = {
 
 const CHEVRON = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
+/** The house phases a consumer can be wired to, as `phase` stores them. */
+const DEVICE_PHASES = ["L1", "L2", "L3", "3ph"] as const;
+
 /** A device card's sections, each named by its `editor.sections.*` key. */
 type SectionKey =
     | "identity"
@@ -188,7 +191,7 @@ function sectionOfIssue(devicePath: readonly PathSegment[], issuePath: string): 
     // An EV charger's power limit is edited among its controls.
     if (under("controls") || under("schedulable") || under("limits")) return "controls";
     if (under("vehicles")) return "vehicles";
-    if (under("groups")) return "groups";
+    if (under("groups") || under("phase")) return "groups";
     return "identity";
 }
 
@@ -961,17 +964,18 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     }
 
     /**
-     * The device's own group in each grouping: a badge per assigned group, and
-     * one picker per grouping to add, change or remove it. Only for consumers
-     * (a system device is never grouped), and only once a grouping exists.
+     * The device's own house phase, and its own group in each grouping: a
+     * badge per assigned value, a phase picker, and one picker per grouping to
+     * add, change or remove the group. Only for consumers: a system device is
+     * never grouped nor wired to a house phase.
      */
     private _renderGroupsSection(device: JsonObject): TemplateResult | typeof nothing {
         const path = this.path;
+        if (path[1] !== "consumers") return nothing;
         const groupings = (asJsonArray(asJsonObject(this.config?.devices)?.groupings) ?? []).flatMap((value) => {
             const grouping = asJsonObject(value);
             return grouping ? [grouping] : [];
         });
-        if (path[1] !== "consumers" || groupings.length === 0) return nothing;
         const rows = groupings.map((grouping) => {
             const groupingId = stringValue(grouping.id);
             const groups = (asJsonArray(grouping.groups) ?? []).flatMap((value) => {
@@ -982,9 +986,11 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
             return { grouping, groupingId, groups, current, group: groups.find((group) => group.id === current) };
         });
         const assigned = rows.filter((row) => row.current);
+        const phase = stringValue(device.phase);
         return this._renderSection(
             "groups",
             html`<div class="field-grid">
+                ${this._renderPhaseField(phase)}
                 ${rows.map(
                     ({ grouping, groupingId, groups, current, group }) => html`
                         <div class="field">
@@ -1017,8 +1023,49 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                     `,
                 )}
             </div>`,
-            assigned.map((row) => ({ key: "group", text: stringValue(row.group?.name) || row.current })),
+            [
+                ...(phase ? [{ key: "phase", text: this._phaseLabel(phase) }] : []),
+                ...assigned.map((row) => ({ key: "group", text: stringValue(row.group?.name) || row.current })),
+            ],
         );
+    }
+
+    /**
+     * The house phase the device is wired to; empty is unassigned, which the
+     * house detail shows as such rather than guessing. A stored value this
+     * version does not know stays selected, so the picker never misstates it.
+     */
+    private _renderPhaseField(phase: string): TemplateResult {
+        const path = this.path;
+        return html`
+            <div class="field">
+                <label>${this.t("editor.fields.device_phase")}</label>
+                <select
+                    class="device-phase"
+                    .value=${live(phase)}
+                    @change=${(event: Event) => {
+                        const value = (event.currentTarget as HTMLSelectElement).value;
+                        this._mutate(path, (draft) => {
+                            if (value) setValueAtPath(draft, [...path, "phase"], value);
+                            else unsetValueAtPath(draft, [...path, "phase"]);
+                        });
+                    }}
+                >
+                    <option value="" ?selected=${phase === ""}>${this.t("editor.device_phases.unassigned")}</option>
+                    ${DEVICE_PHASES.map((option) => html`
+                        <option value=${option} ?selected=${option === phase}>${this._phaseLabel(option)}</option>
+                    `)}
+                    ${phase && !(DEVICE_PHASES as readonly string[]).includes(phase)
+                        ? html`<option value=${phase} selected>${phase}</option>`
+                        : nothing}
+                </select>
+                <div class="helper">${this.t("editor.helpers.device_phase")}</div>
+            </div>
+        `;
+    }
+
+    private _phaseLabel(phase: string): string {
+        return (DEVICE_PHASES as readonly string[]).includes(phase) ? this.t(`editor.device_phases.${phase}`) : phase;
     }
 
     /** The device's kind; a hardware profile fixes it, so under one it is locked. */

@@ -16,6 +16,7 @@ from typing import Any
 
 from .battery import async_battery_section, build_battery_overview
 from .grid import async_grid_section, build_grid_overview
+from .house import async_house_section, build_house_overview
 from .inverter import async_inverter_section, build_inverter_overview
 from .solar import async_solar_section, build_solar_overview
 
@@ -59,6 +60,11 @@ NODE_DETAILS: dict[str, NodeDetail] = {
         overview=build_solar_overview,
         section=async_solar_section,
         sections=frozenset({"production", "strings", "destinations"}),
+    ),
+    "house": NodeDetail(
+        overview=build_house_overview,
+        section=async_house_section,
+        sections=frozenset({"today", "pattern"}),
     ),
 }
 

@@ -67,7 +67,12 @@ export interface TreeItemDTO extends TreeItemDTOBase {
     energyEntityId: string | null;
     /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
     isEstimated: boolean;
+    /** A house device's own wiring, `null` when unassigned and for every other node. */
+    phase?: DevicePhase | null;
 }
+
+/** The house phase a device is wired to: one of the three, or all three. */
+export type DevicePhase = "L1" | "L2" | "L3" | "3ph";
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────
 
@@ -844,7 +849,7 @@ export interface GetApplianceProjectionsRequest {
 // --- Node details (helman/get_node_detail) ----------------------------------
 
 /** The nodes the backend serves a detail for. */
-export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar";
+export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar" | "house";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
 export interface GetNodeDetailRequest {
@@ -1109,6 +1114,106 @@ export interface SolarDestinationsSectionPayload {
     destinations: SolarDestinationsDTO | null;
     /** Today's battery charge origin, for the solar charge's forgone export value. */
     charge: BatteryChargeDTO | null;
+}
+
+/**
+ * The house detail's overview. `entities` carries the house `power` meter,
+ * Helman's live source-ratio sensors (`solar_ratio`, `battery_ratio`,
+ * `grid_ratio`), its battery `time_to_empty` and the profile's EPS phase
+ * readings (`eps_power_l1..3`, absent for a Custom inverter).
+ */
+export interface HouseDetailPayload {
+    node: "house";
+    asOf: string;
+    profile: { id: string; label: string } | null;
+    entities: Record<string, string | null>;
+    condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
+    sections: string[];
+}
+
+/** A ranking node's attributed money: estimates, not a bill. An amount is `null` when nothing was priced. */
+export interface HouseMoneyDTO {
+    paid: number | null;
+    paidPricedKwh: number;
+    paidUnpricedKwh: number;
+    forgone: number | null;
+    forgonePricedKwh: number;
+    forgoneUnpricedKwh: number;
+}
+
+/** One load of the house, counted once: a device, or a metered parent's own share (`ownOf`). */
+export interface HouseLoadDTO {
+    id: string;
+    label: string;
+    ownOf: string | null;
+    estimated: boolean;
+    kwh: number;
+    coverage: number;
+    money: HouseMoneyDTO;
+}
+
+/** Today's house figures, from the ranking report. */
+export interface HouseTodaySectionPayload {
+    node: "house";
+    section: "today";
+    asOf: string;
+    period: { start: string; end: string };
+    currency: string | null;
+    complete: boolean;
+    unavailable: string | null;
+    house: {
+        kwh: number;
+        coverage: number;
+        sources: { solar: number; battery: number; grid: number; unattributed: number };
+        money: HouseMoneyDTO;
+        ambiguousKwh: number;
+        mismatchKwh: number;
+    } | null;
+    /** `(house − grid − unattributed) / house`; `null` without house energy. */
+    independence: { share: number; gridShare: number; unknownShare: number } | null;
+    /** `(solar → house + solar → battery) / matched solar`; `share` `null` with a `reason`. */
+    selfConsumption: {
+        share: number | null;
+        reason: "no_solar_meter" | "no_matched_solar" | null;
+        destinations: SolarDestinationsDTO | null;
+    } | null;
+    consumers: {
+        top: HouseLoadDTO[];
+        others: { count: number; kwh: number };
+        /** The house's own remainder: what no device meter explains. */
+        unmeasuredKwh: number | null;
+        overallocatedKwh: number;
+    } | null;
+}
+
+/** Today against earlier same weekdays, the overnight minimum and the learned profile. */
+export interface HousePatternSectionPayload {
+    node: "house";
+    section: "pattern";
+    asOf: string;
+    period: { start: string; end: string };
+    comparison: {
+        unavailable: "no_energy_meter" | "no_elapsed_hour" | null;
+        /** The end of the completed hours compared. */
+        until: string;
+        elapsedHours: number;
+        comparedHours: number;
+        todayKwh: number | null;
+        averageKwh: number | null;
+        ratio: number | null;
+        used: number;
+        days: Array<{ date: string; kwh: number | null; knownHours: number }>;
+    };
+    overnight: {
+        start: string;
+        end: string;
+        complete: boolean;
+        unavailable: "no_power_sensor" | "unit" | null;
+        minimum: { watts: number; at: string; coverage: number } | null;
+        coverage: number;
+    };
+    /** kWh per hour, Monday first; `null` while no profile is fitted. */
+    profile: { historyDays: number; trainedAt: string | null; kwh: number[][] } | null;
 }
 
 /**

@@ -139,6 +139,7 @@ export class NodeDetailDialog extends LitElement {
                 return html`
                     <node-detail-house-content
                         .hass=${this.hass}
+                        .localize=${this.localize}
                         .params=${this.params}
                     ></node-detail-house-content>
                 `;

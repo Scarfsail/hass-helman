@@ -65,7 +65,7 @@
       "automation_settings": "Automation settings",
       "appliance_optimizer_pipeline": "Appliance optimizers",
       "system_optimizer_pipeline": "System optimizers",
-      "groups": "Groups",
+      "groups": "Groups and phase",
       "identity": "Identity",
       "action_options": "Action options",
       "controls": "Controls",
@@ -300,7 +300,8 @@
       "hardware_profile": "Hardware profile",
       "vendor_entry": "Integration entry",
       "vendor_device": "Device",
-      "max_allowed_export_power": "Max allowed export power"
+      "max_allowed_export_power": "Max allowed export power",
+      "device_phase": "House phase"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -377,7 +378,8 @@
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",
       "add_device": "Its id is generated from the entity once and never changes.",
       "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
-      "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes."
+      "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes.",
+      "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it; a device under a single-phase device without its own phase is on that one."
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -602,6 +604,13 @@
     "device_groups": {
       "unassigned": "Unassigned",
       "none": "None"
+    },
+    "device_phases": {
+      "unassigned": "Unassigned",
+      "L1": "L1",
+      "L2": "L2",
+      "L3": "L3",
+      "3ph": "Three-phase"
     },
     "device_badges": {
       "energy": "Energy",

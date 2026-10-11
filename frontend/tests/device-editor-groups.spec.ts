@@ -2,14 +2,14 @@ import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
 /**
- * A device's groups in its own editor (#376).
+ * A device's groups and house phase in its own editor (#376, #424).
  *
- * Every consumer card has a "Groups" section, collapsed, whose summary shows a
- * badge per group the device is assigned to, and whose body holds one picker
- * per grouping: "None", then the grouping's groups. Picking writes the
- * device's own `groups.<grouping>`, "None" removes the key and a `groups` map
- * left empty. A config without groupings has nothing to pick, so it shows
- * no section.
+ * Every consumer card has a "Groups and phase" section, collapsed, whose
+ * summary shows a badge per assigned phase and group, and whose body holds the
+ * phase picker and one picker per grouping: "None", then the grouping's
+ * groups. Picking writes the device's own `groups.<grouping>`, "None" removes
+ * the key and a `groups` map left empty. A config without groupings has no
+ * group to pick, so the section holds the phase picker alone.
  *
  * The fixture: an AC breaker in "Technická FV" with an ungrouped climate
  * child, a boiler in a group of each grouping, and a lamp naming a group the
@@ -132,18 +132,18 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
     await expect(panel.locator("details.device-card")).toHaveCount(4);
 }
 
-/** The device card's own Groups section, not a nested child card's. */
+/** The device card's own Groups and phase section, not a nested child card's. */
 const groupsSection = (page: Page, id: string) =>
     page
         .locator("helman-config-editor-panel")
         .locator(`details.device-card[data-device-id="${id}"] > .appliance-body > details.section-card`, {
-            has: page.locator(":scope > summary .section-summary-label", { hasText: /^Groups$/ }),
+            has: page.locator(":scope > summary .section-summary-label", { hasText: /^Groups and phase$/ }),
         });
 
 const picker = (page: Page, id: string, groupingId: string) =>
     groupsSection(page, id).locator(`select.device-group[data-grouping-id="${groupingId}"]`);
 
-/** The badges in a Groups section's summary. */
+/** The badges in a Groups and phase section's summary. */
 const badges = (page: Page, id: string) =>
     groupsSection(page, id).locator(":scope > summary .device-badge").allTextContents();
 
@@ -175,7 +175,7 @@ const INITIAL = {
     lamp: LAMP.groups,
 };
 
-test("the Groups section is collapsed and its badges name the assigned groups", async ({ page }) => {
+test("the Groups and phase section is collapsed and its badges name the assigned groups", async ({ page }) => {
     await mountEditor(page);
 
     await expect(groupsSection(page, "boiler")).toHaveCount(1);
@@ -186,8 +186,8 @@ test("the Groups section is collapsed and its badges name the assigned groups", 
     await expect(groupsSection(page, "klima")).toHaveCount(1);
     await expect(groupsSection(page, "klima").locator(":scope > summary .section-summary-badge")).toHaveCount(0);
 
-    // One picker per grouping, labelled with its name: "None", then its groups.
-    await expect(groupsSection(page, "boiler").locator(".field > label")).toHaveText(["Jističe", "Režimy"]);
+    // The phase picker, then one per grouping, labelled with its name: "None", then its groups.
+    await expect(groupsSection(page, "boiler").locator(".field > label")).toHaveText(["House phase", "Jističe", "Režimy"]);
     await expect(picker(page, "boiler", "breakers").locator("option")).toHaveText([
         "None",
         "Technická FV",
@@ -218,7 +218,7 @@ test("picking adds, changes and removes the device's own group", async ({ page }
     await expect.poll(() => memberships(page)).toEqual({ ...INITIAL, boiler: { breakers: "technicka_sit" } });
 });
 
-test("a config without groupings shows no Groups section", async ({ page }) => {
+test("a config without groupings shows the phase picker alone", async ({ page }) => {
     await mountEditor(page);
     const panel = page.locator("helman-config-editor-panel");
     await expect(panel.locator("select.device-group")).toHaveCount(8);
@@ -226,7 +226,31 @@ test("a config without groupings shows no Groups section", async ({ page }) => {
     await mountEditor(page, []);
     await expect(page.locator("helman-config-editor-panel").locator("details.device-card")).toHaveCount(4);
     await expect(page.locator("helman-config-editor-panel").locator("select.device-group")).toHaveCount(0);
-    await expect(groupsSection(page, "boiler")).toHaveCount(0);
+    await expect(groupsSection(page, "boiler").locator(".field > label")).toHaveText(["House phase"]);
+});
+
+test("the phase picker sets, badges and clears the device's own phase", async ({ page }) => {
+    await mountEditor(page);
+    const phase = groupsSection(page, "klima").locator("select.device-phase");
+    await expect(phase.locator("option")).toHaveText(["Unassigned", "L1", "L2", "L3", "Three-phase"]);
+    await expect(phase).toHaveValue("");
+
+    const choose = (value: string) => phase.evaluate((select, next) => {
+        (select as HTMLSelectElement).value = next;
+        select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    }, value);
+    const stored = () => page.evaluate(() => window.__editorConfig().devices.consumers[0].children[0].phase);
+
+    await choose("L2");
+    await expect.poll(stored).toBe("L2");
+    expect((await badges(page, "klima")).map((text) => text.trim())).toEqual(["L2"]);
+    // The parent keeps its own: a child's phase is its own.
+    expect(await page.evaluate(() => window.__editorConfig().devices.consumers[0].phase)).toBeUndefined();
+
+    await choose("");
+    await expect.poll(() => page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[0].children[0])).toBe(false);
+    // Groups are untouched.
+    await expect.poll(() => memberships(page)).toEqual(INITIAL);
 });
 
 test("a group id the grouping does not have shows as selected", async ({ page }) => {

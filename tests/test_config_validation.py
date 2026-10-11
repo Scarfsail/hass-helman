@@ -1387,6 +1387,49 @@ class ConfigValidationTests(unittest.TestCase):
             [("energy_nodes.inverter.groups", "groups_not_allowed")],
         )
 
+    def test_a_consumer_may_name_its_phase_or_none(self) -> None:
+        breaker = _ac_breaker()
+        breaker["phase"] = "3ph"
+        breaker["children"][0]["phase"] = "L2"
+        config = _valid_config()
+        config["devices"]["consumers"][0]["phase"] = "L1"
+        config["devices"]["consumers"].append(breaker)
+
+        report = validate_config_document(config)
+
+        # The other children name none: unassigned is always allowed.
+        self.assertEqual(_paths_and_codes(report), [])
+
+    def test_a_phase_must_be_one_of_the_known_wirings(self) -> None:
+        breaker = _ac_breaker()
+        breaker["phase"] = "L4"
+        breaker["children"][1]["phase"] = 1
+        config = _valid_config()
+        config["devices"]["consumers"][0]["phase"] = "l1"
+        config["devices"]["consumers"].append(breaker)
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [
+                ("devices.consumers[0].phase", "invalid_phase"),
+                ("devices.consumers[1].phase", "invalid_phase"),
+                ("devices.consumers[1].children[1].phase", "invalid_phase"),
+            ],
+        )
+
+    def test_the_inverter_takes_no_phase(self) -> None:
+        config = _valid_config()
+        config["energy_nodes"]["inverter"]["phase"] = "L1"
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            _paths_and_codes(report),
+            [("energy_nodes.inverter.phase", "phase_not_allowed")],
+        )
+
     def test_a_stored_vendor_key_is_refused_by_name(self) -> None:
         """Load migrates ``vendor`` to ``profile`` (v29); save refuses it."""
         config = _valid_config()

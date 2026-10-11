@@ -21,7 +21,7 @@ import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
 import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
-import { readEnergyKWh } from "./node-detail-readings";
+import { powerUnitFactor, readEnergyKWh, WATTS } from "./node-detail-readings";
 import {
     currentRun,
     currentRuntime,
@@ -53,9 +53,6 @@ const OUTLOOK_DAYS = 7;
 
 /** One colour per string; every chart and row also names the string in text. */
 const STRING_COLORS: Record<string, string> = { "1": "#fb8c00", "2": "#3949ab" };
-
-/** Power units a reading converts from, to W; any other is no reading. */
-const WATTS: Record<string, number> = { W: 1, kW: 1000, MW: 1_000_000 };
 
 /**
  * The inspector under "Is today's production meeting expectations?": today's
@@ -963,10 +960,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _powerNow(): number | null {
         const power = this.params.power;
         if (power === null) return null;
-        const entityId = this._overview.status === "ready" ? this._overview.payload.entities.power : null;
-        const unit = entityId ? this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
-        const factor = unit ? WATTS[unit] : 1;
-        return factor === undefined ? null : power * factor;
+        const factor = powerUnitFactor(this.hass, this._overview.status === "ready" ? this._overview.payload.entities.power : null);
+        return factor === null ? null : power * factor;
     }
 
     private _watts(overview: SolarDetailPayload, key: string): number | null {
@@ -993,10 +988,6 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     private _signedKwh(kwh: number): string {
         return (kwh < 0 ? "−" : "+") + formatGridEnergy(kwh);
-    }
-
-    private _share(share: number): string {
-        return Math.round(share * 100) + " %";
     }
 
     private readonly _formatWatts = (value: number): string => formatPower(Math.max(0, value)).display;
