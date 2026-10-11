@@ -74,6 +74,7 @@ def _make_coordinator(battery_power: str, polarity: str | None):
     c._source_ratio_entity_ids = {}
     c._consumption_total_sensor = None
     c._production_total_sensor = None
+    c._house_consumption_sensors = []
     c._unmeasured_sensors = {}
     c._cached_tree = TREE
     c._share_sensors = {}

@@ -8,7 +8,7 @@ from .const import DOMAIN, NAME
 class HelmanConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Helman Energy."""
 
-    VERSION = 2
+    VERSION = 3
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_PUSH
 
     async def async_step_user(self, user_input=None):

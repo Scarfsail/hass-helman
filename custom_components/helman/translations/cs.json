@@ -18,8 +18,20 @@
       "battery_time_to_empty": {
         "name": "Čas do vybití baterie"
       },
+      "consumer_total_power": {
+        "name": "Celkem na straně spotřeby"
+      },
       "house_consumption_power": {
         "name": "Spotřeba domu"
+      },
+      "house_consumption_power_l1": {
+        "name": "Spotřeba domu L1"
+      },
+      "house_consumption_power_l2": {
+        "name": "Spotřeba domu L2"
+      },
+      "house_consumption_power_l3": {
+        "name": "Spotřeba domu L3"
       },
       "house_supply_power": {
         "name": "Přísun energie do domu"

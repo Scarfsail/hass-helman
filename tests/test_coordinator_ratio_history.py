@@ -96,6 +96,7 @@ def _make_coordinator(states: dict[str, str]):
     c._battery_time_to_empty = None
     c._consumption_total_sensor = None
     c._production_total_sensor = None
+    c._house_consumption_sensors = []
     c._unmeasured_sensors = {}
     c._cached_tree = TREE
     c._share_sensors = {}

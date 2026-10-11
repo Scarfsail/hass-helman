@@ -5,7 +5,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
-from .const import DOMAIN, SENSOR_UNIQUE_ID_MIGRATIONS, UNMEASURED_POWER_UNIQUE_ID_SUFFIX
+from .const import (
+    DOMAIN,
+    SENSOR_UNIQUE_ID_MIGRATIONS,
+    SENSOR_UNIQUE_ID_MIGRATIONS_V3,
+    UNMEASURED_POWER_UNIQUE_ID_SUFFIX,
+)
 from .frontend import async_register_frontend, async_unregister_frontend
 from .group_services import (
     async_register_group_services,
@@ -21,12 +26,17 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Rewrite sensor-platform registry entries onto the unified id scheme.
+    """Rewrite sensor-platform registry entries onto the current id scheme.
 
-    Version 1 → 2. Reads :data:`SENSOR_UNIQUE_ID_MIGRATIONS` -- the single
-    source of truth for the static renames -- plus a pattern match for the
-    dynamically-created unmeasured-power sensors, whose ids are only known
-    from the device tree at runtime.
+    Runs one step per version, so a version 1 entry goes 1 → 2 and then
+    2 → 3:
+
+    * 1 → 2 reads :data:`SENSOR_UNIQUE_ID_MIGRATIONS` plus a pattern match
+      for the dynamically-created unmeasured-power sensors, whose ids are only
+      known from the device tree at runtime.
+    * 2 → 3 reads :data:`SENSOR_UNIQUE_ID_MIGRATIONS_V3`: the consumer-side
+      total moves off ``house_consumption_power``, freeing that id for the
+      measured house consumption sensor.
 
     ``EntityRegistry.async_update_entity`` is the whole move: the recorder listens for
     ``entity_registry_updated`` and carries ``states_meta`` /
@@ -38,9 +48,24 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     load. The ``entity_id`` is renamed alongside it only when it still equals
     the old default, so a user's manual rename is never clobbered.
     """
-    if entry.version and entry.version >= 2:
-        return True
+    version = entry.version or 1
+    if version < 2:
+        _migrate_registry(hass, entry, SENSOR_UNIQUE_ID_MIGRATIONS, unmeasured=True)
+        hass.config_entries.async_update_entry(entry, version=2)
+    if version < 3:
+        _migrate_registry(hass, entry, SENSOR_UNIQUE_ID_MIGRATIONS_V3, unmeasured=False)
+        hass.config_entries.async_update_entry(entry, version=3)
+    return True
 
+
+def _migrate_registry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    migrations: tuple[tuple[str, str, bool], ...],
+    *,
+    unmeasured: bool,
+) -> None:
+    """Apply one version step's renames to this entry's sensor registry rows."""
     ent_reg = er.async_get(hass)
     prefix = f"{entry.entry_id}_"
 
@@ -53,7 +78,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         migrate_entity_id = False
         old_entity_id: str | None = None
 
-        for old_suffix, mapped_suffix, should_migrate_id in SENSOR_UNIQUE_ID_MIGRATIONS:
+        for old_suffix, mapped_suffix, should_migrate_id in migrations:
             if suffix == old_suffix:
                 new_suffix = mapped_suffix
                 migrate_entity_id = should_migrate_id
@@ -66,7 +91,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     old_entity_id = f"sensor.helman_{old_suffix}"
                 break
 
-        if new_suffix is None and suffix.endswith(UNMEASURED_POWER_UNIQUE_ID_SUFFIX):
+        if (
+            unmeasured
+            and new_suffix is None
+            and suffix.endswith(UNMEASURED_POWER_UNIQUE_ID_SUFFIX)
+        ):
             node_id = suffix.removesuffix(UNMEASURED_POWER_UNIQUE_ID_SUFFIX)
             slug = node_id.removeprefix("sensor.")
             new_suffix = f"unmeasured_power_{slug}"
@@ -99,7 +128,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # unique id is already taken -- by a stale row this migration
                 # does not own, or by another integration publishing the same
                 # id. One collision must not abort the whole migration: the
-                # version bump below would never run, the config entry would
+                # caller's version bump would never run, the config entry would
                 # fail setup outright, and the registry would be left
                 # half-renamed with no way to finish.
                 #
@@ -128,9 +157,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     if unique_id_only
                     else "Left it unchanged.",
                 )
-
-    hass.config_entries.async_update_entry(entry, version=2)
-    return True
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

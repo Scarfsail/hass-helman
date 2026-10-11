@@ -14,8 +14,10 @@ from .const import (
     DOMAIN,
     GRID_EXPORT_PRICE_ENTITY_ID,
     GRID_IMPORT_PRICE_ENTITY_ID,
+    HOUSE_CONSUMPTION_ENTITY_ID,
     PRODUCTION_TOTAL_ENTITY_ID,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
+    house_consumption_phase_entity_id,
 )
 
 _HYSTERESIS_W: float = 5.0
@@ -86,6 +88,9 @@ async def async_setup_entry(
     }
     total_power = HelmanConsumptionTotalSensor(coordinator, entry)
     production_total = HelmanProductionTotalSensor(coordinator, entry)
+    house_consumption = [
+        HelmanHousePhasePowerSensor(coordinator, entry, phase) for phase in (None, 1, 2, 3)
+    ]
     forecast_entities = [
         HelmanSolarForecastEnergySensor(coordinator, entry, "today", day_offset=0),
         HelmanSolarForecastEnergySensor(coordinator, entry, "tomorrow", day_offset=1),
@@ -113,6 +118,7 @@ async def async_setup_entry(
         source_ratio_sensors=source_ratio_sensors,
         forecast_sensors=forecast_entities,
         share_sensors=share_sensors,
+        house_consumption_sensors=house_consumption,
     )
     coordinator.set_entity_factory(
         entry,
@@ -130,6 +136,7 @@ async def async_setup_entry(
         + list(unmeasured_sensors.values())
         + list(share_sensors.values())
         + [total_power, production_total]
+        + house_consumption
         + list(source_ratio_sensors.values())
         + forecast_entities
     )
@@ -359,6 +366,27 @@ class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
         self._attr_name = f"Share — {device_name}"
 
 
+class HelmanHousePhasePowerSensor(_HelmanDerivedPowerSensor):
+    """Measured house consumption on one phase, or the sum of the three.
+
+    ``phase`` is ``None`` for the total. Computed by the coordinator from the
+    inverter profile's telemetry, so without a profile it publishes
+    ``unavailable``.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry, phase: int | None) -> None:
+        super().__init__(coordinator, entry)
+        self.phase = phase
+        suffix = "" if phase is None else f"_l{phase}"
+        self.entity_id = (
+            HOUSE_CONSUMPTION_ENTITY_ID
+            if phase is None
+            else house_consumption_phase_entity_id(phase)
+        )
+        self._attr_unique_id = f"{entry.entry_id}_house_consumption_power{suffix}"
+        self._attr_translation_key = f"house_consumption_power{suffix}"
+
+
 class HelmanConsumptionTotalSensor(_HelmanDeviceEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
@@ -369,8 +397,8 @@ class HelmanConsumptionTotalSensor(_HelmanDeviceEntity):
         super().__init__(entry)
         self._coordinator = coordinator
         self.entity_id = CONSUMPTION_TOTAL_ENTITY_ID
-        self._attr_unique_id = f"{entry.entry_id}_house_consumption_power"
-        self._attr_translation_key = "house_consumption_power"
+        self._attr_unique_id = f"{entry.entry_id}_consumer_total_power"
+        self._attr_translation_key = "consumer_total_power"
         self._value: float | None = None
 
     @property

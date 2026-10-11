@@ -268,7 +268,8 @@ def resolve_vendor_telemetry(
     """Every profiled device's telemetry, keyed by ``inverter`` or consumer id.
 
     Resolved with the same binding rules as the config the profile fills, but
-    never written into the config: telemetry is display-only. A device without
+    never written into the config: telemetry feeds the detail views and the
+    measured house phase sensors the coordinator computes. A device without
     a profile (Custom) is absent, and a consumer without an id is skipped. A
     disabled or missing entity, or an unbound profile, resolves to ``None``.
     """

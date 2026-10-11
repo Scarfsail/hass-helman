@@ -18,8 +18,20 @@
       "battery_time_to_empty": {
         "name": "Battery time to empty"
       },
+      "consumer_total_power": {
+        "name": "Consumer total"
+      },
       "house_consumption_power": {
         "name": "House consumption"
+      },
+      "house_consumption_power_l1": {
+        "name": "House consumption L1"
+      },
+      "house_consumption_power_l2": {
+        "name": "House consumption L2"
+      },
+      "house_consumption_power_l3": {
+        "name": "House consumption L3"
       },
       "house_supply_power": {
         "name": "House supply"

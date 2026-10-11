@@ -165,7 +165,8 @@ interface PlannedRun {
  * overnight minimum are requested only while their question is open, and the
  * forecast embed and today's full ranking only behind their answers. Nothing
  * here is a diagnosis: a low overnight load is an observation, an unusual day
- * a comparison, and phase loads an estimate from the user's own wiring map.
+ * a comparison, and a phase's gap to its assigned devices a hint, measured
+ * against an estimate from the user's own wiring map.
  */
 @customElement("node-detail-house-content")
 export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPayload, QuestionId> {
@@ -246,6 +247,16 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         }
         .tag {
             font-size: 0.75rem;
+            color: var(--secondary-text-color);
+        }
+        .phase {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .phase-devices > summary {
+            cursor: pointer;
+            font-size: 0.82rem;
             color: var(--secondary-text-color);
         }
     `];
@@ -444,7 +455,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                 ${this._question("consumers", this._consumersPreview(), () => this._renderConsumers(), () => this._renderConsumersEvidence(), "evidence")}
                 ${this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence")}
                 ${this._question("pattern", this._patternPreview(), () => this._renderPattern(), () => this._renderPatternEvidence(), "evidence")}
-                ${this._question("phases", this._phasesPreview(phases), () => this._renderPhases(overview, phases), () => this._renderPhasesEvidence(overview, phases), "evidence")}
+                ${this._question("phases", this._phasesPreview(overview, phases), () => this._renderPhases(overview, phases), () => this._renderPhasesEvidence(overview), "evidence")}
             </div>
         `;
     }
@@ -1027,44 +1038,132 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     private _phaseEstimate(): PhaseEstimate {
         return estimatePhaseLoads(this.params.houseNode, (entityId) => {
-            const value = readingNumber(this.hass, entityId);
-            const factor = powerUnitFactor(this.hass, entityId);
-            return value === null || factor === null ? null : Math.max(0, value * factor);
+            const watts = this._watts(entityId);
+            return watts === null ? null : Math.max(0, watts);
         });
     }
 
-    private _phasesPreview(estimate: PhaseEstimate): string {
+    /** A power reading in W through its unit, `null` without one. */
+    private _watts(entityId: string | null | undefined): number | null {
+        const value = readingNumber(this.hass, entityId);
+        const factor = powerUnitFactor(this.hass, entityId);
+        return value === null || factor === null ? null : value * factor;
+    }
+
+    /** Helman's measured house load per phase, W; `null` unless every phase reads. */
+    private _measuredPhases(overview: HouseDetailPayload): PhaseEstimate["perPhase"] | null {
+        const [L1, L2, L3] = PHASES.map((_, i) => this._watts(overview.entities[`phase_power_l${i + 1}`]));
+        return L1 === null || L2 === null || L3 === null ? null : { L1, L2, L3 };
+    }
+
+    private _phasesPreview(overview: HouseDetailPayload, estimate: PhaseEstimate): string {
+        const measured = this._measuredPhases(overview);
+        if (measured) return PHASES.map((phase) => `${phase} ${formatPower(measured[phase]).display}`).join(" · ");
         if (!estimate.anyMapped) return this._t("phases.none_mapped_short");
         return PHASES.map((phase) => `${phase} ${formatPower(estimate.perPhase[phase]).display}`).join(" · ") + " " + this._t("phases.estimated_tag");
     }
 
+    /**
+     * Measured load per phase against what the mapped devices explain, or,
+     * while the measured sensors are unavailable, the wiring estimate alone.
+     * Each phase lists its devices, and the "No phase" group the rest.
+     */
     private _renderPhases(overview: HouseDetailPayload, estimate: PhaseEstimate) {
         const offGrid = overview.condition?.kind === "off_grid";
+        const measured = this._measuredPhases(overview);
+        if (!measured && !estimate.anyMapped) {
+            return html`
+                ${offGrid ? this._renderEps(overview) : nothing}
+                <p class="note" data-none-mapped>${this._t("phases.none_mapped")}</p>
+            `;
+        }
         const power = this._powerNow();
         const unknown = estimate.loads.filter((load) => load.phase !== null && load.watts === null);
-        const scale = Math.max(IDLE_W, ...PHASES.map((phase) => estimate.perPhase[phase]));
+        const bars = measured ?? estimate.perPhase;
+        const scale = Math.max(IDLE_W, ...PHASES.map((phase) => bars[phase]));
         return html`
             ${offGrid ? this._renderEps(overview) : nothing}
-            ${estimate.anyMapped ? html`
-                <div class="section-title">${this._t("phases.estimate_title")}</div>
-                <div class="bars" data-phase-estimate>
-                    ${PHASES.map((phase) => html`
-                        <div class="bar-row" data-phase=${phase}>
+            <div class="section-title">${this._t(measured ? "phases.measured_title" : "phases.estimate_title")}</div>
+            <div class="bars" data-phase-measured=${measured ? "" : nothing} data-phase-estimate=${measured ? nothing : ""}>
+                ${PHASES.map((phase) => html`
+                    <div class="phase" data-phase=${phase}>
+                        <div class="bar-row">
                             <span class="bar-label">${phase}</span>
-                            <div class="bar-track"><div class="bar-fill" style="width: ${Math.min(100, estimate.perPhase[phase] / scale * 100)}%"></div></div>
-                            <span class="bar-text">${"≈ " + formatPower(estimate.perPhase[phase]).display}</span>
+                            <div class="bar-track"><div class="bar-fill" style="width: ${Math.max(0, Math.min(100, bars[phase] / scale * 100))}%"></div></div>
+                            <span class="bar-text">${measured
+                                ? this._phaseComparison(measured[phase], estimate.perPhase[phase])
+                                : "≈ " + formatPower(estimate.perPhase[phase]).display}</span>
                         </div>
-                    `)}
-                </div>
-                ${this._row(this._t("phases.unassigned"), formatPower(estimate.unassignedW).display, "unassigned", this._t("phases.unassigned_scope"))}
-                ${this._row(this._t("phases.coverage"), power !== null && power > IDLE_W
-                    ? fillTemplate(this._t("phases.coverage_value"), { share: this._share(Math.min(1, estimate.mappedW / power)), power: formatPower(estimate.mappedW).display })
-                    : formatPower(estimate.mappedW).display, "coverage")}
-                ${unknown.length ? html`<p class="note" data-unknown-loads>${fillTemplate(this._t("phases.unknown_loads"), {
-                    names: unknown.map((load) => this._phaseLoadName(load)).join(", "),
-                })}</p>` : nothing}
-                <p class="note">${this._t("phases.explain")}</p>
-            ` : html`<p class="note" data-none-mapped>${this._t("phases.none_mapped")}</p>`}
+                        ${this._renderPhaseDevices(phase, estimate)}
+                    </div>
+                `)}
+                ${this._renderPhaseDevices(null, estimate)}
+            </div>
+            ${this._row(this._t("phases.unassigned"), formatPower(estimate.unassignedW).display, "unassigned", this._t("phases.unassigned_scope"))}
+            ${this._row(this._t("phases.coverage"), power !== null && power > IDLE_W
+                ? fillTemplate(this._t("phases.coverage_value"), { share: this._share(Math.min(1, estimate.mappedW / power)), power: formatPower(estimate.mappedW).display })
+                : formatPower(estimate.mappedW).display, "coverage")}
+            ${unknown.length ? html`<p class="note" data-unknown-loads>${fillTemplate(this._t("phases.unknown_loads"), {
+                names: unknown.map((load) => this._phaseLoadName(load)).join(", "),
+            })}</p>` : nothing}
+            ${measured && !estimate.anyMapped ? html`<p class="note" data-none-mapped>${this._t("phases.none_mapped")}</p>` : nothing}
+            <p class="note">${this._t(measured ? "phases.measured_explain" : "phases.explain")}</p>
+        `;
+    }
+
+    /**
+     * A phase's measured W, its assigned W and the difference. Within
+     * `IDLE_W` of the assignment nothing is unexplained; further below it,
+     * more is assigned than measured, most likely a device on another phase.
+     */
+    private _phaseComparison(measuredW: number, assignedW: number) {
+        const difference = measuredW - assignedW;
+        return html`
+            <span data-measured>${formatPower(measuredW).display}</span>
+            · <span data-assigned>${fillTemplate(this._t("phases.assigned_value"), { power: formatPower(assignedW).display })}</span>
+            · <span data-difference>${difference < -IDLE_W
+                ? fillTemplate(this._t("phases.over_assigned_value"), { power: formatPower(-difference).display })
+                : fillTemplate(this._t("phases.unexplained_value"), { power: formatPower(Math.max(0, difference)).display })}</span>
+        `;
+    }
+
+    /**
+     * The loads on `phase`, a three-phase load at its third on each, or with
+     * `null` the loads without a phase and the house's own remainder.
+     */
+    private _renderPhaseDevices(phase: (typeof PHASES)[number] | null, estimate: PhaseEstimate) {
+        const rows = estimate.loads
+            .filter((load) => phase === null ? load.phase === null : load.phase === phase || load.phase === "3ph")
+            .map((load) => ({
+                name: this._phaseLoadName(load),
+                threePhase: load.phase === "3ph",
+                via: load.inheritedFrom,
+                watts: load.watts === null ? null : load.phase === "3ph" ? load.watts / 3 : load.watts,
+            }));
+        if (phase === null) {
+            if (estimate.houseRemainderW !== null) rows.push({ name: this._t("phases.house_remainder"), threePhase: false, via: null, watts: estimate.houseRemainderW });
+            if (!rows.length) return nothing;
+        }
+        return html`
+            <details class="phase-devices" data-phase-devices=${phase ?? "none"}>
+                <summary>${phase === null
+                    ? fillTemplate(this._t("phases.devices_no_phase"), { count: String(rows.length) })
+                    : fillTemplate(this._t("phases.devices_on"), { phase, count: String(rows.length) })}</summary>
+                ${rows.length ? html`
+                    <table>
+                        <tbody>
+                            ${rows.map((row) => html`
+                                <tr>
+                                    <td>${row.name}${row.threePhase ? html` <span class="tag" data-three-phase>${this._t("phases.three_phase_tag")}</span>` : nothing}${row.via
+                                        ? html` <span class="tag" data-via>${fillTemplate(this._t("phases.via"), { name: row.via })}</span>`
+                                        : nothing}</td>
+                                    <td>${row.watts === null ? this._t("phases.no_reading") : formatPower(row.watts).display}</td>
+                                </tr>
+                            `)}
+                        </tbody>
+                    </table>
+                ` : html`<p class="note">${this._t("phases.devices_empty")}</p>`}
+            </details>
         `;
     }
 
@@ -1088,35 +1187,33 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         `;
     }
 
-    private _renderPhasesEvidence(overview: HouseDetailPayload, estimate: PhaseEstimate) {
-        const eps = [1, 2, 3].map((phase) => this._optionalRow(overview, `eps_power_l${phase}`, `phases.eps_l${phase}`));
+    /** The measured phases' formula inputs per phase, the formula in words, and the estimate's assumptions. */
+    private _renderPhasesEvidence(overview: HouseDetailPayload) {
+        const hasInputs = [1, 2, 3].some((phase) => `ac_power_l${phase}` in overview.entities);
+        // The meter shown import-positive, whichever way the profile reads it.
+        const meterSign = overview.phasePowerPolarity === "positive_is_export" ? -1 : 1;
+        const cell = (watts: number | null, sign = 1) => watts === null ? "–" : Math.round(watts * sign) + " W";
         return html`
-            ${estimate.loads.length ? html`
-                <table data-phase-map>
-                    <thead><tr><th>${this._t("phases.device")}</th><th>${this._t("phases.phase")}</th><th>${this._t("phases.now")}</th></tr></thead>
+            ${hasInputs ? html`
+                <table data-phase-inputs>
+                    <thead><tr>
+                        <th>${this._t("phases.input_phase")}</th><th>${this._t("phases.input_inverter")}</th>
+                        <th>${this._t("phases.input_meter")}</th><th>${this._t("phases.input_eps")}</th>
+                    </tr></thead>
                     <tbody>
-                        ${estimate.loads.map((load) => html`
-                            <tr>
-                                <td>${this._phaseLoadName(load)}</td>
-                                <td>${load.phase === null
-                                    ? this._t("phases.unassigned_short")
-                                    : (load.phase === "3ph" ? this._t("phases.three_phase") : load.phase)
-                                        + (load.inheritedFrom ? " " + fillTemplate(this._t("phases.inherited"), { name: load.inheritedFrom }) : "")}</td>
-                                <td>${load.watts === null ? this._t("phases.no_reading") : formatPower(load.watts).display}</td>
+                        ${[1, 2, 3].map((phase) => html`
+                            <tr data-phase-input=${"L" + phase}>
+                                <td>L${phase}</td>
+                                <td>${cell(this._watts(overview.entities[`ac_power_l${phase}`]))}</td>
+                                <td>${cell(this._watts(overview.entities[`grid_power_l${phase}`]), meterSign)}</td>
+                                <td>${cell(this._watts(overview.entities[`eps_power_l${phase}`]))}</td>
                             </tr>
                         `)}
-                        ${estimate.houseRemainderW !== null ? html`
-                            <tr><td>${this._t("phases.house_remainder")}</td><td>${this._t("phases.unassigned_short")}</td><td>${formatPower(estimate.houseRemainderW).display}</td></tr>
-                        ` : nothing}
                     </tbody>
                 </table>
-            ` : nothing}
+                <p class="note" data-formula>${this._t("phases.formula")}</p>
+            ` : html`<p class="note">${this._t("phases.inputs_none")}</p>`}
             <p class="note">${this._t("phases.assumptions")}</p>
-            ${eps.some((row) => row !== nothing) ? html`
-                <div class="section-title">${this._t("phases.eps_title")}</div>
-                ${eps}
-                <p class="note">${this._t("phases.eps_note")}</p>
-            ` : nothing}
         `;
     }
 
