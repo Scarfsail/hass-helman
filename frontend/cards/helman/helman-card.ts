@@ -214,6 +214,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .historyBucketDuration=${historyBucketDuration}
                         .historyRevision=${this._historyRevision}
                         .devices_full_width=${true}
+                        .showInverterButton=${true}
                     ></helman-tree-item-list>
                     <power-flow-arrows .devices=${consumersChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 

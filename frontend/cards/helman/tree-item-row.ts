@@ -34,6 +34,8 @@ export class HelmanTreeItem extends LitElement {
      */
     @property({ type: Number }) public parentMaxPower?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
+    /** Set by the full card on its central distribution row, which opens the inverter detail. */
+    @property({ type: Boolean }) public showInverterButton = false;
 
     @state() private _childrenCollapsed = true;
 
@@ -316,11 +318,9 @@ export class HelmanTreeItem extends LitElement {
         // a house wash and a border of its own, and a stack of them there reads as
         // highlighted rather than merely lighter if the tint goes much past this.
         const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
-        // The full card's central "consumers" aggregate is where the flows meet the inverter.
-        const isDistribution = device.id === "consumers";
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''} ${isDistribution ? 'has-inverter' : ''}" style=${styleMap({
+                <div class="border deviceContent ${isOff ? 'is-off' : ''} ${this.showInverterButton ? 'has-inverter' : ''}" style=${styleMap({
                     ...(nodeColor ? {'--device-shadow-color': nodeColor} : {}),
                     ...(tintColor ? {'--device-tint': tintColor} : {}),
                 })}>
@@ -331,7 +331,7 @@ export class HelmanTreeItem extends LitElement {
                         .historyRevision=${this.historyRevision}
                         .sourceHistory=${device.isSource ? undefined : device.sourcePowerHistory}>
                     </helman-power-history-bars>
-                    ${isDistribution ? this._renderInverterButton() : nothing}
+                    ${this.showInverterButton ? this._renderInverterButton() : nothing}
                     <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">
                         <div style="display: flex; flex-direction: row;flex-basis: 100%;align-items: center; ">
                             <helman-tree-item-icon 
