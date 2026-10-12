@@ -12,13 +12,11 @@ import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model"
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
-import "../../shared/node-flow";
-import type { FlowItem } from "../../shared/node-flow";
 import "../../shared/soc-glyph";
 import type { SocDirection } from "../../shared/soc-glyph";
 import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, TODAY_SCALE_HOURS, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import {
@@ -30,7 +28,7 @@ import {
     scheduleRuns,
     type ScheduleRun,
 } from "./node-detail-schedule";
-import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { BatteryDetailParams } from "./node-detail-types";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
@@ -53,16 +51,6 @@ interface Reserve {
     usableKwh: number | null;
     /** Below the ceiling, kWh; `null` without a ceiling. */
     roomKwh: number | null;
-}
-
-/** What the battery's flow draws in one scope. */
-interface BatteryFlow {
-    scopeLabel: string;
-    inputs: FlowItem[];
-    outputs: FlowItem[];
-    totalIn: string | null;
-    totalOut: string | null;
-    notes: string[];
 }
 
 /** One direction's power ceilings, W; `null` where not known. */
@@ -94,59 +82,14 @@ interface Ceilings {
  */
 @customElement("node-detail-battery-content")
 export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, scheduleActionToneStyles, css`
+    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .muted {
             color: var(--secondary-text-color);
-        }
-        .pill {
-            align-self: flex-start;
-            padding: 4px 12px;
-            border-radius: 999px;
-            border: 1px solid var(--schedule-action-tone-border);
-            background: var(--schedule-action-tone-bg);
-            color: var(--schedule-action-tone-color);
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-        .glyph {
-            display: block;
-            padding: 0;
-            border: none;
-            background: none;
-            cursor: pointer;
-            border-radius: 8px;
-        }
-        .glyph:focus-visible {
-            outline: 2px solid var(--primary-color);
-            outline-offset: 2px;
         }
         .estimate {
             margin: 0;
             font-size: 0.85rem;
             color: var(--secondary-text-color);
-        }
-        .tiles {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-            gap: 8px;
-            margin-top: 4px;
-        }
-        .meter {
-            display: block;
-            height: 6px;
-            margin-top: 4px;
-            border-radius: 3px;
-            background: var(--divider-color, rgba(0, 0, 0, 0.12));
-            overflow: hidden;
-        }
-        .meter-fill {
-            display: block;
-            height: 100%;
-            border-radius: 3px;
-            background: var(--schedule-action-tone-accent);
-        }
-        helman-node-question {
-            margin-top: 4px;
         }
     `];
 
@@ -267,7 +210,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._renderFlow(overview, reserve)}
+                ${this._renderBatteryFlow(overview, reserve)}
                 ${estimate?.kind === "time" ? html`
                     <p class="estimate" data-estimate>${fillTemplate(this._t("next_estimate"), { estimate: estimate.text })}</p>
                 ` : nothing}
@@ -330,54 +273,34 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * the card on Now, today's kWh from the `flows` section on Today. The
      * glyph opens the reserve; the flow opens today's charge.
      */
-    private _renderFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
-        const now = this._flowScope === "now";
-        const flow = now ? this._nowFlow() : this._todayFlow(overview);
+    private _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
+        const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow(overview);
         const soc = this._number(overview, "soc");
-        return html`
-            <helman-node-flow
-                data-flow-scope=${this._flowScope}
-                .scope=${this._flowScope}
-                .scopeLabel=${flow.scopeLabel}
-                .nowLabel=${this.localize("node_detail.flow.now")}
-                .todayLabel=${this.localize("node_detail.flow.today")}
-                .inputs=${flow.inputs}
-                .outputs=${flow.outputs}
-                .scale=${now ? this.params.flowScaleW : this.params.flowScaleW * TODAY_SCALE_HOURS / 1000}
-                .totalIn=${flow.totalIn}
-                .totalOut=${flow.totalOut}
-                .notes=${flow.notes}
-                question-id="charge"
-                .questionLabel=${this._t("q.charge")}
+        return this._renderFlow(flow, this.params.flowScaleW, "charge", html`
+            <button
+                slot="centre"
+                class="glyph"
+                data-glyph
+                aria-label=${this._t("q.reserve")}
+                aria-expanded=${this._open === "reserve" ? "true" : "false"}
+                @click=${() => this._setOpen(this._open === "reserve" ? null : "reserve")}
             >
-                <button
-                    slot="centre"
-                    class="glyph"
-                    data-glyph
-                    aria-label=${this._t("q.reserve")}
-                    aria-expanded=${this._open === "reserve" ? "true" : "false"}
-                    @click=${() => this._setOpen(this._open === "reserve" ? null : "reserve")}
-                >
-                    <helman-soc-glyph
-                        .soc=${soc !== null && soc >= 0 && soc <= 100 ? soc : null}
-                        .min=${reserve?.minSoc ?? null}
-                        .max=${reserve?.maxSoc ?? null}
-                        .usableLabel=${reserve?.usableKwh != null ? formatGridEnergy(reserve.usableKwh) : null}
-                        .roomLabel=${reserve?.roomKwh != null ? formatGridEnergy(reserve.roomKwh) : null}
-                        .minLabel=${reserve?.minSoc != null ? fillTemplate(this._t("glyph.min"), { soc: this._percent(reserve.minSoc) }) : null}
-                        .maxLabel=${reserve?.maxSoc != null ? fillTemplate(this._t("glyph.max"), { soc: this._percent(reserve.maxSoc) }) : null}
-                        .direction=${this._direction()}
-                    ></helman-soc-glyph>
-                </button>
-            </helman-node-flow>
-            ${!now && this._todayFlows?.status === "error" ? html`
-                <button class="link-button" @click=${() => this._loadTodayFlows()}>${this._t("retry")}</button>
-            ` : nothing}
-        `;
+                <helman-soc-glyph
+                    .soc=${soc !== null && soc >= 0 && soc <= 100 ? soc : null}
+                    .min=${reserve?.minSoc ?? null}
+                    .max=${reserve?.maxSoc ?? null}
+                    .usableLabel=${reserve?.usableKwh != null ? formatGridEnergy(reserve.usableKwh) : null}
+                    .roomLabel=${reserve?.roomKwh != null ? formatGridEnergy(reserve.roomKwh) : null}
+                    .minLabel=${reserve?.minSoc != null ? fillTemplate(this._t("glyph.min"), { soc: this._percent(reserve.minSoc) }) : null}
+                    .maxLabel=${reserve?.maxSoc != null ? fillTemplate(this._t("glyph.max"), { soc: this._percent(reserve.maxSoc) }) : null}
+                    .direction=${this._direction()}
+                ></helman-soc-glyph>
+            </button>
+        `);
     }
 
     /** The card's live split, W; unknown without the solar or battery reading, never 0. */
-    private _nowFlow(): BatteryFlow {
+    private _nowFlow(): NodeFlow {
         const flows = this.params.flows;
         const watts = (value: number | undefined) => value ?? null;
         const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
@@ -389,13 +312,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             this._flowItem("house", watts(flows?.batteryToHouse), power),
             this._flowItem("grid", watts(flows?.batteryToGrid), power),
         ];
-        return {
-            scopeLabel: fillTemplate(this.localize("node_detail.flow.scope_now"), { time: this._time(Date.now()) }),
-            inputs,
-            outputs,
-            ...this._totals(inputs, outputs, power),
-            notes: [],
-        };
+        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
     }
 
     /**
@@ -403,9 +320,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * cost, an estimate, and the footnote the net change by the battery's own
      * meters and any charge of unknown origin, never forced into a source.
      */
-    private _todayFlow(overview: BatteryDetailPayload): BatteryFlow {
-        const section = this._todayFlows;
-        const payload = section?.status === "ready" ? section.payload : null;
+    private _todayFlow(overview: BatteryDetailPayload): NodeFlow {
+        const payload = this._todayFlows?.status === "ready" ? this._todayFlows.payload : null;
         const flows = payload?.flows ?? null;
         const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
         const cost = flows?.gridToBatteryCost;
@@ -422,11 +338,9 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             this._flowItem("house", flows?.batteryToHouse ?? null, energy),
             this._flowItem("grid", flows?.batteryToGrid ?? null, energy),
         ];
-        const notes: string[] = [];
-        if (section === null || section.status === "loading") notes.push(this.localize("node_detail.flow.loading"));
-        else if (section.status === "error") notes.push(this.localize("node_detail.flow.failed"));
-        else if (!flows) notes.push(this.localize(`node_detail.flow.unavailable_${payload!.unavailable ?? "not_loaded"}`));
-        else {
+        const status = this._todayFlowsNote();
+        const notes: string[] = status ? [status] : [];
+        if (flows) {
             if ((flows.unknownToBattery ?? 0) > 0) {
                 notes.push(fillTemplate(this._t("flow.unknown_charge"), { kwh: formatGridEnergy(flows.unknownToBattery!) }));
             }
@@ -438,35 +352,13 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             }
         }
         return {
-            scopeLabel: fillTemplate(this.localize("node_detail.flow.scope_today"), {
-                time: this._time(payload ? Date.parse(payload.asOf) : Date.now()),
-            }),
+            scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs,
             // The charge of unknown origin is part of what went in.
-            ...this._totals(inputs, outputs, energy, flows?.unknownToBattery ?? 0),
+            ...this._flowTotals(inputs, outputs, energy, flows?.unknownToBattery ?? 0),
             notes,
         };
-    }
-
-    /** A source or destination, in the colour of the node at its other end. */
-    private _flowItem(node: "solar" | "grid" | "house", value: number | null, format: (value: number | null) => string): FlowItem {
-        return {
-            id: node,
-            label: this.localize(`node_detail.title.${node}`),
-            value,
-            display: format(value),
-            color: `var(--helman-${node})`,
-        };
-    }
-
-    /** Each side's sum, inputs with what came in from no known source; unknown when any of it is. */
-    private _totals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0) {
-        const sum = (items: FlowItem[]) => items.some((item) => item.value === null) ? null : items.reduce((total, item) => total + item.value!, 0);
-        const total = (key: "total_in" | "total_out", value: number | null) =>
-            value === null ? null : fillTemplate(this.localize(`node_detail.flow.${key}`), { value: format(value) });
-        const totalIn = sum(inputs);
-        return { totalIn: total("total_in", totalIn === null ? null : totalIn + unresolvedIn), totalOut: total("total_out", sum(outputs)) };
     }
 
     // Tiles -------------------------------------------------------------------

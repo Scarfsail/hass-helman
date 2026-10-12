@@ -355,18 +355,11 @@
       "phase": "Phase",
       "loading_history": "Loading today's history…",
       "history_failed": "Today's history could not be loaded.",
-      "next_price": "Next: import price {price} from {time}",
       "status": {
         "importing": "Importing {power} from the grid.",
         "exporting": "Exporting {power} to the grid.",
         "idle": "Hardly any grid flow right now ({power}).",
         "unavailable": "No grid power reading right now."
-      },
-      "figure": {
-        "net_import": "Net import today",
-        "net_export": "Net export today",
-        "net_cost": "Net cost today",
-        "net_income": "Net income today"
       },
       "power": {
         "import": "importing {power}",
@@ -433,7 +426,9 @@
         "meter_import": "Meter import power",
         "meter_export": "Meter export power",
         "calculation": "Estimated current = |phase power| ÷ phase voltage, assuming a power factor of 1. Reactive power or a lower power factor make the real current higher.",
-        "limitations": "Power is the grid meter's, voltage the inverter's terminals'. The limit is the inverter's main-breaker setting, not the breaker's rating, so the comparison does not measure breaker headroom; phase sums or export power say nothing about it either."
+        "limitations": "Power is the grid meter's, voltage the inverter's terminals'. The limit is the inverter's main-breaker setting, not the breaker's rating, so the comparison does not measure breaker headroom; phase sums or export power say nothing about it either.",
+        "scale_limit": "A full bar is the {limit} main breaker setting at {voltage}, as a picture of scale, not breaker headroom.",
+        "scale_power": "A full bar is {power}: no main breaker setting is readable."
       },
       "money": {
         "failed": "Today's money could not be loaded.",
@@ -503,6 +498,24 @@
         "run_mode": "Run mode",
         "no_readings": "No frequency or run mode reading is available.",
         "evidence_note": "Readings as the inverter reports them now."
+      },
+      "picture": {
+        "voltage": "Voltage · today's range",
+        "range": "{min}–{max} today",
+        "range_loading": "Loading today's voltage range…",
+        "range_failed": "Today's voltage range could not be loaded."
+      },
+      "flow": {
+        "price_now": "Price now: {prices}"
+      },
+      "tile": {
+        "loading_prices": "Loading the prices…",
+        "no_price_change": "No change known",
+        "on_grid": "On grid",
+        "off_grid": "Off-grid",
+        "fault": "Fault",
+        "no_voltage_sensors": "The phase voltage sensors are not found.",
+        "voltage_range": "lowest–highest today"
       }
     },
     "battery": {
@@ -719,11 +732,6 @@
         "not_producing": "Not producing right now.",
         "unavailable": "No solar power reading right now."
       },
-      "figure": {
-        "today": "Today so far",
-        "vs_forecast": "Of forecast to {time}",
-        "remaining": "Forecast for the rest of today"
-      },
       "next": {
         "until": "Forecast: production until around {time}",
         "from": "Forecast: production from around {time}",
@@ -908,6 +916,24 @@
         "training": "Bias correction learned from",
         "training_value": "{days} days",
         "evidence_note": "Forecast days beyond the forecaster's horizon show no forecast rather than zero."
+      },
+      "curve": {
+        "title": "Production today",
+        "actual": "produced",
+        "forecast": "forecast",
+        "forecast_raw": "forecast (uncorrected)",
+        "maximum": "configured max {power}",
+        "no_sensor": "Today's production curve needs a solar power sensor.",
+        "unit": "The solar power sensor's unit is not a power unit, so today's production is not drawn."
+      },
+      "flow": {
+        "unresolved": "{kwh} of today's solar is not resolved to a destination.",
+        "strings_failed": "The strings' energy today could not be loaded."
+      },
+      "tile": {
+        "tomorrow": "forecast for tomorrow",
+        "rating": "inverter AC rating",
+        "export": "export limit"
       }
     },
     "house": {

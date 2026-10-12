@@ -262,11 +262,6 @@
         "not_producing": "Teď nevyrábí.",
         "unavailable": "Výkon panelů teď nemá žádný údaj."
       },
-      "figure": {
-        "today": "Dnes zatím",
-        "vs_forecast": "Z předpovědi do {time}",
-        "remaining": "Předpověď na zbytek dne"
-      },
       "next": {
         "until": "Předpověď: výroba zhruba do {time}",
         "from": "Předpověď: výroba zhruba od {time}",
@@ -451,6 +446,24 @@
         "training": "Korekce se učila z",
         "training_value": "{days} dnů",
         "evidence_note": "Dny za horizontem předpovědi ukazují „bez předpovědi“, ne nulu."
+      },
+      "curve": {
+        "title": "Výroba dnes",
+        "actual": "vyrobeno",
+        "forecast": "předpověď",
+        "forecast_raw": "předpověď (neopravená)",
+        "maximum": "nastavené maximum {power}",
+        "no_sensor": "Křivka dnešní výroby potřebuje senzor výkonu FVE.",
+        "unit": "Jednotka senzoru výkonu FVE není jednotka výkonu, takže dnešní výroba se nekreslí."
+      },
+      "flow": {
+        "unresolved": "{kwh} dnešní výroby FVE není přiřazeno žádnému cíli.",
+        "strings_failed": "Dnešní energii stringů se nepodařilo načíst."
+      },
+      "tile": {
+        "tomorrow": "předpověď na zítřek",
+        "rating": "jmenovitý AC výkon střídače",
+        "export": "limit dodávky"
       }
     },
     "grid": {
@@ -465,18 +478,11 @@
       "phase": "Fáze",
       "loading_history": "Načítám dnešní historii…",
       "history_failed": "Dnešní historii se nepodařilo načíst.",
-      "next_price": "Dále: cena odběru {price} od {time}",
       "status": {
         "importing": "Odebírá ze sítě {power}.",
         "exporting": "Dodává do sítě {power}.",
         "idle": "Se sítí si teď téměř nic nevyměňuje ({power}).",
         "unavailable": "Výkon sítě teď není k dispozici."
-      },
-      "figure": {
-        "net_import": "Čistý odběr dnes",
-        "net_export": "Čistá dodávka dnes",
-        "net_cost": "Čistý náklad dnes",
-        "net_income": "Čistý výnos dnes"
       },
       "power": {
         "import": "odběr {power}",
@@ -543,7 +549,9 @@
         "meter_import": "Odběrový výkon elektroměru",
         "meter_export": "Dodávkový výkon elektroměru",
         "calculation": "Odhadnutý proud = |výkon fáze| ÷ napětí fáze, při účiníku 1. Jalový výkon nebo nižší účiník znamenají vyšší skutečný proud.",
-        "limitations": "Výkon je z elektroměru, napětí ze svorek střídače. Limit je nastavení hlavního jističe ve střídači, ne jmenovitá hodnota jističe, takže srovnání neměří rezervu jističe; součty fází ani výkon dodávky o ní nic neříkají."
+        "limitations": "Výkon je z elektroměru, napětí ze svorek střídače. Limit je nastavení hlavního jističe ve střídači, ne jmenovitá hodnota jističe, takže srovnání neměří rezervu jističe; součty fází ani výkon dodávky o ní nic neříkají.",
+        "scale_limit": "Plný pruh je nastavení hlavního jističe {limit} při {voltage}, jako měřítko obrázku, ne rezerva jističe.",
+        "scale_power": "Plný pruh je {power}: nastavení hlavního jističe nelze přečíst."
       },
       "money": {
         "failed": "Dnešní peníze se nepodařilo načíst.",
@@ -613,6 +621,24 @@
         "run_mode": "Provozní režim",
         "no_readings": "Údaj o frekvenci ani provozním režimu není dostupný.",
         "evidence_note": "Údaje tak, jak je střídač hlásí teď."
+      },
+      "picture": {
+        "voltage": "Napětí · dnešní rozsah",
+        "range": "dnes {min}–{max}",
+        "range_loading": "Načítá se dnešní rozsah napětí…",
+        "range_failed": "Dnešní rozsah napětí se nepodařilo načíst."
+      },
+      "flow": {
+        "price_now": "Cena teď: {prices}"
+      },
+      "tile": {
+        "loading_prices": "Načítají se ceny…",
+        "no_price_change": "Žádná známá změna",
+        "on_grid": "Na síti",
+        "off_grid": "Mimo síť",
+        "fault": "Porucha",
+        "no_voltage_sensors": "Senzory fázového napětí nebyly nalezeny.",
+        "voltage_range": "nejnižší–nejvyšší dnes"
       }
     },
     "house": {
