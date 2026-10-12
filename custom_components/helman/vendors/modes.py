@@ -186,13 +186,17 @@ def mode_agreement(
     (a setting or vendor entity is missing) or ``unavailable`` (a register has
     no readable state). ``registers`` lists every write of the command with
     what it reads, and ``observedOption`` the option the registers hold, if
-    any, whatever was commanded.
+    any, whatever was commanded. ``observedFrom`` lists every register any
+    option binds: the states ``observedOption`` is read from.
     """
     bound = bound_mode_writes(hass, profile, entry, config)
     observed = first_matching_option(bound, hass.states.get)
     result: dict[str, Any] = {
         "commanded": commanded,
         "observedOption": observed,
+        "observedFrom": sorted(
+            {entity_id for writes in bound.values() for entity_id, _ in writes or ()}
+        ),
         "registers": [],
     }
     if commanded not in profile.modes:

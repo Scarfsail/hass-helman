@@ -226,6 +226,8 @@ def test_registers_holding_the_command_match():
     assert (agreement["status"], agreement["commanded"]) == ("match", "charge_to_target_soc")
     assert agreement["observedOption"] == "charge_to_target_soc"
     assert [r["entityId"] for r in agreement["registers"]] == [USE_MODE, MANUAL_MODE, EXPORT_LIMIT]
+    # Every register any mode binds, so a change to one the command does not write is seen.
+    assert {USE_MODE, MANUAL_MODE, EXPORT_LIMIT} <= set(agreement["observedFrom"])
 
 
 def test_a_fully_observed_different_configuration_is_a_mismatch():

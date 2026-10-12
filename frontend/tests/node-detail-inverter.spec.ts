@@ -148,8 +148,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             entities,
             maxAllowedExportPower: 9900,
             agreement: profile
-                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: "normal", observedOption: v.agreement === "mismatch" ? null : "normal", registers }
-                : { status: "unknown", reason: "no_profile", commanded: "normal", observedOption: null, registers: [] },
+                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: "normal", observedOption: v.agreement === "mismatch" ? null : "normal",
+                    observedFrom: ["number.solax_export_control_user_limit", "select.solax_charger_use_mode", "select.solax_manual_mode_select"], registers }
+                : { status: "unknown", reason: "no_profile", commanded: "normal", observedOption: null, observedFrom: [], registers: [] },
             condition: v.condition === "off_grid" ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
             sections: profile ? ["temperature", "modes"] : [],
         };
@@ -627,6 +628,15 @@ test.describe("today's modes are read when the observed mode changes", () => {
         await page.evaluate(() => { window.__overview = { ...window.__overview, agreement: { ...window.__overview.agreement, observedOption: "charge_to_target_soc" } }; });
         await setStates(page, { "select.solax_charger_use_mode": "Manual Mode" });
         await expect.poll(() => sectionRequests(page, "modes")).toBe(2);
+    });
+
+    test("a register only another mode binds still re-reads the comparison", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        const before = await overviewRequests(page);
+        // Normal never writes the manual mode, but the observed mode is read from it too.
+        await setStates(page, { "select.solax_manual_mode_select": "Force Charge" });
+        await expect.poll(() => overviewRequests(page)).toBeGreaterThan(before);
     });
 });
 

@@ -82,6 +82,7 @@ def build_inverter_overview(
             "reason": "no_profile",
             "commanded": commanded,
             "observedOption": None,
+            "observedFrom": [],
             "registers": [],
         }
     else:

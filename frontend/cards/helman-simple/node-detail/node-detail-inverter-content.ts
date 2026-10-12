@@ -284,7 +284,8 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     /** The states the backend compared: a change in any of them re-reads the comparison. */
     protected _overviewSignature(payload: InverterDetailPayload): string {
-        const ids = [payload.mode?.entityId, ...payload.agreement.registers.map((register) => register.entityId), payload.entities.run_mode];
+        // Every register the observed mode is read from, not only the command's.
+        const ids = [payload.mode?.entityId, ...payload.agreement.observedFrom, payload.entities.run_mode];
         return ids.map((id) => (id ? this.hass.states[id]?.state ?? "" : "")).join("|");
     }
 

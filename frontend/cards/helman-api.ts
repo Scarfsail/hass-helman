@@ -898,6 +898,8 @@ export interface ModeAgreementDTO {
     reason: "no_profile" | "no_command" | "not_bound" | "unavailable" | null;
     commanded: ScheduleActionKind | null;
     observedOption: ScheduleActionKind | null;
+    /** Every register any option binds: the states `observedOption` is read from. */
+    observedFrom: string[];
     registers: ModeRegisterDTO[];
 }
 
