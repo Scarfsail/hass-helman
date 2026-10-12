@@ -9,10 +9,13 @@ import { CARD_BUNDLE } from "./support/card-page";
  * Mounted on the real `helman-card` against a fake backend that answers the
  * device tree, the appliance roster, `helman/get_node_detail` (the charger's
  * overview and its today and segment sections), the schedule and the
- * appliance projection.
+ * appliance projection. HA's `ha-entity-toggle` is a stub that reflects the
+ * state it is handed and calls the switch service on a click.
  * What is pinned is the routing (an EV charger by its configured appliance
- * kind, every other device on the generic detail), the shared disclosure
- * contract, and the charger's truthfulness: the hardware's session counters
+ * kind, every other device on the generic detail), the pictured overview
+ * (the charge switch and its plan line, the charging strip with the
+ * completion under it, the flow around the car, the tiles), the shared
+ * disclosure contract, and the charger's truthfulness: the hardware's session counters
  * are the session and today's attribution is not, several cars with nothing
  * naming one show no car's charge, a time at current power is not a ready-by
  * time, and a projected completion counts only windows that will run, under a
@@ -51,6 +54,15 @@ type Variant = {
     faultCode?: string;
     runtimeFailed?: boolean;
     overviewFails?: boolean;
+    /** The charge switch's state; `null` for a charger without one configured. */
+    chargeSwitch?: string | null;
+    /** Home Assistant's time zone, UTC by default. */
+    timeZone?: string;
+    /** The profile's L3 power is not in the registry. */
+    noPhase3?: boolean;
+    /** HA's entity toggle never registers (outside a dashboard). */
+    noToggle?: boolean;
+    todayFails?: boolean;
 };
 
 declare global {
@@ -58,6 +70,8 @@ declare global {
         __hass: any;
         __requests: Array<{ type: string; node?: string; section?: string; device_id?: string }>;
         __deepAll: (root: ParentNode, selector: string, out?: Element[]) => Element[];
+        __serviceCalls: Array<[string, string, Record<string, unknown>]>;
+        __moreInfo: string[];
     }
 }
 
@@ -76,6 +90,27 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             return out;
         };
         (window as any).loadCardHelpers = async () => ({ createCardElement: () => document.createElement("div") });
+        // HA's entity toggle: reflects the state handed to it, and a click asks for the other one.
+        if (!v.noToggle) customElements.define("ha-entity-toggle", class extends HTMLElement {
+            hass: any;
+            private _stateObj: any;
+            set stateObj(value: any) {
+                this._stateObj = value;
+                this.setAttribute("data-state", value?.state ?? "");
+                this.setAttribute("data-entity", value?.entity_id ?? "");
+            }
+            get stateObj() { return this._stateObj; }
+            connectedCallback() {
+                this.textContent = "toggle";
+                this.addEventListener("click", () => {
+                    const on = this._stateObj?.state === "on";
+                    this.hass.callService("switch", on ? "turn_off" : "turn_on", { entity_id: this._stateObj.entity_id });
+                });
+            }
+        });
+        window.__serviceCalls = [];
+        window.__moreInfo = [];
+        document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         const profile = v.profile !== false;
         const updated = "2026-10-21T11:59:50+00:00";
         const s = (state: string, unit?: string, at = updated, changedAt = at) => ({
@@ -89,7 +124,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             energyEntityId: null, ratioSensorId: null, children: [], ...overrides,
         });
         const tree = {
-            sources: [dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" })],
+            sources: [
+                dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
+                dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
+                dto({ id: "grid", displayName: "Grid", powerSensorId: "sensor.grid", isSource: true, sourceType: "grid" }),
+            ],
             consumers: [dto({
                 id: "house", displayName: "House", powerSensorId: "sensor.house",
                 children: [
@@ -104,16 +143,18 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const phaseAt = new Date(Date.parse(updated) - (v.phasesAgeS ?? 0) * 1000).toISOString();
         const phaseChangedAt = new Date(Date.parse(phaseAt) - (v.phasesHeldS ?? 0) * 1000).toISOString();
         const states: Record<string, unknown> = {
+            // The house: 4.2 kW of solar and 3.8 kW from the grid.
             "sensor.solar": s("4200", "W"), "sensor.house": s("8000", "W"),
+            "sensor.battery": s("0", "W"), "sensor.grid": s("3800", "W"),
             "sensor.ev_power": s(v.power ?? "6400", "W"), "sensor.ev_energy": s("9474.7", "kWh"),
             "sensor.boiler_power": s("0", "W"), "sensor.boiler_energy": s("10", "kWh"),
-            "switch.ev_charge": s("on"),
+            "switch.ev_charge": s(v.chargeSwitch ?? "on"),
             "select.ev_use_mode": s("Fast"), "select.ev_eco_gear": s("6A"),
             "sensor.kona_soc": s(v.soc ?? "50", "%"), "sensor.ioniq_soc": s("30", "%"),
         };
         if (v.limit !== null) states["number.kona_limit"] = s(v.limit ?? "80", "%");
         const entities: Record<string, string | null> = {
-            power: "sensor.ev_power", energy_total: "sensor.ev_energy", charge_switch: "switch.ev_charge",
+            power: "sensor.ev_power", energy_total: "sensor.ev_energy", charge_switch: v.chargeSwitch === null ? null : "switch.ev_charge",
             use_mode: "select.ev_use_mode", eco_gear: "select.ev_eco_gear",
         };
         const telemetry: Record<string, [string, string, string?, string?, string?]> = {
@@ -142,6 +183,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 entities[key] = entityId;
                 states[entityId] = s(state, unit, at, changedAt);
             }
+            // Unresolved telemetry is a typed null, never dropped.
+            if (v.noPhase3) entities.charge_power_l3 = null;
         }
         const kinds: Record<string, string> = { Charging: "charging", SuspendedEV: "waiting", Preparing: "waiting", Available: "no_car", Faulted: "fault" };
         const runMode = v.runMode ?? "Charging";
@@ -152,9 +195,17 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             status: profile && kinds[runMode] ? { kind: kinds[runMode], runMode, entityId: "sensor.ev_run_mode" } : null,
             sections: ["today", "segment"],
         };
+        for (const [id, state] of Object.entries(states)) (state as any).entity_id = id;
+        // Charged 08:00–09:30 this morning, and charging again since 11:20 while it charges now.
+        const charging = runMode === "Charging";
         const segment = {
             node: "ev_charger", section: "segment", deviceId: "garage-ev", asOf: "2026-10-21T12:00:00+00:00",
-            chargingSince: profile && runMode === "Charging" ? "2026-10-21T11:20:00+00:00" : null,
+            period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
+            chargingSince: profile && charging ? "2026-10-21T11:20:00+00:00" : null,
+            charging: !profile ? null : [
+                { start: "2026-10-21T08:00:00+00:00", end: "2026-10-21T09:30:00+00:00", open: false },
+                ...(charging ? [{ start: "2026-10-21T11:20:00+00:00", end: "2026-10-21T12:00:00+00:00", open: true }] : []),
+            ],
         };
         const today = {
             node: "ev_charger", section: "today", deviceId: "garage-ev", asOf: "2026-10-21T11:55:00+00:00",
@@ -229,8 +280,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__hass = {
             language: "en",
             locale: { language: "en-GB" },
-            config: { time_zone: "UTC" },
+            config: { time_zone: v.timeZone ?? "UTC" },
             user: { is_admin: true },
+            callService: async (domain: string, service: string, data: Record<string, unknown>) => {
+                window.__serviceCalls.push([domain, service, data]);
+            },
             connection: {
                 sendMessagePromise: async () => ({}),
                 subscribeMessage: async () => () => undefined,
@@ -249,6 +303,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 if (msg.type === "helman/get_node_detail") {
                     if (v.overviewFails) throw new Error("detail down");
                     if (msg.section === "segment") return segment;
+                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown)) throw new Error("today down");
                     return msg.section ? today : overview;
                 }
                 if (msg.type === "recorder/statistic_during_period") return { change: 1 };
@@ -279,12 +334,29 @@ const overview = (page: Page) => content(page).locator("[data-overview]");
 const question = (page: Page, id: string) => content(page).locator(`helman-node-question[data-question="${id}"]`);
 const header = (page: Page, id: string) => question(page, id).locator("button.header");
 const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
+const tile = (page: Page, id: string) => content(page).locator(`helman-node-tile[data-question="${id}"]`);
+const flow = (page: Page) => content(page).locator("helman-node-flow");
+const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
+const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
+const strip = (page: Page) => content(page).locator("helman-mode-strip");
+const switchLine = (page: Page) => content(page).locator("[data-switch-line]");
 const requests = (page: Page, type: string) => page.evaluate((type) => window.__requests.filter((r) => r.type === type), type);
+const sectionRequests = async (page: Page, section: string) =>
+    (await requests(page, "helman/get_node_detail")).filter((r) => r.section === section).length;
 
 async function openCharger(page: Page, variant: Variant = {}): Promise<void> {
     await mount(page, variant);
     await openDevice(page, "Garage EV");
     await expect(overview(page)).toBeVisible();
+}
+
+/** Open a question the way a reader does: the picture that absorbed it, or its tile. */
+async function open(page: Page, id: string): Promise<void> {
+    if (id === "plan") await content(page).locator("[data-strip]").click();
+    else if (id === "today") await flow(page).locator("[data-side='in']").click();
+    else if (id === "progress") await content(page).locator("[data-glyph]").click();
+    else await tile(page, id).locator("button").click();
+    await expect(header(page, id)).toHaveAttribute("aria-expanded", "true");
 }
 
 async function setStates(page: Page, states: Record<string, string>): Promise<void> {
@@ -296,6 +368,22 @@ async function setStates(page: Page, states: Record<string, string>): Promise<vo
         window.__hass = { ...hass, states: next };
         card.hass = window.__hass;
     }, states);
+}
+
+/** A flow label's bold value and its name. */
+async function expectItem(page: Page, side: "in" | "out", id: string, value: string, name: string): Promise<void> {
+    await expect(flowLabel(page, side, id).locator(".value")).toHaveText(value);
+    await expect(flowLabel(page, side, id).locator(".name")).toHaveText(name);
+}
+
+/** The strip's segments as drawn: tone, whether planned, and the UTC times they span. */
+async function segments(page: Page): Promise<Array<{ tone: string; planned: string; from: string; to: string }>> {
+    return strip(page).locator("[data-segment]").evaluateAll((nodes) => nodes.map((node) => ({
+        tone: node.getAttribute("data-tone")!,
+        planned: node.getAttribute("data-planned")!,
+        from: new Date(Number(node.getAttribute("data-start"))).toISOString().slice(11, 16),
+        to: new Date(Number(node.getAttribute("data-end"))).toISOString().slice(11, 16),
+    })));
 }
 
 test.describe("routing", () => {
@@ -316,31 +404,48 @@ test.describe("routing", () => {
 });
 
 test.describe("the overview", () => {
-    test("opens compact: status, power, the car's charge to its limit, the session, the qualified estimate and five closed questions", async ({ page }) => {
+    test("opens on a status pill, the switch, the strip, the Now flow around the car and three closed tiles", async ({ page }) => {
         await openCharger(page);
         await expect(overview(page).locator(".status")).toHaveText("Charging at 6.4 kW.");
-        await expect(overview(page).locator(".figure")).toHaveCount(3);
-        await expect(overview(page).locator("[data-figure='power']")).toContainText("6.4 kW");
-        await expect(overview(page).locator("[data-figure='car']")).toContainText("Kona: charge → limit");
-        await expect(overview(page).locator("[data-figure='car']")).toContainText("50 % → 80 %");
-        await expect(overview(page).locator("[data-figure='session']")).toContainText("9.5 kWh");
+        await expect(overview(page).locator(".status")).toHaveAttribute("data-tone", "charge");
+        await expect(content(page).locator("[data-switch]")).toBeVisible();
+        await expect(strip(page)).toBeVisible();
+        await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
         // 30 % of a 64 kWh battery at 6.4 kW: three hours, at current power, not a ready-by time.
-        await expect(overview(page).locator("[data-next]")).toHaveText("≈ 3 h 0 min to 80 % at current power");
+        await expect(content(page).locator("[data-estimate]")).toHaveText("≈ 3 h 0 min to 80 % at current power");
 
-        const ids = await content(page).locator("helman-node-question").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-question")));
-        expect(ids).toEqual(["progress", "plan", "waiting", "today", "trust"]);
-        for (const id of ids) await expect(header(page, id!)).toHaveAttribute("aria-expanded", "false");
+        const ids = await content(page).locator("helman-node-tile").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-question")));
+        expect(ids).toEqual(["progress", "waiting", "trust"]);
+        for (const id of ids) await expect(tile(page, id!).locator("button")).toHaveAttribute("aria-expanded", "false");
+        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
         await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-        // Nothing heavy is asked for while closed.
-        expect(await requests(page, "helman/get_appliance_projections")).toEqual([]);
-        expect((await requests(page, "helman/get_node_detail")).filter((r) => r.section)).toEqual([]);
+        // The strip and its completion line are read on opening; today's attribution is not.
+        await expect.poll(() => sectionRequests(page, "segment")).toBe(1);
+        expect(await requests(page, "helman/get_appliance_projections")).toHaveLength(1);
+        expect(await sectionRequests(page, "today")).toBe(0);
+    });
+
+    test("tiles say the answer: the session, charging since when, the total against its phases", async ({ page }) => {
+        await openCharger(page);
+        await expect(tile(page, "progress").locator(".value")).toHaveText("9.5 kWh");
+        await expect(tile(page, "progress").locator(".detail")).toHaveText("this session, 1 h 13 min");
+        await expect(tile(page, "waiting").locator(".value")).toHaveText("Charging");
+        await expect(tile(page, "waiting").locator(".detail")).toHaveText("from 11:20");
+        await expect(tile(page, "waiting").locator("button")).toHaveClass(/action-tone-charge/);
+        await expect(tile(page, "waiting").locator(".caption")).toHaveText("Why isn't it charging?");
+        await expect(tile(page, "trust").locator(".value")).toHaveText("6.4 kW");
+        await expect(tile(page, "trust").locator(".detail")).toHaveText("phases 6.4 kW");
     });
 
     test("answer previews say the answer", async ({ page }) => {
         await openCharger(page);
+        await open(page, "progress");
         await expect(question(page, "progress").locator(".preview")).toHaveText("9.5 kWh this session · 19 kWh still needed");
+        await open(page, "plan");
         await expect(question(page, "plan").locator(".preview")).toHaveText("Next charging window: now–14:00");
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator(".preview")).toHaveText("It is charging now");
+        await open(page, "trust");
         await expect(question(page, "trust").locator(".preview")).toHaveText("network Not Connected · total vs phases differ by 0 W");
     });
 
@@ -348,7 +453,9 @@ test.describe("the overview", () => {
         await openCharger(page, { runMode: "Faulted", faultCode: "12", power: "0", windows: [{ from: 22, to: 26, vehicleId: "kona" }] });
         const exception = content(page).locator("[data-exception]");
         await expect(exception).toContainText("The charger reports a fault: Faulted · Over current · code 12.");
-        await header(page, "waiting").click();
+        await expect(tile(page, "waiting").locator(".value")).toHaveText("Fault");
+        await expect(tile(page, "waiting").locator("button")).toHaveClass(/action-tone-stop/);
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator("[data-waiting='fault']")).toBeVisible();
         await expect(question(page, "waiting")).not.toContainText("next window");
         await exception.locator("button").click();
@@ -359,8 +466,8 @@ test.describe("the overview", () => {
     test("a fault code left over while charging is a reading, not a fault", async ({ page }) => {
         await openCharger(page, { faultCode: "12" });
         await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-        await expect(question(page, "waiting").locator(".preview")).toHaveText("It is charging now");
-        await header(page, "trust").click();
+        await expect(tile(page, "waiting").locator(".value")).toHaveText("Charging");
+        await open(page, "trust");
         await evidence(page, "trust").click();
         await expect(question(page, "trust").locator("[data-row='fault_code']")).toContainText("12");
     });
@@ -368,25 +475,235 @@ test.describe("the overview", () => {
     test("no car connected: no session in progress and no estimate", async ({ page }) => {
         await openCharger(page, { runMode: "Available", power: "0" });
         await expect(overview(page).locator(".status")).toHaveText("No car connected (Available).");
-        await expect(overview(page).locator("[data-figure='session']")).toHaveCount(0);
-        await expect(question(page, "progress").locator(".preview")).toHaveText("No car connected");
-        await header(page, "progress").click();
+        await expect(tile(page, "progress").locator(".value")).toHaveText("No car connected");
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-no-session]")).toBeVisible();
         await expect(question(page, "progress")).toContainText("Last reported session");
         await expect(question(page, "progress").locator("[data-row='eta']")).toHaveCount(0);
     });
 });
 
+test.describe("the charge switch", () => {
+    test("reflects and toggles the configured entity; its name opens more-info", async ({ page }) => {
+        await openCharger(page);
+        const toggle = content(page).locator("[data-switch] ha-entity-toggle");
+        await expect(toggle).toHaveAttribute("data-entity", "switch.ev_charge");
+        await expect(toggle).toHaveAttribute("data-state", "on");
+        // On during a planned window: as planned, and the plan stops it at the window's end.
+        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "on_planned");
+        await expect(switchLine(page)).toHaveText("On, as planned. The plan next switches it off at 14:00.");
+
+        await toggle.click();
+        expect(await page.evaluate(() => window.__serviceCalls)).toEqual([["switch", "turn_off", { entity_id: "switch.ev_charge" }]]);
+        // HA reports the new state; the toggle and the line follow it, and never say who switched it.
+        await setStates(page, { "switch.ev_charge": "off" });
+        await expect(toggle).toHaveAttribute("data-state", "off");
+        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "off_planned");
+        await expect(switchLine(page)).toHaveText("Off, though the plan charges now. The plan next switches it off at 14:00.");
+        await expect(switchLine(page)).not.toContainText(/you|user|manual|Helman switched/i);
+
+        await content(page).locator("[data-switch] button.reading").click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["switch.ev_charge"]);
+    });
+
+    test("not planned now: the line says so, and when the plan next switches it on", async ({ page }) => {
+        await openCharger(page, { runMode: "SuspendedEV", power: "0", chargeSwitch: "off", windows: [{ from: 22, to: 26, vehicleId: "kona" }] });
+        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "off_unplanned");
+        await expect(switchLine(page)).toHaveText("Off, as planned. The plan next switches it on at 22:00.");
+        await setStates(page, { "switch.ev_charge": "on" });
+        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "on_unplanned");
+        await expect(switchLine(page)).toHaveText("On, though no charging is planned now. The plan next switches it on at 22:00.");
+    });
+
+    test("adjacent planned windows are one stretch: the plan switches it off where the last ends", async ({ page }) => {
+        await openCharger(page, { windows: [
+            { from: 11.75, to: 13, vehicleId: "kona", useMode: "Fast" },
+            { from: 13, to: 14.5, vehicleId: "kona", useMode: "ECO" },
+        ] });
+        await expect(switchLine(page)).toHaveText("On, as planned. The plan next switches it off at 14:30.");
+    });
+
+    test("a candidate is not executed: it is not a plan change", async ({ page }) => {
+        await openCharger(page, { runMode: "SuspendedEV", power: "0", chargeSwitch: "off", windows: [{ from: 22, to: 26, candidate: true, vehicleId: "kona" }] });
+        await expect(switchLine(page)).toHaveText("Off, as planned. The plan does not switch it today or tomorrow.");
+    });
+
+    test("with execution off the plan does not switch it", async ({ page }) => {
+        await openCharger(page, { executionEnabled: false });
+        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "execution_off");
+        await expect(switchLine(page)).toHaveText("Schedule execution is off: the plan does not switch it.");
+    });
+
+    test("no switch row without a configured switch", async ({ page }) => {
+        await openCharger(page, { chargeSwitch: null });
+        await expect(content(page).locator("[data-switch]")).toHaveCount(0);
+        await expect(content(page).locator("ha-entity-toggle")).toHaveCount(0);
+        await expect(strip(page)).toBeVisible();
+    });
+});
+
+test.describe("the charging strip", () => {
+    test("charging so far solid, the planned windows hatched, the next change flagged, and the completion under it", async ({ page }) => {
+        await openCharger(page);
+        expect(await segments(page)).toEqual([
+            { tone: "charge", planned: "false", from: "08:00", to: "09:30" },
+            // The stretch still going is drawn to now.
+            { tone: "charge", planned: "false", from: "11:20", to: "12:00" },
+            // The window in progress, from now; the candidate tonight is not executed.
+            { tone: "charge", planned: "true", from: "12:00", to: "14:00" },
+            { tone: "neutral", planned: "true", from: "22:00", to: "02:00" },
+        ]);
+        const next = strip(page).locator("[data-next-change]");
+        await expect(next).toHaveText("14:00 · stops charging");
+        await expect(next).toHaveAttribute("data-tone", "stop");
+        await expect(strip(page).locator("[data-now]")).toHaveCount(1);
+        // 8 slots × 1.6 kWh = 12.8 kWh of 19.2 needed.
+        await expect(content(page).locator("[data-completion-line]")).toHaveText(
+            "Under the current plan ≈ 70 % of 80 % by 14:00, 6.4 kWh short: an estimate, not a guarantee.");
+        // The strip opens the plan.
+        await expect(content(page).locator("[data-strip]")).toHaveAttribute("title", "When will charging happen, and will it reach the target?");
+        await open(page, "plan");
+        await expect(question(page, "plan").locator("[data-window]")).toHaveCount(2);
+    });
+
+    test("the completion line names when the limit is reached", async ({ page }) => {
+        await openCharger(page, { slotKwh: 2.4 });
+        await expect(content(page).locator("[data-completion-line]")).toHaveText(
+            "Under the current plan ≈ 80 % by 14:00: an estimate, not a guarantee.");
+    });
+
+    test("waiting for tonight: no charging now, the next start flagged in the charge tone", async ({ page }) => {
+        await openCharger(page, { runMode: "SuspendedEV", power: "0", windows: [{ from: 22, to: 26, vehicleId: "kona" }] });
+        expect(await segments(page)).toEqual([
+            { tone: "charge", planned: "false", from: "08:00", to: "09:30" },
+            { tone: "charge", planned: "true", from: "22:00", to: "02:00" },
+        ]);
+        await expect(strip(page).locator("[data-next-change]")).toHaveText("22:00 · starts charging");
+        await expect(strip(page).locator("[data-next-change]")).toHaveAttribute("data-tone", "charge");
+    });
+
+    test("a completion that cannot be estimated says why on the line", async ({ page }) => {
+        await openCharger(page, { executionEnabled: false });
+        await expect(content(page).locator("[data-completion-line]")).toHaveText("Schedule execution is off, so the plan does not establish a completion.");
+        // Not executed: every window is neutral.
+        expect((await segments(page)).filter((segment) => segment.planned === "true").map((segment) => segment.tone)).toEqual(["neutral", "neutral"]);
+    });
+
+    test("a Custom charger has no recorded charging, only the plan", async ({ page }) => {
+        await openCharger(page, { profile: false });
+        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
+    });
+});
+
+test.describe("the strip in Home Assistant's time zone", () => {
+    test.use({ timezoneId: "America/New_York" });
+
+    test("midnight to noon tomorrow and the hours are Home Assistant's, not the browser's", async ({ page }) => {
+        // 12:00 UTC is 14:00 in Prague: the strip runs from Prague's midnight, 22:00 UTC, for 36 h.
+        await openCharger(page, { timeZone: "Europe/Prague" });
+        const ticks = strip(page).locator(".hours span");
+        await expect(ticks.first()).toHaveText("00");
+        await expect(ticks.first()).toHaveAttribute("style", /left: 0\.00%/);
+        await expect(ticks.nth(1)).toHaveText("06");
+        await expect(ticks.nth(1)).toHaveAttribute("style", /left: 16\.67%/);
+        await expect(ticks.last()).toHaveText("12");
+        await expect(ticks.last()).toHaveAttribute("style", /left: 100\.00%/);
+        // Now, 14 h into the 36.
+        await expect(strip(page).locator("[data-now] line")).toHaveAttribute("x1", "389");
+        // This morning's 08:00 UTC charging, 10 h after Prague's midnight.
+        await expect(strip(page).locator("[data-segment]").first()).toHaveAttribute("style", /left: 27\.78%/);
+    });
+});
+
+test.describe("the flow", () => {
+    test("Now: the house's live mix applied to the charger in, an estimate said as one; its phases out in the phase colours", async ({ page }) => {
+        await openCharger(page);
+        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Now · 12:00");
+        // 6.4 kW of the house's 4.2 kW solar and 3.8 kW grid.
+        await expectItem(page, "in", "solar", "3.4 kW", "Solar");
+        await expectItem(page, "in", "grid", "3.0 kW", "Grid");
+        await expect(flowLabel(page, "in", "battery")).toHaveClass(/none/);
+        await expect(flow(page).locator("[data-flow-note]")).toHaveText("Sources are the house's mix now, applied to the charger: an estimate.");
+        await expectItem(page, "out", "phase-1", "2.1 kW", "L1");
+        await expect(flow(page).locator("[data-side='out'] [data-ribbon]")).toHaveCount(3);
+        await expect(flow(page).locator("[data-ribbon='phase-2']")).toHaveAttribute("style", /--helman-phase-l2/);
+        await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 6.4 kW");
+    });
+
+    test("single-phase charging draws one phase ribbon", async ({ page }) => {
+        await openCharger(page, { phases: ["6400", "0", "0"] });
+        await expect(flow(page).locator("[data-side='out'] [data-ribbon]")).toHaveCount(1);
+        await expect(flow(page).locator("[data-side='out'] [data-ribbon]")).toHaveAttribute("data-ribbon", "phase-1");
+        // The idle phases stay as greyed labels, so the layout never moves.
+        await expect(flowLabel(page, "out", "phase-2")).toHaveClass(/none/);
+        await expect(flowLabel(page, "out", "phase-3")).toHaveClass(/none/);
+    });
+
+    test("the car is the SoC glyph: the limit as its max, no min marker, still while not charging", async ({ page }) => {
+        await openCharger(page);
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveText("50 %");
+        await expect(glyph(page).locator("[data-marker='max']")).toHaveAttribute("data-soc", "80");
+        await expect(glyph(page).locator("[data-marker-label='max']")).toContainText("limit 80 %");
+        await expect(glyph(page).locator("[data-marker='min']")).toHaveCount(0);
+        // 30 % of 64 kWh still to the limit.
+        await expect(glyph(page).locator("[data-room]")).toHaveText("19 kWh");
+        await expect(glyph(page).locator("[data-chevrons]")).toHaveAttribute("data-chevrons", "charge");
+        // The car opens the progress.
+        await open(page, "progress");
+    });
+
+    test("a car plugged in but not charging is drawn still", async ({ page }) => {
+        await openCharger(page, { runMode: "SuspendedEV", power: "0" });
+        await expect(glyph(page).locator("[data-chevrons]")).toHaveAttribute("data-chevrons", "idle");
+    });
+
+    test("several cars and nothing naming one: the car is drawn empty, never another car's charge", async ({ page }) => {
+        await openCharger(page, { twoCars: true, windows: [{ from: 22, to: 26, vehicleId: "ioniq" }] });
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveCount(0);
+        await expect(glyph(page).locator("[data-fill]")).toHaveCount(0);
+    });
+
+    test("an unknown live split is no source, never 0 W", async ({ page }) => {
+        await openCharger(page);
+        await setStates(page, { "sensor.battery": "unavailable" });
+        await expect(flowLabel(page, "in", "solar").locator(".value")).toHaveText("–");
+        await expect(flow(page).locator("[data-side='in'] [data-ribbon]")).toHaveCount(0);
+    });
+
+    test("Today: the today section's sources only, requested once chosen, with the paid estimate and no phases", async ({ page }) => {
+        await openCharger(page);
+        expect(await sectionRequests(page, "today")).toBe(0);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flow(page)).toHaveAttribute("data-flow-scope", "today");
+        await expectItem(page, "in", "solar", "4.0 kWh", "Solar");
+        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Today · 00:00–11:55");
+        await expectItem(page, "in", "grid", "1.8 kWh", "Grid");
+        await expect(flowLabel(page, "in", "grid").locator(".item-note")).toHaveText("paid ≈ 7.20 CZK");
+        // Per-phase energy is not recorded: nothing goes out.
+        await expect(flow(page).locator("[data-side='out'] [data-flow]")).toHaveCount(0);
+        await expect(flow(page).locator("[data-total='out']")).toHaveText("");
+        // Energy of no known source is a footnote and part of what went in.
+        await expect(flow(page).locator("[data-flow-note]")).toHaveText("0.20 kWh from no known source");
+        await expect(flow(page).locator("[data-total='in']")).toHaveText("In 6.4 kWh");
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        expect(await sectionRequests(page, "today")).toBe(1);
+        // The flow opens today's answer, from the same figures.
+        await open(page, "today");
+        await expect(question(page, "today").locator("[data-row='today-kwh']")).toContainText("6.4 kWh");
+    });
+});
+
 test.describe("progress", () => {
     test("hardware session counters, the charging segment apart, and the car's need converted from percent", async ({ page }) => {
         await openCharger(page);
-        await header(page, "progress").click();
+        await open(page, "progress");
         const progress = question(page, "progress");
         await expect(progress.locator("[data-row='session-energy']")).toContainText("9.5 kWh");
         await expect(progress.locator("[data-row='session-duration']")).toContainText("1 h 13 min");
         await expect(progress.locator("[data-row='segment']")).toContainText("11:20: the latest start of charging, not the session's start");
-        // The recorded segment start is read when its question opens.
-        expect((await requests(page, "helman/get_node_detail")).filter((r) => r.section === "segment")).toHaveLength(1);
+        // The segment is the strip's, read once on opening.
+        expect(await sectionRequests(page, "segment")).toBe(1);
         await expect(progress.locator("[data-row='car-name']")).toContainText("the only configured car");
         // (80 − 50) % of 64 kWh.
         await expect(progress.locator("[data-row='car-needed']")).toContainText("19 kWh");
@@ -404,20 +721,20 @@ test.describe("progress", () => {
 
     test("a car at its limit needs nothing and gets no estimate", async ({ page }) => {
         await openCharger(page, { soc: "85" });
-        await expect(overview(page).locator("[data-next]")).not.toContainText("at current power");
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        await open(page, "progress");
         await expect(question(page, "progress").locator(".preview")).toHaveText("9.5 kWh this session · at the car's limit");
-        await header(page, "progress").click();
         await expect(question(page, "progress").locator("[data-row='car-needed']")).toContainText("at or above the limit");
         await expect(question(page, "progress").locator("[data-row='eta']")).toContainText("at or above the limit");
-        await header(page, "plan").click();
-        await expect(question(page, "plan").locator("[data-completion='reached']")).toBeVisible();
+        await expect(content(page).locator("[data-completion-line]")).toHaveText("The car is already at or above its charge limit.");
     });
 
     test("paused at zero power has no time estimate", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0", phases: ["0", "0", "0"] });
         await expect(overview(page).locator(".status")).toHaveText("Car plugged in, not charging (SuspendedEV).");
-        await expect(overview(page).locator("[data-next]")).toHaveText("Next charging window: now–14:00");
-        await header(page, "progress").click();
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        await expect(tile(page, "waiting").locator(".value")).toHaveText("Not charging");
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-row='eta']")).toContainText("no estimate while not charging");
         await expect(question(page, "progress").locator("[data-row='segment']")).toHaveCount(0);
     });
@@ -425,7 +742,7 @@ test.describe("progress", () => {
     test("charging on one phase is an observation, not a fault", async ({ page }) => {
         await openCharger(page, { phases: ["6400", "0", "0"] });
         await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-        await header(page, "progress").click();
+        await open(page, "progress");
         await evidence(page, "progress").click();
         await expect(question(page, "progress").locator("[data-row='active-phases']")).toContainText("1");
         await expect(question(page, "progress").locator("[data-single-phase]")).toContainText("an observation, not a fault");
@@ -433,7 +750,8 @@ test.describe("progress", () => {
 
     test("an implausible duration counter is shown as read, never used", async ({ page }) => {
         await openCharger(page, { duration: "287571968" });
-        await header(page, "progress").click();
+        await expect(tile(page, "progress").locator(".detail")).toHaveText("this session");
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-row='session-duration']")).toContainText("unavailable");
         await evidence(page, "progress").click();
         await expect(question(page, "progress").locator("[data-row='duration-raw']")).toContainText("287571968 s");
@@ -442,20 +760,18 @@ test.describe("progress", () => {
 
     test("several cars and nothing naming one: no car's charge is shown", async ({ page }) => {
         await openCharger(page, { twoCars: true, windows: [{ from: 22, to: 26, vehicleId: "ioniq" }] });
-        await expect(overview(page).locator("[data-figure='car']")).toHaveCount(0);
-        await expect(overview(page).locator("[data-next]")).not.toContainText("at current power");
-        await header(page, "progress").click();
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-ambiguous]")).toContainText("2 cars are configured");
         await expect(question(page, "progress")).not.toContainText("50 %");
         await expect(question(page, "progress")).not.toContainText("30 %");
-        await header(page, "plan").click();
-        await expect(question(page, "plan").locator("[data-completion='no_vehicle']")).toBeVisible();
+        await expect(content(page).locator("[data-completion-line]")).toHaveText("Which car charges is not known, so no completion is estimated.");
     });
 
     test("several cars with the slot in progress naming one: that car", async ({ page }) => {
         await openCharger(page, { twoCars: true });
-        await expect(overview(page).locator("[data-figure='car']")).toContainText("Kona");
-        await header(page, "progress").click();
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveText("50 %");
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-row='car-name']")).toContainText("named by the plan's slot in progress");
     });
 });
@@ -463,7 +779,7 @@ test.describe("progress", () => {
 test.describe("plan", () => {
     test("effective and candidate windows, and the end-of-plan charge with its shortfall under the current plan", async ({ page }) => {
         await openCharger(page);
-        await header(page, "plan").click();
+        await open(page, "plan");
         const plan = question(page, "plan");
         const windows = plan.locator("[data-window]");
         await expect(windows).toHaveCount(2);
@@ -476,6 +792,7 @@ test.describe("plan", () => {
         await expect(plan.locator("[data-row='end-soc']")).toContainText("≈ 70 % of 80 % by 14:00");
         await expect(plan.locator("[data-row='end-soc']")).toContainText("an estimate under the current plan, not a guarantee");
         await expect(plan.locator("[data-row='reach']")).toContainText("not within the plan: 6.4 kWh short");
+        // The projection read on opening serves the answer too.
         expect(await requests(page, "helman/get_appliance_projections")).toHaveLength(1);
 
         await evidence(page, "plan").click();
@@ -486,7 +803,7 @@ test.describe("plan", () => {
 
     test("the first slot whose cumulative energy reaches the limit, only for this car", async ({ page }) => {
         await openCharger(page, { slotKwh: 2.4, twoCars: true, otherCarPoints: true });
-        await header(page, "plan").click();
+        await open(page, "plan");
         // 8 × 2.4 = 19.2 kWh: exactly the need, at the 13:45 slot's end. The other car's 5 kWh points are not this car's.
         await expect(question(page, "plan").locator("[data-row='reach']")).toContainText("≈ by 14:00");
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toContainText("≈ 80 % of 80 % by 14:00");
@@ -495,15 +812,16 @@ test.describe("plan", () => {
     test("the threshold is crossed in energy, not on the projection's rounded SoC", async ({ page }) => {
         // 8 × 2.368 = 18.944 kWh: 79.6 %, which the projection rounds to 80.
         await openCharger(page, { slotKwh: 2.368 });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-row='reach']")).toContainText("not within the plan: 0.26 kWh short");
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toContainText("≈ 79 % of 80 %");
+        await expect(content(page).locator("[data-completion-line]")).toContainText("≈ 79 % of 80 %");
     });
 
     test("execution off establishes no completion", async ({ page }) => {
         await openCharger(page, { executionEnabled: false });
+        await open(page, "plan");
         await expect(question(page, "plan").locator(".preview")).toHaveText("Planned, but schedule execution is off");
-        await header(page, "plan").click();
         await expect(question(page, "plan").locator("[data-execution-off]")).toBeVisible();
         await expect(question(page, "plan").locator("[data-window]").nth(0)).toHaveAttribute("data-effective", "false");
         await expect(question(page, "plan").locator("[data-completion='execution_off']")).toBeVisible();
@@ -512,8 +830,8 @@ test.describe("plan", () => {
 
     test("candidate-only windows establish no completion", async ({ page }) => {
         await openCharger(page, { windows: [{ from: 22, to: 26, candidate: true, vehicleId: "kona" }] });
+        await open(page, "plan");
         await expect(question(page, "plan").locator(".preview")).toHaveText("Only candidate windows, not executed");
-        await header(page, "plan").click();
         await expect(question(page, "plan").locator("[data-completion='candidates_only']")).toBeVisible();
     });
 
@@ -522,7 +840,7 @@ test.describe("plan", () => {
             { from: 11.75, to: 13, candidate: true, vehicleId: "kona" },
             { from: 13, to: 14, vehicleId: "kona" },
         ] });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-completion='candidate_first']")).toBeVisible();
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toHaveCount(0);
     });
@@ -534,38 +852,38 @@ test.describe("plan", () => {
             { from: 13, to: 14, candidate: true, vehicleId: "kona" },
             { from: 14, to: 15, vehicleId: "kona" },
         ] });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-row='reach']")).toContainText("12:30");
     });
 
     test("a projection from an earlier slot is stale", async ({ page }) => {
         await openCharger(page, { projectionGeneratedAt: "2026-10-21T11:40:00+00:00" });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-completion='stale']")).toBeVisible();
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toHaveCount(0);
     });
 
     test("a projection without this charger has no completion", async ({ page }) => {
         await openCharger(page, { projectionEmpty: true });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-completion='no_projection']")).toBeVisible();
     });
 
     test("an unknown charge limit supports no deadline and no completion; there is no silent default target", async ({ page }) => {
         await openCharger(page, { limit: null });
-        await expect(overview(page).locator("[data-figure='car']")).toHaveText(/50 %$/);
-        await expect(overview(page).locator("[data-next]")).not.toContainText("at current power");
-        await header(page, "progress").click();
+        await expect(glyph(page).locator("[data-marker='max']")).toHaveCount(0);
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+        await open(page, "progress");
         await expect(question(page, "progress").locator("[data-row='car-limit']")).toContainText("no charge limit reading");
         await expect(question(page, "progress").locator("[data-row='eta']")).toContainText("no estimate without the car's charge and limit");
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-completion='no_target']")).toBeVisible();
         await expect(question(page, "plan").locator("[data-row='reach']")).toHaveCount(0);
     });
 
     test("a failed refresh after a plan change drops the old plan's completion", async ({ page }) => {
         await openCharger(page);
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toBeVisible();
         await page.evaluate(() => {
             (window as any).__projectionDown = true;
@@ -574,11 +892,12 @@ test.describe("plan", () => {
         });
         await expect(question(page, "plan")).toContainText("The projection could not be loaded.");
         await expect(question(page, "plan").locator("[data-row='end-soc']")).toHaveCount(0);
+        await expect(content(page).locator("[data-completion-line]")).toHaveText("The projection could not be loaded.");
     });
 
     test("a failed projection offers a retry", async ({ page }) => {
         await openCharger(page, { projectionFails: true });
-        await header(page, "plan").click();
+        await open(page, "plan");
         await expect(question(page, "plan")).toContainText("The projection could not be loaded.");
         await expect(question(page, "plan").locator("button.link-button")).toHaveText("Try again");
     });
@@ -587,8 +906,8 @@ test.describe("plan", () => {
 test.describe("waiting", () => {
     test("plugged in during an effective window with no reported cause: it cannot be determined, with the readings", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0" });
-        await expect(question(page, "waiting").locator(".preview")).toHaveText("The cause cannot be determined");
-        await header(page, "waiting").click();
+        await expect(tile(page, "waiting").locator(".detail")).toHaveText("The cause cannot be determined");
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator("[data-waiting='unknown']")).toBeVisible();
         await evidence(page, "waiting").click();
         await expect(question(page, "waiting").locator("[data-row='run_mode']")).toContainText("SuspendedEV");
@@ -597,12 +916,12 @@ test.describe("waiting", () => {
 
     test("not planned now: the next effective window is the supported reason", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0", windows: [{ from: 22, to: 26, vehicleId: "kona" }] });
-        await expect(question(page, "waiting").locator(".preview")).toHaveText("Not planned to charge now; next window 22:00–02:00.");
+        await expect(tile(page, "waiting").locator(".detail")).toHaveText("Not planned to charge now; next window 22:00–02:00.");
     });
 
     test("ECO surplus is context, not the established cause", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0", windows: [{ from: 11.75, to: 14, vehicleId: "kona", useMode: "ECO" }] });
-        await header(page, "waiting").click();
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator("[data-waiting='unknown']")).toBeVisible();
         await expect(question(page, "waiting").locator("[data-eco]")).toContainText("starts from 2097 W; its grid reading is -781 W");
         await expect(question(page, "waiting").locator("[data-eco]")).toContainText("context, not proof");
@@ -610,13 +929,13 @@ test.describe("waiting", () => {
 
     test("an actual runtime failure is reported as supplied", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0", runtimeFailed: true });
-        await header(page, "waiting").click();
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator("[data-waiting='reason']")).toContainText("failed: the charger did not accept Start Charging");
     });
 
     test("several supported observations are listed without picking one", async ({ page }) => {
         await openCharger(page, { runMode: "SuspendedEV", power: "0", soc: "85", executionEnabled: false });
-        await header(page, "waiting").click();
+        await open(page, "waiting");
         await expect(question(page, "waiting").locator("[data-waiting='unknown']")).toContainText("cannot be singled out");
         await expect(question(page, "waiting").locator("li")).toHaveCount(2);
     });
@@ -625,7 +944,7 @@ test.describe("waiting", () => {
 test.describe("today and the session", () => {
     test("today's attribution is its own answer, requested on opening, and never the session's", async ({ page }) => {
         await openCharger(page);
-        await header(page, "today").click();
+        await open(page, "today");
         const today = question(page, "today");
         await expect(today.locator("[data-row='today-kwh']")).toContainText("6.4 kWh");
         await expect(today.locator("[data-row='today-grid']")).toContainText("1.8 kWh (28 %)");
@@ -634,8 +953,8 @@ test.describe("today and the session", () => {
         await expect(today.locator("[data-not-session]")).toContainText("not the charging session's");
         await expect(question(page, "today").locator(".preview")).toHaveText("6.4 kWh today · ≈ 7.20 CZK paid");
         // The session figure stays the hardware's.
-        await expect(overview(page).locator("[data-figure='session']")).toContainText("9.5 kWh");
-        const section = (await requests(page, "helman/get_node_detail")).filter((r) => r.section);
+        await expect(tile(page, "progress").locator(".value")).toHaveText("9.5 kWh");
+        const section = (await requests(page, "helman/get_node_detail")).filter((r) => r.section === "today");
         expect(section).toEqual([{ type: "helman/get_node_detail", node: "ev_charger", section: "today", device_id: "garage-ev" }]);
 
         await evidence(page, "today").click();
@@ -647,7 +966,7 @@ test.describe("today and the session", () => {
 test.describe("trust", () => {
     test("reported states and a timestamped comparison, without a verdict", async ({ page }) => {
         await openCharger(page);
-        await header(page, "trust").click();
+        await open(page, "trust");
         const trust = question(page, "trust");
         await expect(trust.locator("[data-row='fault']")).toContainText("none reported");
         await expect(trust.locator("[data-row='network_status']")).toContainText("Not Connected");
@@ -663,7 +982,8 @@ test.describe("trust", () => {
 
     test("readings not taken together are not compared", async ({ page }) => {
         await openCharger(page, { phasesAgeS: 120 });
-        await header(page, "trust").click();
+        await expect(tile(page, "trust").locator(".detail")).toHaveText("not compared with its phases");
+        await open(page, "trust");
         await expect(question(page, "trust").locator("[data-incomparable]")).toContainText("not taken at the same time");
         await expect(question(page, "trust").locator("[data-row='difference']")).toHaveCount(0);
     });
@@ -671,7 +991,7 @@ test.describe("trust", () => {
     test("a value that held for hours but was just read again is compared", async ({ page }) => {
         // Single-phase charging: L2 and L3 sit at 0 W, so only their last report moves.
         await openCharger(page, { phases: ["6400", "0", "0"], phasesHeldS: 3 * 3600 });
-        await header(page, "trust").click();
+        await open(page, "trust");
         await expect(question(page, "trust").locator("[data-incomparable]")).toHaveCount(0);
         await expect(question(page, "trust").locator("[data-row='difference']")).toContainText("0 W");
     });
@@ -680,21 +1000,21 @@ test.describe("trust", () => {
 test.describe("disclosure and live data", () => {
     test("one open question at a time, evidence by keyboard in two disclosures", async ({ page }) => {
         await openCharger(page);
-        await header(page, "progress").focus();
+        await tile(page, "progress").locator("button").focus();
         await page.keyboard.press("Enter");
         await expect(header(page, "progress")).toHaveAttribute("aria-expanded", "true");
         await evidence(page, "progress").focus();
         await page.keyboard.press("Space");
         await expect(question(page, "progress").locator("[data-row='average']")).toBeVisible();
-        await header(page, "trust").click();
-        await expect(header(page, "progress")).toHaveAttribute("aria-expanded", "false");
-        await expect(question(page, "progress").locator("[data-row='session-energy']")).toHaveCount(0);
+        await open(page, "trust");
+        await expect(question(page, "progress")).toHaveCount(0);
+        await expect(tile(page, "progress").locator("button")).toHaveAttribute("aria-expanded", "false");
     });
 
     test("live readings reach the open detail", async ({ page }) => {
         await openCharger(page);
         await setStates(page, { "sensor.kona_soc": "60" });
-        await expect(overview(page).locator("[data-figure='car']")).toContainText("60 % → 80 %");
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveText("60 %");
     });
 
     test("a failed overview offers a retry", async ({ page }) => {
@@ -709,29 +1029,100 @@ test.describe("a Custom charger", () => {
     test("keeps every question with its config-backed answers", async ({ page }) => {
         await openCharger(page, { profile: false });
         await expect(overview(page).locator(".status")).toHaveText("Drawing 6.4 kW.");
-        await expect(content(page).locator("helman-node-question")).toHaveCount(5);
-        await header(page, "progress").click();
+        await expect(content(page).locator("helman-node-tile")).toHaveCount(3);
+        // No phase readings: nothing drawn out, which is not 0 W out.
+        await expect(flow(page).locator("[data-side='out'] [data-flow]")).toHaveCount(0);
+        await expect(flow(page).locator("[data-total='out']")).toHaveText("");
+        await open(page, "progress");
         await expect(question(page, "progress")).toContainText("Session counters need a hardware profile");
         await expect(question(page, "progress").locator("[data-row='eta']")).toContainText("≈ 3 h 0 min to 80 % at current power");
-        await header(page, "trust").click();
+        await open(page, "trust");
         await expect(question(page, "trust").locator("[data-row='fault']")).toContainText("unavailable");
     });
 });
 
+test.describe("review fixes", () => {
+    test("without HA's toggle the switch row still says on or off", async ({ page }) => {
+        await openCharger(page, { noToggle: true });
+        await expect(content(page).locator("[data-switch] ha-entity-toggle")).toHaveCount(0);
+        await expect(content(page).locator("[data-switch-state]")).toHaveText("on");
+    });
+
+    test("a phase the registry does not have is not drawn, and the total out stays", async ({ page }) => {
+        await openCharger(page, { noPhase3: true });
+        await expect(flow(page).locator("[data-side='out'] [data-flow]")).toHaveCount(2);
+        await expect(flowLabel(page, "out", "phase-3")).toHaveCount(0);
+        await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 4.3 kW");
+    });
+
+    test("opened without the card's live split, the sources are unknown on the default scale", async ({ page }) => {
+        await openCharger(page);
+        // As the solar inspector opens a device: its item alone.
+        await content(page).evaluate((element: any) => { element.params = { nodeType: "device", item: element.params.item }; });
+        await expect(flowLabel(page, "in", "solar").locator(".value")).toHaveText("–");
+        await expect(flow(page).locator("[data-side='in'] [data-ribbon]")).toHaveCount(0);
+        expect(await flow(page).evaluate((element: any) => element.scale)).toBe(5000);
+    });
+
+    test("a fresh Today is reused on the next toggle and by its answer", async ({ page }) => {
+        await openCharger(page);
+        await flow(page).locator("[data-scope='today']").click();
+        await expectItem(page, "in", "solar", "4.0 kWh", "Solar");
+        await flow(page).locator("[data-scope='now']").click();
+        await flow(page).locator("[data-scope='today']").click();
+        await open(page, "today");
+        expect(await sectionRequests(page, "today")).toBe(1);
+    });
+
+    test("a failed Today offers a retry", async ({ page }) => {
+        await openCharger(page, { todayFails: true });
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flow(page).locator("[data-flow-note]").first()).toHaveText("Today's figures could not be loaded.");
+        const retry = content(page).locator("helman-node-flow + button.link-button");
+        await expect(retry).toHaveText("Try again");
+        await retry.click();
+        await expect.poll(() => sectionRequests(page, "today")).toBe(2);
+    });
+
+    test("today's charging is read again on a new run mode, not on every overview", async ({ page }) => {
+        await openCharger(page);
+        await expect.poll(() => sectionRequests(page, "segment")).toBe(1);
+        await page.evaluate(() => (window.__deepAll(document, "node-detail-ev-charger-content")[0] as any)._loadOverview(true));
+        await expect.poll(() => requests(page, "helman/get_node_detail").then((all) => all.filter((r) => !r.section).length)).toBe(2);
+        expect(await sectionRequests(page, "segment")).toBe(1);
+        await setStates(page, { "sensor.ev_run_mode": "SuspendedEV" });
+        await expect.poll(() => sectionRequests(page, "segment")).toBe(2);
+    });
+});
+
+/** The two states the review screenshots show: an evening waiting for tonight's window, and a midday charge. */
+const STATES: Array<[string, Variant]> = [
+    ["evening", { runMode: "SuspendedEV", power: "0", phases: ["0", "0", "0"], chargeSwitch: "off", windows: [{ from: 22, to: 26, vehicleId: "kona" }] }],
+    ["midday", {}],
+];
+
 test.describe("screenshots", { tag: "@screens" }, () => {
-    for (const [name, width, height] of [["mobile-390", 390, 844], ["desktop-1280", 1280, 900]] as const) {
-        test(`overview and expanded answers at ${name}`, async ({ page }) => {
-            await page.setViewportSize({ width, height });
-            await openCharger(page, { twoCars: true });
-            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-overview.png`, fullPage: true });
-            await header(page, "plan").click();
-            await expect(question(page, "plan").locator("[data-row='end-soc']")).toBeVisible();
-            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-plan.png`, fullPage: true });
-            await header(page, "progress").click();
-            await evidence(page, "progress").click();
-            await page.screenshot({ path: `${SCREENS}/ev-charger-${name}-progress-evidence.png`, fullPage: true });
-            const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-            expect(overflow).toBeLessThanOrEqual(0);
-        });
+    for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
+        for (const [state, variant] of STATES) {
+            test(`the ${state} overview, Today and the opened answers at ${name}`, async ({ page }) => {
+                await page.setViewportSize({ width, height });
+                await openCharger(page, variant);
+                await expect(content(page).locator("[data-completion-line]")).not.toHaveText("Loading the projection…");
+                await page.screenshot({ path: `${SCREENS}/ev-charger-${state}-${name}-now.png`, fullPage: true });
+                await flow(page).locator("[data-scope='today']").click();
+                await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+                await page.screenshot({ path: `${SCREENS}/ev-charger-${state}-${name}-today.png`, fullPage: true });
+                await open(page, "plan");
+                await expect(question(page, "plan").locator("[data-window]").first()).toBeVisible();
+                await page.screenshot({ path: `${SCREENS}/ev-charger-${state}-${name}-plan.png`, fullPage: true });
+                await open(page, "waiting");
+                await evidence(page, "waiting").click();
+                await page.screenshot({ path: `${SCREENS}/ev-charger-${state}-${name}-waiting.png`, fullPage: true });
+                // The power card behind the stubbed dialog is wider than 360 px on its own; the detail is not.
+                const overflow = await content(page).evaluate((element) =>
+                    Math.max(element.scrollWidth - element.clientWidth, element.getBoundingClientRect().right - window.innerWidth));
+                expect(overflow).toBeLessThanOrEqual(0);
+            });
+        }
     }
 });

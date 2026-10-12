@@ -19,7 +19,7 @@ import {
 import { buildScheduleSlotPatches } from "./schedule-patch-builder";
 import {
     formatScheduleDayLabel,
-    getScheduleLocalTimeParts,
+    getScheduleLocalDayStartMs,
     getScheduleTimeRangeLabels,
 } from "./schedule-time";
 
@@ -267,7 +267,7 @@ export function buildElapsedScheduleSlots({
     }
 
     const durationMs = _resolveSlotDurationMs(slots);
-    const dayStartMs = _resolveLocalDayStartMs(firstSlot.startMs, timeZone);
+    const dayStartMs = getScheduleLocalDayStartMs(firstSlot.startMs, timeZone);
     const elapsed: ScheduleSlot[] = [];
     for (let startMs = dayStartMs; startMs < firstSlot.startMs; startMs += durationMs) {
         const endMs = Math.min(startMs + durationMs, firstSlot.startMs);
@@ -330,13 +330,13 @@ export function buildEntityScheduleDays({
 
     const days = [...slotsByDayKey.entries()];
     return days.map(([dayKey, daySlots], index) => {
-        const startMs = _resolveLocalDayStartMs(daySlots[0].startMs, timeZone);
+        const startMs = getScheduleLocalDayStartMs(daySlots[0].startMs, timeZone);
         // A day ends where the next one's slots begin, so a schedule that stops
         // mid-day does not claim the hours it has no slots for.
         const nextDaySlots = days[index + 1]?.[1];
         const endMs = nextDaySlots === undefined
             ? startMs + DAY_MS
-            : _resolveLocalDayStartMs(nextDaySlots[0].startMs, timeZone);
+            : getScheduleLocalDayStartMs(nextDaySlots[0].startMs, timeZone);
 
         return {
             dayKey,
@@ -759,19 +759,4 @@ function _resolveSlotDurationMs(slots: readonly ScheduleSlot[]): number {
     }
 
     return FALLBACK_SLOT_DURATION_MS;
-}
-
-/**
- * Local midnight of the day a moment falls in.
- *
- * Derived by subtracting the moment's own local clock time rather than by date
- * maths, so it stays correct in any zone without a second date library.
- */
-function _resolveLocalDayStartMs(atMs: number, timeZone: string): number {
-    const parts = getScheduleLocalTimeParts(atMs, timeZone);
-    if (parts === null) {
-        return atMs;
-    }
-
-    return atMs - (parts.hour * 60 + parts.minute) * 60_000;
 }

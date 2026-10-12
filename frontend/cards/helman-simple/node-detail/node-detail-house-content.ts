@@ -16,19 +16,29 @@ import {
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, SOLAR_COLOR } from "../../color-utils";
+import { helmanColorVars } from "../../color-vars";
 import type { TreeItem } from "../../helman/tree-item";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy } from "../../shared/forecast-value-format";
+import type { FlowItem } from "../../shared/node-flow";
+import { houseGlyph, type HouseShare } from "../../shared/node-glyphs";
+import { scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
+import { getScheduleApplianceActionPresentation } from "../../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries } from "../../shared/schedule/model/schedule-time";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { INVERTER_CONTROLLABLE_ID, isScheduleApplianceActionEnabled } from "../../shared/schedule/schedule-types";
+import {
+    INVERTER_CONTROLLABLE_ID,
+    isScheduleApplianceActionEnabled,
+    isScheduleClimateApplianceAction,
+    isScheduleEvChargerAction,
+} from "../../shared/schedule/schedule-types";
 import { todayIso } from "../../shared/today-iso";
 import "../../helman-device-reports/device-report-ranking";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { powerUnitFactor, readingNumber } from "./node-detail-readings";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
-import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
@@ -38,6 +48,9 @@ const NEW_DAY_RETRY_MS = 30_000;
 
 /** The forecast's canonical slot. */
 const SLOT_MS = 15 * 60_000;
+
+/** The consumers the flow draws by name; the rest is "everything else". */
+const TOP_CONSUMERS = 3;
 
 /** The house's sources, in the order every split and row shows them. */
 const SOURCES = [
@@ -153,26 +166,44 @@ interface PlannedRun {
     /** Placed by an optimizer whose condition is not met: the executor will not run it. */
     candidate: boolean;
     setBy: string | null;
+    action: ScheduleApplianceActionDTO;
 }
 
 /**
  * The house detail: what powered the house today, what used the energy, what
  * will use it next, whether today is unusual and how the load spreads over the
- * phases, as an overview and five questions. The card's device tree is not
- * repeated: the card stays the route to individual devices.
+ * phases. The card's device tree is not repeated: the card stays the route to
+ * individual devices.
  *
- * Live readings come from `hass`; the backend overview supplies the entity
- * ids. Today's report figures are requested with the overview, because the
- * overview shows today's energy and paid cost; the weekday comparison and the
- * overnight minimum are requested only while their question is open, and the
- * forecast embed and today's full ranking only behind their answers. Nothing
- * here is a diagnosis: a low overnight load is an observation, an unusual day
- * a comparison, and a phase's gap to its assigned devices a hint, measured
+ * It opens on a status pill and the house's Now/Today flow: its sources in,
+ * the house filled with their mix, and the three largest consumers and
+ * everything else out. The flow absorbs two questions: its sources open what
+ * powered the house, its consumers what used the most. The other three are
+ * tiles; one answer is open at a time, full width under the tiles.
+ *
+ * Live readings come from `hass` and the live split from the card; Now's
+ * consumers are the card's house tree, each load counted once. The backend
+ * overview supplies the entity ids. Today's report figures are requested with
+ * the overview: they are the Today flow (sources, top consumers, the paid
+ * estimate) and the today tile. The weekday comparison and the overnight
+ * minimum are requested only while their question is open, and the forecast
+ * embed and today's full ranking only behind their answers. Nothing here is
+ * a diagnosis: a low overnight load is an observation, an unusual day a
+ * comparison, and a phase's gap to its assigned devices a hint, measured
  * against an estimate from the user's own wiring map.
  */
 @customElement("node-detail-house-content")
 export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+        .phase-meters {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-top: 2px;
+        }
+        .phase-meters .meter {
+            margin-top: 0;
+        }
         .swatch {
             display: inline-block;
             width: 10px;
@@ -318,8 +349,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             this._schedule = snapshot.schedule;
         });
         super._start();
-        // The overview's next line reads the rest of today's forecast.
-        void this._loadForecast();
     }
 
     protected _stop(): void {
@@ -453,13 +482,33 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._question("sources", this._sourcesPreview(), () => this._renderSources(), () => this._renderSourcesEvidence(), "evidence")}
-                ${this._question("consumers", this._consumersPreview(), () => this._renderConsumers(), () => this._renderConsumersEvidence(), "evidence")}
-                ${this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence")}
-                ${this._question("pattern", this._patternPreview(), () => this._renderPattern(), () => this._renderPatternEvidence(), "evidence")}
-                ${this._question("phases", this._phasesPreview(overview, phases), () => this._renderPhases(overview, phases), () => this._renderPhasesEvidence(overview), "evidence")}
+                ${this._renderHouseFlow(phases)}
+                <div class="tiles">
+                    ${this._renderNextTile()}
+                    ${this._renderPatternTile()}
+                    ${this._renderPhasesTile(overview, phases)}
+                </div>
+                ${this._renderOpen(overview, phases)}
             </div>
         `;
+    }
+
+    /** The open question's answer and evidence, full width under the tiles. */
+    private _renderOpen(overview: HouseDetailPayload, phases: PhaseEstimate) {
+        switch (this._open) {
+            case "sources":
+                return this._question("sources", this._sourcesPreview(), () => this._renderSources(), () => this._renderSourcesEvidence(), "evidence");
+            case "consumers":
+                return this._question("consumers", this._consumersPreview(), () => this._renderConsumers(), () => this._renderConsumersEvidence(), "evidence");
+            case "next":
+                return this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence");
+            case "pattern":
+                return this._question("pattern", this._patternPreview(), () => this._renderPattern(), () => this._renderPatternEvidence(), "evidence");
+            case "phases":
+                return this._question("phases", this._phasesPreview(overview, phases), () => this._renderPhases(overview, phases), () => this._renderPhasesEvidence(overview), "evidence");
+            default:
+                return nothing;
+        }
     }
 
     private _renderSummary(overview: HouseDetailPayload) {
@@ -467,61 +516,180 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const status = power === null
             ? this._t("status.unavailable")
             : fillTemplate(this._t("status.using"), { power: formatPower(Math.max(0, power)).display });
-
-        // The status sentence already says the power now.
-        const figures: Array<[string, string, string]> = [];
-        const today = this._todayPayload();
-        if (today?.house) {
-            figures.push([this._t("figure.today"), formatGridEnergy(today.house.kwh), "today"]);
-            const paid = today.house.money.paid;
-            if (paid !== null) figures.push([this._t("figure.paid"), this._money(paid, today.currency), "paid"]);
-        }
-
-        const next = this._nextLine();
         return html`
             <div class="summary" data-overview>
-                <p class="status">${status}</p>
-                ${this._renderLiveMix(overview)}
-                ${figures.length ? html`
-                    <div class="figures">
-                        ${figures.map(([label, value, key]) => html`
-                            <div class="figure" data-figure=${key}><span class="figure-label">${label}</span><span class="figure-value">${value}</span></div>
-                        `)}
-                    </div>
-                ` : nothing}
-                ${next ? html`<p class="next" data-next>${next}</p>` : nothing}
+                <p class="status pill action-tone-neutral">${status}</p>
                 ${this._renderException(overview)}
             </div>
         `;
     }
 
+    // Flow --------------------------------------------------------------------
+
     /**
-     * Where the power in use comes from now: Helman's source-ratio sensors, the
-     * mix the card colours its consumers with. One compact line, not cards.
+     * The sources in and the consumers out around the house, which is filled
+     * with the sources' mix: live on Now, from the card's split and its house
+     * tree; today's kWh on Today, from the `today` section the overview
+     * already reads. The sources open what powered the house, the consumers
+     * what used the most.
      */
-    private _renderLiveMix(overview: HouseDetailPayload) {
-        const shares = SOURCES.map(([key, color]) => ({ key, color, pct: readingNumber(this.hass, overview.entities[`${key}_ratio`]) }));
-        const total = shares.reduce((sum, share) => sum + Math.max(0, share.pct ?? 0), 0);
-        if (shares.some((share) => share.pct === null) || total <= 0) return nothing;
-        return html`
-            <div class="mix" data-live-mix>
-                <div class="split" aria-hidden="true">
-                    ${shares.filter((share) => share.pct! > 0).map((share) => html`<span data-split=${share.key} style="width: ${share.pct! / total * 100}%; background: ${share.color}"></span>`)}
-                </div>
-                <span>${fillTemplate(this._t("mix.now"), {
-                    shares: shares.map((share) => fillTemplate(this._t(`mix.${share.key}`), { share: Math.round(share.pct!) + " %" })).join(" · "),
-                })}</span>
-            </div>
-        `;
+    private _renderHouseFlow(phases: PhaseEstimate) {
+        const now = this._flowScope === "now";
+        const { flow, shares } = now ? this._nowFlow(phases) : this._todayFlow();
+        return this._renderFlow(flow, this.params.flowScaleW, "sources", html`<span slot="centre">${houseGlyph(shares)}</span>`, "consumers");
     }
 
-    /** The next planned appliance run, or the one running now. */
-    private _nextLine(): string | null {
+    /**
+     * The card's live split in, W, and out the three largest loads of the
+     * house tree, each counted once as the phase estimate counts it, and what
+     * they leave of the house reading. Unknown without the split or the house
+     * reading, never 0; a load without a reading is in neither.
+     */
+    private _nowFlow(phases: PhaseEstimate): { flow: NodeFlow; shares: HouseShare[] | null } {
+        const flows = this.params.flows;
+        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
+        const inputs = [
+            this._flowItem("solar", flows?.solarToHouse ?? null, power),
+            this._flowItem("battery", flows?.batteryToHouse ?? null, power),
+            this._flowItem("grid", flows?.gridToHouse ?? null, power),
+        ];
+        const loads = phases.loads
+            .filter((load) => load.watts !== null && load.watts > 0)
+            .sort((a, b) => b.watts! - a.watts!)
+            .slice(0, TOP_CONSUMERS)
+            .map((load) => ({ label: this._phaseLoadName(load), value: load.watts! }));
+        const house = this._powerNow();
+        const top = loads.reduce((sum, load) => sum + load.value, 0);
+        const outputs = this._consumerItems(loads, house === null ? null : Math.max(0, house - top), power);
+        return {
+            flow: { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] },
+            shares: this._shares(inputs.map((item) => ({ id: item.id, value: item.value, color: item.color }))),
+        };
+    }
+
+    /**
+     * Today's kWh from the `today` section: the house's sources in, its top
+     * consumers and everything else out. Energy of no known source is a
+     * footnote and part of what went in, never a source; the paid cost is a
+     * footnote, an estimate.
+     */
+    private _todayFlow(): { flow: NodeFlow; shares: HouseShare[] | null } {
+        const today = this._todayPayload();
+        const house = today?.house ?? null;
+        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const inputs = SOURCES.map(([key]) => this._flowItem(key, house ? house.sources[key] : null, energy));
+        const top = (today?.consumers?.top ?? []).slice(0, TOP_CONSUMERS).map((load) => ({ label: this._loadName(load), value: load.kwh }));
+        const named = top.reduce((sum, load) => sum + load.value, 0);
+        const outputs = this._consumerItems(top, house ? Math.max(0, house.kwh - named) : null, energy);
+        const notes: string[] = [];
+        const status = this._todayFlowStatus();
+        if (status) notes.push(status);
+        if (house) {
+            if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: formatGridEnergy(house.sources.unattributed) }));
+            if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.currency) }));
+        }
+        return {
+            flow: {
+                scopeLabel: this._todayScopeLabel(),
+                inputs,
+                outputs,
+                ...this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0),
+                notes,
+            },
+            shares: this._shares([
+                ...inputs.map((item) => ({ id: item.id, value: item.value, color: item.color })),
+                { id: "unattributed", value: house?.sources.unattributed ?? null, color: "var(--helman-neutral-light)" },
+            ]),
+        };
+    }
+
+    /** The named consumers and everything else, each in the house's colour. */
+    private _consumerItems(loads: Array<{ label: string; value: number }>, rest: number | null, format: (value: number | null) => string): FlowItem[] {
+        const color = "var(--helman-house)";
+        return [
+            ...loads.map((load, index) => ({ id: `consumer-${index + 1}`, label: load.label, value: load.value, display: format(load.value), color })),
+            { id: "rest", label: this._t("flow.rest"), value: rest, display: format(rest), color },
+        ];
+    }
+
+    /** Each source's share of their sum, for the house's fill; `null` without a known, non-zero mix. */
+    private _shares(parts: Array<{ id: string; value: number | null; color: string }>): HouseShare[] | null {
+        if (parts.some((part) => part.value === null)) return null;
+        const total = parts.reduce((sum, part) => sum + Math.max(0, part.value!), 0);
+        if (total <= 0) return null;
+        return parts.map((part) => ({ id: part.id, share: Math.max(0, part.value!) / total, color: part.color }));
+    }
+
+    /** Why Today has nothing to draw: loading, failed or unavailable; `null` once it has the house's figures. */
+    private _todayFlowStatus(): string | null {
+        const today = this._today;
+        if (today === null || today.status === "loading") return this._t("today.loading");
+        if (today.status === "error") return this._t("today.failed");
+        if (!today.payload.house) {
+            return this._t(["no_house_node", "no_house_meter"].includes(today.payload.unavailable ?? "")
+                ? `today.unavailable_${today.payload.unavailable}` : "today.unavailable_not_loaded");
+        }
+        return null;
+    }
+
+    /** Today is the `today` section, read with the overview and kept current. */
+    protected _todaySection() {
+        return { state: this._today, requestedAt: this._todayRequestedAt };
+    }
+
+    protected _loadTodayFlows(): Promise<void> {
+        return this._loadToday();
+    }
+
+    // Tiles -------------------------------------------------------------------
+
+    /** The next planned appliance run, or the one running now, in its action's tone. */
+    private _renderNextTile() {
         const run = this._plannedRuns()[0];
-        if (!run) return null;
-        const values = { name: run.name, time: this._time(run.startMs), end: run.endMs === null ? "?" : this._time(run.endMs) };
-        const text = fillTemplate(this._t(run.startMs <= Date.now() ? "next.running" : "next.planned"), values);
-        return run.candidate ? text + " – " + this._t("next.candidate") : text;
+        if (!run) return this._tile("next", this._t("tile.no_runs"), null, nothing, "neutral");
+        const running = run.startMs <= Date.now();
+        const detail = [run.name, run.candidate ? this._t("next.candidate") : null].filter(Boolean).join(" · ");
+        return running
+            ? this._tile("next", fillTemplate(this._t("tile.until"), { time: run.endMs === null ? "…" : this._time(run.endMs) }), detail, nothing, this._runTone(run))
+            : this._tile("next", this._time(run.startMs), detail, nothing, this._runTone(run));
+    }
+
+    /** A run's tone as the scheduler paints its appliance's action; a candidate, which does not run, is neutral. */
+    private _runTone(run: PlannedRun): ScheduleActionTone {
+        if (run.candidate) return "neutral";
+        const action = run.action;
+        const kind = isScheduleEvChargerAction(action) ? "ev_charger" : isScheduleClimateApplianceAction(action) ? "climate" : "generic";
+        return getScheduleApplianceActionPresentation({ appliance: { kind, icon: "" }, action, localize: this.localize }).tone;
+    }
+
+    /** Today's energy so far, with today against the usual once the comparison is read. */
+    private _renderPatternTile() {
+        const house = this._todayPayload()?.house;
+        return this._tile("pattern", house ? formatGridEnergy(house.kwh) : "–", this._patternPreview() ?? this._t("tile.today_so_far"));
+    }
+
+    /**
+     * The most loaded phase, measured, or estimated from the wiring map while
+     * the measured sensors are unavailable, and the three phases as bars in
+     * the shared phase colours.
+     */
+    private _renderPhasesTile(overview: HouseDetailPayload, estimate: PhaseEstimate) {
+        const measured = this._measuredPhases(overview);
+        if (!measured && !estimate.anyMapped) return this._tile("phases", "–", this._t("phases.none_mapped_short"));
+        const bars = measured ?? estimate.perPhase;
+        const scale = Math.max(IDLE_W, ...PHASES.map((phase) => bars[phase]));
+        const highest = PHASES.reduce((a, b) => (bars[b] > bars[a] ? b : a));
+        const graphic = html`
+            <span class="phase-meters" data-phase-meters>
+                ${PHASES.map((phase, index) => html`
+                    <span class="meter" data-phase-bar=${phase} style="--meter-accent: var(--helman-phase-l${index + 1})">
+                        <span class="meter-fill" style="width: ${Math.max(0, Math.min(100, bars[phase] / scale * 100)).toFixed(1)}%"></span>
+                    </span>
+                `)}
+            </span>
+        `;
+        return this._tile("phases", `${highest} ${formatPower(bars[highest]).display}`,
+            this._t(measured ? "tile.phase_highest" : "tile.phase_highest_estimated"), graphic);
     }
 
     /** At most one: off-grid operation or a fault the inverter reports, linked to the phase answer. */
@@ -857,6 +1025,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     endMs: boundary.endMs,
                     candidate: action.conditionMet === false,
                     setBy: action.setBy ?? null,
+                    action,
                 };
                 open.set(id, next);
                 runs.push(next);

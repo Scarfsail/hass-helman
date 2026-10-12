@@ -1,3 +1,4 @@
+import type { ScheduleActionTone } from "../action-tones";
 import type { LocalizeFunction } from "../../../localize/localize";
 import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type { ScheduleApplianceAction } from "../schedule-types";
@@ -7,12 +8,14 @@ import {
     isScheduleGenericApplianceAction,
 } from "../schedule-types";
 
-type ScheduleApplianceActionTone = "neutral" | "charge" | "stop";
+export type ScheduleApplianceActionTone = Extract<ScheduleActionTone, "neutral" | "charge" | "stop">;
 export type ScheduleApplianceActionToneClass = `action-tone-${ScheduleApplianceActionTone}`;
 
 export interface ScheduleApplianceActionPresentation {
     icon: string;
     label: string;
+    /** The scheduler tone it takes, and its class. */
+    tone: ScheduleApplianceActionTone;
     toneClass: ScheduleApplianceActionToneClass;
     // Candidate = placed by an optimizer whose execution condition is not met.
     isCandidate: boolean;
@@ -23,8 +26,10 @@ export function getScheduleApplianceActionPresentation(args: {
     action: ScheduleApplianceAction | null;
     localize: LocalizeFunction;
 }): ScheduleApplianceActionPresentation {
+    const base = _getBaseApplianceActionPresentation(args);
     return {
-        ..._getBaseApplianceActionPresentation(args),
+        ...base,
+        toneClass: `action-tone-${base.tone}`,
         isCandidate: args.action !== null && args.action.conditionMet === false,
     };
 }
@@ -37,12 +42,12 @@ function _getBaseApplianceActionPresentation({
     appliance: Pick<ScheduleApplianceMetadata, "kind" | "icon">;
     action: ScheduleApplianceAction | null;
     localize: LocalizeFunction;
-}): Omit<ScheduleApplianceActionPresentation, "isCandidate"> {
+}): Omit<ScheduleApplianceActionPresentation, "isCandidate" | "toneClass"> {
     if (action === null) {
         return {
             icon: appliance.icon,
             label: localize("scheduling.dialog.appliance.no_action"),
-            toneClass: "action-tone-neutral",
+            tone: "neutral",
         };
     }
 
@@ -55,12 +60,12 @@ function _getBaseApplianceActionPresentation({
             ? {
                 icon: appliance.icon,
                 label: localize("scheduling.appliance.generic.action.on"),
-                toneClass: "action-tone-charge",
+                tone: "charge",
             }
             : {
                 icon: appliance.icon,
                 label: localize("scheduling.appliance.generic.action.off"),
-                toneClass: "action-tone-stop",
+                tone: "stop",
             };
     }
 
@@ -68,14 +73,14 @@ function _getBaseApplianceActionPresentation({
         return {
             icon: appliance.icon,
             label: formatScheduleClimateModeLabel(action.mode, localize),
-            toneClass: action.mode === "off" ? "action-tone-stop" : "action-tone-charge",
+            tone: action.mode === "off" ? "stop" : "charge",
         };
     }
 
     return {
         icon: appliance.icon,
         label: localize("scheduling.appliance.action.generic"),
-        toneClass: "action-tone-neutral",
+        tone: "neutral",
     };
 }
 
@@ -99,12 +104,12 @@ function _getEvChargerActionPresentation(
     icon: string,
     action: Extract<ScheduleApplianceAction, { charge: boolean }>,
     localize: LocalizeFunction,
-): Omit<ScheduleApplianceActionPresentation, "isCandidate"> {
+): Omit<ScheduleApplianceActionPresentation, "isCandidate" | "toneClass"> {
     const modeLabel = _buildEvModeLabel(action, localize);
     return {
         icon,
         label: action.charge ? modeLabel : localize("scheduling.appliance.ev.action.no_charge"),
-        toneClass: action.charge ? "action-tone-charge" : "action-tone-stop",
+        tone: action.charge ? "charge" : "stop",
     };
 }
 

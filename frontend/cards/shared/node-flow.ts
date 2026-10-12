@@ -46,7 +46,8 @@ const MIN_RIBBON = 1.5;
  *
  * Controlled: the host owns the scope and redraws on `flow-scope`. A tap on
  * either side fires the question toggle for `question-id`, the question the
- * flow answers; the centre's own control is the host's.
+ * flow answers, or on the destinations for `output-question-id` when they
+ * answer one of their own; the centre's own control is the host's.
  */
 @customElement("helman-node-flow")
 export class HelmanNodeFlow extends LitElement {
@@ -196,6 +197,9 @@ export class HelmanNodeFlow extends LitElement {
     /** The question a tap on the flow opens. */
     @property({ attribute: "question-id" }) public questionId = "";
     @property({ attribute: false }) public questionLabel = "";
+    /** The question a tap on the destinations opens, when not `question-id`. */
+    @property({ attribute: "output-question-id" }) public outputQuestionId = "";
+    @property({ attribute: false }) public outputQuestionLabel = "";
 
     render() {
         return html`
@@ -257,7 +261,7 @@ export class HelmanNodeFlow extends LitElement {
             return svg`<path class="ribbon" data-ribbon=${item.id} d=${d} style="fill: ${item.color}"></path>`;
         });
         return html`
-            <button class="side ${side}" data-side=${side} title=${this.questionLabel || nothing} @click=${this._tap}>
+            <button class="side ${side}" data-side=${side} title=${this._question(side).label || nothing} @click=${() => this._tap(side)}>
                 <span class="labels">
                     ${items.map((item) => html`
                         <span class="item ${item.value ? "" : "none"}" data-flow=${item.id}>
@@ -283,14 +287,22 @@ export class HelmanNodeFlow extends LitElement {
         return total > FULL ? raw.map((t) => t * FULL / total) : raw;
     }
 
-    private _tap = (): void => {
-        if (!this.questionId) return;
+    /** The question a side opens. */
+    private _question(side: "in" | "out"): { id: string; label: string } {
+        return side === "out" && this.outputQuestionId
+            ? { id: this.outputQuestionId, label: this.outputQuestionLabel }
+            : { id: this.questionId, label: this.questionLabel };
+    }
+
+    private _tap(side: "in" | "out"): void {
+        const { id } = this._question(side);
+        if (!id) return;
         this.dispatchEvent(new CustomEvent<QuestionToggleDetail>(QUESTION_TOGGLE_EVENT, {
-            detail: { id: this.questionId },
+            detail: { id },
             bubbles: true,
             composed: true,
         }));
-    };
+    }
 }
 
 declare global {
