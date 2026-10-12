@@ -682,6 +682,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             totalIn: totals.totalIn,
             totalOut: outputs.length ? totals.totalOut : null,
             notes: power !== null && power > IDLE_W ? [this._t("flow.mix_estimate")] : [],
+            centreValue: format(power),
+            active: this._isActive(power),
         };
     }
 
@@ -701,13 +703,17 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (charger && charger.sources.unattributed > 0) {
             notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: formatGridEnergy(charger.sources.unattributed) }));
         }
+        const { totalIn, sumIn } = this._flowTotals(inputs, [], energy, charger?.sources.unattributed ?? 0);
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs: [],
-            totalIn: this._flowTotals(inputs, [], energy, charger?.sources.unattributed ?? 0).totalIn,
+            totalIn,
             totalOut: null,
             notes,
+            // Charged: every source and the unattributed rest.
+            centreValue: energy(sumIn),
+            active: false,
         };
     }
 

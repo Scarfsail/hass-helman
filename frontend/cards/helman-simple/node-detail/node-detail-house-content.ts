@@ -562,7 +562,15 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const top = loads.reduce((sum, load) => sum + load.value, 0);
         const outputs = this._consumerItems(loads, house === null ? null : Math.max(0, house - top), power);
         return {
-            flow: { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] },
+            flow: {
+                scopeLabel: this._nowScopeLabel(),
+                inputs,
+                outputs,
+                ...this._flowTotals(inputs, outputs, power),
+                notes: [],
+                centreValue: power(house),
+                active: this._isActive(house),
+            },
             shares: this._shares(inputs.map((item) => ({ id: item.id, value: item.value, color: item.color }))),
         };
     }
@@ -588,13 +596,17 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: formatGridEnergy(house.sources.unattributed) }));
             if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.currency) }));
         }
+        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0);
         return {
             flow: {
                 scopeLabel: this._todayScopeLabel(),
                 inputs,
                 outputs,
-                ...this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0),
+                ...totals,
                 notes,
+                // Used: every source and the unattributed rest.
+                centreValue: energy(sumIn),
+                active: false,
             },
             shares: this._shares([
                 ...inputs.map((item) => ({ id: item.id, value: item.value, color: item.color })),

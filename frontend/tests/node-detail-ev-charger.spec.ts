@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";
+import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
  * The EV charger detail, opened from the charger's name on the power card.
@@ -694,6 +695,45 @@ test.describe("the flow", () => {
     });
 });
 
+test.describe("motion and the centre value", () => {
+    test("Now: ribbons with energy shimmer, the glyph pulses and the charger's power sits under it; Today stands still", async ({ page }) => {
+        await openCharger(page);
+        await expect(flow(page)).toHaveAttribute("active", "");
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("6.4 kW");
+        await expect(flow(page).locator("[data-side='out'] [data-ribbon='phase-1']")).toHaveAttribute("data-animated", "");
+        // Every drawn ribbon has energy on it, and shimmers.
+        await expect(flow(page).locator("[data-ribbon]:not([data-animated])")).toHaveCount(0);
+        // Nothing comes from the battery: no ribbon, so nothing shimmers.
+        await expect(flowLabel(page, "in", "battery")).toHaveClass(/none/);
+        await expect(flow(page).locator("[data-side='in'] [data-ribbon='battery']")).toHaveCount(0);
+        await flow(page).locator("[data-scope='today']").click();
+        // Charged: the sources and the unknown source.
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("6.4 kWh");
+        await expect(flow(page)).not.toHaveAttribute("active");
+        await expect(flow(page).locator("[data-ribbon]").first()).toBeAttached();
+        await expect(flow(page).locator("[data-animated]")).toHaveCount(0);
+    });
+
+    const cases: Array<[Variant, string, boolean]> = [
+        [{ runMode: "SuspendedEV", power: "0" }, "0 W", false],
+        [{ power: "60" }, "60 W", true],
+        [{ power: "unavailable" }, "–", false],
+    ];
+    for (const [variant, value, active] of cases) {
+        test(`${JSON.stringify(variant)} shows ${value} under the glyph, ${active ? "pulsing" : "still"}`, async ({ page }) => {
+            await openCharger(page, variant);
+            await expect(flow(page).locator("[data-centre-value]")).toHaveText(value);
+            if (active) await expect(flow(page)).toHaveAttribute("active", "");
+            else await expect(flow(page)).not.toHaveAttribute("active");
+        });
+    }
+
+    test("reduced motion stops the shimmer and the pulse", async ({ page }) => {
+        await openCharger(page);
+        await expectReducedMotionStill(page, flow(page));
+    });
+});
+
 test.describe("progress", () => {
     test("hardware session counters, the charging segment apart, and the car's need converted from percent", async ({ page }) => {
         await openCharger(page);
@@ -1078,6 +1118,7 @@ test.describe("review fixes", () => {
         await openCharger(page, { todayFails: true });
         await flow(page).locator("[data-scope='today']").click();
         await expect(flow(page).locator("[data-flow-note]").first()).toHaveText("Today's figures could not be loaded.");
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("–");
         const retry = content(page).locator("helman-node-flow + button.link-button");
         await expect(retry).toHaveText("Try again");
         await retry.click();

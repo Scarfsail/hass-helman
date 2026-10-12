@@ -620,7 +620,16 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             this._flowItem("battery", flows?.solarToBattery ?? null, power),
             this._flowItem("grid", flows?.solarToGrid ?? null, power),
         ];
-        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
+        const production = this._powerNow();
+        return {
+            scopeLabel: this._nowScopeLabel(),
+            inputs,
+            outputs,
+            ...this._flowTotals(inputs, outputs, power),
+            notes: [],
+            centreValue: power(production),
+            active: this._isActive(production),
+        };
     }
 
     /**
@@ -657,12 +666,16 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         ];
         const unresolved = flows?.solarUnresolved ?? 0;
         if (unresolved > 0) notes.push(fillTemplate(this._t("flow.unresolved"), { kwh: formatGridEnergy(unresolved) }));
+        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, 0, unresolved);
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs,
-            ...this._flowTotals(inputs, outputs, energy, 0, unresolved),
+            ...totals,
             notes,
+            // Produced: every destination and the unresolved rest.
+            centreValue: energy(sumOut),
+            active: false,
         };
     }
 
