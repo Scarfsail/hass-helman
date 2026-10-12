@@ -85,7 +85,10 @@ export class HelmanModeStrip extends LitElement {
             position: absolute;
             top: 0;
             bottom: 0;
+            box-sizing: border-box;
             background: var(--schedule-action-tone-accent);
+            /* The normal tone is near the track's own colour: its border keeps it apart. */
+            box-shadow: inset 0 0 0 1px var(--schedule-action-tone-border);
         }
         .segment.planned {
             background: repeating-linear-gradient(

@@ -219,6 +219,12 @@ export const nodeDetailPictureStyles = css`
     .picture {
         width: 100%;
     }
+    .picture.strip,
+    .picture.chain {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
     .glyph:focus-visible,
     .picture:focus-visible {
         outline: 2px solid var(--primary-color);

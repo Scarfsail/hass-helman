@@ -1,3 +1,4 @@
+import { mdiCurrentAc } from "@mdi/js";
 import { html, svg } from "lit";
 
 /**
@@ -14,6 +15,22 @@ export function pylonGlyph() {
             <path d="M28 4 L16 68 M28 4 L40 68 M20.5 44 L35.5 44 M18.5 56 L37.5 56 M22.6 33 L33.4 33"></path>
             <path d="M6 18 L50 18 M10 28 L46 28 M24.5 18 L34 28 M31.5 18 L22 28 M17 44 L39 56 M39 44 L17 56"></path>
             <path d="M6 18 v5 M50 18 v5 M10 28 v5 M46 28 v5"></path>
+        </svg>
+    `;
+}
+
+/**
+ * The inverter: a cabinet with the AC wave the card's centre cell shows,
+ * the inverter flow's centre. The inverter has no colour of its own, so it
+ * is drawn in the palette's neutral.
+ */
+export function inverterGlyph() {
+    return html`
+        <svg class="node-glyph" data-glyph="inverter" width="56" height="64" viewBox="0 0 56 64" aria-hidden="true">
+            <rect x="4" y="4" width="48" height="56" rx="6" fill="var(--helman-neutral)" fill-opacity="0.12"
+                stroke="var(--helman-neutral)" stroke-width="2.4"></rect>
+            <path d=${mdiCurrentAc} transform="translate(12 16) scale(1.33)" fill="var(--helman-neutral)"></path>
+            <path d="M14 50 H42" stroke="var(--helman-neutral)" stroke-width="2" stroke-linecap="round"></path>
         </svg>
     `;
 }

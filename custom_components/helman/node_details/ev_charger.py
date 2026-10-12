@@ -39,15 +39,12 @@ from homeassistant.util import dt as dt_util
 from ..controllables.config import own_meter, peek_controllable_id
 from ..vendors import resolve_vendor_telemetry
 from .battery import today_ranking_report
-from .day_stats import day_window
+from .day_stats import SEGMENT_MAX_GAP, async_state_history, day_window, with_live_state
 from .house import ranking_money
 from .inverter import run_mode_condition
 
 #: How far back the charging segment's start is looked for.
 SEGMENT_LOOKBACK = timedelta(hours=24)
-#: A run mode gap (``unavailable``, ``unknown``) up to this long, an HA restart
-#: or a Modbus blip, does not end a segment; a longer one leaves its start unknown.
-SEGMENT_MAX_GAP = timedelta(minutes=10)
 _GAP_STATES = frozenset({"unavailable", "unknown"})
 
 #: The device's own config the answers read, by payload key: a dotted path
@@ -177,11 +174,8 @@ async def _async_segment_section(
     if entity_id:
         # Back to midnight for the strip, and a day back for a segment begun yesterday.
         start = min(day_start, now - SEGMENT_LOOKBACK)
-        states = list(await async_run_mode_history(hass, entity_id, start, now))
-        live = hass.states.get(entity_id)
-        # The recorder commits in batches: the live state may not be in it yet.
-        if live is not None and (not states or live.last_changed > states[-1].last_changed):
-            states.append(live)
+        history = await async_state_history(hass, [entity_id], start, now)
+        states = with_live_state(hass, entity_id, history[entity_id])
         conditions = telemetry.profile.run_mode_conditions
         status = run_mode_condition(hass, telemetry)
         if status is not None and status["kind"] == "charging":
@@ -275,32 +269,6 @@ def charging_segment_start(
             return since
         since = known_from = state.last_changed
     return None
-
-
-async def async_run_mode_history(
-    hass: Any, entity_id: str, start: datetime, end: datetime
-) -> Sequence[Any]:
-    """The run mode's recorded states over ``[start, end]``, the one before ``start`` included."""
-    from homeassistant.components.recorder import get_instance
-
-    def _read() -> list[Any]:
-        from homeassistant.components.recorder.history import get_significant_states
-
-        history = get_significant_states(
-            hass,
-            dt_util.as_utc(start),
-            dt_util.as_utc(end),
-            entity_ids=[entity_id],
-            filters=None,
-            include_start_time_state=True,
-            significant_changes_only=False,
-            minimal_response=False,
-            no_attributes=True,
-            compressed_state_format=False,
-        )
-        return list((history or {}).get(entity_id) or [])
-
-    return await get_instance(hass).async_add_executor_job(_read)
 
 
 def _device_entity(device: Mapping[str, Any], path: str) -> str | None:

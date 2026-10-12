@@ -936,6 +936,21 @@ export interface InverterTemperatureSectionPayload {
 }
 
 /**
+ * Today's observed modes, replayed from the recorded states of the registers
+ * the profile's modes write: each stretch with the action kind the registers
+ * held, `null` where they held none (unreadable, unrecorded, or a combination
+ * no mode writes). `open` marks the last stretch, still going at `asOf`.
+ * `modes` is `null` without registers to read (a Custom inverter).
+ */
+export interface InverterModesSectionPayload {
+    node: "inverter";
+    section: "modes";
+    asOf: string;
+    period: { start: string; end: string };
+    modes: Array<{ start: string; end: string; kind: ScheduleActionKind | null; open: boolean }> | null;
+}
+
+/**
  * The grid detail's overview. `entities` carries the profile's grid telemetry
  * (absent for a Custom inverter, `null` where the registry lacks one) and the
  * grid's own today meters. `phasePowerPolarity` says which way the

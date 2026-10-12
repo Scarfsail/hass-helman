@@ -26,20 +26,36 @@ ModeWrite = tuple[EntityTemplate, Any]
 BoundWrite = tuple[str, Any]
 
 
+class _NonZero:
+    """The export limit of every mode but ``stop_export``, as a recorded history reads it."""
+
+    def __repr__(self) -> str:
+        return "non-zero"
+
+
+#: A target any non-zero reading holds. A past mode is told apart by the export
+#: limit being zero or not, never by today's ``max_allowed_export_power``, so
+#: editing that setting does not rewrite what the inverter did earlier.
+NON_ZERO = _NonZero()
+
+
 class ModeWritesError(Exception):
     """An option's writes cannot be put together: a setting or entity is missing."""
 
 
 def mode_write_templates(
-    profile: VendorProfile, option: str, config: Mapping[str, Any]
+    profile: VendorProfile, option: str, config: Mapping[str, Any], *, history: bool = False
 ) -> list[ModeWrite]:
     """The vendor writes for ``option``, in order, as ``(template, target)``.
 
     The export limit follows every mode: ``0`` for ``stop_export``, the grid's
     ``max_allowed_export_power`` otherwise, which then has to be configured.
+    With ``history`` it is :data:`NON_ZERO` otherwise, read from no config.
     """
     if option == SCHEDULE_ACTION_STOP_EXPORT:
         export_limit: Any = 0
+    elif history:
+        export_limit = NON_ZERO
     else:
         export_limit = (
             config.get("energy_nodes", {}).get("grid", {}).get("max_allowed_export_power")
@@ -84,10 +100,14 @@ def bind_mode_writes(
 def register_matches(state: Any, entity_id: str, target: Any) -> bool | None:
     """Whether a register's ``state`` holds ``target``; ``None`` when unreadable.
 
-    A number compares as a float, so ``9900.0`` holds ``9900``.
+    A number compares as a float, so ``9900.0`` holds ``9900``; any non-zero
+    number holds :data:`NON_ZERO`.
     """
     if state is None or state.state.strip().lower() in _UNREADABLE_STATES:
         return None
+    if target is NON_ZERO:
+        value = _as_float(state.state)
+        return None if value is None else value != 0
     if entity_id.startswith("number."):
         return _as_float(state.state) == float(target)
     return state.state == target
@@ -110,28 +130,26 @@ def first_matching_option(
     return None
 
 
-def mode_agreement(
+def bound_mode_writes(
     hass: Any,
     profile: VendorProfile,
     entry: Any,
     config: Mapping[str, Any],
-    commanded: str | None,
-) -> dict[str, Any]:
-    """Whether the hardware's mode registers hold the last commanded option.
+    *,
+    history: bool = False,
+) -> dict[str, list[BoundWrite] | None]:
+    """Each of the profile's options → its writes bound to entity ids, in profile order.
 
-    ``status`` is ``match``, ``mismatch`` or ``unknown``; an unknown carries a
-    ``reason``: ``no_command`` (no commanded option to compare), ``not_bound``
-    (a setting or vendor entity is missing) or ``unavailable`` (a register has
-    no readable state). ``registers`` lists every write of the command with
-    what it reads, and ``observedOption`` the option the registers hold, if
-    any, whatever was commanded.
+    ``None`` for an option whose writes cannot be put together or bound (a
+    setting or vendor entity is missing). ``history`` binds them for reading
+    a recorded history, as :func:`mode_write_templates` does.
     """
     from . import resolve_unique_ids
 
     templates: dict[str, list[ModeWrite] | None] = {}
     for option in profile.modes:
         try:
-            templates[option] = mode_write_templates(profile, option, config)
+            templates[option] = mode_write_templates(profile, option, config, history=history)
         except ModeWritesError:
             templates[option] = None
     # One registry read for every option's registers.
@@ -151,7 +169,26 @@ def mode_agreement(
         except ModeWritesError:
             return None
 
-    bound = {option: _bind(option) for option in profile.modes}
+    return {option: _bind(option) for option in profile.modes}
+
+
+def mode_agreement(
+    hass: Any,
+    profile: VendorProfile,
+    entry: Any,
+    config: Mapping[str, Any],
+    commanded: str | None,
+) -> dict[str, Any]:
+    """Whether the hardware's mode registers hold the last commanded option.
+
+    ``status`` is ``match``, ``mismatch`` or ``unknown``; an unknown carries a
+    ``reason``: ``no_command`` (no commanded option to compare), ``not_bound``
+    (a setting or vendor entity is missing) or ``unavailable`` (a register has
+    no readable state). ``registers`` lists every write of the command with
+    what it reads, and ``observedOption`` the option the registers hold, if
+    any, whatever was commanded.
+    """
+    bound = bound_mode_writes(hass, profile, entry, config)
     observed = first_matching_option(bound, hass.states.get)
     result: dict[str, Any] = {
         "commanded": commanded,
