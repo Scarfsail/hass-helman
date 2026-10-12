@@ -1,4 +1,5 @@
-"""A day of a measurement, in five-minute buckets: mean, min, max and coverage.
+"""A day of a measurement, in five-minute buckets: mean, min, max and coverage;
+and the recorded states of a few entities, the one recorder read of state history.
 
 The node details' history answers (today's inverter temperature now; grid
 voltages, string powers and base load in later phases) all ask the same thing
@@ -29,6 +30,11 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 BUCKET = timedelta(minutes=5)
+
+#: A recorded stretch up to this long (an HA restart, a Modbus blip, a mode
+#: written register by register) is not a state of its own: the charging
+#: segment and today's inverter modes both read through it.
+SEGMENT_MAX_GAP = timedelta(minutes=10)
 
 #: What a bucket's ``min``/``max`` are, by source.
 EXTREMA_KIND = {"statistics": "bucket_statistics", "history": "recorded"}
@@ -215,7 +221,6 @@ async def async_day_stats(
         }
 
     def _read() -> tuple[set[str], dict[str, list[dict[str, Any]]], dict[str, list[Any]], dict[str, str | None]]:
-        from homeassistant.components.recorder.history import get_significant_states
         from homeassistant.components.recorder.statistics import (
             get_metadata,
             statistics_during_period,
@@ -249,23 +254,8 @@ async def async_day_stats(
             else {}
         )
         without = [entity_id for entity_id in ids if entity_id not in with_statistics]
-        history = (
-            get_significant_states(
-                hass,
-                utc_start,
-                stop,
-                entity_ids=without,
-                filters=None,
-                include_start_time_state=True,
-                significant_changes_only=False,
-                minimal_response=False,
-                no_attributes=True,
-                compressed_state_format=False,
-            )
-            if without
-            else {}
-        )
-        return with_statistics, statistics or {}, history or {}, statistic_units
+        history = _read_states(hass, without, utc_start, stop) if without else {}
+        return with_statistics, statistics or {}, history, statistic_units
 
     with_statistics, statistics, history, statistic_units = await get_instance(
         hass
@@ -281,16 +271,66 @@ async def async_day_stats(
             source = "statistics"
             unit = statistic_units.get(entity_id) or unit
         else:
-            buckets = buckets_from_states(
-                history.get(entity_id) or history.get(entity_id.lower()) or [],
-                utc_start,
-                stop,
-            )
+            buckets = buckets_from_states(history[entity_id], utc_start, stop)
             source = "history"
         result[entity_id] = summarize(
             buckets, start=utc_start, stop=stop, source=source, unit=unit, entity_id=entity_id
         )
     return result
+
+
+async def async_state_history(
+    hass: Any, entity_ids: Iterable[str], start: datetime, end: datetime
+) -> dict[str, list[Any]]:
+    """Each entity's recorded states over ``[start, end]``, the one before ``start`` included.
+
+    Every id is a key, with an empty list when nothing is recorded. One read
+    on the recorder's executor, never on the event loop; the newest state may
+    not be committed yet, which :func:`with_live_state` adds.
+    """
+    from homeassistant.components.recorder import get_instance
+
+    ids = list(dict.fromkeys(entity_ids))
+    utc_start, utc_end = dt_util.as_utc(start), dt_util.as_utc(end)
+    return await get_instance(hass).async_add_executor_job(
+        _read_states, hass, ids, utc_start, utc_end
+    )
+
+
+def with_live_state(hass: Any, entity_id: str, states: Sequence[Any]) -> list[Any]:
+    """``states`` with the live state appended when it is newer than the last recorded one.
+
+    The recorder commits in batches: the live state may not be in it yet.
+    """
+    states = list(states)
+    live = hass.states.get(entity_id)
+    if live is not None and (not states or live.last_changed > states[-1].last_changed):
+        states.append(live)
+    return states
+
+
+def _read_states(
+    hass: Any, entity_ids: list[str], start: datetime, end: datetime
+) -> dict[str, list[Any]]:
+    """The recorder's states of ``entity_ids`` over ``[start, end]``; run on its executor."""
+    from homeassistant.components.recorder.history import get_significant_states
+
+    history = get_significant_states(
+        hass,
+        start,
+        end,
+        entity_ids=entity_ids,
+        filters=None,
+        include_start_time_state=True,
+        significant_changes_only=False,
+        minimal_response=False,
+        no_attributes=True,
+        compressed_state_format=False,
+    ) or {}
+    return {
+        entity_id: list(history.get(entity_id) or history.get(entity_id.lower()) or [])
+        for entity_id in entity_ids
+    }
 
 
 def _live_unit(hass: Any, entity_id: str) -> str | None:

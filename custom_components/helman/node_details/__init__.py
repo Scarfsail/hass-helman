@@ -54,7 +54,7 @@ NODE_DETAILS: dict[str, NodeDetail] = {
     "inverter": NodeDetail(
         overview=build_inverter_overview,
         section=async_inverter_section,
-        sections=frozenset({"temperature", FLOWS_SECTION}),
+        sections=frozenset({"temperature", "modes", FLOWS_SECTION}),
     ),
     "grid": NodeDetail(
         overview=build_grid_overview,

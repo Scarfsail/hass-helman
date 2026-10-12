@@ -182,13 +182,9 @@
       "technical": "Technical readings",
       "status": {
         "commanded": "Helman last commanded: {mode}.",
-        "no_command": "Helman has not commanded a mode yet.",
-        "match": "The inverter's mode registers match it.",
-        "unknown": "Whether the inverter's mode registers match can't be told right now."
+        "no_command": "Helman has not commanded a mode yet."
       },
       "figure": {
-        "commanded": "Commanded",
-        "ac_power": "AC power",
         "temperature": "Temperature"
       },
       "next_change": "Next: {time} {action}",
@@ -341,6 +337,34 @@
         "lock_state": "Lock state",
         "grid_runtime": "Time on grid",
         "eps_runtime": "Time off-grid (EPS)"
+      },
+      "chain": {
+        "plan": "Plan",
+        "command": "Last command",
+        "inverter": "Inverter",
+        "executor": "executor {outcome}",
+        "no_runtime": "no executor record",
+        "match": "matches",
+        "mismatch": "doesn't match",
+        "unknown": "can't be told now",
+        "not_read": "not readable",
+        "other_mode": "another mode",
+        "not_applied": "not applied",
+        "candidate": "{action}: a candidate, not executed"
+      },
+      "strip": {
+        "scope": "Modes · today to noon tomorrow",
+        "history_failed": "Today's modes could not be read.",
+        "no_history": "A Custom inverter has no mode registers to read: only the plan is drawn.",
+        "no_registers": "Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn."
+      },
+      "tile": {
+        "export_cap": "export cap",
+        "ac_share": "AC {value} · {share} of rating"
+      },
+      "flow": {
+        "export": "Export",
+        "unknown_house": "{kwh} of the house's use today has no known source."
       }
     },
     "grid": {

@@ -890,13 +890,9 @@
       "technical": "Technické údaje",
       "status": {
         "commanded": "Helman naposledy nastavil: {mode}.",
-        "no_command": "Helman zatím žádný režim nenastavil.",
-        "match": "Registry režimu ve střídači tomu odpovídají.",
-        "unknown": "Zda registry režimu ve střídači odpovídají, teď nelze zjistit."
+        "no_command": "Helman zatím žádný režim nenastavil."
       },
       "figure": {
-        "commanded": "Nastaveno",
-        "ac_power": "Výkon AC",
         "temperature": "Teplota"
       },
       "next_change": "Další: {time} {action}",
@@ -1049,6 +1045,34 @@
         "lock_state": "Zámek",
         "grid_runtime": "Doba v síti",
         "eps_runtime": "Doba mimo síť (EPS)"
+      },
+      "chain": {
+        "plan": "Plán",
+        "command": "Poslední příkaz",
+        "inverter": "Střídač",
+        "executor": "vykonavatel: {outcome}",
+        "no_runtime": "bez záznamu vykonavatele",
+        "match": "odpovídá",
+        "mismatch": "neodpovídá",
+        "unknown": "teď nelze určit",
+        "not_read": "nečitelné",
+        "other_mode": "jiný režim",
+        "not_applied": "neprovádí se",
+        "candidate": "{action}: kandidát, neprovádí se"
+      },
+      "strip": {
+        "scope": "Režimy · dnes do zítřejšího poledne",
+        "history_failed": "Dnešní režimy se nepodařilo načíst.",
+        "no_history": "Vlastní střídač nemá registry režimu ke čtení: kreslí se jen plán.",
+        "no_registers": "Ne všechny registry režimu profilu jsou nalezeny, takže dnešní režimy nelze přečíst: kreslí se jen plán."
+      },
+      "tile": {
+        "export_cap": "limit přetoku",
+        "ac_share": "AC {value} · {share} jmenovitého výkonu"
+      },
+      "flow": {
+        "export": "Přetok",
+        "unknown_house": "{kwh} dnešní spotřeby domu nemá známý zdroj."
       }
     },
     "ev_charger": {

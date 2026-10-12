@@ -137,11 +137,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             min-width: 0;
             overflow-wrap: anywhere;
         }
-        .picture.strip {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
         .estimate {
             margin: 0;
             font-size: 0.85rem;

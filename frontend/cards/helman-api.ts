@@ -898,6 +898,8 @@ export interface ModeAgreementDTO {
     reason: "no_profile" | "no_command" | "not_bound" | "unavailable" | null;
     commanded: ScheduleActionKind | null;
     observedOption: ScheduleActionKind | null;
+    /** Every register any option binds: the states `observedOption` is read from. */
+    observedFrom: string[];
     registers: ModeRegisterDTO[];
 }
 
@@ -933,6 +935,21 @@ export interface InverterTemperatureSectionPayload {
     asOf: string;
     period: { start: string; end: string };
     temperature: DayStatsDTO | null;
+}
+
+/**
+ * Today's observed modes, replayed from the recorded states of the registers
+ * the profile's modes write: each stretch with the action kind the registers
+ * held, `null` where they held none (unreadable, unrecorded, or a combination
+ * no mode writes). `open` marks the last stretch, still going at `asOf`.
+ * `modes` is `null` without registers to read (a Custom inverter).
+ */
+export interface InverterModesSectionPayload {
+    node: "inverter";
+    section: "modes";
+    asOf: string;
+    period: { start: string; end: string };
+    modes: Array<{ start: string; end: string; kind: ScheduleActionKind | null; open: boolean }> | null;
 }
 
 /**

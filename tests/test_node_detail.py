@@ -146,7 +146,7 @@ def test_the_overview_reads_no_history():
 
     assert payload["node"] == "inverter"
     assert payload["configured"] is True
-    assert payload["sections"] == ["temperature"]
+    assert payload["sections"] == ["temperature", "modes"]
     assert payload["entities"]["inverter_temperature"] == TEMPERATURE
     assert payload["entities"]["battery_min_soc"] == "number.min_soc"
     assert payload["mode"] == {
@@ -226,6 +226,8 @@ def test_registers_holding_the_command_match():
     assert (agreement["status"], agreement["commanded"]) == ("match", "charge_to_target_soc")
     assert agreement["observedOption"] == "charge_to_target_soc"
     assert [r["entityId"] for r in agreement["registers"]] == [USE_MODE, MANUAL_MODE, EXPORT_LIMIT]
+    # Every register any mode binds, so a change to one the command does not write is seen.
+    assert {USE_MODE, MANUAL_MODE, EXPORT_LIMIT} <= set(agreement["observedFrom"])
 
 
 def test_a_fully_observed_different_configuration_is_a_mismatch():
@@ -295,6 +297,154 @@ def test_an_off_grid_or_fault_run_mode_is_promoted(run_mode, kind):
 
     condition = payload["condition"]
     assert (condition and condition["kind"]) == (kind or None)
+
+
+# --- Today's observed modes -------------------------------------------------------
+
+
+def clock(hour, minute=0, second=0):
+    return datetime(2026, 10, 10, hour, minute, second, tzinfo=PRAGUE)
+
+
+def modes_section(history, *, live=None, cfg=None, tele=None):
+    """The ``modes`` section at 14:00, the registers' history by entity id."""
+    reads = []
+
+    async def state_history(hass, entity_ids, start, end):
+        reads.append((list(entity_ids), start, end))
+        return {
+            entity_id: [NS(state=value, last_changed=when) for when, value in history.get(entity_id, [])]
+            for entity_id in entity_ids
+        }
+
+    live_states = {
+        entity_id: NS(state=value, last_changed=when, attributes={})
+        for entity_id, (when, value) in (live or {}).items()
+    }
+    with (
+        patch(
+            "custom_components.helman.node_details.inverter.resolve_vendor_telemetry",
+            return_value=telemetry() if tele is None else tele,
+        ),
+        patch("custom_components.helman.vendors.resolve_unique_ids", side_effect=resolve_controls),
+        patch(
+            "custom_components.helman.node_details.inverter.async_state_history",
+            side_effect=state_history,
+        ),
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                NS(states=NS(get=live_states.get)),
+                config() if cfg is None else cfg,
+                node="inverter",
+                device_id=None,
+                section="modes",
+                now=clock(14),
+            )
+        )
+    return payload, reads
+
+
+def test_the_overview_offers_the_modes_section_with_a_profile_only():
+    assert overview({MODE_SELECT: "normal"})["sections"] == ["temperature", "modes"]
+    assert overview({MODE_SELECT: "normal"}, cfg=config(profile=False), tele={})["sections"] == []
+
+
+def test_todays_modes_are_the_registers_replayed_with_gaps_and_unknowns_kept():
+    midnight = clock(0)
+    history = {
+        USE_MODE: [
+            (midnight, "Self Use Mode"),  # the state holding at the window's start
+            (clock(6), "Manual Mode"),
+            (clock(9), "unavailable"),  # unreadable for 20 minutes: a gap, never a mode
+            (clock(9, 20), "Manual Mode"),
+            (clock(12), "Self Use Mode"),
+            (clock(13), "Back Up Mode"),  # a combination no mode writes
+        ],
+        MANUAL_MODE: [(midnight, "Force Charge")],
+        # Unrecorded until 00:30: the registers say nothing until then.
+        EXPORT_LIMIT: [(clock(0, 30), "9900.0")],
+    }
+    payload, reads = modes_section(history)
+
+    [(ids, start, end)] = reads
+    assert sorted(ids) == sorted([USE_MODE, MANUAL_MODE, EXPORT_LIMIT])
+    assert (start, end) == (dt_util.as_utc(midnight), clock(14))
+    assert payload["section"] == "modes"
+    assert payload["period"]["start"] == midnight.isoformat()
+    assert payload["modes"] == [
+        {"start": a.isoformat(), "end": b.isoformat(), "kind": kind, "open": still}
+        for a, b, kind, still in [
+            (midnight, clock(0, 30), None, False),
+            (clock(0, 30), clock(6), "normal", False),
+            (clock(6), clock(9), "charge_to_target_soc", False),
+            (clock(9), clock(9, 20), None, False),
+            (clock(9, 20), clock(12), "charge_to_target_soc", False),
+            (clock(12), clock(13), "normal", False),
+            (clock(13), clock(14), None, True),
+        ]
+    ]
+
+
+def test_a_short_blip_between_equal_modes_is_bridged():
+    history = {
+        USE_MODE: [(clock(0), "Self Use Mode"), (clock(9), "unavailable"), (clock(9, 2), "Self Use Mode")],
+        EXPORT_LIMIT: [(clock(0), "9900")],
+    }
+    payload, _ = modes_section(history)
+
+    assert [(m["start"], m["end"], m["kind"]) for m in payload["modes"]] == [
+        (clock(0).isoformat(), clock(14).isoformat(), "normal"),
+    ]
+
+
+def test_a_mode_written_register_by_register_is_one_change():
+    # Normal → charge: the use mode lands first, while the manual mode still
+    # reads Force Discharge from before; the half-written mode is no stretch.
+    history = {
+        USE_MODE: [(clock(0), "Self Use Mode"), (clock(10), "Manual Mode")],
+        MANUAL_MODE: [(clock(0), "Force Discharge"), (clock(10, 0, 4), "Force Charge")],
+        EXPORT_LIMIT: [(clock(0), "9900")],
+    }
+    payload, _ = modes_section(history)
+
+    assert [(m["start"], m["kind"]) for m in payload["modes"]] == [
+        (clock(0).isoformat(), "normal"),
+        (clock(10).isoformat(), "charge_to_target_soc"),
+    ]
+
+
+def test_past_modes_do_not_depend_on_the_export_cap_configured_now():
+    history = {
+        USE_MODE: [(clock(0), "Self Use Mode")],
+        EXPORT_LIMIT: [(clock(0), "9900"), (clock(11), "0")],
+    }
+    for cap in (9900, 5000, None):
+        payload, _ = modes_section(history, cfg=config(export_cap=cap))
+        assert [m["kind"] for m in payload["modes"]] == ["normal", "stop_export"]
+
+
+def test_states_from_before_midnight_and_the_live_state_are_read():
+    history = {
+        USE_MODE: [(clock(0), "Manual Mode")],
+        MANUAL_MODE: [(clock(0), "Force Discharge"), (clock(10), "Force Charge")],
+        EXPORT_LIMIT: [(clock(0), "9900")],
+    }
+    # The recorder has not committed the 13:30 change yet.
+    payload, _ = modes_section(history, live={USE_MODE: (clock(13, 30), "Self Use Mode")})
+
+    assert [(m["start"], m["kind"], m["open"]) for m in payload["modes"]] == [
+        (clock(0).isoformat(), "discharge_to_target_soc", False),
+        (clock(10).isoformat(), "charge_to_target_soc", False),
+        (clock(13, 30).isoformat(), "normal", True),
+    ]
+
+
+def test_a_custom_inverter_has_no_modes_to_read():
+    payload, reads = modes_section({}, cfg=config(profile=False), tele={})
+
+    assert payload["modes"] is None
+    assert reads == []
 
 
 # --- day_stats --------------------------------------------------------------------
@@ -1947,9 +2097,9 @@ def ev_detail(
 ):
     reports = []
 
-    async def run_mode_history(hass, entity_id, start, end):
-        assert entity_id == EV_RUN_MODE
-        return list(history)
+    async def run_mode_history(hass, entity_ids, start, end):
+        assert entity_ids == [EV_RUN_MODE]
+        return {EV_RUN_MODE: list(history)}
 
     async def device_report(name, query):
         reports.append((name, query))
@@ -1966,7 +2116,7 @@ def ev_detail(
         "custom_components.helman.node_details.ev_charger.resolve_vendor_telemetry",
         return_value=ev_telemetry() if tele is None else tele,
     ), patch(
-        "custom_components.helman.node_details.ev_charger.async_run_mode_history",
+        "custom_components.helman.node_details.ev_charger.async_state_history",
         side_effect=run_mode_history,
     ):
         payload = asyncio.run(
@@ -2175,6 +2325,42 @@ def test_charging_stretches_are_only_the_recorded_charging(history, stretches):
     ]
     # Not charging now: no segment, whatever the history.
     assert segment["chargingSince"] is None
+
+
+def test_the_charging_stretches_are_read_through_the_one_state_history_read():
+    # The generic read in day_stats, against the recorder, serves the charger.
+    reads = []
+
+    def get_significant_states(hass, start, end, entity_ids, **kwargs):
+        reads.append((start, end, list(entity_ids), kwargs["include_start_time_state"]))
+        return {EV_RUN_MODE: [run_mode_state("SuspendedEV", 120), run_mode_state("Charging", 40)]}
+
+    with (
+        patch("homeassistant.components.recorder.get_instance",
+              return_value=NS(async_add_executor_job=_executor)),
+        patch("homeassistant.components.recorder.history.get_significant_states",
+              get_significant_states),
+        patch("custom_components.helman.node_details.ev_charger.resolve_vendor_telemetry",
+              return_value=ev_telemetry()),
+    ):
+        segment = asyncio.run(
+            async_get_node_detail(
+                NS(states=NS(get={EV_RUN_MODE: NS(state="Charging", attributes={}, last_changed=CHARGING_SINCE)}.get)),
+                ev_config(),
+                node="ev_charger",
+                device_id="garage-ev",
+                section="segment",
+                now=NOW,
+            )
+        )
+
+    [(start, end, ids, with_start_state)] = reads
+    assert ids == [EV_RUN_MODE] and with_start_state
+    assert (start, end) == (dt_util.as_utc(NOW - timedelta(hours=24)), dt_util.as_utc(NOW))
+    assert segment["chargingSince"] == CHARGING_SINCE.isoformat()
+    assert segment["charging"] == [
+        {"start": CHARGING_SINCE.isoformat(), "end": NOW.isoformat(), "open": True},
+    ]
 
 
 def test_a_custom_charger_has_no_charging_stretches_to_read():
