@@ -32,6 +32,11 @@ export class HelmanTreeItem extends LitElement {
      */
     @property({ type: Number }) public parentMaxPower?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
+    /**
+     * Drawn in the middle of the row, between its name and its reading: the
+     * full card puts the inverter cell on its central distribution row.
+     */
+    @property({ attribute: false }) public centreContent?: TemplateResult;
 
     @state() private _childrenCollapsed = true;
 
@@ -172,6 +177,24 @@ export class HelmanTreeItem extends LitElement {
             .deviceInfo {
                 z-index: 2;
             }
+            /* A row with centre content splits its width evenly either side of it:
+               the name and the reading each take half of what is left, and the
+               reading gives up the 40px the row icon takes in front of the name, so
+               the centre stays centred however long either side is. */
+            .has-centre .deviceName {
+                flex: 1 1 0;
+                min-width: 0;
+            }
+            .has-centre helman-tree-item-power-display {
+                flex: 1 1 0;
+                min-width: 0;
+                margin-left: 40px;
+            }
+            .centre {
+                flex: none;
+                position: relative;
+                z-index: 3;
+            }
         `;
     }
 
@@ -250,7 +273,7 @@ export class HelmanTreeItem extends LitElement {
         const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({
+                <div class="border deviceContent ${isOff ? 'is-off' : ''} ${this.centreContent ? 'has-centre' : ''}" style=${styleMap({
                     ...(nodeColor ? {'--device-shadow-color': nodeColor} : {}),
                     ...(tintColor ? {'--device-tint': tintColor} : {}),
                 })}>
@@ -272,6 +295,7 @@ export class HelmanTreeItem extends LitElement {
                             ></helman-tree-item-icon>
                             ${indicator ? html`<span class="childrenToggle" @click=${this._onChevronClick}>${indicator}</span>` : nothing}
                             <div class="deviceName ${hasChildren ? 'has-children' : ''} ${device.deviceKey ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
+                            ${this.centreContent ? html`<div class="centre">${this.centreContent}</div>` : nothing}
                             <helman-tree-item-power-display
                                 .powerValue=${this.device.powerValue ?? 0}
                                 .powerSensorId=${this.device.powerSensorId ?? undefined}

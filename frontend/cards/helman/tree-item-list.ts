@@ -43,6 +43,8 @@ export class HelmanTreeItemList extends LitElement {
     @property({ type: Boolean }) public sortChildrenByPower?: boolean;
     @property({ type: Number }) public show_only_top_children?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
+    /** Handed to every row as its centre content; the rows' own children never inherit it. */
+    @property({ attribute: false }) public centreContent?: TemplateResult;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
@@ -132,6 +134,7 @@ export class HelmanTreeItemList extends LitElement {
                         .historyBucketDuration=${this.historyBucketDuration}
                         .historyRevision=${this.historyRevision}
                         .openNodeDetailOnIcon=${this.openNodeDetailOnIcon}
+                        .centreContent=${this.centreContent}
                     ></helman-tree-item>
                 `)}
             </div>

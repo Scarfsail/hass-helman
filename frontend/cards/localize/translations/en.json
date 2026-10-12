@@ -2,7 +2,7 @@
   "card": {
     "loading": "Loading energy data…",
     "sources_title": "Energy Sources",
-    "consumers_title": "Energy Consumers"
+    "consumers_title": "Distribution"
   },
   "bias_correction": {
     "inspector": {

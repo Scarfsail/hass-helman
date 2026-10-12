@@ -341,7 +341,9 @@ const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).loc
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
 const strip = (page: Page) => content(page).locator("helman-mode-strip");
 const switchLine = (page: Page) => content(page).locator("[data-switch-line]");
-const requests = (page: Page, type: string) => page.evaluate((type) => window.__requests.filter((r) => r.type === type), type);
+// The card's own inverter overview, for its distribution row's cell, is not the detail's.
+const requests = (page: Page, type: string) =>
+    page.evaluate((type) => window.__requests.filter((r) => r.type === type && r.node !== "inverter"), type);
 const sectionRequests = async (page: Page, section: string) =>
     (await requests(page, "helman/get_node_detail")).filter((r) => r.section === section).length;
 

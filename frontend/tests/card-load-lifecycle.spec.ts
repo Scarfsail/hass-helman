@@ -319,8 +319,8 @@ test.describe("helman-card: root titles", () => {
     });
 
     for (const [language, sources, consumers] of [
-        ["en", "Energy Sources", "Energy Consumers"],
-        ["cs", "Zdroje energie", "Spotřebiče energie"],
+        ["en", "Energy Sources", "Distribution"],
+        ["cs", "Zdroje energie", "Distribuce"],
     ] as const) {
         test(`the roots are titled in the HA language (${language})`, async ({ page }) => {
             const names = await page.evaluate(async (lang) => {
