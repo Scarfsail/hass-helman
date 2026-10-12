@@ -208,7 +208,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .parentPowerHistory=${sourcesNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${sourcesChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
                     <helman-tree-item-list
                         .hass=${this._hass!}
@@ -225,7 +225,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                             ></helman-inverter-cell>
                         `}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${consumersChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${consumersChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
                     <helman-tree-item-list
                         .hass=${this._hass!}
@@ -237,7 +237,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .parentPowerHistory=${consumerNode!.powerHistory}
                         .openNodeDetailOnIcon=${true}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${houseArrowDevices} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
+                    <power-flow-arrows .devices=${houseArrowDevices} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
                     <helman-house-devices-section
                         .hass=${this._hass!}
                         .devices=${houseDevices}

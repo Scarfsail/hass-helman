@@ -4,7 +4,7 @@ import { CARD_BUNDLE } from "./support/card-page";
 /**
  * What the flow arrows are allowed to cost while nobody is looking at them.
  *
- * The strips animate forever, so the animation is paused whenever the element
+ * The light band sweeps forever, so the animation is paused whenever the element
  * is scrolled out of the viewport or the tab is in the background, and picks up
  * where it left off on the way back. Before that, three arrow rows kept the
  * renderer recalculating style and painting on every frame for as long as the
@@ -28,24 +28,48 @@ const PAGE = `<!doctype html><html><body style="margin:0">
 </body></html>`;
 
 async function mountArrows(page: Page, powers: (number | null)[]): Promise<void> {
+    await mountDevices(page, powers.map((p) => (p === null ? null : { powerValue: p })));
+}
+
+/** The source row every band test shares: solar, battery, grid, left to right. */
+const SOURCES = [
+    { id: "src-solar", sourceType: "solar", isSource: true },
+    { id: "src-battery", sourceType: "battery", isSource: true },
+    { id: "src-grid", sourceType: "grid", isSource: true },
+];
+
+async function mountDevices(page: Page, devices: (object | null)[], sources: object[] = []): Promise<void> {
     await page.setContent(PAGE);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("power-flow-arrows"));
     await page.evaluate(async (opts) => {
         const el = document.createElement("power-flow-arrows") as any;
-        el.devices = opts.powers.map((p) => (p === null ? undefined : { powerValue: p }));
+        el.devices = opts.devices.map((d) => d ?? undefined);
+        el.sources = opts.sources;
         el.maxPower = opts.maxPower;
         document.getElementById("stage")!.appendChild(el);
         await el.updateComplete;
-    }, { powers, maxPower: MAX_POWER });
+    }, { devices, sources, maxPower: MAX_POWER });
 }
 
-/** The play states of every strip animation, deduplicated. */
+/** Each drawn ribbon's bands, left to right: their source and flex-grow. */
+function segments(page: Page): Promise<{ source: string | null; grow: string }[][]> {
+    return page.evaluate(() => {
+        const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
+        return [...root.querySelectorAll(".animated-arrow")].map((arrow) =>
+            [...arrow.querySelectorAll(".segment")].map((segment) => ({
+                source: segment.getAttribute("data-source"),
+                grow: getComputedStyle(segment).flexGrow,
+            })));
+    });
+}
+
+/** The play states of every light band animation, deduplicated. */
 function playStates(page: Page): Promise<string[]> {
     return page.evaluate(() => {
         const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
-        const states = [...root.querySelectorAll(".strip")]
-            .flatMap((strip) => strip.getAnimations().map((a) => a.playState));
+        const states = [...root.querySelectorAll(".band")]
+            .flatMap((band) => band.getAnimations().map((a) => a.playState));
         return [...new Set(states)].sort();
     });
 }
@@ -68,6 +92,48 @@ test("an arrow's width stays proportional to its power, and tiny flows draw noth
     });
 
     expect(widths).toEqual(["25%", "100%", null, null]);
+});
+
+test("a source's ribbon is one band in its own colour", async ({ page }) => {
+    await mountDevices(page, [{ ...SOURCES[2], powerValue: 1000 }], SOURCES);
+
+    expect(await segments(page)).toEqual([[{ source: "grid", grow: "1" }]]);
+});
+
+test("a consumer's ribbon is split by the sources' shares of its latest bucket, and a revision moves it", async ({ page }) => {
+    const consumer = {
+        powerValue: 400,
+        sourcePowerHistory: [
+            { "src-battery": { power: 400, color: "#000" } },
+            { "src-grid": { power: 100, color: "#000" }, "src-solar": { power: 300, color: "#000" } },
+        ],
+    };
+    await mountDevices(page, [consumer], SOURCES);
+
+    expect(await segments(page)).toEqual([[
+        { source: "solar", grow: "0.75" },
+        { source: "grid", grow: "0.25" },
+    ]]);
+
+    await page.evaluate(async () => {
+        const el = document.querySelector("power-flow-arrows") as any;
+        el.devices[0].sourcePowerHistory.push({ "src-battery": { power: 200, color: "#000" }, "src-grid": { power: 0, color: "#000" } });
+        el.historyRevision = 1;
+        await el.updateComplete;
+    });
+
+    expect(await segments(page)).toEqual([[{ source: "battery", grow: "1" }]]);
+});
+
+test("a consumer with nothing to attribute is one neutral band", async ({ page }) => {
+    await mountDevices(page, [{ powerValue: 400 }], SOURCES);
+
+    expect(await segments(page)).toEqual([[{ source: "none", grow: "1" }]]);
+    const color = await page.evaluate(() => {
+        const segment = document.querySelector("power-flow-arrows")!.shadowRoot!.querySelector(".segment")!;
+        return getComputedStyle(segment).backgroundColor;
+    });
+    expect(color).toBe("rgb(156, 163, 175)");
 });
 
 test("a visible arrow animates", async ({ page }) => {
@@ -113,7 +179,7 @@ test("an element remounted after being scrolled away starts running", async ({ p
         document.getElementById("stage")!.appendChild(el);
         // Read before yielding: the observer's first callback is a task away, and
         // what is drawn until it lands is this verdict -- a still frame of
-        // half-lit strips if the element kept the one it was removed on.
+        // a half-swept light band if the element kept the one it was removed on.
         return el.hasAttribute("paused");
     });
 

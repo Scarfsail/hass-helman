@@ -1,6 +1,7 @@
-import { LitElement, css, html, nothing, svg } from "lit";
+import { LitElement, css, html, nothing, svg, unsafeCSS } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { helmanColorVars } from "../color-vars";
+import { FLOW_BAND_LENGTH, FLOW_BAND_PEAK_OPACITY, FLOW_RIBBON_OPACITY, FLOW_SWEEP_DURATION } from "./flow-style";
 import { QUESTION_TOGGLE_EVENT, type QuestionToggleDetail } from "./node-question";
 
 /** Fired by the Now/Today switch; the host owns which scope is shown. */
@@ -34,7 +35,7 @@ const FULL = 120;
 /** A flow that is not zero is never thinner than this, px. */
 const MIN_RIBBON = 1.5;
 /** The light band's width, in the ribbons' 0–100 x units. */
-const BAND = 40;
+const BAND = FLOW_BAND_LENGTH * 100;
 
 /**
  * A node's energy flow: its sources come in on the left, the node's glyph sits
@@ -169,10 +170,10 @@ export class HelmanNodeFlow extends LitElement {
             color: var(--secondary-text-color);
         }
         .ribbon {
-            fill-opacity: 0.5;
+            fill-opacity: ${unsafeCSS(FLOW_RIBBON_OPACITY)};
         }
         .band {
-            animation: sweep 2.4s linear infinite;
+            animation: sweep ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
         }
         @keyframes sweep {
             from { transform: translateX(0); }
@@ -333,7 +334,7 @@ export class HelmanNodeFlow extends LitElement {
                         <defs>
                             <linearGradient id="band-light-${side}">
                                 <stop offset="0" stop-color="#fff" stop-opacity="0"></stop>
-                                <stop offset="0.5" stop-color="#fff" stop-opacity="0.5"></stop>
+                                <stop offset="0.5" stop-color="#fff" stop-opacity=${FLOW_BAND_PEAK_OPACITY}></stop>
                                 <stop offset="1" stop-color="#fff" stop-opacity="0"></stop>
                             </linearGradient>
                         </defs>
