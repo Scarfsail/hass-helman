@@ -15,6 +15,7 @@ import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model"
 import { BATT_COLOR, GRID_EXPORT_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR } from "../../color-utils";
 import { helmanColorVars } from "../../color-vars";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../../helman-solar-inspector/chart-colors";
+import { getScheduleLocalTimeParts } from "../../shared/schedule/model/schedule-time";
 import { renderNowMarker } from "../../helman-solar-inspector/now-marker";
 import { panelGlyph } from "../../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
@@ -536,12 +537,14 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             : overview.configuredMaxPowerW !== null
             ? fillTemplate(this._t("curve.maximum"), { power: formatPower(scale).display })
             : null;
-        // Local wall-clock hours, so a daylight-saving day still puts 12 at noon.
-        const hours = [6, 12, 18].map((hour) => {
-            const at = new Date(start);
-            at.setHours(hour, 0, 0, 0);
-            return { hour, t: at.getTime() };
-        }).filter(({ t }) => t < end);
+        // Wall-clock hours in Home Assistant's zone: the day starts at its
+        // midnight, so stepping whole hours lands on them, and a daylight-saving
+        // day still puts 12 at noon.
+        const hours: Array<{ hour: number; t: number }> = [];
+        for (let t = start; t < end; t += 3_600_000) {
+            const hour = getScheduleLocalTimeParts(t, this._timeZone)?.hour;
+            if (hour === 6 || hour === 12 || hour === 18) hours.push({ hour, t });
+        }
         return html`
             <span class="plot">
                 <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">

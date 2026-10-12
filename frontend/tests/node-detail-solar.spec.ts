@@ -477,6 +477,19 @@ test("while the grid imports as the battery charges, PV's share of the charge is
     await expect(question(page, "destinations").locator("[data-row='dc-battery']")).toContainText("not known");
 });
 
+test.describe("the curve's hours in Home Assistant's zone", () => {
+    // The browser is five hours behind Home Assistant's UTC day.
+    test.use({ timezoneId: "America/New_York" });
+
+    test("ticks sit at the zone's 06, 12 and 18, not the browser's", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        const ticks = curve(page).locator(".hours span");
+        await expect(ticks).toHaveText(["06", "12", "18"]);
+        await expect(ticks.nth(1)).toHaveAttribute("style", /left: 50\.00%/);
+    });
+});
+
 test.describe("the production curve", () => {
     test("today's measured production against the forecast on the AC rating, gaps kept, with a now line; a tap opens production", async ({ page }) => {
         await mount(page);
