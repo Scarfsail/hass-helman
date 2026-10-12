@@ -67,6 +67,12 @@ export const SELECTION_COLOR = '#f59e0b'; // amber-500
 export const CHARGE_COLOR    = '#16a34a'; // green-600
 export const DISCHARGE_COLOR = '#dc2626'; // red-600
 
+/**
+ * One colour per grid phase, L1–L3, wherever a phase is drawn. Every chart and
+ * table also names the phase in text, so colour is never the only cue.
+ */
+export const PHASE_COLORS: Record<1 | 2 | 3, string> = { 1: '#8e24aa', 2: '#fb8c00', 3: '#00897b' };
+
 /** Nothing happening: idle battery, blend with no active source, unknown node. */
 export const NEUTRAL_COLOR       = '#6b7280'; // gray-500
 export const NEUTRAL_LIGHT_COLOR = '#9ca3af'; // gray-400

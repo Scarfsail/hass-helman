@@ -1,7 +1,11 @@
 import type { TreeItem } from "../helman/tree-item";
-import type { NodeDetailParams, NodeType } from "./node-detail-types";
+import type { LiveFlows } from "../helman-simple/live-flows";
+import type { EnergyNodeFlowParams, NodeDetailParams, NodeType } from "./node-detail-types";
 
 export interface NodeDetailContext {
+    /** The card's live power split, W. */
+    flows: LiveFlows;
+    flowScaleW: number;
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -10,6 +14,8 @@ export interface NodeDetailContext {
     /** Grid power: positive imports, negative exports, W. */
     gridPower: number | null;
     housePower: number;
+    /** Whether the house meter has a reading; `housePower` is 0 without one. */
+    houseReadable: boolean;
     solarPower: number;
     houseNode: TreeItem | null;
     historyBuckets: number;
@@ -17,9 +23,14 @@ export interface NodeDetailContext {
 }
 
 export function buildNodeDetailParams(context: NodeDetailContext, nodeType: NodeType): NodeDetailParams {
+    // The split reads a missing meter as 0 and every edge is a residual of the
+    // others: without the solar, battery or house reading it is not known, never a zero.
+    const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
+    const flow: EnergyNodeFlowParams = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW };
     switch (nodeType) {
         case "battery":
             return {
+                ...flow,
                 nodeType: "battery",
                 power: context.batteryPowerReading,
                 historyBuckets: context.historyBuckets,
@@ -27,6 +38,7 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
             };
         case "solar":
             return {
+                ...flow,
                 nodeType: "solar",
                 power: context.solarPowerReading,
                 batteryPower: context.batteryPowerReading,
@@ -34,17 +46,20 @@ export function buildNodeDetailParams(context: NodeDetailContext, nodeType: Node
             };
         case "grid":
             return {
+                ...flow,
                 nodeType: "grid",
                 gridPower: context.gridPower,
             };
         case "house":
             return {
+                ...flow,
                 nodeType: "house",
                 power: context.housePower,
                 houseNode: context.houseNode,
             };
         case "inverter":
             return {
+                ...flow,
                 nodeType: "inverter",
                 solarPower: context.solarPower,
                 batteryPower: context.batteryPower,

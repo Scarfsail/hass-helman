@@ -448,8 +448,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const unavailable = this._t("unavailable");
         return html`
             ${this._row(this._t("car.name"), car.vehicle.name, "car-name", this._t(`car.selected_${car.selectedBy}`))}
-            ${this._row(this._t("car.soc"), car.soc === null ? unavailable : this._percent(car.soc), "car-soc")}
-            ${this._row(this._t("car.limit"), car.limit === null ? this._t("car.no_limit") : this._percent(car.limit), "car-limit")}
+            ${this._row(this._t("car.soc"), car.soc === null ? unavailable : this._percent(car.soc), "car-soc", undefined, car.vehicle.telemetry.socEntityId)}
+            ${this._row(this._t("car.limit"), car.limit === null ? this._t("car.no_limit") : this._percent(car.limit), "car-limit", undefined, car.vehicle.telemetry.chargeLimitEntityId)}
             ${this._row(this._t("car.needed"), car.neededKwh === null
                 ? this._t("car.needed_unknown")
                 : car.neededKwh <= 0 ? this._t("car.reached") : formatGridEnergy(car.neededKwh), "car-needed")}
@@ -466,7 +466,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${session !== null && minutes !== null && minutes > 0 ? this._row(this._t("progress.average"),
                 formatPower(session / (minutes / 60) * 1000).display, "average", this._t("progress.average_scope")) : nothing}
             ${minutes === null && this._reading(overview, "session_duration") !== null ? html`
-                ${this._row(this._t("progress.duration_raw"), this._reading(overview, "session_duration")!, "duration-raw")}
+                ${this._row(this._t("progress.duration_raw"), this._reading(overview, "session_duration")!, "duration-raw", undefined, overview.entities.session_duration)}
                 <p class="note" data-duration-implausible>${this._t("progress.duration_unusable")}</p>
             ` : nothing}
             ${phases.map((watts, index) => watts === null ? nothing

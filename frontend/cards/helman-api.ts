@@ -1034,6 +1034,42 @@ export interface BatteryChargeSectionPayload {
 }
 
 /**
+ * Today's energy between the nodes, kWh, from the ranking report. An edge whose
+ * meters are not configured is `null`, never a zero; unresolved energy keeps
+ * its own figure rather than being forced into a destination.
+ */
+export interface TodayFlowsDTO {
+    solarToHouse: number | null;
+    solarToBattery: number | null;
+    solarToGrid: number | null;
+    /** Solar the meters do not explain. */
+    solarUnresolved: number | null;
+    gridToBattery: number | null;
+    /** Battery charge of unknown origin. */
+    unknownToBattery: number | null;
+    /** The grid charge's paid cost, an estimate; `null` where unpriced. */
+    gridToBatteryCost: number | null;
+    batteryToHouse: number | null;
+    gridToHouse: number | null;
+    /** House energy whose source is not known. */
+    unknownToHouse: number | null;
+    batteryToGrid: number | null;
+}
+
+/** The `flows` section every energy node answers: today's flows, or why there are none. */
+export interface FlowsSectionPayload {
+    node: NodeDetailNode;
+    section: "flows";
+    asOf: string;
+    period: { start: string; end: string };
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    complete: boolean;
+    unavailable: string | null;
+    flows: TodayFlowsDTO | null;
+}
+
+/**
  * The solar detail's overview. `entities` carries the solar node's `power` and
  * `today_energy` meters, the lifetime counter (`lifetime_energy`), the grid's
  * `today_export` and the profile's string, cap and setting telemetry (absent

@@ -1343,6 +1343,144 @@ def test_the_destinations_section_says_why_it_has_none(report, reason):
     assert payload["unavailable"] == reason
 
 
+# --- Today's flows --------------------------------------------------------------
+
+
+def flows_report(**changes):
+    """A day's ranking report with grid charge priced at 4.0 and some battery export."""
+    report = ranking(measured_export=4.5)
+    report["complete"] = True
+    report["charge_origin"] = origin(5.0, solar_priced=0.6, grid_recorded=0.3, unknown=0.1, paid_rate=4.0)
+    report.update(changes)
+    return report
+
+
+def flows_detail(node, report):
+    reports = []
+
+    async def device_report(name, query):
+        reports.append((name, query))
+        return report
+
+    hass = NS(states={}, data={"helman": {"coordinator": NS(async_device_report=device_report)}})
+    payload = asyncio.run(
+        async_get_node_detail(hass, config(), node=node, device_id=None, section="flows", now=NOW)
+    )
+    return payload, reports
+
+
+def test_today_flows_are_the_days_edges_from_one_report():
+    from custom_components.helman.node_details.flows import today_flows
+
+    flows = today_flows(flows_report())
+
+    assert flows == {
+        "solarToHouse": pytest.approx(3.0),
+        "solarToBattery": pytest.approx(3.0),
+        "solarToGrid": pytest.approx(4.0),
+        "solarUnresolved": pytest.approx(0.0),
+        "gridToBattery": pytest.approx(1.5),
+        "unknownToBattery": pytest.approx(0.5),
+        # Only the rated grid charge is priced, an estimate like the charge answer's.
+        "gridToBatteryCost": pytest.approx(6.0),
+        "batteryToHouse": pytest.approx(1.0),
+        "gridToHouse": pytest.approx(2.0),
+        "unknownToHouse": pytest.approx(0.0),
+        # The measured export the solar does not explain came from the battery.
+        "batteryToGrid": pytest.approx(0.5),
+    }
+
+
+def test_today_flows_without_a_meter_are_unknown_never_zero():
+    from custom_components.helman.node_details.flows import today_flows
+
+    flows = today_flows(flows_report(meters={"grid": True, "solar": False, "battery": True, "house": True}, complete=False))
+
+    assert flows["solarToHouse"] is None
+    assert flows["solarToBattery"] is None
+    assert flows["solarToGrid"] is None
+    assert flows["solarUnresolved"] is None
+    assert flows["batteryToGrid"] is None
+    # What does not need the solar meter is still known.
+    assert flows["gridToBattery"] == pytest.approx(1.5)
+    assert flows["batteryToHouse"] == pytest.approx(1.0)
+    assert flows["gridToHouse"] == pytest.approx(2.0)
+
+    without_battery = today_flows(flows_report(meters={"grid": True, "solar": True, "battery": False, "house": True}))
+    assert without_battery["gridToBattery"] is None
+    assert without_battery["unknownToBattery"] is None
+    assert without_battery["gridToBatteryCost"] is None
+    assert without_battery["batteryToHouse"] is None
+    assert without_battery["solarToBattery"] is None
+    assert without_battery["solarToHouse"] == pytest.approx(3.0)
+
+
+def test_today_flows_keep_unresolved_solar_out_of_every_destination():
+    from custom_components.helman.node_details.flows import today_flows
+
+    # 10 kWh attributed and 2 kWh in hours without a mix; only 1.5 kWh exported.
+    flows = today_flows(flows_report(**{
+        "solar_totals": {
+            "attributed_kwh": 10.0,
+            "unattributed_kwh": 2.0,
+            "house_kwh": 3.0,
+            "battery_kwh": 3.0,
+            "export_kwh": 1.5,
+            "measured_export_kwh": 1.5,
+        },
+    }))
+
+    assert flows["solarToHouse"] == pytest.approx(3.0)
+    assert flows["solarToBattery"] == pytest.approx(3.0)
+    assert flows["solarToGrid"] == pytest.approx(1.5)
+    assert flows["solarUnresolved"] == pytest.approx(4.5)
+    assert flows["batteryToGrid"] == pytest.approx(0.0)
+    assert sum(flows[key] for key in ("solarToHouse", "solarToBattery", "solarToGrid", "solarUnresolved")) == pytest.approx(12.0)
+
+
+def test_today_flows_do_not_put_unresolved_export_on_the_battery():
+    from custom_components.helman.node_details.flows import today_flows
+
+    # 1.5 kWh of attributed solar is unresolved, and 2.5 kWh of export is not
+    # solar's: only the 1.0 kWh beyond the unresolved solar is the battery's.
+    flows = today_flows(flows_report(**{
+        "solar_totals": {
+            "attributed_kwh": 8.0,
+            "unattributed_kwh": 0.0,
+            "house_kwh": 3.0,
+            "battery_kwh": 2.0,
+            "export_kwh": 1.5,
+            "measured_export_kwh": 4.0,
+        },
+    }))
+
+    assert flows["solarUnresolved"] == pytest.approx(1.5)
+    assert flows["batteryToGrid"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("node", ["inverter", "grid", "battery", "solar", "house"])
+def test_every_energy_node_answers_the_flows_section_from_todays_report(node):
+    payload, reports = flows_detail(node, flows_report(complete=False))
+
+    [(name, query)] = reports
+    assert name == "ranking"
+    assert query.start_date == query.end_date == NOW.date()
+    assert payload["node"] == node
+    assert payload["section"] == "flows"
+    assert payload["currency"] == "CZK/kWh"
+    assert payload["complete"] is False
+    assert payload["unavailable"] is None
+    assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
+    assert payload["flows"]["gridToBattery"] == pytest.approx(1.5)
+
+
+def test_the_flows_section_says_why_without_reports():
+    payload, _ = flows_detail("battery", {"unavailable": "no_house_meter"})
+
+    assert payload["flows"] is None
+    assert payload["unavailable"] == "no_house_meter"
+
+
 # --- The house detail ----------------------------------------------------------
 
 HOUSE_POWER = "sensor.house_power"
