@@ -1,4 +1,4 @@
-import { css, html, nothing, type TemplateResult } from "lit";
+import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
 import {
@@ -10,16 +10,18 @@ import {
 } from "../../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR } from "../../color-utils";
+import { PHASE_COLORS } from "../../color-utils";
+import { helmanColorVars } from "../../color-vars";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
 import { todayIso } from "../../shared/today-iso";
+import { pylonGlyph } from "../../shared/node-glyphs";
+import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
 import "../../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../../shared/day-line-chart";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
-import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { readEnergyKWh } from "./node-detail-readings";
+import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
 
 type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
@@ -27,12 +29,12 @@ type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
 const PHASES = [1, 2, 3] as const;
 type Phase = (typeof PHASES)[number];
 
-/** One colour per phase; every chart and table also names the phase in text. */
-const PHASE_COLORS: Record<Phase, string> = { 1: "#8e24aa", 2: "#fb8c00", 3: "#00897b" };
-
 /** The nominal low-voltage supply and the ±10 % band around it, as references only. */
 const NOMINAL_VOLTAGE = 230;
 const REFERENCE_BAND = { from: 207, to: 253 };
+
+/** The phase picture's voltage axis: the reference band with room either side, widened to fit any reading. */
+const VOLTAGE_AXIS = { from: 200, to: 260 };
 
 /**
  * The inspector under "What has the grid cost or earned today?": today's
@@ -88,17 +90,23 @@ interface MoneyFigures {
 /**
  * The grid detail: how stable each phase's voltage is, how each phase uses the
  * grid, what the grid cost or earned today, what changes next and what happens
- * without the grid, as an overview and five questions.
+ * without the grid.
  *
- * Live readings come from `hass`; the backend overview supplies the entity ids.
- * Today's voltages are requested only while their question is open; today's
- * money comes from the inspector's own span read, the rates and the plan from
- * the forecast, and the focused inspector embeds are mounted only behind their
- * answers' second disclosure.
+ * It opens on a status pill, the phase picture and the grid's Now/Today flow
+ * around the pylon. The pictures absorb two questions: the phase picture opens
+ * the phases, the flow opens the money. The other three are tiles; one answer
+ * is open at a time, full width under the tiles.
+ *
+ * Live readings come from `hass` and the live flow from the card; the backend
+ * overview supplies the entity ids. Today's voltages are read on opening, for
+ * the picture's ranges; today's money comes from the inspector's own span
+ * read, also on opening, the rates and the plan from the forecast, today's
+ * flows from the `flows` section once Today is chosen, and the focused
+ * inspector embeds are mounted only behind their answers' second disclosure.
  */
 @customElement("node-detail-grid-content")
 export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .swatch {
             display: inline-block;
             width: 10px;
@@ -107,56 +115,102 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             vertical-align: middle;
             border-radius: 2px;
         }
-        .bars {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .bar-row {
+        .phases {
             display: grid;
-            grid-template-columns: 24px 1fr;
-            gap: 4px 8px;
+            grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr);
+            gap: 2px 10px;
             align-items: center;
-            font-size: 0.9rem;
         }
-        .bar-phase {
+        .phases-head {
+            display: contents;
+            font-size: 0.72rem;
+            color: var(--secondary-text-color);
+        }
+        .head-power {
+            display: flex;
+            justify-content: space-between;
+            gap: 4px;
+        }
+        .phase-row {
+            display: contents;
+        }
+        .phase-name {
             font-weight: 600;
+            font-size: 0.85rem;
+            grid-row: span 2;
         }
-        .bar-track {
+        .track {
             position: relative;
             height: 10px;
+            margin-top: 6px;
             border-radius: 5px;
             background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
         }
-        .bar-track::after {
+        .power-track::after {
             content: "";
             position: absolute;
             left: 50%;
             top: -2px;
             bottom: -2px;
             width: 1px;
-            background: var(--secondary-text-color);
+            background: var(--secondary-text-color, #727272);
         }
-        .bar-fill {
+        .power-fill {
             position: absolute;
             top: 0;
             bottom: 0;
             border-radius: 5px;
         }
-        .bar-text {
-            grid-column: 2;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            gap: 0 8px;
-            font-size: 0.82rem;
+        .band {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: color-mix(in srgb, var(--secondary-text-color, #727272) 18%, transparent);
         }
-        .bar-scale {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.75rem;
-            color: var(--secondary-text-color);
-            padding-left: 32px;
+        .nominal {
+            position: absolute;
+            top: -2px;
+            bottom: -2px;
+            width: 1px;
+            background: var(--secondary-text-color, #727272);
+            opacity: 0.6;
+        }
+        .whisker {
+            position: absolute;
+            top: 4px;
+            height: 2px;
+            min-width: 2px;
+            border-radius: 1px;
+        }
+        .dot {
+            position: absolute;
+            top: 50%;
+            width: 10px;
+            height: 10px;
+            margin: -5px 0 0 -5px;
+            border-radius: 50%;
+            border: 2px solid var(--card-background-color, #fff);
+            box-sizing: border-box;
+        }
+        .phase-text {
+            font-size: 0.78rem;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+            min-height: 1.25em;
+        }
+        .phase-text .muted {
+            display: block;
+        }
+        .sparkline {
+            display: block;
+            width: 100%;
+            height: 28px;
+            margin-top: 4px;
+        }
+        .sparkline path {
+            fill: none;
+            stroke-width: 1.5;
+            vector-effect: non-scaling-stroke;
         }
         .muted {
             color: var(--secondary-text-color);
@@ -191,8 +245,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         if (this._started && !document.hidden && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > TODAY_REFRESH_MS)) {
             void this._loadMoney();
         }
-        // The open voltage answer is "today so far": it follows the day the same way.
-        if (this._open === "voltage" && this._voltage?.status === "ready" && !document.hidden
+        // Today's voltages, which the picture's ranges draw, follow the day the same way.
+        if (this._voltage?.status === "ready" && !document.hidden
             && (!this._isToday(this._voltage.payload.period.start) || Date.now() - this._voltageRequestedAt > TODAY_REFRESH_MS)) {
             void this._loadVoltage();
         }
@@ -207,12 +261,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     protected _stop(): void {
         this._moneyRequest += 1;
         this._voltageRequest += 1;
+        // A dropped load would otherwise stay "loading" after a reconnect.
+        if (this._voltage?.status === "loading") this._voltage = null;
     }
 
     protected _onDataChanged(): void {
         super._onDataChanged();
         void this._loadMoney();
-        if (this._open === "voltage" && this._voltage !== null) void this._loadVoltage();
+        if (this._voltage !== null) void this._loadVoltage();
     }
 
     /** The run mode the overview's condition was computed from. */
@@ -222,10 +278,9 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     protected _overviewLoaded(payload: GridDetailPayload): void {
-        // The voltage answer may already be open, waiting for its sensors.
-        if (this._open === "voltage" && this._voltage === null && payload.sections.includes("voltage")) {
-            void this._loadVoltage();
-        }
+        // The picture's voltage ranges are read on opening, once the overview
+        // says there are sensors to read.
+        if (this._voltage === null && payload.sections.includes("voltage")) void this._loadVoltage();
     }
 
     // ── Data ────────────────────────────────────────────────────────────────
@@ -271,12 +326,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     protected _setOpen(id: QuestionId | null): void {
         super._setOpen(id);
-        // A closed answer's history request is obsolete; it is re-read on reopen.
-        this._voltageRequest += 1;
-        this._voltage = null;
-        if (id === "voltage" && this._overview.status === "ready" && this._overview.payload.sections.includes("voltage")) {
-            void this._loadVoltage();
-        }
         // An opened answer shows today's figures as they are now.
         if (id === "money") void this._loadMoney();
         if (id === "next") void this._loadForecast();
@@ -291,13 +340,36 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._question("voltage", this._voltagePreview(overview), () => this._renderVoltage(overview), () => this._renderVoltageEvidence(overview), "evidence")}
-                ${this._question("phases", this._phasesPreview(overview), () => this._renderPhases(overview), () => this._renderPhasesEvidence(overview), "evidence")}
-                ${this._question("money", this._moneyPreview(), () => this._renderMoney(), () => this._renderMoneyEvidence(), "evidence")}
-                ${this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence")}
-                ${overview.profile ? this._question("outage", this._outagePreview(overview), () => this._renderOutage(overview), () => this._renderOutageEvidence(overview), "technical") : nothing}
+                ${this._renderPhasePicture(overview)}
+                ${this._renderGridFlow()}
+                <div class="tiles">
+                    ${this._renderNextTile()}
+                    ${overview.profile ? this._renderOutageTile(overview) : nothing}
+                    ${this._renderVoltageTile(overview)}
+                </div>
+                ${this._renderOpen(overview)}
             </div>
         `;
+    }
+
+    /** The open question's answer and evidence, full width under the tiles. */
+    private _renderOpen(overview: GridDetailPayload) {
+        switch (this._open) {
+            case "voltage":
+                return this._question("voltage", this._voltagePreview(overview), () => this._renderVoltage(overview), () => this._renderVoltageEvidence(overview), "evidence");
+            case "phases":
+                return this._question("phases", this._phasesPreview(overview), () => this._renderPhases(overview), () => this._renderPhasesEvidence(overview), "evidence");
+            case "money":
+                return this._question("money", this._moneyPreview(), () => this._renderMoney(), () => this._renderMoneyEvidence(), "evidence");
+            case "next":
+                return this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence");
+            case "outage":
+                return overview.profile
+                    ? this._question("outage", this._outagePreview(overview), () => this._renderOutage(overview), () => this._renderOutageEvidence(overview), "technical")
+                    : nothing;
+            default:
+                return nothing;
+        }
     }
 
     private _renderSummary(overview: GridDetailPayload) {
@@ -307,35 +379,269 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             : Math.abs(power) <= IDLE_W
             ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
             : fillTemplate(this._t(power > 0 ? "status.importing" : "status.exporting"), { power: formatPower(Math.abs(power)).display });
-
-        // The status sentence already says the power and its direction.
-        const figures: Array<[string, string, string]> = [];
-        const net = this._netEnergyToday(overview);
-        if (net !== null) {
-            figures.push([this._t(net >= 0 ? "figure.net_import" : "figure.net_export"), formatGridEnergy(net), "net-energy"]);
-        }
-        const money = this._moneyFigures();
-        if (money && money.net !== null) {
-            figures.push([this._t(money.net >= 0 ? "figure.net_cost" : "figure.net_income"), this._formatMoney(Math.abs(money.net), money.currency), "net-money"]);
-        }
-
-        const next = this._nextPriceChange("import");
         return html`
             <div class="summary" data-overview>
-                <p class="status">${status}</p>
-                ${figures.length ? html`
-                    <div class="figures">
-                        ${figures.map(([label, value, key]) => html`
-                            <div class="figure" data-figure=${key}><span class="figure-label">${label}</span><span class="figure-value">${value}</span></div>
-                        `)}
-                    </div>
-                ` : nothing}
-                ${next ? html`
-                    <p class="next" data-next>${fillTemplate(this._t("next_price"), { time: this._time(next.at), price: this._price(next.value, this._forecast!.grid.importPriceUnit) })}</p>
-                ` : nothing}
+                <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
                 ${this._renderException(overview)}
             </div>
         `;
+    }
+
+    // Phase picture -----------------------------------------------------------
+
+    /**
+     * Each phase's power and voltage, always visible: the power in the
+     * phase's colour, export to the left and import to the right, on the
+     * configured main breaker setting at the nominal voltage (the phases
+     * answer's own comparison); the voltage as a dot inside the reference
+     * band, with today's min–max whisker from the `voltage` section. A phase
+     * or a range without a reading is said, never drawn as zero. A tap opens
+     * the phases answer.
+     */
+    private _renderPhasePicture(overview: GridDetailPayload) {
+        if (!this._hasPhaseTelemetry(overview, "grid_power") && !this._hasPhaseTelemetry(overview, "ac_voltage")) {
+            // No picture to draw, but the answer (its evidence and what it needs) stays one tap away.
+            return html`
+                <button
+                    class="picture"
+                    data-phase-picture-none
+                    title=${this._t("q.phases")}
+                    aria-expanded=${this._open === "phases" ? "true" : "false"}
+                    @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
+                ><span class="note">${this._t("phases.no_profile")}</span></button>
+            `;
+        }
+        const readings = this._phaseReadings(overview);
+        const scaleW = this._phaseScaleW(overview, readings);
+        const ranges = this._voltage?.status === "ready" ? this._voltage.payload.phases : null;
+        const known = [
+            ...readings.map((reading) => reading.voltage).filter((value): value is number => value !== null && value > 0),
+            ...PHASES.flatMap((phase) => {
+                const stats = ranges?.[String(phase) as "1" | "2" | "3"];
+                return stats?.min != null && stats.max != null ? [stats.min, stats.max] : [];
+            }),
+        ];
+        const axis = { from: Math.min(VOLTAGE_AXIS.from, ...known), to: Math.max(VOLTAGE_AXIS.to, ...known) };
+        return html`
+            <button
+                class="picture"
+                data-phase-picture
+                title=${this._t("q.phases")}
+                aria-expanded=${this._open === "phases" ? "true" : "false"}
+                @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
+            >
+                <span class="phases">
+                    <span class="phases-head" aria-hidden="true">
+                        <span></span>
+                        <span class="head-power"><span>${this._t("phases.export_side")}</span><span>${this._t("phases.import_side")}</span></span>
+                        <span>${this._t("picture.voltage")}</span>
+                    </span>
+                    ${readings.map((reading) => this._phaseRow(reading, scaleW, axis, ranges))}
+                </span>
+            </button>
+            ${this._renderRangeStatus(overview)}
+        `;
+    }
+
+    /** Whether today's voltage ranges are still loading or failed; nothing once they are in. */
+    private _renderRangeStatus(overview: GridDetailPayload) {
+        if (!overview.sections.includes("voltage")) return nothing;
+        const section = this._voltage;
+        if (section === null || section.status === "loading") {
+            return html`<p class="note" data-range-loading>${this._t("picture.range_loading")}</p>`;
+        }
+        if (section.status === "error") {
+            return html`
+                <p class="note" data-range-failed>${this._t("picture.range_failed")}</p>
+                <button class="link-button" @click=${() => this._loadVoltage()}>${this._t("retry")}</button>
+            `;
+        }
+        return nothing;
+    }
+
+    /**
+     * What a full power bar is, W: the main breaker setting at the nominal
+     * voltage, so every phase is drawn against the same configured current;
+     * without a setting, the largest phase power, at least 1 kW.
+     */
+    private _phaseScaleW(overview: GridDetailPayload, readings: PhaseReading[]): number {
+        const limit = this._number(overview, "main_breaker_limit");
+        if (limit !== null && limit > 0) return limit * NOMINAL_VOLTAGE;
+        return Math.max(1000, ...readings.map((reading) => Math.abs(reading.power ?? 0)));
+    }
+
+    private _phaseRow(reading: PhaseReading, scaleW: number, axis: { from: number; to: number }, ranges: GridVoltageSectionPayload["phases"] | null) {
+        const color = `var(--helman-phase-l${reading.phase})`;
+        const power = reading.power;
+        const half = power === null ? 0 : Math.min(50, Math.abs(power) / scaleW * 50);
+        const fill = power === null || Math.abs(power) <= 0
+            ? nothing
+            : html`<span class="power-fill" data-power-fill=${power > 0 ? "import" : "export"}
+                style="${power > 0 ? "left" : "right"}: 50%; width: ${half.toFixed(2)}%; background: ${color}"></span>`;
+        const at = (volts: number) => ((volts - axis.from) / (axis.to - axis.from) * 100).toFixed(2) + "%";
+        const voltage = reading.voltage !== null && reading.voltage > 0 ? reading.voltage : null;
+        const stats = ranges?.[String(reading.phase) as "1" | "2" | "3"];
+        const range = stats?.min != null && stats.max != null ? { min: stats.min, max: stats.max } : null;
+        let rangeText: string | null = null;
+        if (range) rangeText = fillTemplate(this._t("picture.range"), { min: this._volts(range.min), max: this._volts(range.max) });
+        else if (ranges) rangeText = this._t(stats ? "voltage.not_recorded" : "voltage.no_sensor");
+        return html`
+            <span class="phase-row" data-phase-bar=${reading.phase}>
+                <span class="phase-name">L${reading.phase}</span>
+                <span class="track power-track">${fill}</span>
+                <span class="track voltage-track" data-voltage=${reading.phase}>
+                    <span class="band" style="left: ${at(REFERENCE_BAND.from)}; width: calc(${at(REFERENCE_BAND.to)} - ${at(REFERENCE_BAND.from)})"></span>
+                    <span class="nominal" style="left: ${at(NOMINAL_VOLTAGE)}"></span>
+                    ${range ? html`<span class="whisker" data-whisker data-min=${range.min} data-max=${range.max}
+                        style="left: ${at(range.min)}; width: calc(${at(range.max)} - ${at(range.min)}); background: ${color}"></span>` : nothing}
+                    ${voltage !== null ? html`<span class="dot" data-dot data-v=${voltage} style="left: ${at(voltage)}; background: ${color}"></span>` : nothing}
+                </span>
+                <span class="phase-text" data-power>${power === null ? this._t("unavailable") : this._directedPower(power)}</span>
+                <span class="phase-text">
+                    <span data-volts>${voltage === null ? this._t("unavailable") : this._volts(voltage)}</span>
+                    ${rangeText ? html`<span class="muted" data-range>${rangeText}</span>` : nothing}
+                </span>
+            </span>
+        `;
+    }
+
+    // Flow --------------------------------------------------------------------
+
+    /**
+     * Solar and battery export in, house and battery import out, around the
+     * pylon: live from the card on Now with the rates now as the footnote,
+     * today's kWh from the `flows` section on Today with today's export
+     * income and import cost on their sides. A tap opens the money.
+     */
+    private _renderGridFlow() {
+        const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow();
+        return this._renderFlow(flow, this.params.flowScaleW, "money", html`<span slot="centre">${pylonGlyph()}</span>`);
+    }
+
+    /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
+    private _nowFlow(): NodeFlow {
+        const flows = this.params.flows;
+        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
+        const inputs = [
+            this._flowItem("solar", flows?.solarToGrid ?? null, power),
+            this._flowItem("battery", flows?.batteryToGrid ?? null, power),
+        ];
+        const outputs = [
+            this._flowItem("house", flows?.gridToHouse ?? null, power),
+            this._flowItem("battery", flows?.gridToBattery ?? null, power),
+        ];
+        const prices = this._pricesNow();
+        return {
+            scopeLabel: this._nowScopeLabel(),
+            inputs,
+            outputs,
+            ...this._flowTotals(inputs, outputs, power),
+            notes: prices.length ? [fillTemplate(this._t("flow.price_now"), { prices: prices.join(" · ") })] : [],
+        };
+    }
+
+    /**
+     * Today's kWh from the `flows` section, with today's export income on the
+     * export side and import cost on the import side, from the money read on
+     * opening; a side whose money is not known says so, never zero.
+     */
+    private _todayFlow(): NodeFlow {
+        const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
+        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const inputs = [
+            this._flowItem("solar", flows?.solarToGrid ?? null, energy),
+            this._flowItem("battery", flows?.batteryToGrid ?? null, energy),
+        ];
+        const outputs = [
+            this._flowItem("house", flows?.gridToHouse ?? null, energy),
+            this._flowItem("battery", flows?.gridToBattery ?? null, energy),
+        ];
+        const status = this._todayFlowsNote();
+        const notes: string[] = status ? [status] : [];
+        const totals = this._flowTotals(inputs, outputs, energy);
+        const money = this._moneyFigures();
+        const unknown = this._t("money.unknown");
+        const withMoney = (total: string | null, key: string, value: number | null) => money
+            ? [total, fillTemplate(this._t(key), { value: value === null ? unknown : this._formatMoney(value, money.currency) })].filter(Boolean).join(" · ")
+            : total;
+        if (this._money?.status === "error") notes.push(this._t("money.failed"));
+        return {
+            scopeLabel: this._todayScopeLabel(),
+            inputs,
+            outputs,
+            totalIn: withMoney(totals.totalIn, "money.income_short", money?.gain ?? null),
+            totalOut: withMoney(totals.totalOut, "money.cost_short", money?.cost ?? null),
+            notes,
+        };
+    }
+
+    // Tiles -------------------------------------------------------------------
+
+    /** The next import price change, in the import colour. */
+    private _renderNextTile() {
+        const accent = "var(--helman-grid-import)";
+        const grid = this._forecast?.grid;
+        if (!grid) {
+            return this._tile("next", "–", this._forecastFailed ? this.localize("node_detail.forecast_failed") : this._t("tile.loading_prices"));
+        }
+        const next = this._nextPriceChange("import");
+        if (next) {
+            return this._tile("next", this._time(next.at), fillTemplate(this._t("next.import_short"), { price: this._price(next.value, grid.importPriceUnit) }), nothing, null, accent);
+        }
+        const now = this._priceNow("import");
+        return this._tile("next", this._t("tile.no_price_change"), now === null ? null : fillTemplate(this._t("next.import_short"), { price: this._price(now, grid.importPriceUnit) }), nothing, null, accent);
+    }
+
+    /** Whether the inverter runs on the grid now, by its own run mode. */
+    private _renderOutageTile(overview: GridDetailPayload) {
+        const condition = overview.condition;
+        const runMode = this._reading(overview, "run_mode");
+        if (condition) return this._tile("outage", this._t(`tile.${condition.kind}`), condition.runMode);
+        return runMode
+            ? this._tile("outage", this._t("tile.on_grid"), runMode)
+            : this._tile("outage", "–", this._t("outage.unknown_short"));
+    }
+
+    /** Today's voltage range over every phase, with each phase's day as a sparkline. */
+    private _renderVoltageTile(overview: GridDetailPayload) {
+        if (!overview.sections.includes("voltage")) {
+            return this._tile("voltage", "–", this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "tile.no_voltage_sensors" : "voltage.no_profile"));
+        }
+        const section = this._voltage;
+        if (section === null || section.status === "loading") return this._tile("voltage", "–", this._t("loading_history"));
+        if (section.status === "error") return this._tile("voltage", "–", this._t("history_failed"));
+        const drawn = PHASES.flatMap((phase) => {
+            const stats = section.payload.phases[String(phase) as "1" | "2" | "3"];
+            return stats && stats.points.length && stats.min !== null && stats.max !== null ? [{ phase, stats }] : [];
+        });
+        if (!drawn.length) return this._tile("voltage", "–", this._t("voltage.none_today"));
+        const low = Math.min(...drawn.map(({ stats }) => stats.min!));
+        const high = Math.max(...drawn.map(({ stats }) => stats.max!));
+        const start = Date.parse(section.payload.period.start);
+        const span = Math.max(1, Date.parse(section.payload.period.end) - start);
+        const means = drawn.flatMap(({ stats }) => stats.points.map((point) => point.mean));
+        const bottom = Math.min(...means);
+        const top = Math.max(bottom + 1, ...means);
+        const bucketMs = drawn[0].stats.bucketMinutes * 60_000;
+        // A gap in the day stays a gap in the line.
+        const path = (points: Array<{ start: string; mean: number }>) => {
+            let d = "";
+            let previous: number | null = null;
+            for (const point of points) {
+                const t = Date.parse(point.start);
+                const x = (t - start) / span * 100;
+                const y = 2 + (1 - (point.mean - bottom) / (top - bottom)) * 24;
+                d += `${previous === null || t - previous > bucketMs * 1.5 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+                previous = t;
+            }
+            return d;
+        };
+        const graphic = html`
+            <svg class="sparkline" data-sparkline viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+                ${drawn.map(({ phase, stats }) => svg`<path data-spark=${phase} d=${path(stats.points)} stroke=${PHASE_COLORS[phase]}></path>`)}
+            </svg>
+        `;
+        return this._tile("voltage", `${Math.floor(low)}–${Math.ceil(high)} V`, this._t("tile.voltage_range"), graphic);
     }
 
     /** At most one: off-grid operation or a fault the inverter reports. */
@@ -506,45 +812,36 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return text;
     }
 
+    /**
+     * The picture above draws each phase; the answer adds each phase's
+     * estimated current against the configured setting, and what a full bar is.
+     */
     private _renderPhases(overview: GridDetailPayload) {
         if (!this._hasPhaseTelemetry(overview, "grid_power")) {
             return html`<p class="note">${this._t("phases.no_profile_long")}</p>`;
         }
         const readings = this._phaseReadings(overview);
         const limit = this._number(overview, "main_breaker_limit");
-        const scale = Math.max(1000, ...readings.map((reading) => Math.abs(reading.power ?? 0)));
         return html`
-            <div class="bar-scale" aria-hidden="true"><span>${this._t("phases.export_side")}</span><span>${this._t("phases.import_side")}</span></div>
-            <div class="bars">
-                ${readings.map((reading) => this._phaseBar(reading, scale, limit))}
-            </div>
+            ${readings.map((reading) => html`
+                <div class="row" data-phase-current=${reading.phase}>
+                    <span class="label"><span class="swatch" style="background: ${PHASE_COLORS[reading.phase]}"></span>L${reading.phase}
+                        <span data-power>${reading.power === null ? this._t("unavailable") : this._directedPower(reading.power)}</span></span>
+                    <span class="value" data-current>${this._currentText(reading, limit)}</span>
+                </div>
+            `)}
+            <p class="note" data-phase-scale>${limit !== null && limit > 0
+                ? fillTemplate(this._t("phases.scale_limit"), { limit: this._amps(limit), voltage: NOMINAL_VOLTAGE + " V" })
+                : fillTemplate(this._t("phases.scale_power"), { power: formatPower(this._phaseScaleW(overview, readings)).display })}</p>
             <p class="note">${this._t("phases.explain")}</p>
         `;
     }
 
-    private _phaseBar(reading: PhaseReading, scale: number, limit: number | null) {
-        const power = reading.power;
-        const half = power === null ? 0 : Math.min(50, (Math.abs(power) / scale) * 50);
-        const style = power === null || power === 0
-            ? "display: none"
-            : power > 0
-                ? `left: 50%; width: ${half}%; background: ${GRID_IMPORT_COLOR}`
-                : `right: 50%; width: ${half}%; background: ${GRID_EXPORT_COLOR}`;
-        let current: string;
-        if (power === null) current = "";
-        else if (reading.current === null) current = this._t("phases.current_unknown");
-        else if (limit !== null && limit > 0) current = fillTemplate(this._t("phases.current_of_limit"), { current: this._amps(reading.current), limit: this._amps(limit) });
-        else current = fillTemplate(this._t("phases.current_only"), { current: this._amps(reading.current) });
-        return html`
-            <div class="bar-row" data-phase-bar=${reading.phase}>
-                <span class="bar-phase">L${reading.phase}</span>
-                <div class="bar-track"><div class="bar-fill" style=${style}></div></div>
-                <div class="bar-text">
-                    <span data-power>${power === null ? this._t("unavailable") : this._directedPower(power)}</span>
-                    <span data-current class="muted">${current}</span>
-                </div>
-            </div>
-        `;
+    private _currentText(reading: PhaseReading, limit: number | null): string {
+        if (reading.power === null) return this._t("unavailable");
+        if (reading.current === null) return this._t("phases.current_unknown");
+        if (limit !== null && limit > 0) return fillTemplate(this._t("phases.current_of_limit"), { current: this._amps(reading.current), limit: this._amps(limit) });
+        return fillTemplate(this._t("phases.current_only"), { current: this._amps(reading.current) });
     }
 
     private _renderPhasesEvidence(overview: GridDetailPayload) {
@@ -664,14 +961,21 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // Next --------------------------------------------------------------------
 
-    private _nextPreview(): string | null {
+    /** The import and export rates now, each as its short phrase; none without the forecast or a rate. */
+    private _pricesNow(): string[] {
         const grid = this._forecast?.grid;
-        if (!grid) return null;
+        if (!grid) return [];
         const parts: string[] = [];
         const importNow = this._priceNow("import");
         const exportNow = this._priceNow("export");
         if (importNow !== null) parts.push(fillTemplate(this._t("next.import_short"), { price: this._price(importNow, grid.importPriceUnit) }));
         if (exportNow !== null) parts.push(fillTemplate(this._t("next.export_short"), { price: this._price(exportNow, grid.exportPriceUnit) }));
+        return parts;
+    }
+
+    private _nextPreview(): string | null {
+        if (!this._forecast?.grid) return null;
+        const parts = this._pricesNow();
         return parts.length ? parts.join(" · ") : this._t("next.no_prices");
     }
 
@@ -808,7 +1112,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const exportLimit = this._number(overview, "export_limit");
         return html`
             ${this._row(this._t("outage.state"), state, "grid-state")}
-            ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter")) : nothing}
+            ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter"), overview.entities.export_limit) : nothing}
             ${overview.maxAllowedExportPower !== null ? this._row(this._t("outage.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("outage.scope_helman")) : nothing}
             ${this._optionalRow(overview, "grid_mode_runtime", "outage.grid_runtime")}
             ${this._optionalRow(overview, "eps_mode_runtime", "outage.eps_runtime")}
@@ -832,17 +1136,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     /** Whether the profile maps any phase of `prefix` (`grid_power`, `ac_voltage`). */
     private _hasPhaseTelemetry(overview: GridDetailPayload, prefix: string): boolean {
         return PHASES.some((phase) => `${prefix}_l${phase}` in overview.entities);
-    }
-
-    /** Today's import minus export from the grid's own meters, kWh; `null` unless both read. */
-    private _netEnergyToday(overview: GridDetailPayload): number | null {
-        const imported = this._kwh(overview.entities.today_import);
-        const exported = this._kwh(overview.entities.today_export);
-        return imported === null || exported === null ? null : imported - exported;
-    }
-
-    private _kwh(entityId: string | null | undefined): number | null {
-        return readEnergyKWh(this.hass, entityId);
     }
 
     // ── Formatting ──────────────────────────────────────────────────────────

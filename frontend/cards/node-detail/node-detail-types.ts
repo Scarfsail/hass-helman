@@ -1,12 +1,24 @@
 import type { TreeItem } from "../helman/tree-item";
+import type { LiveFlows } from "../helman-simple/live-flows";
 
 export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
+
+/**
+ * What every energy node's flow is drawn from: the card's live power split,
+ * rebuilt with the params on every card render, and the fixed scale.
+ */
+export interface EnergyNodeFlowParams {
+    /** The card's live power split, W; `null` while the solar or battery meter has no reading. */
+    flows: LiveFlows | null;
+    /** The power the Now flow draws at full height, W: the inverter's AC rating, else the solar node's maximum. */
+    flowScaleW: number;
+}
 
 /**
  * The battery. Its readings come from `helman/get_node_detail`; the power is
  * the card's own live figure, with the polarity the card already applied.
  */
-export interface BatteryDetailParams {
+export interface BatteryDetailParams extends EnergyNodeFlowParams {
     nodeType: "battery";
     /** Battery power: positive charges, negative discharges, W; `null` without a reading. */
     power: number | null;
@@ -19,7 +31,7 @@ export interface BatteryDetailParams {
  * The solar node. Its readings come from `helman/get_node_detail`; the powers
  * are the card's own live figures, with the polarity the card already applied.
  */
-export interface SolarDetailParams {
+export interface SolarDetailParams extends EnergyNodeFlowParams {
     nodeType: "solar";
     /** Solar production, W; `null` without a reading. */
     power: number | null;
@@ -33,7 +45,7 @@ export interface SolarDetailParams {
  * The grid. Its readings come from `helman/get_node_detail`; the total power is
  * the card's own live figure, with the polarity the card already applied.
  */
-export interface GridDetailParams {
+export interface GridDetailParams extends EnergyNodeFlowParams {
     nodeType: "grid";
     /** Grid power: positive imports, negative exports, W. */
     /** Signed import-positive; `null` when the grid sensor has no reading. */
@@ -45,7 +57,7 @@ export interface GridDetailParams {
  * card's own live figure, with the polarity the card already applied, and the
  * house tree is the card's own, which the phase answer estimates from.
  */
-export interface HouseDetailParams {
+export interface HouseDetailParams extends EnergyNodeFlowParams {
     nodeType: "house";
     /** House consumption, W. */
     power: number;
@@ -57,7 +69,7 @@ export interface HouseDetailParams {
  * `helman/get_node_detail`; the DC context is the card's own live figures, so
  * the detail reads them with the polarity the card already applied.
  */
-export interface InverterDetailParams {
+export interface InverterDetailParams extends EnergyNodeFlowParams {
     nodeType: "inverter";
     /** Solar production, W. */
     solarPower: number;
@@ -67,9 +79,11 @@ export interface InverterDetailParams {
 
 /**
  * One config device, opened from its name. Not a `NodeType`: that union is also
- * the animated-icon vocabulary, and a device has no animated icon.
+ * the animated-icon vocabulary, and a device has no animated icon. The power
+ * cards add the flow params for an EV charger, whose detail draws the car's
+ * flow; the solar inspector, which shows past slots, has no live split to add.
  */
-export interface DeviceDetailParams {
+export interface DeviceDetailParams extends Partial<EnergyNodeFlowParams> {
     nodeType: "device";
     item: TreeItem;
 }

@@ -15,8 +15,9 @@ import {
     buildNodeDetailParams,
     type NodeDetailContext,
 } from "../node-detail/node-detail-params-builder";
-import type { NodeDetailParams, NodeType } from "../node-detail/node-detail-types";
+import type { NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
+import { DEFAULT_SOLAR_MAX_W, liveFlows } from "../helman-simple/live-flows";
 import "./power-flow-arrows"
 import "./tree-item-info"
 import "./house-devices-section"
@@ -188,7 +189,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
         const dialogParams = this._dialogRequest !== null
-            ? this._buildDialogParams(this._dialogRequest)
+            ? buildNodeDetailParams(this._buildNodeDetailContext(), this._dialogRequest)
             : null;
 
         return html`
@@ -320,12 +321,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._rebuildWatchedEntityIds();
     };
 
-    private _buildDialogParams(request: NodeType | TreeItem): NodeDetailParams {
-        return typeof request === "string"
-            ? buildNodeDetailParams(this._buildNodeDetailContext(), request)
-            : { nodeType: "device", item: request };
-    }
-
     private _buildNodeDetailContext(): NodeDetailContext {
         const { sourcesChildren, consumersChildren, houseNode } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
@@ -347,14 +342,30 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const houseRaw = raw(houseNode?.powerSensorId);
 
         const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
+        const gridPower = gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw;
+        const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType));
+        const solarPower = solarNode?.powerValue ?? 0;
+        const batteryPowerReading = batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw;
+        const solarPowerReading = solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType);
 
         return {
+            // From the sensors' current states, as the reading figures are.
+            flows: liveFlows({
+                solarPower: solarPowerReading ?? 0,
+                housePower,
+                batteryPower: batteryPowerReading ?? 0,
+                gridPower: gridPower ?? 0,
+            }),
+            // This card reads no inverter overview: the solar node's maximum is the
+            // scale. nodeConfig is the DTO's sourceConfig, which the simple card reads it from.
+            flowScaleW: Math.max(1, (solarNode?.nodeConfig as { max_power?: number } | undefined)?.max_power ?? DEFAULT_SOLAR_MAX_W),
             batteryPower,
-            batteryPowerReading: batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw,
-            solarPowerReading: solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType),
-            gridPower: gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw,
-            housePower: houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType)),
-            solarPower: solarNode?.powerValue ?? 0,
+            batteryPowerReading,
+            solarPowerReading,
+            gridPower,
+            housePower,
+            houseReadable: houseRaw !== null,
+            solarPower,
             houseNode: houseNode ?? null,
             historyBuckets: this._uiConfig?.history_buckets ?? 60,
             historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,

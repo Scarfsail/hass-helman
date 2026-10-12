@@ -8,12 +8,15 @@ import { CARD_BUNDLE } from "./support/card-page";
  *
  * Mounted on the real `helman-simple-card` against a fake backend that answers
  * the device tree, `helman/get_node_detail` (the battery overview and its
- * charge section), the schedule and the forecast. What is pinned is the shared
- * disclosure contract (compact overview, one open question, answer then
- * evidence, nothing heavy mounted or requested while closed) and the battery's
- * truthfulness: a BMS ceiling is not proof of a binding cap, a cold reading is
- * not a cause, today's charge is not the stored energy, the daily ratio is not
- * an efficiency and throughput cycles are not health.
+ * charge and flows sections), the schedule and the forecast. What is pinned is
+ * the shared visual language (a status pill, the Now/Today flow around the SoC
+ * glyph, answer tiles, readings that open more-info), the disclosure contract
+ * (the pictures open the questions they absorb, one open answer under the
+ * tiles, answer then evidence, nothing heavy mounted or requested while
+ * closed) and the battery's truthfulness: a BMS ceiling is not proof of a
+ * binding cap, a cold reading is not a cause, today's charge is not the stored
+ * energy, the daily ratio is not an efficiency and throughput cycles are not
+ * health.
  */
 
 const SCREENS = process.env.SCREENS;
@@ -35,13 +38,24 @@ type Variant = {
     remainingUnit?: string;
     todayUnit?: string;
     minSoc?: string;
+    maxSoc?: string;
     remaining?: string;
+    /** The solar, house and grid meters' states, W. */
+    solar?: string;
+    house?: string;
+    grid?: string;
+    soc?: string;
+    /** The inverter's rated power register, W; absent without one. */
+    ratedPower?: string;
+    /** Today's flows section: a fixed day, or the reports' reason for none. */
+    flowsUnavailable?: string;
 };
 
 declare global {
     interface Window {
         __hass: any;
         __requests: Array<{ type: string; node?: string; section?: string }>;
+        __moreInfo: string[];
     }
 }
 
@@ -98,10 +112,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             run_mode: ["sensor.solax_run_mode", "Normal Mode"],
         };
         const states: Record<string, unknown> = {
-            "sensor.solar": s("4200", "W"), "sensor.grid": s("-300", "W"), "sensor.battery": s(v.power ?? "-2100", "W"),
-            "sensor.house": s("1200", "W"),
-            "sensor.soc": s("67", "%"), "sensor.remaining": s(v.remaining ?? "11577", v.remainingUnit ?? "Wh"),
-            "number.min_soc": s(v.minSoc ?? "10", "%"), "number.max_soc": s("100", "%"),
+            "sensor.solar": s(v.solar ?? "4200", "W"), "sensor.grid": s(v.grid ?? "-300", "W"), "sensor.battery": s(v.power ?? "-2100", "W"),
+            "sensor.house": s(v.house ?? "1200", "W"),
+            "sensor.soc": s(v.soc ?? "67", "%"), "sensor.remaining": s(v.remaining ?? "11577", v.remainingUnit ?? "Wh"),
+            "number.min_soc": s(v.minSoc ?? "10", "%"), "number.max_soc": s(v.maxSoc ?? "100", "%"),
+            "sensor.solax_inverter_power_type": s(v.ratedPower ?? "unknown", "W"),
             "sensor.battery_in_today": s("6.2", v.todayUnit ?? "kWh"), "sensor.battery_out_today": s("4.1", "kWh"),
             "sensor.helman_battery_time_to_empty": s(v.timeToEmpty ?? "280", "min", { target_time: "2026-10-21T16:40:00+00:00", target_soc: 10 }),
             "sensor.helman_battery_time_to_full": s("unknown", "min", { target_time: "", target_soc: null }),
@@ -179,13 +194,25 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 series: [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
             },
         };
+        const flowsSection = {
+            node: "battery", section: "flows", asOf: "2026-10-21T12:00:00+00:00",
+            period: { start: `${day}T00:00:00+00:00`, end: "2026-10-22T00:00:00+00:00" },
+            currency: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
+            flows: v.flowsUnavailable ? null : {
+                solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 2.0, solarUnresolved: 0.4,
+                gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
+                batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0,
+            },
+        };
         const inverter = {
             node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
-            entities: {}, maxAllowedExportPower: 9900,
+            entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {}, maxAllowedExportPower: 9900,
             agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
             condition: null, sections: [],
         };
         window.__requests = [];
+        window.__moreInfo = [];
+        document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         window.__hass = {
             language: "en",
             // A 24-hour English locale, so times read as the assertions write them.
@@ -207,6 +234,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 if (msg.type === "helman/get_schedule") return schedule;
                 if (msg.type === "helman/get_node_detail") {
                     if (msg.node === "inverter") return inverter;
+                    if (msg.section === "flows") return flowsSection;
                     return msg.section ? section : overview;
                 }
                 return {};
@@ -228,8 +256,29 @@ const content = (page: Page) => page.locator("node-detail-battery-content");
 const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
 const header = (page: Page, id: string) => question(page, id).locator("button.header");
 const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const sectionRequests = (page: Page) =>
-    page.evaluate(() => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "battery" && r.section).length);
+const tile = (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`);
+const flow = (page: Page) => content(page).locator("helman-node-flow");
+const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
+const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
+const sectionRequests = (page: Page, section?: string) =>
+    page.evaluate((name) => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "battery" && r.section
+        && (name === undefined || r.section === name)).length, section);
+
+/** A ribbon's thickness where it meets the centre, px: the gap between its two ends there. */
+async function ribbonThickness(page: Page, id: string): Promise<number> {
+    const d = await flow(page).locator(`[data-ribbon="${id}"]`).getAttribute("d");
+    // M x,y C c1 c2 x,top L x,bottom ...
+    const numbers = d!.match(/-?[\d.]+/g)!.map(Number);
+    return numbers[9] - numbers[7];
+}
+
+/** Open a question the way a reader does: its tile, or the picture that absorbed it. */
+async function open(page: Page, id: string): Promise<void> {
+    if (id === "reserve") await content(page).locator("[data-glyph]").click();
+    else if (id === "charge") await flow(page).locator("[data-side='out']").click();
+    else await tile(page, id).locator("button").click();
+    await expect(header(page, id)).toHaveAttribute("aria-expanded", "true");
+}
 
 async function openDetail(page: Page): Promise<void> {
     await batteryCell(page).click();
@@ -237,23 +286,27 @@ async function openDetail(page: Page): Promise<void> {
 }
 
 test.describe("the battery overview", () => {
-    test("opens compact: a status sentence, SoC and usable reserve, the next change and five closed questions", async ({ page }) => {
+    test("opens on a status pill, the Now flow around the SoC glyph and three closed tiles", async ({ page }) => {
         await mount(page);
         await openDetail(page);
         const overview = content(page).locator("[data-overview]");
         await expect(overview.locator(".status")).toHaveText("Discharging at 2.1 kW.");
-        await expect(overview.locator(".figure")).toHaveCount(2);
-        await expect(overview.locator("[data-figure='soc']")).toContainText("67 %");
-        // 11 577 Wh at 67 %: a 17.3 kWh battery holds 9.8 kWh above its 10 % floor.
-        await expect(overview.locator("[data-figure='usable']")).toContainText("Usable above 10 %");
-        await expect(overview.locator("[data-figure='usable']")).toContainText("9.8 kWh");
-        await expect(overview.locator("[data-next]")).toHaveText("Next: Charge to 80 % from 14:00");
+        await expect(overview.locator(".status")).toHaveAttribute("data-tone", "discharge");
+        await expect(content(page).locator("[data-estimate]")).toHaveText("At the recent rate: ≈ 4 h 40 min to 10 %, around 16:40");
 
-        const ids = await content(page).locator("helman-node-question").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-question")));
-        expect(ids).toEqual(["reserve", "next", "limits", "charge", "diagnostics"]);
+        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Now · 12:00");
+        await expect(flow(page).locator("[data-scope='now']")).toHaveAttribute("aria-pressed", "true");
+        // 11 577 Wh at 67 %: a 17.3 kWh battery holds 9.8 kWh above its 10 % floor.
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveText("67 %");
+        await expect(glyph(page).locator("[data-usable]")).toHaveText("9.8 kWh");
+
+        const ids = await content(page).locator("helman-node-tile").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-question")));
+        expect(ids).toEqual(["next", "limits", "diagnostics"]);
         for (const id of ids) {
-            await expect(header(page, id!)).toHaveAttribute("aria-expanded", "false");
+            await expect(tile(page, id!).locator("button")).toHaveAttribute("aria-expanded", "false");
         }
+        // No answer is open, and nothing heavy is mounted or requested.
+        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
         await expect(content(page).locator("table, helman-day-line-chart, helman-solar-inspector-card")).toHaveCount(0);
         expect(await sectionRequests(page)).toBe(0);
         await expect(content(page).locator("[data-exception]")).toHaveCount(0);
@@ -261,14 +314,20 @@ test.describe("the battery overview", () => {
         await expect(content(page).locator("helman-tree-item")).toHaveCount(0);
     });
 
-    test("answer previews say the answer", async ({ page }) => {
+    test("tiles say the answer: the next change in its action's tone, the binding ceiling, the diagnostics", async ({ page }) => {
         await mount(page);
         await openDetail(page);
-        await expect(question(page, "reserve").locator(".preview")).toHaveText("9.8 kWh usable above 10 % · 5.7 kWh room below 100 %");
-        await expect(question(page, "next").locator(".preview")).toHaveText("Next: Charge to 80 % from 14:00");
-        await expect(question(page, "limits").locator(".preview")).toHaveText("charge ≤ 5.0 kW · discharge ≤ 6.0 kW");
-        await expect(question(page, "charge").locator(".preview")).toHaveText("6.2 kWh charged today");
-        await expect(question(page, "diagnostics").locator(".preview")).toHaveText("≈ 170 full cycles · 24 °C · cell gap 0.012 V");
+        await expect(tile(page, "next").locator(".value")).toHaveText("14:00");
+        await expect(tile(page, "next").locator(".detail")).toHaveText("Charge to 80 %");
+        await expect(tile(page, "next").locator("button")).toHaveClass(/action-tone-charge/);
+        await expect(tile(page, "next").locator(".caption")).toHaveText("What will the battery do next?");
+        // Discharging at 2.1 kW against the 6.0 kW planning limit.
+        await expect(tile(page, "limits").locator(".value")).toHaveText("≤ 6.0 kW");
+        await expect(tile(page, "limits").locator(".detail")).toHaveText("discharge ceiling");
+        await expect(tile(page, "limits").locator("[data-limits-meter] .meter-fill")).toHaveAttribute("style", /width: 35\.0%/);
+        // The cell gap from the highest and lowest cell, 3.342 − 3.330 V.
+        await expect(tile(page, "diagnostics").locator(".value")).toHaveText("24 °C");
+        await expect(tile(page, "diagnostics").locator(".detail")).toHaveText("cell gap 12 mV · ≈ 170 full cycles");
     });
 
     test("an unreadable battery sensor is no reading, never idle at 0 W", async ({ page }) => {
@@ -287,11 +346,141 @@ test.describe("the battery overview", () => {
     });
 });
 
+test.describe("the flow", () => {
+    test("Now by default from the card's live split; nothing flowing stays as a greyed label", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
+        // Solar covers the house and exports; the discharging battery exports 2.1 kW.
+        await expect(flowLabel(page, "out", "grid")).toContainText("2.1 kW");
+        await expect(flowLabel(page, "out", "grid")).toContainText("Grid");
+        await expect(flowLabel(page, "out", "grid")).not.toHaveClass(/none/);
+        for (const [side, id] of [["in", "solar"], ["in", "grid"], ["out", "house"]] as const) {
+            await expect(flowLabel(page, side, id)).toContainText("0 W");
+            await expect(flowLabel(page, side, id)).toHaveClass(/none/);
+            await expect(flow(page).locator(`[data-side="${side}"] [data-ribbon="${id}"]`)).toHaveCount(0);
+        }
+        await expect(flow(page).locator("[data-side='out'] [data-ribbon='grid']")).toHaveCount(1);
+        await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 2.1 kW");
+    });
+
+    test("an evening discharge into the house, on the fixed scale of the solar maximum", async ({ page }) => {
+        await mount(page, { solar: "0", house: "1800", power: "-1500", grid: "300" });
+        await openDetail(page);
+        await expect(flowLabel(page, "out", "house")).toContainText("1.5 kW");
+        await expect(flowLabel(page, "in", "solar")).toHaveClass(/none/);
+        // No inverter rating: the solar node's 5 kW maximum is full height (120 px).
+        expect(await ribbonThickness(page, "house")).toBeCloseTo(1500 / 5000 * 120, 1);
+    });
+
+    test("the inverter's AC rating is the scale when it has one", async ({ page }) => {
+        await mount(page, { ratedPower: "10000" });
+        await openDetail(page);
+        expect(await ribbonThickness(page, "grid")).toBeCloseTo(2100 / 10000 * 120, 1);
+    });
+
+    test("an unreadable battery is no flow, never 0 W", async ({ page }) => {
+        await mount(page, { power: "unavailable" });
+        await openDetail(page);
+        await expect(flowLabel(page, "out", "grid")).toContainText("–");
+        await expect(flowLabel(page, "out", "grid")).toHaveClass(/none/);
+        await expect(flow(page).locator("[data-total]")).toHaveCount(0);
+    });
+
+    test("an unreadable solar meter leaves the split unknown, never charge from the grid", async ({ page }) => {
+        await mount(page, { solar: "unavailable", house: "900", power: "3200", grid: "-2400" });
+        await openDetail(page);
+        for (const [side, id] of [["in", "solar"], ["in", "grid"], ["out", "house"], ["out", "grid"]] as const) {
+            await expect(flowLabel(page, side, id)).toContainText("–");
+        }
+        await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
+    });
+
+    test("an unreadable house meter leaves the split unknown, never an export", async ({ page }) => {
+        await mount(page, { house: "unavailable" });
+        await openDetail(page);
+        await expect(flowLabel(page, "out", "grid")).toContainText("–");
+        await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
+    });
+
+    test("Today is requested only once chosen, in kWh with the paid estimate, the unknown charge and the net change", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        expect(await sectionRequests(page, "flows")).toBe(0);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flow(page)).toHaveAttribute("data-flow-scope", "today");
+        await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kWh");
+        expect(await sectionRequests(page, "flows")).toBe(1);
+        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Today · 00:00–12:00");
+        await expect(flowLabel(page, "in", "grid")).toContainText("1.5 kWh");
+        await expect(flowLabel(page, "in", "grid")).toContainText("paid ≈ 4.00 CZK");
+        await expect(flowLabel(page, "out", "house")).toContainText("3.6 kWh");
+        await expect(flowLabel(page, "out", "grid")).toContainText("0.00 kWh");
+        await expect(flowLabel(page, "out", "grid")).toHaveClass(/none/);
+        // The unknown charge is part of what went in, and said, never forced into a source.
+        await expect(flow(page).locator("[data-total='in']")).toHaveText("In 6.0 kWh");
+        const notes = flow(page).locator("[data-flow-note]");
+        await expect(notes).toHaveText([
+            "0.30 kWh of today's charge has no known source.",
+            "Net change today: +2.1 kWh, by the battery's own meters.",
+        ]);
+        // The time estimate is Now's.
+        await expect(content(page).locator("[data-estimate]")).toHaveCount(0);
+
+        await flow(page).locator("[data-scope='now']").click();
+        await expect(flowLabel(page, "out", "grid")).toContainText("2.1 kW");
+        await expect(content(page).locator("[data-estimate]")).toBeVisible();
+    });
+
+    test("Today without reports says why, and a reopened dialog starts on Now", async ({ page }) => {
+        await mount(page, { flowsUnavailable: "no_house_meter" });
+        await openDetail(page);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flow(page).locator("[data-flow-note]")).toHaveText("Today's flows need the house meter the device reports read; it is not configured.");
+        await expect(flowLabel(page, "in", "solar")).toContainText("–");
+
+        await page.locator("node-detail-dialog ha-dialog").evaluate((dialog: any) => dialog.close());
+        await openDetail(page);
+        await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
+    });
+
+    test("the glyph marks min and max at the configured SoC, hatched outside them", async ({ page }) => {
+        await mount(page, { minSoc: "20", maxSoc: "90" });
+        await openDetail(page);
+        // The fill area runs 118 px from y 10: a SoC sits at 10 + (1 − SoC) × 118.
+        const y = (pct: number) => 10 + (1 - pct / 100) * 118;
+        const min = glyph(page).locator("[data-marker='min']");
+        const max = glyph(page).locator("[data-marker='max']");
+        await expect(min).toHaveAttribute("data-soc", "20");
+        await expect(max).toHaveAttribute("data-soc", "90");
+        expect(Number(await min.getAttribute("y1"))).toBeCloseTo(y(20), 3);
+        expect(Number(await max.getAttribute("y1"))).toBeCloseTo(y(90), 3);
+        expect(Number(await glyph(page).locator("[data-fill]").getAttribute("y"))).toBeCloseTo(y(67), 3);
+        await expect(glyph(page).locator("[data-marker-label='min']")).toHaveText("min 20 %");
+        await expect(glyph(page).locator("[data-marker-label='max']")).toContainText("max 90 %");
+        await expect(glyph(page).locator("[data-hatch]")).toHaveCount(2);
+        await expect(glyph(page).locator("[data-chevrons]")).toHaveAttribute("data-chevrons", "discharge");
+    });
+
+    test("tapping the glyph opens the reserve, tapping the flow opens today's charge", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await content(page).locator("[data-glyph]").click();
+        await expect(header(page, "reserve")).toHaveAttribute("aria-expanded", "true");
+        await expect(question(page, "reserve").locator("[data-row='usable']")).toContainText("9.8 kWh");
+
+        await flow(page).locator("[data-side='in']").click();
+        await expect(question(page, "reserve")).toHaveCount(0);
+        await expect(header(page, "charge")).toHaveAttribute("aria-expanded", "true");
+        await expect(question(page, "charge").locator("[data-row='charged']")).toContainText("6.0 kWh");
+    });
+});
+
 test.describe("reserve", () => {
     test("usable energy, room and the time estimate, with the capacity assumption as evidence", async ({ page }) => {
         await mount(page);
         await openDetail(page);
-        await header(page, "reserve").click();
+        await open(page, "reserve");
         const reserve = question(page, "reserve");
         await expect(reserve.locator("[data-row='usable']")).toContainText("9.8 kWh");
         await expect(reserve.locator("[data-row='room']")).toContainText("5.7 kWh");
@@ -310,7 +499,7 @@ test.describe("reserve", () => {
         await mount(page, { power: "20" });
         await openDetail(page);
         await expect(content(page).locator("[data-overview] .status")).toHaveText("Idle (20 W).");
-        await header(page, "reserve").click();
+        await open(page, "reserve");
         await expect(question(page, "reserve").locator("[data-row='time']")).toContainText("idle: no finish time");
     });
 });
@@ -319,7 +508,7 @@ test.describe("limits", () => {
     test("directional ceilings side by side, and power below them does not name a cause", async ({ page }) => {
         await mount(page);
         await openDetail(page);
-        await header(page, "limits").click();
+        await open(page, "limits");
         const limits = question(page, "limits");
         await expect(limits.locator("[data-row='bms-charge']")).toContainText("BMS charge ceiling");
         await expect(limits.locator("[data-row='bms-charge']")).toContainText("≈ 8.9 kW (25.0 A × 355.6 V)");
@@ -338,7 +527,7 @@ test.describe("limits", () => {
     test("power at the lowest ceiling is consistent with it, never proof", async ({ page }) => {
         await mount(page, { power: "-5900" });
         await openDetail(page);
-        await header(page, "limits").click();
+        await open(page, "limits");
         await expect(question(page, "limits").locator("[data-row='binding']"))
             .toContainText("at the lowest known ceiling (planning limit, 6.0 kW): consistent with it limiting, not proof that it does");
     });
@@ -346,14 +535,14 @@ test.describe("limits", () => {
     test("a disabled BMS current is not reported, not a zero ceiling", async ({ page }) => {
         await mount(page, { noBmsCurrents: true });
         await openDetail(page);
-        await header(page, "limits").click();
+        await open(page, "limits");
         await expect(question(page, "limits").locator("[data-row='bms-charge']")).toContainText("not reported");
     });
 
     test("a cold reading is an observation without an invented cause", async ({ page }) => {
         await mount(page, { temperature: "6" });
         await openDetail(page);
-        await header(page, "limits").click();
+        await open(page, "limits");
         const cold = question(page, "limits").locator("[data-cold]");
         await expect(cold).toContainText("The battery reads 6 °C.");
         await expect(cold).toContainText("this reading alone does not show that is happening");
@@ -364,20 +553,22 @@ test.describe("limits", () => {
 test("a remaining energy in an unsupported unit gives no reserve, never a guess", async ({ page }) => {
     await mount(page, { remainingUnit: "MJ" });
     await openDetail(page);
-    await header(page, "reserve").click();
+    await open(page, "reserve");
     await expect(question(page, "reserve").locator("[data-row='usable']")).toHaveCount(0);
 });
 
-test("today's meter in an unsupported unit gives no charge preview, never a guess", async ({ page }) => {
+test("today's meter in an unsupported unit gives no net change, never a guess", async ({ page }) => {
     await mount(page, { todayUnit: "MJ" });
     await openDetail(page);
-    await expect(question(page, "charge")).not.toContainText("charged today");
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kWh");
+    await expect(flow(page).locator("[data-flow-note]")).toHaveText(["0.30 kWh of today's charge has no known source."]);
 });
 
 test("an out-of-range SoC floor is no floor, never a usable figure above it", async ({ page }) => {
     await mount(page, { minSoc: "120" });
     await openDetail(page);
-    await header(page, "reserve").click();
+    await open(page, "reserve");
     const reserve = question(page, "reserve");
     await expect(reserve).not.toContainText("120 %");
     await expect(reserve.locator("[data-row='room']")).toContainText("5.7 kWh");
@@ -386,28 +577,28 @@ test("an out-of-range SoC floor is no floor, never a usable figure above it", as
 test("a zero remaining energy at a positive SoC is no reserve, never 0 kWh of room", async ({ page }) => {
     await mount(page, { remaining: "0" });
     await openDetail(page);
-    await header(page, "reserve").click();
+    await open(page, "reserve");
     await expect(question(page, "reserve").locator("[data-row='usable'], [data-row='room']")).toHaveCount(0);
 });
 
 test("a cold reading in °F is compared in °C", async ({ page }) => {
     await mount(page, { temperature: "41", temperatureUnit: "°F" });
     await openDetail(page);
-    await header(page, "limits").click();
+    await open(page, "limits");
     await expect(question(page, "limits").locator("[data-cold]")).toContainText("41 °F");
 });
 
 test("a duration just short of two hours reads 2 h 0 min, never 1 h 60 min", async ({ page }) => {
     await mount(page, { power: "-1500", timeToEmpty: "119.7" });
     await openDetail(page);
-    await header(page, "reserve").click();
+    await open(page, "reserve");
     await expect(question(page, "reserve").locator("[data-row='time']")).toContainText("≈ 2 h 0 min");
 });
 
 test("a plan that cannot be loaded says so and offers a retry", async ({ page }) => {
     await mount(page, { forecastFails: true });
     await openDetail(page);
-    await header(page, "next").click();
+    await open(page, "next");
     const next = question(page, "next");
     await expect(next.locator("[data-row='planned-soc']")).toContainText("the plan could not be loaded");
     await expect(next.getByRole("button", { name: "Try again" })).toBeVisible();
@@ -418,7 +609,7 @@ test.describe("today's charge", () => {
         await mount(page);
         await openDetail(page);
         expect(await sectionRequests(page)).toBe(0);
-        await header(page, "charge").click();
+        await open(page, "charge");
         const charge = question(page, "charge");
         await expect(charge.locator("[data-row='charged']")).toContainText("6.0 kWh");
         expect(await sectionRequests(page)).toBe(1);
@@ -449,7 +640,7 @@ test.describe("today's charge", () => {
     test("no charge today is said so, not an unknown or a zero-cost store", async ({ page }) => {
         await mount(page, { noCharge: true });
         await openDetail(page);
-        await header(page, "charge").click();
+        await open(page, "charge");
         const charge = question(page, "charge");
         await expect(charge.locator("[data-no-charge]")).toContainText("has not charged today");
         await expect(charge.locator(".preview")).toHaveText("No charge today");
@@ -462,7 +653,7 @@ test.describe("next and the plan", () => {
         await mount(page);
         await openDetail(page);
         await expect(page.locator("helman-solar-inspector-card")).toHaveCount(0);
-        await header(page, "next").click();
+        await open(page, "next");
         const next = question(page, "next");
         await expect(next.locator("[data-row='soc-now']")).toContainText("67 %");
         await expect(next.locator("[data-row='planned-soc']")).toContainText("66 % at 12:15");
@@ -475,7 +666,7 @@ test.describe("next and the plan", () => {
         await expect(next).toContainText("does not record why an optimizer chose");
 
         // Another question unmounts the plan.
-        await header(page, "reserve").click();
+        await open(page, "reserve");
         await expect(page.locator("helman-solar-inspector-card")).toHaveCount(0);
     });
 });
@@ -484,7 +675,7 @@ test.describe("diagnostics", () => {
     test("throughput cycles with their denominator, never health; cells and heating as evidence", async ({ page }) => {
         await mount(page);
         await openDetail(page);
-        await header(page, "diagnostics").click();
+        await open(page, "diagnostics");
         const diagnostics = question(page, "diagnostics");
         await expect(diagnostics.locator("[data-row='cycles']")).toContainText("≈ 170.3 (throughput)");
         await expect(diagnostics.locator("[data-row='temperature-range']")).toContainText("23.0 °C – 25.0 °C");
@@ -501,25 +692,60 @@ test.describe("diagnostics", () => {
 });
 
 test.describe("disclosure and live data", () => {
-    test("one open question at a time, evidence by keyboard, and a reopened dialog starts at the overview", async ({ page }) => {
+    test("one open answer at a time under the tiles, evidence by keyboard, and a reopened dialog starts at the overview", async ({ page }) => {
         await mount(page);
         await openDetail(page);
-        await header(page, "reserve").focus();
+        const nextTile = tile(page, "next").locator("button");
+        await nextTile.focus();
         await page.keyboard.press("Enter");
-        await expect(header(page, "reserve")).toHaveAttribute("aria-expanded", "true");
-        await expect(header(page, "reserve")).toBeFocused();
-        await evidence(page, "reserve").focus();
+        await expect(nextTile).toHaveAttribute("aria-expanded", "true");
+        await expect(header(page, "next")).toHaveAttribute("aria-expanded", "true");
+        await expect(nextTile).toBeFocused();
+        await evidence(page, "next").focus();
         await page.keyboard.press("Space");
-        await expect(question(page, "reserve").locator("[data-row='capacity']")).toBeVisible();
+        await expect(question(page, "next").locator("[data-row='executor']")).toBeVisible();
 
+        await tile(page, "limits").locator("button").click();
+        await expect(nextTile).toHaveAttribute("aria-expanded", "false");
+        await expect(tile(page, "limits").locator("button")).toHaveAttribute("aria-expanded", "true");
+        await expect(content(page).locator("helman-node-question")).toHaveCount(1);
+        await expect(question(page, "next")).toHaveCount(0);
+        // The answer opens full width under the tiles.
+        const tiles = await content(page).locator(".tiles").boundingBox();
+        const answer = await question(page, "limits").boundingBox();
+        expect(answer!.y).toBeGreaterThanOrEqual(tiles!.y + tiles!.height);
+        expect(answer!.width).toBeCloseTo(tiles!.width, 0);
+
+        // The open answer's header, or its tile again, closes it.
         await header(page, "limits").click();
-        await expect(header(page, "reserve")).toHaveAttribute("aria-expanded", "false");
-        await expect(question(page, "reserve").locator("[data-row='usable']")).toHaveCount(0);
+        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
+        await tile(page, "limits").locator("button").click();
+        await tile(page, "limits").locator("button").click();
+        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
 
+        await open(page, "limits");
         await page.locator("node-detail-dialog ha-dialog").evaluate((dialog: any) => dialog.close());
         await expect(content(page)).toHaveCount(0);
         await openDetail(page);
-        await expect(header(page, "limits")).toHaveAttribute("aria-expanded", "false");
+        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
+        await expect(tile(page, "limits").locator("button")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    test("a reading opens its more-info; a calculated figure stays plain", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await open(page, "diagnostics");
+        await evidence(page, "diagnostics").click();
+        const reading = question(page, "diagnostics").locator("[data-row='cell_voltage_high'] button.reading");
+        await expect(reading).toHaveText("3.342 V");
+        await reading.click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.solax_cell_voltage_high"]);
+        // Lifetime energy, a cycle count: worked out, not one entity's reading.
+        await expect(question(page, "diagnostics").locator("[data-row='cycles'] button")).toHaveCount(0);
+
+        await open(page, "next");
+        await question(page, "next").locator("[data-row='soc-now'] button.reading").click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.solax_cell_voltage_high", "sensor.soc"]);
     });
 
     test("live readings reach the open detail", async ({ page }) => {
@@ -530,7 +756,7 @@ test.describe("disclosure and live data", () => {
             const hass = window.__hass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.soc": { state: "70", attributes: { unit_of_measurement: "%" } } } };
         });
-        await expect(content(page).locator("[data-figure='soc']")).toContainText("70 %");
+        await expect(glyph(page).locator("[data-soc-text]")).toHaveText("70 %");
     });
 });
 
@@ -538,36 +764,44 @@ test.describe("a Custom inverter", () => {
     test("keeps every question with what its config can answer", async ({ page }) => {
         await mount(page, { profile: false });
         await openDetail(page);
-        await expect(content(page).locator("helman-node-question")).toHaveCount(5);
-        await expect(question(page, "diagnostics").locator(".preview")).toHaveText("No battery diagnostics are available.");
-        await header(page, "limits").click();
+        await expect(content(page).locator("helman-node-tile")).toHaveCount(3);
+        await expect(tile(page, "diagnostics").locator(".detail")).toHaveText("No battery diagnostics are available.");
+        await open(page, "limits");
         await expect(question(page, "limits").locator("[data-row='bms-charge']")).toContainText("needs a hardware profile");
         await expect(question(page, "limits").locator("[data-row='planning-charge']")).toContainText("5.0 kW");
-        await header(page, "diagnostics").click();
+        await open(page, "diagnostics");
         await expect(question(page, "diagnostics").locator("[data-row='cycles']")).toContainText("needs the lifetime energy counters");
     });
 });
 
+/** The two states the review screenshots show: an evening discharge and a midday charge. */
+const STATES: Array<[string, Variant]> = [
+    ["evening", { solar: "0", house: "1800", power: "-1500", grid: "300", soc: "54", remaining: "9353" }],
+    ["midday", { solar: "6500", house: "900", power: "3200", grid: "-2400", soc: "81", remaining: "14029", ratedPower: "10000" }],
+];
+
 test.describe("screenshots", { tag: "@screens" }, () => {
     for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
-        test(`overview and an expanded answer at ${name}`, async ({ page }) => {
-            await page.setViewportSize({ width, height });
-            await mount(page);
-            await openDetail(page);
-            await page.screenshot({ path: `${SCREENS}/battery-${name}-overview.png`, fullPage: true });
-            await header(page, "limits").click();
-            await page.screenshot({ path: `${SCREENS}/battery-${name}-limits.png`, fullPage: true });
-            await evidence(page, "limits").click();
-            await page.screenshot({ path: `${SCREENS}/battery-${name}-limits-evidence.png`, fullPage: true });
-            await header(page, "charge").click();
-            await expect(question(page, "charge").locator("[data-row='charged']")).toBeVisible();
-            await evidence(page, "charge").click();
-            await page.screenshot({ path: `${SCREENS}/battery-${name}-charge.png`, fullPage: true });
-            await header(page, "reserve").click();
-            await evidence(page, "reserve").click();
-            await page.screenshot({ path: `${SCREENS}/battery-${name}-reserve.png`, fullPage: true });
-            const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-            expect(overflow).toBeLessThanOrEqual(0);
-        });
+        for (const [state, variant] of STATES) {
+            test(`the ${state} overview, Today and an opened answer at ${name}`, async ({ page }) => {
+                await page.setViewportSize({ width, height });
+                await mount(page, variant);
+                await openDetail(page);
+                await page.screenshot({ path: `${SCREENS}/battery-${state}-${name}-now.png`, fullPage: true });
+                await flow(page).locator("[data-scope='today']").click();
+                await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+                await page.screenshot({ path: `${SCREENS}/battery-${state}-${name}-today.png`, fullPage: true });
+                await open(page, "charge");
+                await expect(question(page, "charge").locator("[data-row='charged']")).toBeVisible();
+                await page.screenshot({ path: `${SCREENS}/battery-${state}-${name}-charge.png`, fullPage: true });
+                await open(page, "limits");
+                await evidence(page, "limits").click();
+                await page.screenshot({ path: `${SCREENS}/battery-${state}-${name}-limits.png`, fullPage: true });
+                await open(page, "reserve");
+                await page.screenshot({ path: `${SCREENS}/battery-${state}-${name}-reserve.png`, fullPage: true });
+                const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+                expect(overflow).toBeLessThanOrEqual(0);
+            });
+        }
     }
 });

@@ -12,8 +12,11 @@ import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model"
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
+import "../../shared/soc-glyph";
+import type { SocDirection } from "../../shared/soc-glyph";
+import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import {
@@ -25,7 +28,7 @@ import {
     scheduleRuns,
     type ScheduleRun,
 } from "./node-detail-schedule";
-import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { BatteryDetailParams } from "./node-detail-types";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
@@ -62,19 +65,30 @@ interface Ceilings {
 /**
  * The battery detail: how much energy is left and room to store, what the
  * battery will do next, what limits it, where today's charge came from and what
- * the diagnostics tell, as an overview and five questions.
+ * the diagnostics tell.
  *
- * Live readings come from `hass`; the backend overview supplies the entity ids,
- * the configured ceilings and the throughput cycles. The plan comes from the
- * shared schedule owner, the planned SoC from the forecast once its question
- * opens, and today's charge origin from the node detail's `charge` section,
- * requested only while its question is open. Nothing here is a health verdict:
- * the hardware's state-of-health reading is not used.
+ * It opens on a status pill and the battery's Now/Today flow around its SoC
+ * glyph. The pictures absorb two questions: the glyph opens the reserve, the
+ * flow opens today's charge. The other three are tiles; one answer is open at
+ * a time, full width under the tiles.
+ *
+ * Live readings come from `hass` and the live flow from the card; the backend
+ * overview supplies the entity ids, the configured ceilings and the throughput
+ * cycles. The plan comes from the shared schedule owner, the planned SoC from
+ * the forecast once its question opens, today's flows from the `flows`
+ * section once Today is chosen, and today's charge origin from the `charge`
+ * section, requested only while its question is open. Nothing here is a
+ * health verdict: the hardware's state-of-health reading is not used.
  */
 @customElement("node-detail-battery-content")
 export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .muted {
+            color: var(--secondary-text-color);
+        }
+        .estimate {
+            margin: 0;
+            font-size: 0.85rem;
             color: var(--secondary-text-color);
         }
     `];
@@ -192,61 +206,201 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const reserve = this._reserve(overview);
+        const estimate = this._flowScope === "now" ? this._estimate(overview) : null;
         return html`
             <div class="content">
-                ${this._renderSummary(overview, reserve)}
-                ${this._question("reserve", this._reservePreview(reserve), () => this._renderReserve(overview, reserve), () => this._renderReserveEvidence(overview, reserve), "evidence")}
-                ${this._question("next", this._nextPreview(), () => this._renderNext(overview), () => this._renderNextEvidence(), "evidence")}
-                ${this._question("limits", this._limitsPreview(overview), () => this._renderLimits(overview), () => this._renderLimitsEvidence(overview), "technical")}
-                ${this._question("charge", this._chargePreview(overview), () => this._renderCharge(), () => this._renderChargeEvidence(overview), "evidence")}
-                ${this._question("diagnostics", this._diagnosticsPreview(overview), () => this._renderDiagnostics(overview), () => this._renderDiagnosticsEvidence(overview), "technical")}
+                ${this._renderSummary(overview)}
+                ${this._renderBatteryFlow(overview, reserve)}
+                ${estimate?.kind === "time" ? html`
+                    <p class="estimate" data-estimate>${fillTemplate(this._t("next_estimate"), { estimate: estimate.text })}</p>
+                ` : nothing}
+                <div class="tiles">
+                    ${this._renderNextTile()}
+                    ${this._renderLimitsTile(overview)}
+                    ${this._renderDiagnosticsTile(overview)}
+                </div>
+                ${this._renderOpen(overview, reserve)}
             </div>
         `;
     }
 
-    private _renderSummary(overview: BatteryDetailPayload, reserve: Reserve | null) {
+    /** The open question's answer and evidence, full width under the tiles. */
+    private _renderOpen(overview: BatteryDetailPayload, reserve: Reserve | null) {
+        switch (this._open) {
+            case "reserve":
+                return this._question("reserve", this._reservePreview(reserve), () => this._renderReserve(overview, reserve), () => this._renderReserveEvidence(overview, reserve), "evidence");
+            case "next":
+                return this._question("next", this._nextPreview(), () => this._renderNext(overview), () => this._renderNextEvidence(), "evidence");
+            case "limits":
+                return this._question("limits", this._limitsPreview(overview), () => this._renderLimits(overview), () => this._renderLimitsEvidence(overview), "technical");
+            case "charge":
+                return this._question("charge", this._chargePreview(overview), () => this._renderCharge(), () => this._renderChargeEvidence(overview), "evidence");
+            case "diagnostics":
+                return this._question("diagnostics", this._diagnosticsPreview(overview), () => this._renderDiagnostics(overview), () => this._renderDiagnosticsEvidence(overview), "technical");
+            default:
+                return nothing;
+        }
+    }
+
+    private _renderSummary(overview: BatteryDetailPayload) {
         const power = this.params.power;
         const status = power === null
             ? this._t("status.unavailable")
             : Math.abs(power) <= IDLE_W
             ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
             : fillTemplate(this._t(power > 0 ? "status.charging" : "status.discharging"), { power: formatPower(Math.abs(power)).display });
-
-        // The status sentence already says the power and its direction.
-        const figures: Array<[string, string, string]> = [];
-        const soc = this._number(overview, "soc");
-        if (soc !== null) figures.push([this._t("figure.soc"), this._percent(soc), "soc"]);
-        if (reserve?.usableKwh != null) {
-            figures.push([
-                fillTemplate(this._t("figure.usable"), { floor: this._percent(reserve.minSoc!) }),
-                formatGridEnergy(reserve.usableKwh),
-                "usable",
-            ]);
-        }
-
-        const next = this._nextLine(overview);
+        const direction = this._direction();
+        const tone: ScheduleActionTone = direction === "idle" ? "neutral" : direction;
         return html`
             <div class="summary" data-overview>
-                <p class="status">${status}</p>
-                ${figures.length ? html`
-                    <div class="figures">
-                        ${figures.map(([label, value, key]) => html`
-                            <div class="figure" data-figure=${key}><span class="figure-label">${label}</span><span class="figure-value">${value}</span></div>
-                        `)}
-                    </div>
-                ` : nothing}
-                ${next ? html`<p class="next" data-next>${next}</p>` : nothing}
+                <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
                 ${this._renderException(overview)}
             </div>
         `;
     }
 
-    /** The plan's next change; without one, the time estimate while the battery is active. */
-    private _nextLine(overview: BatteryDetailPayload): string | null {
+    /** Which way the battery's power moves now; idle without a reading. */
+    private _direction(): SocDirection {
+        const power = this.params.power;
+        if (power === null || Math.abs(power) <= IDLE_W) return "idle";
+        return power > 0 ? "charge" : "discharge";
+    }
+
+    // Flow --------------------------------------------------------------------
+
+    /**
+     * Solar and grid in, house and grid out, around the SoC glyph: live from
+     * the card on Now, today's kWh from the `flows` section on Today. The
+     * glyph opens the reserve; the flow opens today's charge.
+     */
+    private _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
+        const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow(overview);
+        const soc = this._number(overview, "soc");
+        return this._renderFlow(flow, this.params.flowScaleW, "charge", html`
+            <button
+                slot="centre"
+                class="glyph"
+                data-glyph
+                aria-label=${this._t("q.reserve")}
+                aria-expanded=${this._open === "reserve" ? "true" : "false"}
+                @click=${() => this._setOpen(this._open === "reserve" ? null : "reserve")}
+            >
+                <helman-soc-glyph
+                    .soc=${soc !== null && soc >= 0 && soc <= 100 ? soc : null}
+                    .min=${reserve?.minSoc ?? null}
+                    .max=${reserve?.maxSoc ?? null}
+                    .usableLabel=${reserve?.usableKwh != null ? formatGridEnergy(reserve.usableKwh) : null}
+                    .roomLabel=${reserve?.roomKwh != null ? formatGridEnergy(reserve.roomKwh) : null}
+                    .minLabel=${reserve?.minSoc != null ? fillTemplate(this._t("glyph.min"), { soc: this._percent(reserve.minSoc) }) : null}
+                    .maxLabel=${reserve?.maxSoc != null ? fillTemplate(this._t("glyph.max"), { soc: this._percent(reserve.maxSoc) }) : null}
+                    .direction=${this._direction()}
+                ></helman-soc-glyph>
+            </button>
+        `);
+    }
+
+    /** The card's live split, W; unknown without the solar or battery reading, never 0. */
+    private _nowFlow(): NodeFlow {
+        const flows = this.params.flows;
+        const watts = (value: number | undefined) => value ?? null;
+        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
+        const inputs = [
+            this._flowItem("solar", watts(flows?.solarToBattery), power),
+            this._flowItem("grid", watts(flows?.gridToBattery), power),
+        ];
+        const outputs = [
+            this._flowItem("house", watts(flows?.batteryToHouse), power),
+            this._flowItem("grid", watts(flows?.batteryToGrid), power),
+        ];
+        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
+    }
+
+    /**
+     * Today's kWh from the `flows` section: the grid charge carries its paid
+     * cost, an estimate, and the footnote the net change by the battery's own
+     * meters and any charge of unknown origin, never forced into a source.
+     */
+    private _todayFlow(overview: BatteryDetailPayload): NodeFlow {
+        const payload = this._todayFlows?.status === "ready" ? this._todayFlows.payload : null;
+        const flows = payload?.flows ?? null;
+        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const cost = flows?.gridToBatteryCost;
+        const inputs = [
+            this._flowItem("solar", flows?.solarToBattery ?? null, energy),
+            {
+                ...this._flowItem("grid", flows?.gridToBattery ?? null, energy),
+                note: cost != null && (flows?.gridToBattery ?? 0) > 0
+                    ? fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(cost, currencyFromPriceUnit(payload!.currency)) })
+                    : null,
+            },
+        ];
+        const outputs = [
+            this._flowItem("house", flows?.batteryToHouse ?? null, energy),
+            this._flowItem("grid", flows?.batteryToGrid ?? null, energy),
+        ];
+        const status = this._todayFlowsNote();
+        const notes: string[] = status ? [status] : [];
+        if (flows) {
+            if ((flows.unknownToBattery ?? 0) > 0) {
+                notes.push(fillTemplate(this._t("flow.unknown_charge"), { kwh: formatGridEnergy(flows.unknownToBattery!) }));
+            }
+            const charged = readEnergyKWh(this.hass, overview.entities.today_charge);
+            const discharged = readEnergyKWh(this.hass, overview.entities.today_discharge);
+            if (charged !== null && discharged !== null) {
+                const net = charged - discharged;
+                notes.push(fillTemplate(this._t("flow.net"), { kwh: (net > 0 ? "+" : net < 0 ? "−" : "") + formatGridEnergy(Math.abs(net)) }));
+            }
+        }
+        return {
+            scopeLabel: this._todayScopeLabel(),
+            inputs,
+            outputs,
+            // The charge of unknown origin is part of what went in.
+            ...this._flowTotals(inputs, outputs, energy, flows?.unknownToBattery ?? 0),
+            notes,
+        };
+    }
+
+    // Tiles -------------------------------------------------------------------
+
+    /** The plan's next change, in its action's tone. */
+    private _renderNextTile() {
         const change = this._nextChange();
-        if (change) return fillTemplate(this._t("next_change"), { time: this._time(change.startMs), action: this._actionLabel(change.action) });
-        const estimate = this._estimate(overview);
-        return estimate && estimate.kind === "time" ? fillTemplate(this._t("next_estimate"), { estimate: estimate.text }) : null;
+        if (!change) return this._tile("next", this._t("tile.no_change"), null, nothing, "neutral");
+        return this._tile("next", this._time(change.startMs), this._actionLabel(change.action), nothing, getScheduleActionTone(change.action.kind));
+    }
+
+    /**
+     * The lowest known ceiling in the direction the battery moves, charge at
+     * idle, with the power now against it while it moves.
+     */
+    private _renderLimitsTile(overview: BatteryDetailPayload) {
+        const direction = this._direction();
+        const side = direction === "discharge" ? "discharge" : "charge";
+        const lowest = this._lowest(this._ceilings(overview, side));
+        if (!lowest) return this._tile("limits", "–", this._t("limits.none"));
+        const power = this.params.power;
+        const graphic = direction !== "idle" && power !== null ? html`
+            <span class="meter action-tone-${direction}" data-limits-meter>
+                <span class="meter-fill" style="width: ${Math.min(100, Math.abs(power) / lowest.watts * 100).toFixed(1)}%"></span>
+            </span>
+        ` : nothing;
+        return this._tile("limits", "≤ " + formatPower(lowest.watts).display, this._t(`tile.limits_${side}`), graphic);
+    }
+
+    /** Temperature, the cell voltage gap from the highest and lowest cell, and cycles. */
+    private _renderDiagnosticsTile(overview: BatteryDetailPayload) {
+        const parts: string[] = [];
+        const high = this._volts(overview, "cell_voltage_high");
+        const low = this._volts(overview, "cell_voltage_low");
+        if (high !== null && low !== null && high >= low) {
+            parts.push(fillTemplate(this._t("diagnostics.gap_short"), { gap: Math.round((high - low) * 1000) + " mV" }));
+        }
+        const cycles = overview.cycles.cycles;
+        if (cycles !== null) parts.push(fillTemplate(this._t("diagnostics.cycles_short"), { cycles: cycles.toFixed(0) }));
+        const temperature = this._reading(overview, "battery_temperature");
+        if (temperature === null && !parts.length) return this._tile("diagnostics", "–", this._t("diagnostics.none"));
+        return this._tile("diagnostics", temperature ?? "–", parts.join(" · ") || null);
     }
 
     /** At most one: a BMS state or run mode the hardware reports. */
@@ -375,7 +529,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const change = this._nextChange();
         const planned = this._plannedSlot();
         return html`
-            ${this._row(this._t("next.soc_now"), soc === null ? this._t("unavailable") : this._percent(soc), "soc-now")}
+            ${this._row(this._t("next.soc_now"), soc === null ? this._t("unavailable") : this._percent(soc), "soc-now", undefined, overview.entities.soc)}
             ${this._row(this._t("next.planned_soc"), planned
                 ? fillTemplate(this._t("next.planned_soc_value"), { soc: this._percent(planned.socPct), time: this._time(planned.endMs) })
                 : this._t(this._forecast !== null ? "next.no_plan" : this._forecastFailed ? "next.plan_failed" : "next.loading_plan"), "planned-soc")}
@@ -619,8 +773,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 <p class="note">${this._t("charge.attribution_note")}</p>
             ` : nothing}
             <div class="section-title">${this._t("charge.meters")}</div>
-            ${this._row(this._t("charge.input_today"), input === null ? this._t("unavailable") : formatGridEnergy(input), "input-today")}
-            ${this._row(this._t("charge.output_today"), output === null ? this._t("unavailable") : formatGridEnergy(output), "output-today")}
+            ${this._row(this._t("charge.input_today"), input === null ? this._t("unavailable") : formatGridEnergy(input), "input-today", undefined, overview.entities.today_charge)}
+            ${this._row(this._t("charge.output_today"), output === null ? this._t("unavailable") : formatGridEnergy(output), "output-today", undefined, overview.entities.today_discharge)}
             ${input !== null && output !== null && input > 0 ? html`
                 ${this._row(this._t("charge.flow_ratio"), (output / input).toFixed(2), "flow-ratio")}
                 <p class="note" data-flow-ratio-note>${this._t("charge.flow_ratio_note")}</p>

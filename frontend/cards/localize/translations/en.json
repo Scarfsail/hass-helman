@@ -155,6 +155,20 @@
       "solar": "Solar",
       "house": "House"
     },
+    "flow": {
+      "now": "Now",
+      "today": "Today",
+      "scope_now": "Now · {time}",
+      "scope_today": "Today · 00:00–{time}",
+      "total_in": "In {value}",
+      "total_out": "Out {value}",
+      "paid_estimate": "paid ≈ {value}",
+      "loading": "Loading today's flows…",
+      "failed": "Today's flows could not be loaded.",
+      "unavailable_not_loaded": "Today's flows are not available yet: Helman is still loading. Try again shortly.",
+      "unavailable_no_house_node": "Today's flows need the house in the device tree, which has no house node yet.",
+      "unavailable_no_house_meter": "Today's flows need the house meter the device reports read; it is not configured."
+    },
     "inverter": {
       "cell_label": "Inverter: {mode}",
       "link_cue": "communication details: {value}",
@@ -168,13 +182,9 @@
       "technical": "Technical readings",
       "status": {
         "commanded": "Helman last commanded: {mode}.",
-        "no_command": "Helman has not commanded a mode yet.",
-        "match": "The inverter's mode registers match it.",
-        "unknown": "Whether the inverter's mode registers match can't be told right now."
+        "no_command": "Helman has not commanded a mode yet."
       },
       "figure": {
-        "commanded": "Commanded",
-        "ac_power": "AC power",
         "temperature": "Temperature"
       },
       "next_change": "Next: {time} {action}",
@@ -327,6 +337,34 @@
         "lock_state": "Lock state",
         "grid_runtime": "Time on grid",
         "eps_runtime": "Time off-grid (EPS)"
+      },
+      "chain": {
+        "plan": "Plan",
+        "command": "Last command",
+        "inverter": "Inverter",
+        "executor": "executor {outcome}",
+        "no_runtime": "no executor record",
+        "match": "matches",
+        "mismatch": "doesn't match",
+        "unknown": "can't be told now",
+        "not_read": "not readable",
+        "other_mode": "another mode",
+        "not_applied": "not applied",
+        "candidate": "{action}: a candidate, not executed"
+      },
+      "strip": {
+        "scope": "Modes · today to noon tomorrow",
+        "history_failed": "Today's modes could not be read.",
+        "no_history": "A Custom inverter has no mode registers to read: only the plan is drawn.",
+        "no_registers": "Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn."
+      },
+      "tile": {
+        "export_cap": "export cap",
+        "ac_share": "AC {value} · {share} of rating"
+      },
+      "flow": {
+        "export": "Export",
+        "unknown_house": "{kwh} of the house's use today has no known source."
       }
     },
     "grid": {
@@ -341,18 +379,11 @@
       "phase": "Phase",
       "loading_history": "Loading today's history…",
       "history_failed": "Today's history could not be loaded.",
-      "next_price": "Next: import price {price} from {time}",
       "status": {
         "importing": "Importing {power} from the grid.",
         "exporting": "Exporting {power} to the grid.",
         "idle": "Hardly any grid flow right now ({power}).",
         "unavailable": "No grid power reading right now."
-      },
-      "figure": {
-        "net_import": "Net import today",
-        "net_export": "Net export today",
-        "net_cost": "Net cost today",
-        "net_income": "Net income today"
       },
       "power": {
         "import": "importing {power}",
@@ -419,7 +450,9 @@
         "meter_import": "Meter import power",
         "meter_export": "Meter export power",
         "calculation": "Estimated current = |phase power| ÷ phase voltage, assuming a power factor of 1. Reactive power or a lower power factor make the real current higher.",
-        "limitations": "Power is the grid meter's, voltage the inverter's terminals'. The limit is the inverter's main-breaker setting, not the breaker's rating, so the comparison does not measure breaker headroom; phase sums or export power say nothing about it either."
+        "limitations": "Power is the grid meter's, voltage the inverter's terminals'. The limit is the inverter's main-breaker setting, not the breaker's rating, so the comparison does not measure breaker headroom; phase sums or export power say nothing about it either.",
+        "scale_limit": "A full bar is the {limit} main breaker setting at {voltage}, as a picture of scale, not breaker headroom.",
+        "scale_power": "A full bar is {power}: no main breaker setting is readable."
       },
       "money": {
         "failed": "Today's money could not be loaded.",
@@ -489,6 +522,24 @@
         "run_mode": "Run mode",
         "no_readings": "No frequency or run mode reading is available.",
         "evidence_note": "Readings as the inverter reports them now."
+      },
+      "picture": {
+        "voltage": "Voltage · today's range",
+        "range": "{min}–{max} today",
+        "range_loading": "Loading today's voltage range…",
+        "range_failed": "Today's voltage range could not be loaded."
+      },
+      "flow": {
+        "price_now": "Price now: {prices}"
+      },
+      "tile": {
+        "loading_prices": "Loading the prices…",
+        "no_price_change": "No change known",
+        "on_grid": "On grid",
+        "off_grid": "Off-grid",
+        "fault": "Fault",
+        "no_voltage_sensors": "The phase voltage sensors are not found.",
+        "voltage_range": "lowest–highest today"
       }
     },
     "battery": {
@@ -509,9 +560,18 @@
         "idle": "Idle ({power}).",
         "unavailable": "No battery power reading right now."
       },
-      "figure": {
-        "soc": "Charge (SoC)",
-        "usable": "Usable above {floor}"
+      "glyph": {
+        "min": "min {soc}",
+        "max": "max {soc}"
+      },
+      "flow": {
+        "net": "Net change today: {kwh}, by the battery's own meters.",
+        "unknown_charge": "{kwh} of today's charge has no known source."
+      },
+      "tile": {
+        "no_change": "No change planned",
+        "limits_charge": "charge ceiling",
+        "limits_discharge": "discharge ceiling"
       },
       "exception": {
         "bms_disconnected": "The inverter reports the battery management system as disconnected ({state}).",
@@ -695,11 +755,6 @@
         "producing": "Producing {power}.",
         "not_producing": "Not producing right now.",
         "unavailable": "No solar power reading right now."
-      },
-      "figure": {
-        "today": "Today so far",
-        "vs_forecast": "Of forecast to {time}",
-        "remaining": "Forecast for the rest of today"
       },
       "next": {
         "until": "Forecast: production until around {time}",
@@ -885,6 +940,24 @@
         "training": "Bias correction learned from",
         "training_value": "{days} days",
         "evidence_note": "Forecast days beyond the forecaster's horizon show no forecast rather than zero."
+      },
+      "curve": {
+        "title": "Production today",
+        "actual": "produced",
+        "forecast": "forecast",
+        "forecast_raw": "forecast (uncorrected)",
+        "maximum": "configured max {power}",
+        "no_sensor": "Today's production curve needs a solar power sensor.",
+        "unit": "The solar power sensor's unit is not a power unit, so today's production is not drawn."
+      },
+      "flow": {
+        "unresolved": "{kwh} of today's solar is not resolved to a destination.",
+        "strings_failed": "The strings' energy today could not be loaded."
+      },
+      "tile": {
+        "tomorrow": "forecast for tomorrow",
+        "rating": "inverter AC rating",
+        "export": "export limit"
       }
     },
     "house": {
@@ -911,19 +984,12 @@
         "using": "Using {power}.",
         "unavailable": "No house power reading right now."
       },
-      "figure": {
-        "today": "Today so far",
-        "paid": "Paid today (estimate)"
-      },
       "mix": {
-        "now": "Supplied now: {shares}",
         "solar": "solar {share}",
         "battery": "battery {share}",
         "grid": "grid {share}"
       },
       "next": {
-        "planned": "Next planned: {name} at {time}",
-        "running": "Running by plan: {name} until {end}",
         "candidate": "candidate, its condition is not met",
         "rest_short": "≈ {kwh} for the rest of today",
         "run_short": "{name} at {time}",
@@ -1094,6 +1160,18 @@
         "input_eps": "EPS",
         "formula": "On-grid, a phase's house load is the inverter's output on that phase plus what the grid meter imports on it (less what it exports), plus the EPS output. Off-grid the grid is disconnected and the EPS output is the whole house load. The total is the sum of the three phases.",
         "inputs_none": "Measuring the phases needs an inverter hardware profile; without one, the phases are estimated from your wiring map alone."
+      },
+      "flow": {
+        "rest": "Everything else",
+        "unattributed": "{kwh} from no known source",
+        "paid": "Paid {value}, an estimate, not a bill"
+      },
+      "tile": {
+        "no_runs": "Nothing planned",
+        "until": "until {time}",
+        "today_so_far": "used so far today",
+        "phase_highest": "most loaded phase",
+        "phase_highest_estimated": "most loaded phase, estimated"
       }
     },
     "ev_charger": {
@@ -1118,11 +1196,6 @@
         "drawing": "Drawing {power}.",
         "not_drawing": "Not drawing power ({power}).",
         "unavailable": "No charger power reading right now."
-      },
-      "figure": {
-        "power": "Power now",
-        "car": "{name}: charge → limit",
-        "session": "Added this session"
       },
       "exception": {
         "fault": "The charger reports a fault: {fault}.",
@@ -1311,6 +1384,42 @@
         "lock": "Electronic lock",
         "no_readings": "No technical readings are available.",
         "evidence_note": "Readings as reported by the charger, each with its own update time."
+      },
+      "switch": {
+        "execution_off": "Schedule execution is off: the plan does not switch it.",
+        "on_planned": "On, as planned.",
+        "off_planned": "Off, though the plan charges now.",
+        "on_unplanned": "On, though no charging is planned now.",
+        "off_unplanned": "Off, as planned.",
+        "next_on": "The plan next switches it on at {time}.",
+        "next_off": "The plan next switches it off at {time}.",
+        "no_next": "The plan does not switch it today or tomorrow."
+      },
+      "strip": {
+        "scope": "Charging · today to noon tomorrow",
+        "charged": "Charging",
+        "starts": "starts charging",
+        "stops": "stops charging",
+        "history_failed": "Today's charging could not be read.",
+        "completion_reach": "Under the current plan ≈ {limit} by {time}: an estimate, not a guarantee.",
+        "completion_short": "Under the current plan ≈ {soc} of {limit} by {time}, {kwh} short: an estimate, not a guarantee."
+      },
+      "glyph": {
+        "limit": "limit {soc}"
+      },
+      "flow": {
+        "mix_estimate": "Sources are the house's mix now, applied to the charger: an estimate.",
+        "unattributed": "{kwh} from no known source"
+      },
+      "tile": {
+        "session": "this session",
+        "session_for": "this session, {duration}",
+        "charging": "Charging",
+        "charging_since": "from {time}",
+        "fault": "Fault",
+        "not_charging": "Not charging",
+        "phase_sum": "phases {power}",
+        "not_compared": "not compared with its phases"
       }
     }
   },

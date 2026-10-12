@@ -1,8 +1,8 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
-import type { LocalizeFunction } from "../../localize/localize";
-import type { ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
+import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
+import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
@@ -17,13 +17,32 @@ import {
     type QuestionToggleDetail,
 } from "../../shared/node-question";
 import "../../shared/node-question";
+import "../../shared/node-tile";
+import "../../shared/node-flow";
+import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail } from "../../shared/node-flow";
+import type { ScheduleActionTone } from "../../shared/schedule/action-tones";
 import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
+
+export { IDLE_W } from "../live-flows";
 
 /** How stale a "today so far" answer may get before it is re-read, while visible. */
 export const TODAY_REFRESH_MS = 5 * 60_000;
 
-/** Below this many watts either way a flow counts as idle, as on the card. */
-export const IDLE_W = 50;
+/** The Today flow is drawn at the Now scale × this many hours, kWh. */
+export const TODAY_SCALE_HOURS = 4;
+
+/** What a node's flow draws in one scope. */
+export interface NodeFlow {
+    scopeLabel: string;
+    inputs: FlowItem[];
+    outputs: FlowItem[];
+    totalIn: string | null;
+    totalOut: string | null;
+    notes: string[];
+}
+
+/** An energy node a flow's ribbon can lead to; its colour is `--helman-<node>`. */
+export type FlowNode = "solar" | "grid" | "battery" | "house";
 
 export type SectionState<T> =
     | { status: "loading" }
@@ -62,6 +81,10 @@ type InspectorCardElement = HTMLElement & {
  * `_clockBoundaries` passes, and at least every {@link TODAY_REFRESH_MS}.
  * The forecast, once a subclass asks for it, is reloaded on every shared
  * data change; a load that fails with nothing to show sets `_forecastFailed`.
+ *
+ * The node's flow opens on Now, from the card's live split. Today's flows are
+ * the node's `flows` section, requested only once Today is chosen and kept
+ * current like any "today so far" answer while it is shown.
  */
 export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q extends string> extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
@@ -73,6 +96,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     @state() protected _forecast: ForecastPayload | null = null;
     /** The forecast could not be loaded and nothing earlier is shown. */
     @state() protected _forecastFailed = false;
+    /** Which scope the node's flow shows; every opening starts on Now. */
+    @state() protected _flowScope: FlowScope = "now";
+    /** Today's flows; `null` until Today is first chosen. */
+    @state() protected _todayFlows: SectionState<FlowsSectionPayload> | null = null;
 
     /** The node the detail asks `helman/get_node_detail` for, and its localize namespace. */
     protected abstract readonly _node: NodeDetailNode;
@@ -89,11 +116,14 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** When the clock next moves something shown; the now-clock re-renders then. */
     private _nextBoundary = Infinity;
     private _stopClock?: () => void;
+    private _todayFlowsRequest = 0;
+    private _todayFlowsRequestedAt = 0;
 
     connectedCallback(): void {
         super.connectedCallback();
         this.addEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
         this.addEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
+        this.addEventListener(FLOW_SCOPE_EVENT, this._onFlowScope as EventListener);
         if (this.hass) this._start();
     }
 
@@ -101,6 +131,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         super.disconnectedCallback();
         this.removeEventListener(QUESTION_TOGGLE_EVENT, this._onQuestionToggle as EventListener);
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
+        this.removeEventListener(FLOW_SCOPE_EVENT, this._onFlowScope as EventListener);
         this._started = false;
         this._unsubscribeDataChanged?.();
         this._unsubscribeDataChanged = undefined;
@@ -109,6 +140,9 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         // Whatever is still in flight answers nobody.
         this._overviewRequest += 1;
         this._forecastRequest += 1;
+        this._todayFlowsRequest += 1;
+        // A dropped load would otherwise stay "loading" after a reconnect.
+        if (this._todayFlows?.status === "loading") this._todayFlows = null;
         this._stop();
     }
 
@@ -120,6 +154,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
             }
             // Only the open evidence's embed is in the page; a closed one waits.
             for (const card of this._inspectors.values()) if (card.isConnected) card.hass = this.hass;
+        }
+        // Today's flows are "today so far": re-read on a new day, and otherwise
+        // at most every few minutes, only while shown and the page is visible.
+        if (this._flowScope === "today" && this._todaySection().state?.status === "ready" && !document.hidden && this._todayStale()) {
+            void this._loadTodayFlows();
         }
     }
 
@@ -133,6 +172,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         // everything shown: the feed's contract is to reload it all.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => this._onDataChanged());
         void this._loadOverview();
+        if (this._flowScope === "today" && this._todayStale()) void this._loadTodayFlows();
     }
 
     /** Undo what a subclass's `_start` began; requests in flight are dropped. */
@@ -141,6 +181,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** Reload everything shown; a subclass adds its own data. */
     protected _onDataChanged(): void {
         void this._loadOverview(true);
+        if (this._flowScope === "today") void this._loadTodayFlows();
         if (this._forecastRequested) {
             this._forecastLoader.invalidate();
             void this._loadForecast();
@@ -212,6 +253,43 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         return section ? { node: this._node, section } : { node: this._node };
     }
 
+    /**
+     * The section the Today flow draws, as loaded, and when it was last
+     * requested: the node's `flows` section by default. A node whose Today is
+     * another section returns that one, with `_loadTodayFlows` loading it, so
+     * the refresh, the retry and the scope label all read the one it shows.
+     */
+    protected _todaySection(): { state: SectionState<{ period: { start: string }; asOf: string }> | null; requestedAt: number } {
+        return { state: this._todayFlows, requestedAt: this._todayFlowsRequestedAt };
+    }
+
+    /** Whether today's section needs a read: none yet, from another day, or older than the refresh period. */
+    protected _todayStale(): boolean {
+        const { state, requestedAt } = this._todaySection();
+        return state?.status !== "ready"
+            || !this._isToday(state.payload.period.start)
+            || Date.now() - requestedAt > TODAY_REFRESH_MS;
+    }
+
+    /** Today's flows, the node's `flows` section; a refresh keeps the day's figures on screen. */
+    protected async _loadTodayFlows(): Promise<void> {
+        const request = ++this._todayFlowsRequest;
+        if (this._todayFlows?.status !== "ready" || !this._isToday(this._todayFlows.payload.period.start)) {
+            this._todayFlows = { status: "loading" };
+        }
+        this._todayFlowsRequestedAt = Date.now();
+        try {
+            const payload = await getSharedHelmanStore(this.hass)
+                .getNodeDetail<FlowsSectionPayload>(this._detailRequest("flows"), { fresh: true });
+            if (request !== this._todayFlowsRequest) return;
+            this._todayFlows = { status: "ready", payload };
+        } catch (error) {
+            if (request !== this._todayFlowsRequest) return;
+            console.error(`node-detail-${this._node}: failed to load today's flows`, error);
+            if (this._todayFlows?.status !== "ready") this._todayFlows = { status: "error" };
+        }
+    }
+
     /** The forecast, kept on a failed refresh; reloaded on shared changes once asked for. */
     protected async _loadForecast(): Promise<void> {
         this._forecastRequested = true;
@@ -242,6 +320,19 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     private _onEvidenceToggle = (event: CustomEvent<QuestionToggleDetail>): void => {
         event.stopPropagation();
         this._evidenceOpen = !this._evidenceOpen;
+    };
+
+    private _onFlowScope = (event: CustomEvent<FlowScopeDetail>): void => {
+        event.stopPropagation();
+        this._flowScope = event.detail.scope;
+        // Requested only once Today is chosen; Now needs nothing but the card.
+        if (this._flowScope === "today") {
+            if (this._todayStale()) void this._loadTodayFlows();
+        } else {
+            this._todayFlowsRequest += 1;
+            // A dropped load would otherwise leave Today "loading" when chosen again.
+            if (this._todayFlows?.status === "loading") this._todayFlows = null;
+        }
     };
 
     /** Open `id`, closing the open one and its evidence. */
@@ -293,6 +384,110 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         `;
     }
 
+    /**
+     * One question as a tile: its answer's value, an optional mini graphic and
+     * the question as the caption. Its answer opens through `_question`, which
+     * a tiled detail renders only for the open question, under the tiles. A
+     * tile names an action in its `tone`, or a flow in its `accent` colour.
+     */
+    protected _tile(id: Q, value: string, detail: string | null, graphic: TemplateResult | typeof nothing = nothing, tone: ScheduleActionTone | null = null, accent: string | null = null) {
+        return html`
+            <helman-node-tile
+                data-question=${id}
+                question-id=${id}
+                .question=${this._t(`q.${id}`)}
+                .value=${value}
+                .detail=${detail}
+                .tone=${tone}
+                .accent=${accent}
+                ?open=${this._open === id}
+            >${graphic}</helman-node-tile>
+        `;
+    }
+
+    // ── Flow ────────────────────────────────────────────────────────────────
+
+    /**
+     * The node's flow in the scope shown, on the fixed scale: the Now scale
+     * is the card's, W; Today's is that × {@link TODAY_SCALE_HOURS}, kWh. A
+     * tap on either side opens `questionId`, or on the destinations
+     * `outputQuestionId` when given; `centre` is the node's glyph.
+     */
+    protected _renderFlow(flow: NodeFlow, scaleW: number, questionId: Q, centre: TemplateResult, outputQuestionId: Q | null = null) {
+        const now = this._flowScope === "now";
+        return html`
+            <helman-node-flow
+                data-flow-scope=${this._flowScope}
+                .scope=${this._flowScope}
+                .scopeLabel=${flow.scopeLabel}
+                .nowLabel=${this.localize("node_detail.flow.now")}
+                .todayLabel=${this.localize("node_detail.flow.today")}
+                .inputs=${flow.inputs}
+                .outputs=${flow.outputs}
+                .scale=${now ? scaleW : scaleW * TODAY_SCALE_HOURS / 1000}
+                .totalIn=${flow.totalIn}
+                .totalOut=${flow.totalOut}
+                .notes=${flow.notes}
+                question-id=${questionId}
+                .questionLabel=${this._t(`q.${questionId}`)}
+                output-question-id=${outputQuestionId ?? nothing}
+                .outputQuestionLabel=${outputQuestionId ? this._t(`q.${outputQuestionId}`) : ""}
+            >${centre}</helman-node-flow>
+            ${!now && this._todaySection().state?.status === "error" ? html`
+                <button class="link-button" @click=${() => this._loadTodayFlows()}>${this._t("retry")}</button>
+            ` : nothing}
+        `;
+    }
+
+    /** "Now · 21:08". */
+    protected _nowScopeLabel(): string {
+        return fillTemplate(this.localize("node_detail.flow.scope_now"), { time: this._time(Date.now()) });
+    }
+
+    /** "Today · 00:00–21:08", to the as-of of today's section once it landed. */
+    protected _todayScopeLabel(): string {
+        const state = this._todaySection().state;
+        return fillTemplate(this.localize("node_detail.flow.scope_today"), {
+            time: this._time(state?.status === "ready" ? Date.parse(state.payload.asOf) : Date.now()),
+        });
+    }
+
+    /** Why Today has no flows to draw: loading, failed or unavailable; `null` once it has them. */
+    protected _todayFlowsNote(): string | null {
+        const section = this._todayFlows;
+        if (section === null || section.status === "loading") return this.localize("node_detail.flow.loading");
+        if (section.status === "error") return this.localize("node_detail.flow.failed");
+        if (!section.payload.flows) return this.localize(`node_detail.flow.unavailable_${section.payload.unavailable ?? "not_loaded"}`);
+        return null;
+    }
+
+    /** A source or destination, in the colour of the node at its other end. */
+    protected _flowItem(node: FlowNode, value: number | null, format: (value: number | null) => string): FlowItem {
+        return {
+            id: node,
+            label: this.localize(`node_detail.title.${node}`),
+            value,
+            display: format(value),
+            color: `var(--helman-${node})`,
+        };
+    }
+
+    /**
+     * Each side's sum, with energy that went in or out by no known route
+     * added to its side; a side is unknown when any of its items is.
+     */
+    protected _flowTotals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0, unresolvedOut = 0) {
+        const sum = (items: FlowItem[]) => items.some((item) => item.value === null) ? null : items.reduce((total, item) => total + item.value!, 0);
+        const total = (key: "total_in" | "total_out", value: number | null) =>
+            value === null ? null : fillTemplate(this.localize(`node_detail.flow.${key}`), { value: format(value) });
+        const totalIn = sum(inputs);
+        const totalOut = sum(outputs);
+        return {
+            totalIn: total("total_in", totalIn === null ? null : totalIn + unresolvedIn),
+            totalOut: total("total_out", totalOut === null ? null : totalOut + unresolvedOut),
+        };
+    }
+
     /** The focused inspector embed of `id` (a question, or its evidence), created once and kept. */
     protected _inspector(id: string, config: HelmanSolarInspectorCardConfig): HTMLElement {
         let card = this._inspectors.get(id);
@@ -315,19 +510,35 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     // ── Rows and readings ───────────────────────────────────────────────────
 
-    protected _row(label: string, value: string, key?: string, scope?: string) {
+    /**
+     * A labelled value. With `entityId` the value is that entity's reading,
+     * and a button that opens its more-info; a calculated figure has none and
+     * stays plain.
+     */
+    protected _row(label: string, value: string, key?: string, scope?: string, entityId?: string | null) {
         return html`
             <div class="row" data-row=${key ?? nothing}>
                 <span class="label">${label}${scope ? html`<br><span class="note">${scope}</span>` : nothing}</span>
-                <span class="value">${value}</span>
+                ${entityId ? html`
+                    <button class="value reading" data-entity=${entityId} title=${this._name(entityId)} @click=${() => this._moreInfo(entityId)}>${value}</button>
+                ` : html`<span class="value">${value}</span>`}
             </div>
         `;
     }
 
-    /** A technical row, hidden when its reading is unavailable. */
+    /** A technical row, hidden when its reading is unavailable; its value opens the entity's more-info. */
     protected _optionalRow(overview: O, key: string, labelKey: string) {
         const value = this._reading(overview, key);
-        return value === null ? nothing : this._row(this._t(labelKey), value, key);
+        return value === null ? nothing : this._row(this._t(labelKey), value, key, undefined, overview.entities[key]);
+    }
+
+    /** HA's own more-info dialog for `entityId`, as the card's device rows open it. */
+    protected _moreInfo(entityId: string): void {
+        this.dispatchEvent(new CustomEvent("hass-more-info", {
+            bubbles: true,
+            composed: true,
+            detail: { entityId },
+        }));
     }
 
     /** A reading as shown: its state and unit, `null` when missing or unavailable. */

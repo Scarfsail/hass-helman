@@ -34,6 +34,20 @@
       "house": "Dům",
       "inverter": "Střídač"
     },
+    "flow": {
+      "now": "Teď",
+      "today": "Dnes",
+      "scope_now": "Teď · {time}",
+      "scope_today": "Dnes · 00:00–{time}",
+      "total_in": "Dovnitř {value}",
+      "total_out": "Ven {value}",
+      "paid_estimate": "zaplaceno ≈ {value}",
+      "loading": "Načítají se dnešní toky…",
+      "failed": "Dnešní toky se nepodařilo načíst.",
+      "unavailable_not_loaded": "Dnešní toky zatím nejsou k dispozici: Helman se ještě načítá. Zkuste to za chvíli.",
+      "unavailable_no_house_node": "Dnešní toky potřebují dům ve stromu zařízení, který zatím nemá uzel domu.",
+      "unavailable_no_house_meter": "Dnešní toky potřebují elektroměr domu, ze kterého čtou přehledy zařízení; není nastavený."
+    },
     "battery": {
       "loading": "Načítám podrobnosti baterie…",
       "load_failed": "Podrobnosti baterie se nepodařilo načíst.",
@@ -52,9 +66,18 @@
         "idle": "V klidu ({power}).",
         "unavailable": "Výkon baterie teď nemá žádný údaj."
       },
-      "figure": {
-        "soc": "Nabití (SoC)",
-        "usable": "Využitelné nad {floor}"
+      "glyph": {
+        "min": "min {soc}",
+        "max": "max {soc}"
+      },
+      "flow": {
+        "net": "Čistá změna dnes: {kwh}, podle vlastních měřičů baterie.",
+        "unknown_charge": "{kwh} dnešního nabití nemá známý zdroj."
+      },
+      "tile": {
+        "no_change": "Žádná plánovaná změna",
+        "limits_charge": "strop nabíjení",
+        "limits_discharge": "strop vybíjení"
       },
       "exception": {
         "bms_disconnected": "Střídač hlásí systém správy baterie (BMS) jako odpojený ({state}).",
@@ -238,11 +261,6 @@
         "producing": "Vyrábí {power}.",
         "not_producing": "Teď nevyrábí.",
         "unavailable": "Výkon panelů teď nemá žádný údaj."
-      },
-      "figure": {
-        "today": "Dnes zatím",
-        "vs_forecast": "Z předpovědi do {time}",
-        "remaining": "Předpověď na zbytek dne"
       },
       "next": {
         "until": "Předpověď: výroba zhruba do {time}",
@@ -428,6 +446,24 @@
         "training": "Korekce se učila z",
         "training_value": "{days} dnů",
         "evidence_note": "Dny za horizontem předpovědi ukazují „bez předpovědi“, ne nulu."
+      },
+      "curve": {
+        "title": "Výroba dnes",
+        "actual": "vyrobeno",
+        "forecast": "předpověď",
+        "forecast_raw": "předpověď (neopravená)",
+        "maximum": "nastavené maximum {power}",
+        "no_sensor": "Křivka dnešní výroby potřebuje senzor výkonu FVE.",
+        "unit": "Jednotka senzoru výkonu FVE není jednotka výkonu, takže dnešní výroba se nekreslí."
+      },
+      "flow": {
+        "unresolved": "{kwh} dnešní výroby FVE není přiřazeno žádnému cíli.",
+        "strings_failed": "Dnešní energii stringů se nepodařilo načíst."
+      },
+      "tile": {
+        "tomorrow": "předpověď na zítřek",
+        "rating": "jmenovitý AC výkon střídače",
+        "export": "limit dodávky"
       }
     },
     "grid": {
@@ -442,18 +478,11 @@
       "phase": "Fáze",
       "loading_history": "Načítám dnešní historii…",
       "history_failed": "Dnešní historii se nepodařilo načíst.",
-      "next_price": "Dále: cena odběru {price} od {time}",
       "status": {
         "importing": "Odebírá ze sítě {power}.",
         "exporting": "Dodává do sítě {power}.",
         "idle": "Se sítí si teď téměř nic nevyměňuje ({power}).",
         "unavailable": "Výkon sítě teď není k dispozici."
-      },
-      "figure": {
-        "net_import": "Čistý odběr dnes",
-        "net_export": "Čistá dodávka dnes",
-        "net_cost": "Čistý náklad dnes",
-        "net_income": "Čistý výnos dnes"
       },
       "power": {
         "import": "odběr {power}",
@@ -520,7 +549,9 @@
         "meter_import": "Odběrový výkon elektroměru",
         "meter_export": "Dodávkový výkon elektroměru",
         "calculation": "Odhadnutý proud = |výkon fáze| ÷ napětí fáze, při účiníku 1. Jalový výkon nebo nižší účiník znamenají vyšší skutečný proud.",
-        "limitations": "Výkon je z elektroměru, napětí ze svorek střídače. Limit je nastavení hlavního jističe ve střídači, ne jmenovitá hodnota jističe, takže srovnání neměří rezervu jističe; součty fází ani výkon dodávky o ní nic neříkají."
+        "limitations": "Výkon je z elektroměru, napětí ze svorek střídače. Limit je nastavení hlavního jističe ve střídači, ne jmenovitá hodnota jističe, takže srovnání neměří rezervu jističe; součty fází ani výkon dodávky o ní nic neříkají.",
+        "scale_limit": "Plný pruh je nastavení hlavního jističe {limit} při {voltage}, jako měřítko obrázku, ne rezerva jističe.",
+        "scale_power": "Plný pruh je {power}: nastavení hlavního jističe nelze přečíst."
       },
       "money": {
         "failed": "Dnešní peníze se nepodařilo načíst.",
@@ -590,6 +621,24 @@
         "run_mode": "Provozní režim",
         "no_readings": "Údaj o frekvenci ani provozním režimu není dostupný.",
         "evidence_note": "Údaje tak, jak je střídač hlásí teď."
+      },
+      "picture": {
+        "voltage": "Napětí · dnešní rozsah",
+        "range": "dnes {min}–{max}",
+        "range_loading": "Načítá se dnešní rozsah napětí…",
+        "range_failed": "Dnešní rozsah napětí se nepodařilo načíst."
+      },
+      "flow": {
+        "price_now": "Cena teď: {prices}"
+      },
+      "tile": {
+        "loading_prices": "Načítají se ceny…",
+        "no_price_change": "Žádná známá změna",
+        "on_grid": "Na síti",
+        "off_grid": "Mimo síť",
+        "fault": "Porucha",
+        "no_voltage_sensors": "Senzory fázového napětí nebyly nalezeny.",
+        "voltage_range": "nejnižší–nejvyšší dnes"
       }
     },
     "house": {
@@ -616,19 +665,12 @@
         "using": "Spotřeba {power}.",
         "unavailable": "Teď chybí údaj o výkonu domu."
       },
-      "figure": {
-        "today": "Dnes zatím",
-        "paid": "Zaplaceno dnes (odhad)"
-      },
       "mix": {
-        "now": "Teď dodává: {shares}",
         "solar": "FV {share}",
         "battery": "baterie {share}",
         "grid": "síť {share}"
       },
       "next": {
-        "planned": "Další v plánu: {name} v {time}",
-        "running": "Běží podle plánu: {name} do {end}",
         "candidate": "kandidát, jeho podmínka není splněna",
         "rest_short": "≈ {kwh} do konce dne",
         "run_short": "{name} v {time}",
@@ -799,6 +841,18 @@
         "input_eps": "EPS",
         "formula": "Při provozu se sítí je spotřeba domu na fázi výstup střídače na té fázi plus to, co na ní elektroměr odebírá ze sítě (minus to, co dodává), plus výstup EPS. Mimo síť je síť odpojená a celou spotřebu domu tvoří výstup EPS. Celkem je součet tří fází.",
         "inputs_none": "Měření fází potřebuje hardwarový profil střídače; bez něj se fáze odhadují jen z vaší mapy zapojení."
+      },
+      "flow": {
+        "rest": "Všechno ostatní",
+        "unattributed": "{kwh} z neznámého zdroje",
+        "paid": "Zaplaceno {value}, odhad, ne vyúčtování"
+      },
+      "tile": {
+        "no_runs": "Nic v plánu",
+        "until": "do {time}",
+        "today_so_far": "spotřebováno dnes zatím",
+        "phase_highest": "nejvíc zatížená fáze",
+        "phase_highest_estimated": "nejvíc zatížená fáze, odhad"
       }
     },
     "device": {
@@ -836,13 +890,9 @@
       "technical": "Technické údaje",
       "status": {
         "commanded": "Helman naposledy nastavil: {mode}.",
-        "no_command": "Helman zatím žádný režim nenastavil.",
-        "match": "Registry režimu ve střídači tomu odpovídají.",
-        "unknown": "Zda registry režimu ve střídači odpovídají, teď nelze zjistit."
+        "no_command": "Helman zatím žádný režim nenastavil."
       },
       "figure": {
-        "commanded": "Nastaveno",
-        "ac_power": "Výkon AC",
         "temperature": "Teplota"
       },
       "next_change": "Další: {time} {action}",
@@ -995,6 +1045,34 @@
         "lock_state": "Zámek",
         "grid_runtime": "Doba v síti",
         "eps_runtime": "Doba mimo síť (EPS)"
+      },
+      "chain": {
+        "plan": "Plán",
+        "command": "Poslední příkaz",
+        "inverter": "Střídač",
+        "executor": "vykonavatel: {outcome}",
+        "no_runtime": "bez záznamu vykonavatele",
+        "match": "odpovídá",
+        "mismatch": "neodpovídá",
+        "unknown": "teď nelze určit",
+        "not_read": "nečitelné",
+        "other_mode": "jiný režim",
+        "not_applied": "neprovádí se",
+        "candidate": "{action}: kandidát, neprovádí se"
+      },
+      "strip": {
+        "scope": "Režimy · dnes do zítřejšího poledne",
+        "history_failed": "Dnešní režimy se nepodařilo načíst.",
+        "no_history": "Vlastní střídač nemá registry režimu ke čtení: kreslí se jen plán.",
+        "no_registers": "Ne všechny registry režimu profilu jsou nalezeny, takže dnešní režimy nelze přečíst: kreslí se jen plán."
+      },
+      "tile": {
+        "export_cap": "limit přetoku",
+        "ac_share": "AC {value} · {share} jmenovitého výkonu"
+      },
+      "flow": {
+        "export": "Přetok",
+        "unknown_house": "{kwh} dnešní spotřeby domu nemá známý zdroj."
       }
     },
     "ev_charger": {
@@ -1019,11 +1097,6 @@
         "drawing": "Odebírá {power}.",
         "not_drawing": "Neodebírá výkon ({power}).",
         "unavailable": "Výkon nabíječky teď není k dispozici."
-      },
-      "figure": {
-        "power": "Výkon teď",
-        "car": "{name}: nabití → limit",
-        "session": "Nabito v této relaci"
       },
       "exception": {
         "fault": "Nabíječka hlásí poruchu: {fault}.",
@@ -1212,6 +1285,42 @@
         "lock": "Elektronický zámek",
         "no_readings": "Žádné technické údaje nejsou k dispozici.",
         "evidence_note": "Údaje, jak je nabíječka hlásí, každý se svým časem aktualizace."
+      },
+      "switch": {
+        "execution_off": "Provádění plánu je vypnuté: plán ho nepřepíná.",
+        "on_planned": "Zapnuto, podle plánu.",
+        "off_planned": "Vypnuto, ačkoli plán teď nabíjí.",
+        "on_unplanned": "Zapnuto, ačkoli teď není nabíjení v plánu.",
+        "off_unplanned": "Vypnuto, podle plánu.",
+        "next_on": "Plán ho příště zapne v {time}.",
+        "next_off": "Plán ho příště vypne v {time}.",
+        "no_next": "Plán ho dnes ani zítra nepřepne."
+      },
+      "strip": {
+        "scope": "Nabíjení · dnes do zítřejšího poledne",
+        "charged": "Nabíjení",
+        "starts": "začne nabíjet",
+        "stops": "přestane nabíjet",
+        "history_failed": "Dnešní nabíjení se nepodařilo načíst.",
+        "completion_reach": "Podle současného plánu ≈ {limit} do {time}: odhad, ne záruka.",
+        "completion_short": "Podle současného plánu ≈ {soc} z {limit} do {time}, chybí {kwh}: odhad, ne záruka."
+      },
+      "glyph": {
+        "limit": "limit {soc}"
+      },
+      "flow": {
+        "mix_estimate": "Zdroje jsou současný mix domu, použitý na nabíječku: odhad.",
+        "unattributed": "{kwh} z neznámého zdroje"
+      },
+      "tile": {
+        "session": "toto nabíjení",
+        "session_for": "toto nabíjení, {duration}",
+        "charging": "Nabíjí",
+        "charging_since": "od {time}",
+        "fault": "Porucha",
+        "not_charging": "Nenabíjí",
+        "phase_sum": "fáze {power}",
+        "not_compared": "nesrovnáno s fázemi"
       }
     }
   },

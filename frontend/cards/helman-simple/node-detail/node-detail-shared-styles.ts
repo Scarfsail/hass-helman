@@ -135,6 +135,31 @@ export const nodeDetailQuestionStyles = css`
         min-width: 0;
         max-width: 60%;
     }
+    .reading {
+        font: inherit;
+        font-weight: 600;
+        color: inherit;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+        text-decoration: underline dotted;
+        text-underline-offset: 3px;
+        border-radius: 2px;
+    }
+    .reading::after {
+        content: " ↗";
+        visibility: hidden;
+    }
+    .reading:hover::after,
+    .reading:focus-visible::after {
+        visibility: visible;
+    }
+    .reading:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
     .note {
         margin: 0;
         font-size: 0.82rem;
@@ -160,5 +185,79 @@ export const nodeDetailQuestionStyles = css`
     }
     .plan {
         margin: 0 -8px;
+    }
+`;
+
+/**
+ * The pictured node details: the status pill (in a scheduler tone class),
+ * a picture or glyph that opens the question it absorbed, the answer tiles
+ * and the open answer under them.
+ */
+export const nodeDetailPictureStyles = css`
+    .pill {
+        align-self: flex-start;
+        padding: 4px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--schedule-action-tone-border);
+        background: var(--schedule-action-tone-bg);
+        color: var(--schedule-action-tone-color);
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    .glyph,
+    .picture {
+        display: block;
+        padding: 0;
+        border: none;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-align: inherit;
+        cursor: pointer;
+        border-radius: 8px;
+    }
+    .picture {
+        width: 100%;
+    }
+    .picture.strip,
+    .picture.chain {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .glyph:focus-visible,
+    .picture:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+    .picture-scope {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--secondary-text-color);
+    }
+    .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+        gap: 8px;
+        margin-top: 4px;
+    }
+    helman-node-question {
+        margin-top: 4px;
+    }
+    .meter {
+        display: block;
+        height: 6px;
+        margin-top: 4px;
+        border-radius: 3px;
+        background: var(--divider-color, rgba(0, 0, 0, 0.12));
+        overflow: hidden;
+    }
+    .meter-fill {
+        display: block;
+        height: 100%;
+        border-radius: 3px;
+        background: var(--meter-accent, var(--schedule-action-tone-accent));
     }
 `;

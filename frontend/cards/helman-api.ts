@@ -898,6 +898,8 @@ export interface ModeAgreementDTO {
     reason: "no_profile" | "no_command" | "not_bound" | "unavailable" | null;
     commanded: ScheduleActionKind | null;
     observedOption: ScheduleActionKind | null;
+    /** Every register any option binds: the states `observedOption` is read from. */
+    observedFrom: string[];
     registers: ModeRegisterDTO[];
 }
 
@@ -933,6 +935,21 @@ export interface InverterTemperatureSectionPayload {
     asOf: string;
     period: { start: string; end: string };
     temperature: DayStatsDTO | null;
+}
+
+/**
+ * Today's observed modes, replayed from the recorded states of the registers
+ * the profile's modes write: each stretch with the action kind the registers
+ * held, `null` where they held none (unreadable, unrecorded, or a combination
+ * no mode writes). `open` marks the last stretch, still going at `asOf`.
+ * `modes` is `null` without registers to read (a Custom inverter).
+ */
+export interface InverterModesSectionPayload {
+    node: "inverter";
+    section: "modes";
+    asOf: string;
+    period: { start: string; end: string };
+    modes: Array<{ start: string; end: string; kind: ScheduleActionKind | null; open: boolean }> | null;
 }
 
 /**
@@ -1031,6 +1048,42 @@ export interface BatteryChargeSectionPayload {
     /** Why there is no charge origin: the reports cannot be built. */
     unavailable: string | null;
     charge: BatteryChargeDTO | null;
+}
+
+/**
+ * Today's energy between the nodes, kWh, from the ranking report. An edge whose
+ * meters are not configured is `null`, never a zero; unresolved energy keeps
+ * its own figure rather than being forced into a destination.
+ */
+export interface TodayFlowsDTO {
+    solarToHouse: number | null;
+    solarToBattery: number | null;
+    solarToGrid: number | null;
+    /** Solar the meters do not explain. */
+    solarUnresolved: number | null;
+    gridToBattery: number | null;
+    /** Battery charge of unknown origin. */
+    unknownToBattery: number | null;
+    /** The grid charge's paid cost, an estimate; `null` where unpriced. */
+    gridToBatteryCost: number | null;
+    batteryToHouse: number | null;
+    gridToHouse: number | null;
+    /** House energy whose source is not known. */
+    unknownToHouse: number | null;
+    batteryToGrid: number | null;
+}
+
+/** The `flows` section every energy node answers: today's flows, or why there are none. */
+export interface FlowsSectionPayload {
+    node: NodeDetailNode;
+    section: "flows";
+    asOf: string;
+    period: { start: string; end: string };
+    /** The price unit the money is in, such as `CZK/kWh`. */
+    currency: string | null;
+    complete: boolean;
+    unavailable: string | null;
+    flows: TodayFlowsDTO | null;
 }
 
 /**
@@ -1238,15 +1291,20 @@ export interface EvChargerDetailPayload {
 
 /**
  * When the charger's charging run mode began, as recorded: the start of a
- * charging segment, not the plugged-in session. `null` while not charging, or
- * when the record cannot tell.
+ * charging segment, not the plugged-in session. `chargingSince` is `null`
+ * while not charging, or when the record cannot tell. `charging` is today's
+ * recorded charging stretches, from the same run mode history; `null`
+ * without a run mode to read.
  */
 export interface EvChargerSegmentSectionPayload {
     node: "ev_charger";
     section: "segment";
     deviceId: string;
     asOf: string;
+    period: { start: string; end: string };
     chargingSince: string | null;
+    /** `open`: still charging when read, so it ends at `asOf`. */
+    charging: Array<{ start: string; end: string; open: boolean }> | null;
 }
 
 /** Today's sources and attributed money of one charger, from the ranking report: today, not the session. */
