@@ -210,6 +210,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     <helman-tree-item-list
                         .hass=${this._hass!}
                         .devices=${consumerNode ? [consumerNode] : []}
+                        .isDistributionRow=${true}
                         .historyBuckets=${historyBuckets}
                         .historyBucketDuration=${historyBucketDuration}
                         .historyRevision=${this._historyRevision}

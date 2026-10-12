@@ -34,6 +34,7 @@ export class HelmanTreeItem extends LitElement {
      */
     @property({ type: Number }) public parentMaxPower?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
+    @property({ type: Boolean }) public isDistributionRow = false;
 
     @state() private _childrenCollapsed = true;
 
@@ -313,7 +314,7 @@ export class HelmanTreeItem extends LitElement {
         // highlighted rather than merely lighter if the tint goes much past this.
         const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
-        const isDistribution = device.id === "consumers";
+        const isDistribution = this.isDistributionRow;
         const inverterLabel = isDistribution ? getLocalizeFunction(this.hass)("node_detail.title.inverter") : "";
         const deviceContent = html`
                 <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({

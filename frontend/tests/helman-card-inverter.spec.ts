@@ -19,7 +19,9 @@ async function mount(page: Page, width = 800, language = "en", housePower = "120
         });
         const tree = {
             sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
+            consumers: [{ ...node("house", "sensor.house", null), children: [
+                { ...node("consumers", "sensor.child", null), displayName: "Child named consumers", isEstimated: true, controllableIds: ["consumers"] },
+            ] }],
             consumptionTotalSensorId: "sensor.house", productionTotalSensorId: null,
             uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
         };
@@ -135,4 +137,16 @@ test("the inverter button label and tooltip use the card language", async ({ pag
     await mount(page, 800, "cs");
     await expect(button(page)).toHaveAccessibleName("Střídač");
     await expect(button(page)).toHaveAttribute("title", "Střídač");
+});
+
+test("a configured child named consumers keeps its device layout and action", async ({ page }) => {
+    await mount(page);
+    const child = page.locator("helman-tree-item").filter({ has: page.locator(".deviceName", { hasText: "Child named consumers" }) });
+    await expect(child).toHaveCount(1);
+    await expect(child.locator("button.inverterButton")).toHaveCount(0);
+    await expect(child.locator(".deviceHeading.distribution")).toHaveCount(0);
+    await expect(button(page)).toHaveCount(1);
+    await child.locator(".deviceName").click();
+    await expect(page.locator("node-detail-device-content")).toBeVisible();
+    await expect(content(page)).toHaveCount(0);
 });

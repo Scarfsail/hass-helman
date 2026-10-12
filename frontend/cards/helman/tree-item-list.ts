@@ -43,6 +43,7 @@ export class HelmanTreeItemList extends LitElement {
     @property({ type: Boolean }) public sortChildrenByPower?: boolean;
     @property({ type: Number }) public show_only_top_children?: number;
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
+    @property({ type: Boolean }) public isDistributionRow = false;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
@@ -132,6 +133,7 @@ export class HelmanTreeItemList extends LitElement {
                         .historyBucketDuration=${this.historyBucketDuration}
                         .historyRevision=${this.historyRevision}
                         .openNodeDetailOnIcon=${this.openNodeDetailOnIcon}
+                        .isDistributionRow=${this.isDistributionRow}
                     ></helman-tree-item>
                 `)}
             </div>
