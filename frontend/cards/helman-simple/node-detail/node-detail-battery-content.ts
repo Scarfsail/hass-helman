@@ -312,7 +312,24 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             this._flowItem("house", watts(flows?.batteryToHouse), power),
             this._flowItem("grid", watts(flows?.batteryToGrid), power),
         ];
-        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
+        return {
+            scopeLabel: this._nowScopeLabel(),
+            inputs,
+            outputs,
+            ...this._flowTotals(inputs, outputs, power),
+            notes: [],
+            centreValue: this._directedPower(),
+            active: this._isActive(this.params.power),
+        };
+    }
+
+    /** The battery's power now, ↑ charging and ↓ discharging, as the card's battery shows it; `null` without a reading. */
+    private _directedPower(): string | null {
+        const power = this.params.power;
+        if (power === null) return null;
+        const display = formatPower(Math.abs(power)).display;
+        const direction = this._direction();
+        return direction === "charge" ? `↑ ${display}` : direction === "discharge" ? `↓ ${display}` : display;
     }
 
     /**
@@ -351,13 +368,16 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 notes.push(fillTemplate(this._t("flow.net"), { kwh: (net > 0 ? "+" : net < 0 ? "−" : "") + formatGridEnergy(Math.abs(net)) }));
             }
         }
+        // The charge of unknown origin is part of what went in.
+        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, flows?.unknownToBattery ?? 0);
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs,
-            // The charge of unknown origin is part of what went in.
-            ...this._flowTotals(inputs, outputs, energy, flows?.unknownToBattery ?? 0),
+            ...totals,
             notes,
+            centreValue: this._centrePair(sumIn, sumOut, energy),
+            active: false,
         };
     }
 

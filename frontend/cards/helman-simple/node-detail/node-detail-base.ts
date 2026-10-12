@@ -23,7 +23,9 @@ import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail }
 import type { ScheduleActionTone } from "../../shared/schedule/action-tones";
 import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
 
-export { IDLE_W } from "../live-flows";
+import { IDLE_W } from "../live-flows";
+
+export { IDLE_W };
 
 /** How stale a "today so far" answer may get before it is re-read, while visible. */
 export const TODAY_REFRESH_MS = 5 * 60_000;
@@ -39,6 +41,10 @@ export interface NodeFlow {
     totalIn: string | null;
     totalOut: string | null;
     notes: string[];
+    /** The node's own figure under its glyph: its power on Now, its kWh on Today; `null` is "–". */
+    centreValue: string | null;
+    /** Whether the node is working now: its power is above {@link IDLE_W}; never on Today. */
+    active: boolean;
 }
 
 /** An energy node a flow's ribbon can lead to; its colour is `--helman-<node>`. */
@@ -428,6 +434,9 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
                 .totalIn=${flow.totalIn}
                 .totalOut=${flow.totalOut}
                 .notes=${flow.notes}
+                .centreValue=${flow.centreValue}
+                ?active=${now && flow.active}
+                ?animated=${now}
                 question-id=${questionId}
                 .questionLabel=${this._t(`q.${questionId}`)}
                 output-question-id=${outputQuestionId ?? nothing}
@@ -472,20 +481,30 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         };
     }
 
+    /** Whether a power, W, of either sign is above {@link IDLE_W}: the node is working. */
+    protected _isActive(power: number | null): boolean {
+        return power !== null && Math.abs(power) > IDLE_W;
+    }
+
+    /** Both sides' sums as one centre value, in · out; `null` when neither is known. */
+    protected _centrePair(sumIn: number | null, sumOut: number | null, format: (value: number | null) => string): string | null {
+        return sumIn === null && sumOut === null ? null : `${format(sumIn)} · ${format(sumOut)}`;
+    }
+
     /**
      * Each side's sum, with energy that went in or out by no known route
-     * added to its side; a side is unknown when any of its items is.
+     * added to its side, as a number (`sumIn`, `sumOut`) and as shown; a side
+     * is unknown when any of its items is.
      */
     protected _flowTotals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0, unresolvedOut = 0) {
         const sum = (items: FlowItem[]) => items.some((item) => item.value === null) ? null : items.reduce((total, item) => total + item.value!, 0);
         const total = (key: "total_in" | "total_out", value: number | null) =>
             value === null ? null : fillTemplate(this.localize(`node_detail.flow.${key}`), { value: format(value) });
-        const totalIn = sum(inputs);
-        const totalOut = sum(outputs);
-        return {
-            totalIn: total("total_in", totalIn === null ? null : totalIn + unresolvedIn),
-            totalOut: total("total_out", totalOut === null ? null : totalOut + unresolvedOut),
-        };
+        const sumIn = sum(inputs);
+        const sumOut = sum(outputs);
+        const withIn = sumIn === null ? null : sumIn + unresolvedIn;
+        const withOut = sumOut === null ? null : sumOut + unresolvedOut;
+        return { totalIn: total("total_in", withIn), totalOut: total("total_out", withOut), sumIn: withIn, sumOut: withOut };
     }
 
     /** The focused inspector embed of `id` (a question, or its evidence), created once and kept. */

@@ -33,6 +33,8 @@ const HEIGHT = 152;
 const FULL = 120;
 /** A flow that is not zero is never thinner than this, px. */
 const MIN_RIBBON = 1.5;
+/** The light band's width, in the ribbons' 0–100 x units. */
+const BAND = 40;
 
 /**
  * A node's energy flow: its sources come in on the left, the node's glyph sits
@@ -43,6 +45,12 @@ const MIN_RIBBON = 1.5;
  * ribbon takes the colour of the node at its other end. A source or
  * destination with nothing flowing, or none known, stays as a greyed label,
  * so the layout never moves.
+ *
+ * With `animated` (Now), a light band sweeps along each ribbon with energy
+ * on it, in its direction; with `active`, the centre pulses. Only
+ * `transform` and `opacity` move, as `power-flow-arrows` explains, and
+ * reduced motion stops both. `centreValue` is the node's own figure under
+ * the glyph, "–" when unknown.
  *
  * Controlled: the host owns the scope and redraws on `flow-scope`. A tap on
  * either side fires the question toggle for `question-id`, the question the
@@ -163,10 +171,39 @@ export class HelmanNodeFlow extends LitElement {
         .ribbon {
             fill-opacity: 0.5;
         }
+        .band {
+            animation: sweep 2.4s linear infinite;
+        }
+        @keyframes sweep {
+            from { transform: translateX(0); }
+            to { transform: translateX(${100 + BAND}px); }
+        }
         .centre {
             flex: none;
             display: flex;
+            flex-direction: column;
             align-items: center;
+            justify-content: center;
+            gap: 2px;
+        }
+        :host([active]) ::slotted([slot="centre"]) {
+            animation: pulse 2.4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            50% { opacity: 0.65; }
+        }
+        .centre-value {
+            max-width: 6.5rem;
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-align: center;
+            line-height: 1.2;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .band,
+            :host([active]) ::slotted([slot="centre"]) {
+                animation: none;
+            }
         }
         .notes {
             display: flex;
@@ -200,6 +237,12 @@ export class HelmanNodeFlow extends LitElement {
     /** The question a tap on the destinations opens, when not `question-id`. */
     @property({ attribute: "output-question-id" }) public outputQuestionId = "";
     @property({ attribute: false }) public outputQuestionLabel = "";
+    /** Whether the ribbons with energy on them shimmer: on Now, never on Today. */
+    @property({ type: Boolean }) public animated = false;
+    /** Whether the node is working now: its centre pulses. */
+    @property({ type: Boolean, reflect: true }) public active = false;
+    /** The node's own figure under the glyph; `null` is "–", never 0. */
+    @property({ attribute: false }) public centreValue: string | null = null;
 
     render() {
         return html`
@@ -218,7 +261,10 @@ export class HelmanNodeFlow extends LitElement {
             ` : nothing}
             <div class="diagram">
                 ${this._side("in", this.inputs)}
-                <div class="centre"><slot name="centre"></slot></div>
+                <div class="centre">
+                    <slot name="centre"></slot>
+                    <span class="centre-value" data-centre-value>${this.centreValue ?? "–"}</span>
+                </div>
                 ${this._side("out", this.outputs)}
             </div>
             ${this.notes.length ? html`
@@ -258,7 +304,18 @@ export class HelmanNodeFlow extends LitElement {
             const labelTop = (index + 0.5) / items.length * HEIGHT - t / 2;
             const [x0, x1] = side === "in" ? [0, 100] : [100, 0];
             const d = `M${x0},${labelTop} C50,${labelTop} 50,${at} ${x1},${at} L${x1},${at + t} C50,${at + t} 50,${labelTop + t} ${x0},${labelTop + t} Z`;
-            return svg`<path class="ribbon" data-ribbon=${item.id} d=${d} style="fill: ${item.color}"></path>`;
+            const ribbon = svg`<path class="ribbon" data-ribbon=${item.id} data-animated=${this.animated ? "" : nothing} d=${d} style="fill: ${item.color}"></path>`;
+            if (!this.animated) return ribbon;
+            // x grows toward the centre on the inputs and away from it on the
+            // outputs, so one sweep along +x follows every ribbon's direction.
+            const clip = `band-clip-${side}-${index}`;
+            return svg`
+                ${ribbon}
+                <clipPath id=${clip}><path d=${d}></path></clipPath>
+                <g clip-path="url(#${clip})">
+                    <rect class="band" data-band=${item.id} x=${-BAND} y="0" width=${BAND} height=${HEIGHT} fill="url(#band-light-${side})"></rect>
+                </g>
+            `;
         });
         return html`
             <button class="side ${side}" data-side=${side} title=${this._question(side).label || nothing} @click=${() => this._tap(side)}>
@@ -271,7 +328,18 @@ export class HelmanNodeFlow extends LitElement {
                         </span>
                     `)}
                 </span>
-                <svg viewBox="0 0 100 ${HEIGHT}" preserveAspectRatio="none" aria-hidden="true">${ribbons}</svg>
+                <svg viewBox="0 0 100 ${HEIGHT}" preserveAspectRatio="none" aria-hidden="true">
+                    ${this.animated ? svg`
+                        <defs>
+                            <linearGradient id="band-light-${side}">
+                                <stop offset="0" stop-color="#fff" stop-opacity="0"></stop>
+                                <stop offset="0.5" stop-color="#fff" stop-opacity="0.5"></stop>
+                                <stop offset="1" stop-color="#fff" stop-opacity="0"></stop>
+                            </linearGradient>
+                        </defs>
+                    ` : nothing}
+                    ${ribbons}
+                </svg>
             </button>
         `;
     }

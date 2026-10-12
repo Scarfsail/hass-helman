@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";
+import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
  * The solar node detail on the simple card.
@@ -593,6 +594,7 @@ test.describe("the flow", () => {
         await today(page);
         await expect(flow(page).locator("[data-flow-note]")).toHaveText("Today's flows need the house meter the device reports read; it is not configured.");
         await expect(flowLabel(page, "out", "house")).toContainText("–");
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("–");
         await page.locator("node-detail-dialog ha-dialog").evaluate((dialog: any) => dialog.close());
         await openDetail(page);
         await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
@@ -620,6 +622,48 @@ test.describe("the flow", () => {
         await flow(page).locator("button[data-glyph]").click();
         await expect(question(page, "destinations")).toHaveCount(0);
         await expect(header(page, "strings")).toHaveAttribute("aria-expanded", "true");
+    });
+});
+
+test.describe("motion and the centre value", () => {
+    test("Now: ribbons with energy shimmer, the glyph pulses and the production sits under it; Today stands still", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await expect(flow(page)).toHaveAttribute("active", "");
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("4.2 kW");
+        await expect(flow(page).locator("[data-side='in'] [data-ribbon='string-1']")).toHaveAttribute("data-animated", "");
+        // Every drawn ribbon has energy on it, and shimmers.
+        await expect(flow(page).locator("[data-ribbon]:not([data-animated])")).toHaveCount(0);
+
+        await flow(page).locator("[data-scope='today']").click();
+        // Produced: the destinations and the unresolved rest.
+        await expect(flow(page).locator("[data-centre-value]")).toHaveText("16 kWh");
+        await expect(flow(page)).not.toHaveAttribute("active");
+        await expect(flow(page).locator("[data-ribbon]").first()).toBeAttached();
+        await expect(flow(page).locator("[data-animated]")).toHaveCount(0);
+    });
+
+    const cases: Array<[Variant, string, boolean]> = [
+        [{ night: true }, "0 W", false],
+        [{ power: "60" }, "60 W", true],
+        [{ power: "50" }, "50 W", false],
+        [{ power: "unavailable" }, "–", false],
+        [{ power: "-60" }, "0 W", false],
+    ];
+    for (const [variant, value, active] of cases) {
+        test(`${JSON.stringify(variant)} shows ${value} under the glyph, ${active ? "pulsing" : "still"}`, async ({ page }) => {
+            await mount(page, variant);
+            await openDetail(page);
+            await expect(flow(page).locator("[data-centre-value]")).toHaveText(value);
+            if (active) await expect(flow(page)).toHaveAttribute("active", "");
+            else await expect(flow(page)).not.toHaveAttribute("active");
+        });
+    }
+
+    test("reduced motion stops the shimmer and the pulse", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await expectReducedMotionStill(page, flow(page));
     });
 });
 

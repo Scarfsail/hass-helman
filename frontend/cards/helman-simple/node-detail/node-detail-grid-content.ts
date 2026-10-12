@@ -537,6 +537,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             outputs,
             ...this._flowTotals(inputs, outputs, power),
             notes: prices.length ? [fillTemplate(this._t("flow.price_now"), { prices: prices.join(" · ") })] : [],
+            centreValue: this.params.gridPower === null ? null : this._directedPower(this.params.gridPower),
+            active: this._isActive(this.params.gridPower),
         };
     }
 
@@ -558,7 +560,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         ];
         const status = this._todayFlowsNote();
         const notes: string[] = status ? [status] : [];
-        const totals = this._flowTotals(inputs, outputs, energy);
+        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy);
         const money = this._moneyFigures();
         const unknown = this._t("money.unknown");
         const withMoney = (total: string | null, key: string, value: number | null) => money
@@ -572,6 +574,9 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             totalIn: withMoney(totals.totalIn, "money.income_short", money?.gain ?? null),
             totalOut: withMoney(totals.totalOut, "money.cost_short", money?.cost ?? null),
             notes,
+            // Exported in, imported out.
+            centreValue: this._centrePair(sumIn, sumOut, energy),
+            active: false,
         };
     }
 

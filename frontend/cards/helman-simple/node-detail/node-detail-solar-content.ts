@@ -608,19 +608,28 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _nowFlow(overview: SolarDetailPayload): NodeFlow {
         const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
         const watts = (value: number | null) => value === null ? null : Math.max(0, value);
+        const production = watts(this._powerNow());
         const inputs = overview.strings.length >= 2
             ? overview.strings.map((string) => {
                 const value = watts(this._watts(overview, `pv_power_${string}`));
                 return this._stringItem(string, value, power(value));
             })
-            : [this._flowItem("solar", watts(this._powerNow()), power)];
+            : [this._flowItem("solar", production, power)];
         const flows = this.params.flows;
         const outputs = [
             this._flowItem("house", flows?.solarToHouse ?? null, power),
             this._flowItem("battery", flows?.solarToBattery ?? null, power),
             this._flowItem("grid", flows?.solarToGrid ?? null, power),
         ];
-        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
+        return {
+            scopeLabel: this._nowScopeLabel(),
+            inputs,
+            outputs,
+            ...this._flowTotals(inputs, outputs, power),
+            notes: [],
+            centreValue: power(production),
+            active: this._isActive(production),
+        };
     }
 
     /**
@@ -657,12 +666,16 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         ];
         const unresolved = flows?.solarUnresolved ?? 0;
         if (unresolved > 0) notes.push(fillTemplate(this._t("flow.unresolved"), { kwh: formatGridEnergy(unresolved) }));
+        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, 0, unresolved);
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs,
-            ...this._flowTotals(inputs, outputs, energy, 0, unresolved),
+            ...totals,
             notes,
+            // Produced: every destination and the unresolved rest.
+            centreValue: energy(sumOut),
+            active: false,
         };
     }
 

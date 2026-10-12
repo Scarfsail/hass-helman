@@ -194,16 +194,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         .link.broken {
             color: var(--warning-color, #c27c0e);
         }
-        .centre {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 2px;
-        }
-        .centre-value {
-            font-size: 0.78rem;
-            font-weight: 700;
-        }
         .soc-range .meter-fill {
             --meter-accent: var(--helman-battery);
         }
@@ -595,18 +585,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * from the `flows` section on Today. The flow opens *operating*.
      */
     private _renderInverterFlow(overview: InverterDetailPayload) {
-        const now = this._flowScope === "now";
-        const ac = this._acPower(overview);
-        return this._renderFlow(now ? this._nowFlow() : this._todayFlow(), this.params.flowScaleW, "operating", html`
-            <span slot="centre" class="centre">
-                ${inverterGlyph()}
-                ${now ? html`<span class="centre-value" data-ac>${ac !== null ? fillTemplate(this._t("operating.ac_short"), { value: formatPower(ac).display }) : "–"}</span>` : nothing}
-            </span>
-        `);
+        const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
+        return this._renderFlow(flow, this.params.flowScaleW, "operating", html`<span slot="centre">${inverterGlyph()}</span>`);
     }
 
     /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
-    private _nowFlow(): NodeFlow {
+    private _nowFlow(overview: InverterDetailPayload): NodeFlow {
         const flows = this.params.flows;
         const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
         const sum = (...keys: Array<keyof NonNullable<typeof flows>>) => flows ? keys.reduce((total, key) => total + flows[key], 0) : null;
@@ -620,7 +604,16 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             this._flowItem("battery", sum("solarToBattery", "gridToBattery"), power),
             this._exportItem(sum("solarToGrid", "batteryToGrid"), power),
         ];
-        return { scopeLabel: this._nowScopeLabel(), inputs, outputs, ...this._flowTotals(inputs, outputs, power), notes: [] };
+        const ac = this._acPower(overview);
+        return {
+            scopeLabel: this._nowScopeLabel(),
+            inputs,
+            outputs,
+            ...this._flowTotals(inputs, outputs, power),
+            notes: [],
+            centreValue: ac === null ? null : fillTemplate(this._t("operating.ac_short"), { value: power(ac) }),
+            active: this._isActive(ac),
+        };
     }
 
     /**
@@ -653,12 +646,15 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: formatGridEnergy(unresolvedSolar) }));
         if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: formatGridEnergy(unknownCharge) }));
         if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: formatGridEnergy(unknownHouse) }));
+        const { sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, unresolvedSolar, unknownCharge + unknownHouse);
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
             outputs,
-            ...this._flowTotals(inputs, outputs, energy, unresolvedSolar, unknownCharge + unknownHouse),
+            ...totals,
             notes,
+            centreValue: energy(sumOut),
+            active: false,
         };
     }
 
