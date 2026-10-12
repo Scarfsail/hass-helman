@@ -2,8 +2,10 @@ import { LitElement, TemplateResult, css, html, nothing } from "lit-element";
 import { keyed } from 'lit/directives/keyed.js';
 import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
+import { mdiCurrentAc } from "@mdi/js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { DEFERRABLE_HOUSE_COLOR, nodeAccentColor, withAlpha } from "../color-utils";
+import { getLocalizeFunction } from "../localize/localize";
 import { TreeItem, isItemVisible } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
@@ -79,6 +81,30 @@ export class HelmanTreeItem extends LitElement {
             composed: true,
             detail: { item: this.device },
         }));
+    }
+
+    /** The distribution row's inverter button opens the shared inverter detail. */
+    private _onInverterClick(e: Event) {
+        e.stopPropagation();
+        this.dispatchEvent(new CustomEvent("show-node-detail", {
+            bubbles: true,
+            composed: true,
+            detail: { nodeType: "inverter" },
+        }));
+    }
+
+    private _renderInverterButton(): TemplateResult {
+        const label = getLocalizeFunction(this.hass)("node_detail.title.inverter");
+        return html`
+            <button
+                class="inverter-button"
+                aria-label=${label}
+                title=${label}
+                @click=${this._onInverterClick}
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${mdiCurrentAc}></path></svg>
+            </button>
+        `;
     }
 
     static get styles() {
@@ -172,6 +198,48 @@ export class HelmanTreeItem extends LitElement {
             .deviceInfo {
                 z-index: 2;
             }
+            /* The distribution row's inverter button, centred on the row itself.
+               The title and the power reading each keep to their own half, short of
+               the button, so neither runs under it at narrow widths. */
+            .deviceContent.has-inverter {
+                --inverter-button-size: 32px;
+                --inverter-reserve: calc(var(--inverter-button-size) / 2 + 6px);
+            }
+            .has-inverter .deviceName {
+                /* 40px is the row icon in front of the name. */
+                max-width: calc(50% - 40px - var(--inverter-reserve));
+            }
+            .has-inverter helman-tree-item-power-display {
+                margin-left: auto;
+                max-width: calc(50% - var(--inverter-reserve));
+            }
+            .inverter-button {
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                z-index: 3;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-sizing: border-box;
+                width: var(--inverter-button-size);
+                height: var(--inverter-button-size);
+                padding: 0;
+                border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+                border-radius: 50%;
+                background: var(--card-background-color, #fff);
+                cursor: pointer;
+            }
+            .inverter-button:focus-visible {
+                outline: 2px solid var(--primary-color);
+                outline-offset: 1px;
+            }
+            .inverter-button svg {
+                width: 18px;
+                height: 18px;
+                fill: var(--secondary-text-color);
+            }
         `;
     }
 
@@ -248,9 +316,11 @@ export class HelmanTreeItem extends LitElement {
         // a house wash and a border of its own, and a stack of them there reads as
         // highlighted rather than merely lighter if the tint goes much past this.
         const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
+        // The full card's central "consumers" aggregate is where the flows meet the inverter.
+        const isDistribution = device.id === "consumers";
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({
+                <div class="border deviceContent ${isOff ? 'is-off' : ''} ${isDistribution ? 'has-inverter' : ''}" style=${styleMap({
                     ...(nodeColor ? {'--device-shadow-color': nodeColor} : {}),
                     ...(tintColor ? {'--device-tint': tintColor} : {}),
                 })}>
@@ -261,6 +331,7 @@ export class HelmanTreeItem extends LitElement {
                         .historyRevision=${this.historyRevision}
                         .sourceHistory=${device.isSource ? undefined : device.sourcePowerHistory}>
                     </helman-power-history-bars>
+                    ${isDistribution ? this._renderInverterButton() : nothing}
                     <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">
                         <div style="display: flex; flex-direction: row;flex-basis: 100%;align-items: center; ">
                             <helman-tree-item-icon 
