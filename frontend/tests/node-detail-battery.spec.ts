@@ -396,6 +396,13 @@ test.describe("the flow", () => {
         await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
     });
 
+    test("an unreadable house meter leaves the split unknown, never an export", async ({ page }) => {
+        await mount(page, { house: "unavailable" });
+        await openDetail(page);
+        await expect(flowLabel(page, "out", "grid")).toContainText("–");
+        await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
+    });
+
     test("Today is requested only once chosen, in kWh with the paid estimate, the unknown charge and the net change", async ({ page }) => {
         await mount(page);
         await openDetail(page);

@@ -75,12 +75,14 @@ interface EnergyValues {
     batterySoc:   number;
     batteryMinSoc:number;
     housePower:   number;
+    /** Whether the house meter has a reading; `housePower` is 0 without one. */
+    houseReadable: boolean;
 }
 
 const EMPTY_ENERGY: EnergyValues = {
     solarPower: 0, solarPowerReading: null, gridPower: 0, gridPowerSigned: null, batteryPower: 0, batteryPowerReading: null,
     batterySoc: 0, batteryMinSoc: 10,
-    housePower: 0,
+    housePower: 0, houseReadable: false,
 };
 
 // ──────────────────────────────────── Card ────────────────────────────────────
@@ -713,6 +715,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             solarPowerReading: this._energy.solarPowerReading,
             gridPower: this._energy.gridPowerSigned,
             housePower: this._energy.housePower,
+            houseReadable: this._energy.houseReadable,
             solarPower: this._energy.solarPower,
             houseNode: this._houseNode,
             historyBuckets,
@@ -771,6 +774,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             // clamp this card has always applied stays outside it. For an
             // inverted house sensor the value is already a magnitude.
             housePower:   Math.max(0, applyValueType(rawPower(map.housePowerEntityId), map.houseValueType)),
+            houseReadable: map.housePowerEntityId !== null
+                && Number.isFinite(parseFloat(hass.states[map.housePowerEntityId]?.state ?? "")),
         };
     }
 

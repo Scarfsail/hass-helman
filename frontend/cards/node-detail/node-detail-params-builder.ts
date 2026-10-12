@@ -14,6 +14,8 @@ export interface NodeDetailContext {
     /** Grid power: positive imports, negative exports, W. */
     gridPower: number | null;
     housePower: number;
+    /** Whether the house meter has a reading; `housePower` is 0 without one. */
+    houseReadable: boolean;
     solarPower: number;
     houseNode: TreeItem | null;
     historyBuckets: number;
@@ -21,8 +23,9 @@ export interface NodeDetailContext {
 }
 
 export function buildNodeDetailParams(context: NodeDetailContext, nodeType: NodeType): NodeDetailParams {
-    // The split reads a missing meter as 0: without one it is not known, never a zero.
-    const known = context.solarPowerReading !== null && context.batteryPowerReading !== null;
+    // The split reads a missing meter as 0 and every edge is a residual of the
+    // others: without the solar, battery or house reading it is not known, never a zero.
+    const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
     const flow: EnergyNodeFlowParams = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW };
     switch (nodeType) {
         case "battery":
