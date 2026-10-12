@@ -2123,6 +2123,67 @@ def test_a_custom_charger_keeps_its_config_backed_entities():
     assert payload["entities"]["power"] == EV_POWER
 
 
+def test_the_segment_section_carries_todays_charging_stretches_from_midnight():
+    # Charging overnight from before midnight, a pause in the morning with a
+    # short restart blip, and charging again now.
+    history = [
+        run_mode_state("Charging", 16 * 60),  # 22:00 yesterday
+        run_mode_state("SuspendedEV", 10 * 60),  # 04:00
+        run_mode_state("Charging", 60),  # 13:00
+        run_mode_state("unavailable", 50),  # a restart, too short to break it
+        run_mode_state("Charging", 45),
+    ]
+    segment, _ = ev_detail(section="segment", history=history)
+
+    assert segment["period"]["start"] == datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE).isoformat()
+    assert segment["charging"] == [
+        # Clipped to today's midnight, never drawn into yesterday.
+        {"start": datetime(2026, 10, 10, 0, 0, tzinfo=PRAGUE).isoformat(),
+         "end": datetime(2026, 10, 10, 4, 0, tzinfo=PRAGUE).isoformat(), "open": False},
+        # Still charging: the one stretch marked open, ending at the read.
+        {"start": datetime(2026, 10, 10, 13, 0, tzinfo=PRAGUE).isoformat(), "end": NOW.isoformat(), "open": True},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("history", "stretches"),
+    [
+        # A long gap ends the stretch where the gap began: only recorded charging is drawn.
+        (
+            [run_mode_state("Charging", 120), run_mode_state("unavailable", 90), run_mode_state("Charging", 30)],
+            [(120, 90, False), (30, 0, True)],
+        ),
+        # A gap followed by another state ends it where the gap began.
+        (
+            [run_mode_state("Charging", 120), run_mode_state("unknown", 100), run_mode_state("Available", 95)],
+            [(120, 100, False)],
+        ),
+        # A gap still open now ends it too, once it is long, and it is not going on.
+        ([run_mode_state("Charging", 120), run_mode_state("unavailable", 60)], [(120, 60, False)]),
+        # A short gap still open now is bridged: the stretch is still going.
+        ([run_mode_state("Charging", 120), run_mode_state("unavailable", 5)], [(120, 0, True)]),
+        # Not charging today: no stretch.
+        ([run_mode_state("SuspendedEV", 120)], []),
+    ],
+)
+def test_charging_stretches_are_only_the_recorded_charging(history, stretches):
+    segment, _ = ev_detail(run_mode="SuspendedEV", section="segment", history=history)
+
+    assert segment["charging"] == [
+        {"start": (NOW - timedelta(minutes=a)).isoformat(), "end": (NOW - timedelta(minutes=b)).isoformat(), "open": still}
+        for a, b, still in stretches
+    ]
+    # Not charging now: no segment, whatever the history.
+    assert segment["chargingSince"] is None
+
+
+def test_a_custom_charger_has_no_charging_stretches_to_read():
+    segment, _ = ev_detail(cfg=ev_config(profile=False), tele={}, section="segment")
+
+    assert segment["charging"] is None
+    assert segment["chargingSince"] is None
+
+
 def ev_ranking():
     return {
         "currency": "CZK/kWh",

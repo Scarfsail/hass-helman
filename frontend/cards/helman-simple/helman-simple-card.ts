@@ -10,7 +10,7 @@ import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
 import { TreeItem } from "../helman/tree-item";
 import { hydrateItem } from "../helman/tree-item-hydrator";
-import type { NodeType, NodeDetailParams } from "./node-detail/node-detail-types";
+import type { NodeType } from "./node-detail/node-detail-types";
 import {
     buildNodeDetailParams,
     type NodeDetailContext,
@@ -449,7 +449,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .hass=${this._hass!}
                     .localize=${this._localize!}
                     .open=${true}
-                    .params=${this._buildDialogParams(this._dialogRequest, flows)}
+                    .params=${buildNodeDetailParams(this._buildNodeDetailContext(flows), this._dialogRequest)}
                     @closed=${() => { this._dialogRequest = null; this._detailEntityIds = []; this._rebuildWatchedEntityIds(); }}
                     @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
@@ -734,12 +734,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const factor = hass ? powerUnitFactor(hass, entityId) : null;
         const rated = value === null || factor === null ? null : value * factor;
         return rated !== null && rated > 0 ? rated : this._entityMap!.solarMaxPower;
-    }
-
-    private _buildDialogParams(request: NodeType | TreeItem, flows: LiveFlows): NodeDetailParams {
-        return typeof request === "string"
-            ? buildNodeDetailParams(this._buildNodeDetailContext(flows), request)
-            : { nodeType: "device", item: request };
     }
 
     private _handleShowDeviceDetail = (event: Event): void => {

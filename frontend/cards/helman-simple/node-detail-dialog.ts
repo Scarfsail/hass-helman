@@ -182,6 +182,7 @@ export class NodeDetailDialog extends LitElement {
                             .hass=${this.hass}
                             .localize=${this.localize}
                             .deviceId=${chargerId}
+                            .params=${this.params}
                         ></node-detail-ev-charger-content>
                     `;
                 }

@@ -23,7 +23,9 @@ Two sections, each read when its question opens:
   mode. That starts a charging *segment*: a pause and a restart start a new one
   within the same plugged-in session, so it is never the session's start. The
   run mode's ``last_changed`` cannot stand in for it, since an HA restart or an
-  ``unavailable`` blip moves it too.
+  ``unavailable`` blip moves it too. From the same run mode history it carries
+  ``charging``, today's recorded charging stretches, which the detail's
+  charging strip draws on opening.
 """
 
 from __future__ import annotations
@@ -158,26 +160,95 @@ async def async_ev_charger_section(
 async def _async_segment_section(
     hass: Any, config: Mapping[str, Any], now: datetime, device: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """When the charging run mode began, as recorded; ``None`` when not charging or unknown."""
+    """The charging segment's start and today's charging stretches, as recorded.
+
+    ``chargingSince`` is ``None`` when not charging or unknown. ``charging`` is
+    ``None`` without a run mode to read (a Custom charger), else the stretches
+    of today in which the run mode was charging; ``open`` marks the one still
+    charging when read, which ends at ``asOf``.
+    """
     device_id = peek_controllable_id(device)
     telemetry = resolve_vendor_telemetry(hass, config).get(device_id)
-    status = run_mode_condition(hass, telemetry)
+    local_now = dt_util.as_local(now)
+    day_start, day_end = day_window(local_now)
+    entity_id = telemetry.entities.get("run_mode") if telemetry is not None else None
     since = None
-    if status is not None and status["kind"] == "charging":
-        start = now - SEGMENT_LOOKBACK
-        states = list(await async_run_mode_history(hass, status["entityId"], start, now))
-        live = hass.states.get(status["entityId"])
+    charging = None
+    if entity_id:
+        # Back to midnight for the strip, and a day back for a segment begun yesterday.
+        start = min(day_start, now - SEGMENT_LOOKBACK)
+        states = list(await async_run_mode_history(hass, entity_id, start, now))
+        live = hass.states.get(entity_id)
         # The recorder commits in batches: the live state may not be in it yet.
         if live is not None and (not states or live.last_changed > states[-1].last_changed):
             states.append(live)
-        since = charging_segment_start(states, telemetry.profile.run_mode_conditions, now)
+        conditions = telemetry.profile.run_mode_conditions
+        status = run_mode_condition(hass, telemetry)
+        if status is not None and status["kind"] == "charging":
+            since = charging_segment_start(states, conditions, now)
+        charging = [
+            {
+                "start": dt_util.as_local(begin).isoformat(),
+                "end": dt_util.as_local(end).isoformat(),
+                "open": still_charging,
+            }
+            for begin, end, still_charging in charging_intervals(states, conditions, day_start, now)
+        ]
     return {
         "node": "ev_charger",
         "section": "segment",
         "deviceId": device_id,
-        "asOf": dt_util.as_local(now).isoformat(),
+        "asOf": local_now.isoformat(),
+        "period": {
+            "start": dt_util.as_local(day_start).isoformat(),
+            "end": dt_util.as_local(day_end).isoformat(),
+        },
         "chargingSince": None if since is None else dt_util.as_local(since).isoformat(),
+        "charging": charging,
     }
+
+
+def charging_intervals(
+    states: Sequence[Any], conditions: Mapping[str, str], start: datetime, now: datetime
+) -> list[tuple[datetime, datetime, bool]]:
+    """The recorded charging stretches over ``[start, now]``, clipped to it, each with whether it is still going.
+
+    A stretch runs from a charging state to the next state that is something
+    else. A gap state (``unavailable``, ``unknown``) up to
+    :data:`SEGMENT_MAX_GAP` between two charging states does not break it, as
+    for the segment; any other gap ends the stretch where the gap began, so
+    only recorded charging is drawn. The newest charging state runs to ``now``,
+    and is the one still going.
+    """
+    ordered = sorted(states, key=lambda state: state.last_changed)
+    stretches: list[tuple[datetime, datetime, bool]] = []
+    since: datetime | None = None
+    gap_from: datetime | None = None
+    for state in ordered:
+        at = state.last_changed
+        if state.state in _GAP_STATES:
+            if since is not None and gap_from is None:
+                gap_from = at
+            continue
+        charging = conditions.get(state.state) == "charging"
+        if since is not None:
+            if gap_from is not None and (not charging or at - gap_from > SEGMENT_MAX_GAP):
+                stretches.append((since, gap_from, False))
+                since = None
+            elif not charging:
+                stretches.append((since, at, False))
+                since = None
+        gap_from = None
+        if charging and since is None:
+            since = at
+    if since is not None:
+        open_gap = gap_from is not None and now - gap_from > SEGMENT_MAX_GAP
+        stretches.append((since, gap_from if open_gap else now, not open_gap))
+    return [
+        (max(begin, start), min(end, now), still)
+        for begin, end, still in stretches
+        if end > start and begin < now and min(end, now) > max(begin, start)
+    ]
 
 
 def charging_segment_start(

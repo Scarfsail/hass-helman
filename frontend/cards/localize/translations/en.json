@@ -960,19 +960,12 @@
         "using": "Using {power}.",
         "unavailable": "No house power reading right now."
       },
-      "figure": {
-        "today": "Today so far",
-        "paid": "Paid today (estimate)"
-      },
       "mix": {
-        "now": "Supplied now: {shares}",
         "solar": "solar {share}",
         "battery": "battery {share}",
         "grid": "grid {share}"
       },
       "next": {
-        "planned": "Next planned: {name} at {time}",
-        "running": "Running by plan: {name} until {end}",
         "candidate": "candidate, its condition is not met",
         "rest_short": "≈ {kwh} for the rest of today",
         "run_short": "{name} at {time}",
@@ -1143,6 +1136,18 @@
         "input_eps": "EPS",
         "formula": "On-grid, a phase's house load is the inverter's output on that phase plus what the grid meter imports on it (less what it exports), plus the EPS output. Off-grid the grid is disconnected and the EPS output is the whole house load. The total is the sum of the three phases.",
         "inputs_none": "Measuring the phases needs an inverter hardware profile; without one, the phases are estimated from your wiring map alone."
+      },
+      "flow": {
+        "rest": "Everything else",
+        "unattributed": "{kwh} from no known source",
+        "paid": "Paid {value}, an estimate, not a bill"
+      },
+      "tile": {
+        "no_runs": "Nothing planned",
+        "until": "until {time}",
+        "today_so_far": "used so far today",
+        "phase_highest": "most loaded phase",
+        "phase_highest_estimated": "most loaded phase, estimated"
       }
     },
     "ev_charger": {
@@ -1167,11 +1172,6 @@
         "drawing": "Drawing {power}.",
         "not_drawing": "Not drawing power ({power}).",
         "unavailable": "No charger power reading right now."
-      },
-      "figure": {
-        "power": "Power now",
-        "car": "{name}: charge → limit",
-        "session": "Added this session"
       },
       "exception": {
         "fault": "The charger reports a fault: {fault}.",
@@ -1360,6 +1360,42 @@
         "lock": "Electronic lock",
         "no_readings": "No technical readings are available.",
         "evidence_note": "Readings as reported by the charger, each with its own update time."
+      },
+      "switch": {
+        "execution_off": "Schedule execution is off: the plan does not switch it.",
+        "on_planned": "On, as planned.",
+        "off_planned": "Off, though the plan charges now.",
+        "on_unplanned": "On, though no charging is planned now.",
+        "off_unplanned": "Off, as planned.",
+        "next_on": "The plan next switches it on at {time}.",
+        "next_off": "The plan next switches it off at {time}.",
+        "no_next": "The plan does not switch it today or tomorrow."
+      },
+      "strip": {
+        "scope": "Charging · today to noon tomorrow",
+        "charged": "Charging",
+        "starts": "starts charging",
+        "stops": "stops charging",
+        "history_failed": "Today's charging could not be read.",
+        "completion_reach": "Under the current plan ≈ {limit} by {time}: an estimate, not a guarantee.",
+        "completion_short": "Under the current plan ≈ {soc} of {limit} by {time}, {kwh} short: an estimate, not a guarantee."
+      },
+      "glyph": {
+        "limit": "limit {soc}"
+      },
+      "flow": {
+        "mix_estimate": "Sources are the house's mix now, applied to the charger: an estimate.",
+        "unattributed": "{kwh} from no known source"
+      },
+      "tile": {
+        "session": "this session",
+        "session_for": "this session, {duration}",
+        "charging": "Charging",
+        "charging_since": "from {time}",
+        "fault": "Fault",
+        "not_charging": "Not charging",
+        "phase_sum": "phases {power}",
+        "not_compared": "not compared with its phases"
       }
     }
   },

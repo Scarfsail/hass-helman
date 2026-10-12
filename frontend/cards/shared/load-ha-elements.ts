@@ -25,6 +25,7 @@ const REQUIRED_ELEMENTS = [
 ] as const;
 const SORTABLE_TAG = "ha-sortable";
 const YAML_EDITOR_TAG = "ha-yaml-editor";
+const ENTITY_TOGGLE_TAG = "ha-entity-toggle";
 const TRACE_ELEMENTS = ["hat-script-graph", "ha-trace-path-details"] as const;
 
 /**
@@ -166,6 +167,20 @@ export async function loadHaTrace(hass: HomeAssistant): Promise<LocalizeFunc> {
   await Promise.all([loadTraceChunk(), hass.loadFragmentTranslation("config")]);
   return hass.loadBackendTranslation("conditions");
 }
+
+/**
+ * `ha-entity-toggle`, HA's own switch for an entity, as its entity rows draw it.
+ *
+ * Not in the automation panel's chunk walk, so not in `REQUIRED_ELEMENTS`:
+ * awaited there it would hang every form. Lovelace's card helpers import the
+ * row factory, which imports the toggle row statically, and with it this
+ * element. Outside a dashboard there are no card helpers, and the tag simply
+ * never arrives.
+ */
+export const loadHaEntityToggle = loadOnce([ENTITY_TOGGLE_TAG], async () => {
+  const loadCardHelpers = (window as unknown as { loadCardHelpers?: () => Promise<unknown> }).loadCardHelpers;
+  if (typeof loadCardHelpers === "function") await loadCardHelpers();
+});
 
 /**
  * `ha-yaml-editor`, which lives in developer tools rather than in config.

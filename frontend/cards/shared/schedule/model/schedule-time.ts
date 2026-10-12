@@ -277,6 +277,26 @@ export function getScheduleLocalTimeParts(
     };
 }
 
+/**
+ * The start of the local day `atMs` falls on, in `timeZone`: its midnight,
+ * an exact instant even on a daylight-saving day, when the hours since
+ * midnight on the clock are not the hours elapsed.
+ */
+export function getScheduleLocalDayStartMs(atMs: number, timeZone: string): number {
+    const day = getScheduleLocalTimeParts(atMs, timeZone)?.dayKey;
+    let start = Math.floor(atMs / 60_000) * 60_000;
+    // Step back by the clock's hours, then correct once more for an hour the
+    // clock skipped or repeated on the way.
+    for (let step = 0; step < 3; step += 1) {
+        const parts = getScheduleLocalTimeParts(start, timeZone);
+        if (parts === null || day === undefined) break;
+        if (parts.dayKey !== day) start += ((24 - parts.hour) * 60 - parts.minute) * 60_000;
+        else if (parts.hour !== 0 || parts.minute !== 0) start -= (parts.hour * 60 + parts.minute) * 60_000;
+        else break;
+    }
+    return start;
+}
+
 export function buildScheduleCompactExpandedRangeLabel({
     startMs,
     endMs,

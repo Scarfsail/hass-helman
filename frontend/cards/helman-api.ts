@@ -1274,15 +1274,20 @@ export interface EvChargerDetailPayload {
 
 /**
  * When the charger's charging run mode began, as recorded: the start of a
- * charging segment, not the plugged-in session. `null` while not charging, or
- * when the record cannot tell.
+ * charging segment, not the plugged-in session. `chargingSince` is `null`
+ * while not charging, or when the record cannot tell. `charging` is today's
+ * recorded charging stretches, from the same run mode history; `null`
+ * without a run mode to read.
  */
 export interface EvChargerSegmentSectionPayload {
     node: "ev_charger";
     section: "segment";
     deviceId: string;
     asOf: string;
+    period: { start: string; end: string };
     chargingSince: string | null;
+    /** `open`: still charging when read, so it ends at `asOf`. */
+    charging: Array<{ start: string; end: string; open: boolean }> | null;
 }
 
 /** Today's sources and attributed money of one charger, from the ranking report: today, not the session. */

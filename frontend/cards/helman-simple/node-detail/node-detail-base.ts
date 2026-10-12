@@ -157,7 +157,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         }
         // Today's flows are "today so far": re-read on a new day, and otherwise
         // at most every few minutes, only while shown and the page is visible.
-        if (this._flowScope === "today" && this._todayFlows?.status === "ready" && !document.hidden && this._todayFlowsStale()) {
+        if (this._flowScope === "today" && this._todaySection().state?.status === "ready" && !document.hidden && this._todayStale()) {
             void this._loadTodayFlows();
         }
     }
@@ -172,7 +172,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         // everything shown: the feed's contract is to reload it all.
         this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => this._onDataChanged());
         void this._loadOverview();
-        if (this._flowScope === "today" && this._todayFlowsStale()) void this._loadTodayFlows();
+        if (this._flowScope === "today" && this._todayStale()) void this._loadTodayFlows();
     }
 
     /** Undo what a subclass's `_start` began; requests in flight are dropped. */
@@ -253,11 +253,22 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         return section ? { node: this._node, section } : { node: this._node };
     }
 
-    /** Whether today's flows need a read: none yet, from another day, or older than the refresh period. */
-    private _todayFlowsStale(): boolean {
-        return this._todayFlows?.status !== "ready"
-            || !this._isToday(this._todayFlows.payload.period.start)
-            || Date.now() - this._todayFlowsRequestedAt > TODAY_REFRESH_MS;
+    /**
+     * The section the Today flow draws, as loaded, and when it was last
+     * requested: the node's `flows` section by default. A node whose Today is
+     * another section returns that one, with `_loadTodayFlows` loading it, so
+     * the refresh, the retry and the scope label all read the one it shows.
+     */
+    protected _todaySection(): { state: SectionState<{ period: { start: string }; asOf: string }> | null; requestedAt: number } {
+        return { state: this._todayFlows, requestedAt: this._todayFlowsRequestedAt };
+    }
+
+    /** Whether today's section needs a read: none yet, from another day, or older than the refresh period. */
+    protected _todayStale(): boolean {
+        const { state, requestedAt } = this._todaySection();
+        return state?.status !== "ready"
+            || !this._isToday(state.payload.period.start)
+            || Date.now() - requestedAt > TODAY_REFRESH_MS;
     }
 
     /** Today's flows, the node's `flows` section; a refresh keeps the day's figures on screen. */
@@ -316,7 +327,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         this._flowScope = event.detail.scope;
         // Requested only once Today is chosen; Now needs nothing but the card.
         if (this._flowScope === "today") {
-            if (this._todayFlowsStale()) void this._loadTodayFlows();
+            if (this._todayStale()) void this._loadTodayFlows();
         } else {
             this._todayFlowsRequest += 1;
             // A dropped load would otherwise leave Today "loading" when chosen again.
@@ -399,9 +410,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /**
      * The node's flow in the scope shown, on the fixed scale: the Now scale
      * is the card's, W; Today's is that × {@link TODAY_SCALE_HOURS}, kWh. A
-     * tap on either side opens `questionId`; `centre` is the node's glyph.
+     * tap on either side opens `questionId`, or on the destinations
+     * `outputQuestionId` when given; `centre` is the node's glyph.
      */
-    protected _renderFlow(flow: NodeFlow, scaleW: number, questionId: Q, centre: TemplateResult) {
+    protected _renderFlow(flow: NodeFlow, scaleW: number, questionId: Q, centre: TemplateResult, outputQuestionId: Q | null = null) {
         const now = this._flowScope === "now";
         return html`
             <helman-node-flow
@@ -418,8 +430,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
                 .notes=${flow.notes}
                 question-id=${questionId}
                 .questionLabel=${this._t(`q.${questionId}`)}
+                output-question-id=${outputQuestionId ?? nothing}
+                .outputQuestionLabel=${outputQuestionId ? this._t(`q.${outputQuestionId}`) : ""}
             >${centre}</helman-node-flow>
-            ${!now && this._todayFlows?.status === "error" ? html`
+            ${!now && this._todaySection().state?.status === "error" ? html`
                 <button class="link-button" @click=${() => this._loadTodayFlows()}>${this._t("retry")}</button>
             ` : nothing}
         `;
@@ -430,11 +444,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         return fillTemplate(this.localize("node_detail.flow.scope_now"), { time: this._time(Date.now()) });
     }
 
-    /** "Today · 00:00–21:08", to the as-of of today's flows once they landed. */
+    /** "Today · 00:00–21:08", to the as-of of today's section once it landed. */
     protected _todayScopeLabel(): string {
-        const payload = this._todayFlows?.status === "ready" ? this._todayFlows.payload : null;
+        const state = this._todaySection().state;
         return fillTemplate(this.localize("node_detail.flow.scope_today"), {
-            time: this._time(payload ? Date.parse(payload.asOf) : Date.now()),
+            time: this._time(state?.status === "ready" ? Date.parse(state.payload.asOf) : Date.now()),
         });
     }
 

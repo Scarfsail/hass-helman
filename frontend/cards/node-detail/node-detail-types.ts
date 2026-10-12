@@ -79,9 +79,11 @@ export interface InverterDetailParams extends EnergyNodeFlowParams {
 
 /**
  * One config device, opened from its name. Not a `NodeType`: that union is also
- * the animated-icon vocabulary, and a device has no animated icon.
+ * the animated-icon vocabulary, and a device has no animated icon. The power
+ * cards add the flow params for an EV charger, whose detail draws the car's
+ * flow; the solar inspector, which shows past slots, has no live split to add.
  */
-export interface DeviceDetailParams {
+export interface DeviceDetailParams extends Partial<EnergyNodeFlowParams> {
     nodeType: "device";
     item: TreeItem;
 }

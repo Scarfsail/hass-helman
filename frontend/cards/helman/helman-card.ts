@@ -15,7 +15,7 @@ import {
     buildNodeDetailParams,
     type NodeDetailContext,
 } from "../node-detail/node-detail-params-builder";
-import type { NodeDetailParams, NodeType } from "../node-detail/node-detail-types";
+import type { NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
 import { DEFAULT_SOLAR_MAX_W, liveFlows } from "../helman-simple/live-flows";
 import "./power-flow-arrows"
@@ -189,7 +189,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
         const dialogParams = this._dialogRequest !== null
-            ? this._buildDialogParams(this._dialogRequest)
+            ? buildNodeDetailParams(this._buildNodeDetailContext(), this._dialogRequest)
             : null;
 
         return html`
@@ -321,12 +321,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._rebuildWatchedEntityIds();
     };
 
-    private _buildDialogParams(request: NodeType | TreeItem): NodeDetailParams {
-        return typeof request === "string"
-            ? buildNodeDetailParams(this._buildNodeDetailContext(), request)
-            : { nodeType: "device", item: request };
-    }
-
     private _buildNodeDetailContext(): NodeDetailContext {
         const { sourcesChildren, consumersChildren, houseNode } = this._computedNodes!;
         const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
@@ -362,8 +356,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                 batteryPower: batteryPowerReading ?? 0,
                 gridPower: gridPower ?? 0,
             }),
-            // This card reads no inverter overview: the solar node's maximum is the scale.
-            flowScaleW: Math.max(1, solarNode?.sourceConfig?.max_power ?? DEFAULT_SOLAR_MAX_W),
+            // This card reads no inverter overview: the solar node's maximum is the
+            // scale. nodeConfig is the DTO's sourceConfig, which the simple card reads it from.
+            flowScaleW: Math.max(1, (solarNode?.nodeConfig as { max_power?: number } | undefined)?.max_power ?? DEFAULT_SOLAR_MAX_W),
             batteryPower,
             batteryPowerReading,
             solarPowerReading,
