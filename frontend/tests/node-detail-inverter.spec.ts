@@ -38,6 +38,8 @@ type Variant = {
     grid?: string;
     /** Each phase's AC power, W. */
     acPhase?: string;
+    /** The rating in kW rather than W. */
+    ratedKw?: boolean;
     modesFail?: boolean;
     /** The first read of today's modes is yesterday's, as after midnight; every read after it fails. */
     modesYesterdayThenFail?: boolean;
@@ -116,7 +118,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             link_quarantined_registers: ["sensor.solax_inverter_communication_quarantined_registers", v.linkUnavailable ? "unavailable" : "0"],
             firmware: ["sensor.solax_inverter_solax_software_version", "DSP 1.46 ARM 1.44-1.08"],
             hardware_version: ["sensor.solax_inverter_solax_hardware_version", "Gen4"],
-            rated_power: ["sensor.solax_inverter_power_type", "10000", "W"],
+            rated_power: ["sensor.solax_inverter_power_type", v.ratedKw ? "10" : "10000", v.ratedKw ? "kW" : "W"],
             mppt_count: ["sensor.solax_inverter_mppt_count", "2"],
             lock_state: ["select.solax_lock_state", "Unlocked"],
             grid_mode_runtime: ["sensor.solax_grid_mode_runtime", "32820.0", "h"],
@@ -912,4 +914,10 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+test("the load share converts a rating in kW and phases in W to one unit", async ({ page }) => {
+    await mount(page, { ratedKw: true });
+    await openDetail(page);
+    await expect(tile(page, "operating").locator(".detail")).toHaveText("AC 3.5 kW · 35 % of rating");
 });

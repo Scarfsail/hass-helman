@@ -35,6 +35,7 @@ import {
     todayAndTomorrow,
     type ScheduleRun,
 } from "./node-detail-schedule";
+import { powerUnitFactor } from "./node-detail-readings";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 
@@ -670,7 +671,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     /** The export cap the inverter holds, and the battery's SoC range as a bar. */
     private _renderLimitsTile(overview: InverterDetailPayload) {
-        const exportLimit = this._number(overview, "export_limit") ?? overview.maxAllowedExportPower;
+        const exportLimit = this._watts(overview, "export_limit") ?? overview.maxAllowedExportPower;
         const low = this._number(overview, "battery_min_soc");
         const high = this._number(overview, "battery_max_soc");
         const soc = this._socRange(overview);
@@ -690,7 +691,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     /** The temperature, and the AC load as a share of the inverter's rating, without thresholds. */
     private _renderOperatingTile(overview: InverterDetailPayload) {
         const ac = this._acPower(overview);
-        const rated = this._number(overview, "rated_power");
+        const rated = this._watts(overview, "rated_power");
         const share = ac !== null && rated !== null && rated > 0 ? Math.abs(ac) / rated : null;
         const detail = ac === null ? null
             : share === null ? fillTemplate(this._t("operating.ac_short"), { value: formatPower(ac).display })
@@ -1007,12 +1008,19 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     // ── Rows and readings ───────────────────────────────────────────────────
 
-    /** The phases' AC power summed, only when every phase reads. */
+    /** The phases' AC power summed, W, only when every phase reads in a power unit. */
     private _acPower(overview: InverterDetailPayload): number | null {
-        const values = PHASES.map((phase) => this._number(overview, "ac_power_l" + phase));
+        const values = PHASES.map((phase) => this._watts(overview, "ac_power_l" + phase));
         return values.every((value): value is number => value !== null)
             ? values.reduce((sum, value) => sum + value, 0)
             : null;
+    }
+
+    /** A power reading in W, signed; `null` when missing or in a unit that is not power. */
+    private _watts(overview: InverterDetailPayload, key: string): number | null {
+        const value = this._number(overview, key);
+        const factor = powerUnitFactor(this.hass, overview.entities[key]);
+        return value === null || factor === null ? null : value * factor;
     }
 
     private _socRange(overview: InverterDetailPayload): string | null {
