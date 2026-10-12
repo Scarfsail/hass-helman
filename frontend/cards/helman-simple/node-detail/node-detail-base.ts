@@ -1,7 +1,7 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
-import type { LocalizeFunction } from "../../localize/localize";
+import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
 import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
@@ -18,7 +18,8 @@ import {
 } from "../../shared/node-question";
 import "../../shared/node-question";
 import "../../shared/node-tile";
-import { FLOW_SCOPE_EVENT, type FlowScope, type FlowScopeDetail } from "../../shared/node-flow";
+import "../../shared/node-flow";
+import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail } from "../../shared/node-flow";
 import type { ScheduleActionTone } from "../../shared/schedule/action-tones";
 import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
 
@@ -29,6 +30,19 @@ export const TODAY_REFRESH_MS = 5 * 60_000;
 
 /** The Today flow is drawn at the Now scale × this many hours, kWh. */
 export const TODAY_SCALE_HOURS = 4;
+
+/** What a node's flow draws in one scope. */
+export interface NodeFlow {
+    scopeLabel: string;
+    inputs: FlowItem[];
+    outputs: FlowItem[];
+    totalIn: string | null;
+    totalOut: string | null;
+    notes: string[];
+}
+
+/** An energy node a flow's ribbon can lead to; its colour is `--helman-<node>`. */
+export type FlowNode = "solar" | "grid" | "battery" | "house";
 
 export type SectionState<T> =
     | { status: "loading" }
@@ -362,9 +376,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /**
      * One question as a tile: its answer's value, an optional mini graphic and
      * the question as the caption. Its answer opens through `_question`, which
-     * a tiled detail renders only for the open question, under the tiles.
+     * a tiled detail renders only for the open question, under the tiles. A
+     * tile names an action in its `tone`, or a flow in its `accent` colour.
      */
-    protected _tile(id: Q, value: string, detail: string | null, graphic: TemplateResult | typeof nothing = nothing, tone: ScheduleActionTone | null = null) {
+    protected _tile(id: Q, value: string, detail: string | null, graphic: TemplateResult | typeof nothing = nothing, tone: ScheduleActionTone | null = null, accent: string | null = null) {
         return html`
             <helman-node-tile
                 data-question=${id}
@@ -373,9 +388,90 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
                 .value=${value}
                 .detail=${detail}
                 .tone=${tone}
+                .accent=${accent}
                 ?open=${this._open === id}
             >${graphic}</helman-node-tile>
         `;
+    }
+
+    // ── Flow ────────────────────────────────────────────────────────────────
+
+    /**
+     * The node's flow in the scope shown, on the fixed scale: the Now scale
+     * is the card's, W; Today's is that × {@link TODAY_SCALE_HOURS}, kWh. A
+     * tap on either side opens `questionId`; `centre` is the node's glyph.
+     */
+    protected _renderFlow(flow: NodeFlow, scaleW: number, questionId: Q, centre: TemplateResult) {
+        const now = this._flowScope === "now";
+        return html`
+            <helman-node-flow
+                data-flow-scope=${this._flowScope}
+                .scope=${this._flowScope}
+                .scopeLabel=${flow.scopeLabel}
+                .nowLabel=${this.localize("node_detail.flow.now")}
+                .todayLabel=${this.localize("node_detail.flow.today")}
+                .inputs=${flow.inputs}
+                .outputs=${flow.outputs}
+                .scale=${now ? scaleW : scaleW * TODAY_SCALE_HOURS / 1000}
+                .totalIn=${flow.totalIn}
+                .totalOut=${flow.totalOut}
+                .notes=${flow.notes}
+                question-id=${questionId}
+                .questionLabel=${this._t(`q.${questionId}`)}
+            >${centre}</helman-node-flow>
+            ${!now && this._todayFlows?.status === "error" ? html`
+                <button class="link-button" @click=${() => this._loadTodayFlows()}>${this._t("retry")}</button>
+            ` : nothing}
+        `;
+    }
+
+    /** "Now · 21:08". */
+    protected _nowScopeLabel(): string {
+        return fillTemplate(this.localize("node_detail.flow.scope_now"), { time: this._time(Date.now()) });
+    }
+
+    /** "Today · 00:00–21:08", to the as-of of today's flows once they landed. */
+    protected _todayScopeLabel(): string {
+        const payload = this._todayFlows?.status === "ready" ? this._todayFlows.payload : null;
+        return fillTemplate(this.localize("node_detail.flow.scope_today"), {
+            time: this._time(payload ? Date.parse(payload.asOf) : Date.now()),
+        });
+    }
+
+    /** Why Today has no flows to draw: loading, failed or unavailable; `null` once it has them. */
+    protected _todayFlowsNote(): string | null {
+        const section = this._todayFlows;
+        if (section === null || section.status === "loading") return this.localize("node_detail.flow.loading");
+        if (section.status === "error") return this.localize("node_detail.flow.failed");
+        if (!section.payload.flows) return this.localize(`node_detail.flow.unavailable_${section.payload.unavailable ?? "not_loaded"}`);
+        return null;
+    }
+
+    /** A source or destination, in the colour of the node at its other end. */
+    protected _flowItem(node: FlowNode, value: number | null, format: (value: number | null) => string): FlowItem {
+        return {
+            id: node,
+            label: this.localize(`node_detail.title.${node}`),
+            value,
+            display: format(value),
+            color: `var(--helman-${node})`,
+        };
+    }
+
+    /**
+     * Each side's sum, with energy that went in or out by no known route
+     * added to its side; a side is unknown when any of its items is.
+     */
+    protected _flowTotals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0, unresolvedOut = 0) {
+        const sum = (items: FlowItem[]) => items.some((item) => item.value === null) ? null : items.reduce((total, item) => total + item.value!, 0);
+        const total = (key: "total_in" | "total_out", value: number | null) =>
+            value === null ? null : fillTemplate(this.localize(`node_detail.flow.${key}`), { value: format(value) });
+        const totalIn = sum(inputs);
+        const totalOut = sum(outputs);
+        return {
+            totalIn: total("total_in", totalIn === null ? null : totalIn + unresolvedIn),
+            totalOut: total("total_out", totalOut === null ? null : totalOut + unresolvedOut),
+        };
     }
 
     /** The focused inspector embed of `id` (a question, or its evidence), created once and kept. */

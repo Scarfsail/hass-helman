@@ -11,7 +11,8 @@ import { QUESTION_TOGGLE_EVENT, type QuestionToggleDetail } from "./node-questio
  * A tile is the closed face of a `helman-node-question`: tapping it fires the
  * same question toggle, and the host renders the opened answer and its
  * evidence full width under the tiles, one at a time. `tone` colours the tile
- * in a scheduler action's tone, for a tile that names an action.
+ * in a scheduler action's tone, for a tile that names an action; `accent`
+ * colours its value, for a tile that names a flow, such as the import price.
  */
 @customElement("helman-node-tile")
 export class HelmanNodeTile extends LitElement {
@@ -51,7 +52,7 @@ export class HelmanNodeTile extends LitElement {
             font-weight: 700;
             line-height: 1.2;
             overflow-wrap: anywhere;
-            color: var(--schedule-action-tone-color, var(--primary-text-color));
+            color: var(--node-tile-accent, var(--schedule-action-tone-color, var(--primary-text-color)));
         }
         .detail {
             font-size: 0.78rem;
@@ -79,12 +80,15 @@ export class HelmanNodeTile extends LitElement {
     @property() public detail: string | null = null;
     @property({ type: Boolean, reflect: true }) public open = false;
     @property() public tone: ScheduleActionTone | null = null;
+    /** A colour for the value, for a tile that names a flow rather than an action. */
+    @property() public accent: string | null = null;
 
     render() {
         return html`
             <button
                 class=${this.tone ? `action-tone-${this.tone}` : ""}
                 aria-expanded=${this.open ? "true" : "false"}
+                style=${this.accent ? `--node-tile-accent: ${this.accent}` : nothing}
                 @click=${this._toggle}
             >
                 <span class="value">${this.value}</span>
