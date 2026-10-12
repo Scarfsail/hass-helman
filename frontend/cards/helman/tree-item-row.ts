@@ -1,4 +1,6 @@
 import { LitElement, TemplateResult, css, html, nothing } from "lit-element";
+import { mdiCurrentAc } from "@mdi/js";
+import { getLocalizeFunction } from "../localize/localize";
 import { keyed } from 'lit/directives/keyed.js';
 import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
@@ -78,6 +80,15 @@ export class HelmanTreeItem extends LitElement {
             bubbles: true,
             composed: true,
             detail: { item: this.device },
+        }));
+    }
+
+    private _onInverterClick(e: Event) {
+        e.stopPropagation();
+        this.dispatchEvent(new CustomEvent("show-node-detail", {
+            bubbles: true,
+            composed: true,
+            detail: { nodeType: "inverter" },
         }));
     }
 
@@ -169,6 +180,59 @@ export class HelmanTreeItem extends LitElement {
                 border-top-left-radius: 0;
                 border-top-right-radius: 0;
             }
+            .deviceHeading, .deviceLabel {
+                display: flex;
+                align-items: center;
+                min-width: 0;
+            }
+            .deviceLabel {
+                flex: 1;
+            }
+            .deviceHeading.distribution {
+                /* Equal side tracks center the action independently of text widths. */
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr);
+            }
+            .distributionInfo {
+                container-type: inline-size;
+            }
+            @container (max-width: 360px) {
+                .deviceHeading.distribution {
+                    grid-template-columns: minmax(0, 1fr) auto;
+                }
+                .distribution .inverterButton {
+                    grid-column: 1 / -1;
+                    grid-row: 2;
+                    justify-self: center;
+                }
+            }
+            .distribution helman-tree-item-power-display {
+                justify-self: end;
+                max-width: 100%;
+            }
+            .inverterButton {
+                width: 40px;
+                height: 40px;
+                padding: 8px;
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                color: var(--primary-text-color);
+                cursor: pointer;
+            }
+            .inverterButton:hover {
+                background: rgba(var(--rgb-accent-color), 0.15);
+            }
+            .inverterButton:focus-visible {
+                outline: 2px solid var(--primary-color, #03a9f4);
+                outline-offset: -2px;
+            }
+            .inverterButton svg {
+                display: block;
+                width: 24px;
+                height: 24px;
+                fill: currentColor;
+            }
             .deviceInfo {
                 z-index: 2;
             }
@@ -249,6 +313,8 @@ export class HelmanTreeItem extends LitElement {
         // highlighted rather than merely lighter if the tint goes much past this.
         const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
+        const isDistribution = device.id === "consumers";
+        const inverterLabel = isDistribution ? getLocalizeFunction(this.hass)("node_detail.title.inverter") : "";
         const deviceContent = html`
                 <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({
                     ...(nodeColor ? {'--device-shadow-color': nodeColor} : {}),
@@ -261,17 +327,26 @@ export class HelmanTreeItem extends LitElement {
                         .historyRevision=${this.historyRevision}
                         .sourceHistory=${device.isSource ? undefined : device.sourcePowerHistory}>
                     </helman-power-history-bars>
-                    <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">
-                        <div style="display: flex; flex-direction: row;flex-basis: 100%;align-items: center; ">
-                            <helman-tree-item-icon 
-                                .hass=${this.hass} 
-                                .device=${this.device}
-                                .openNodeDetailOnClick=${this.openNodeDetailOnIcon}
-                                @toggle-children=${this._toggleChildren}
-                                @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
-                            ></helman-tree-item-icon>
-                            ${indicator ? html`<span class="childrenToggle" @click=${this._onChevronClick}>${indicator}</span>` : nothing}
-                            <div class="deviceName ${hasChildren ? 'has-children' : ''} ${device.deviceKey ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
+                    <div class="deviceInfo ${isDistribution ? 'distributionInfo' : ''}" style="display: flex; flex-direction: column;flex-basis: 100%;">
+                        <div class="deviceHeading ${isDistribution ? 'distribution' : ''}">
+                            <div class="deviceLabel">
+                                <helman-tree-item-icon
+                                    .hass=${this.hass}
+                                    .device=${this.device}
+                                    .openNodeDetailOnClick=${this.openNodeDetailOnIcon}
+                                    @toggle-children=${this._toggleChildren}
+                                    @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
+                                ></helman-tree-item-icon>
+                                ${indicator ? html`<span class="childrenToggle" @click=${this._onChevronClick}>${indicator}</span>` : nothing}
+                                <div class="deviceName ${hasChildren ? 'has-children' : ''} ${device.deviceKey ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
+                            </div>
+                            ${isDistribution ? html`
+                                <button class="inverterButton" type="button"
+                                    aria-label=${inverterLabel} title=${inverterLabel}
+                                    @click=${this._onInverterClick}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${mdiCurrentAc}></path></svg>
+                                </button>
+                            ` : nothing}
                             <helman-tree-item-power-display
                                 .powerValue=${this.device.powerValue ?? 0}
                                 .powerSensorId=${this.device.powerSensorId ?? undefined}
