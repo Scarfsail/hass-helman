@@ -648,6 +648,7 @@ test.describe("motion and the centre value", () => {
         [{ power: "60" }, "60 W", true],
         [{ power: "50" }, "50 W", false],
         [{ power: "unavailable" }, "–", false],
+        [{ power: "-60" }, "0 W", false],
     ];
     for (const [variant, value, active] of cases) {
         test(`${JSON.stringify(variant)} shows ${value} under the glyph, ${active ? "pulsing" : "still"}`, async ({ page }) => {

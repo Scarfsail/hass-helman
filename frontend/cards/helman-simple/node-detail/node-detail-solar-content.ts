@@ -608,19 +608,19 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _nowFlow(overview: SolarDetailPayload): NodeFlow {
         const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
         const watts = (value: number | null) => value === null ? null : Math.max(0, value);
+        const production = watts(this._powerNow());
         const inputs = overview.strings.length >= 2
             ? overview.strings.map((string) => {
                 const value = watts(this._watts(overview, `pv_power_${string}`));
                 return this._stringItem(string, value, power(value));
             })
-            : [this._flowItem("solar", watts(this._powerNow()), power)];
+            : [this._flowItem("solar", production, power)];
         const flows = this.params.flows;
         const outputs = [
             this._flowItem("house", flows?.solarToHouse ?? null, power),
             this._flowItem("battery", flows?.solarToBattery ?? null, power),
             this._flowItem("grid", flows?.solarToGrid ?? null, power),
         ];
-        const production = this._powerNow();
         return {
             scopeLabel: this._nowScopeLabel(),
             inputs,
