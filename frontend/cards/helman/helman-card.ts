@@ -6,7 +6,7 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { applyValueType, TreeItemDTO, TreePayload } from "../helman-api";
+import { applyValueType, InverterDetailPayload, TreeItemDTO, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
@@ -17,6 +17,7 @@ import {
 } from "../node-detail/node-detail-params-builder";
 import type { NodeType } from "../node-detail/node-detail-types";
 import "../helman-simple/node-detail-dialog";
+import { inverterCellEntityIds } from "../helman-simple/inverter-cell";
 import { DEFAULT_SOLAR_MAX_W, liveFlows } from "../helman-simple/live-flows";
 import "./power-flow-arrows"
 import "./tree-item-info"
@@ -91,6 +92,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
      */
     @state() private _historyRevision = 0;
     @state() private _uiConfig?: HelmanUiConfig;
+    /** The overview the distribution row's inverter cell reads; `null` until loaded, or when it failed. */
+    @state() private _inverter: InverterDetailPayload | null = null;
     @state() private _computedNodes?: {
         sourcesNode: TreeItem | undefined;
         sourcesChildren: readonly TreeItem[];
@@ -214,7 +217,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .historyBucketDuration=${historyBucketDuration}
                         .historyRevision=${this._historyRevision}
                         .devices_full_width=${true}
-                        .showInverterButton=${true}
+                        .centreContent=${html`
+                            <helman-inverter-cell
+                                .hass=${this._hass}
+                                .localize=${this._localize}
+                                .inverter=${this._inverter}
+                            ></helman-inverter-cell>
+                        `}
                     ></helman-tree-item-list>
                     <power-flow-arrows .devices=${consumersChildren} .historyRevision=${this._historyRevision} .maxPower=${this.config?.max_power}></power-flow-arrows>
 
@@ -406,10 +415,25 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                 () => this._sourceNodes,
             );
             engine.advanceBuckets(this._deviceTree, this._sourceNodes);
+            void this._loadInverter(obsolete);
         } catch (error) {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
             console.error('Helman: failed to load backend data', error);
+        }
+    }
+
+    /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
+    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+        try {
+            const payload = await getSharedHelmanStore(this._latestHass!)
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+            if (obsolete()) return;
+            this._inverter = payload;
+            this._rebuildWatchedEntityIds();
+            this._hass = this._latestHass;
+        } catch (err) {
+            if (!obsolete()) console.error("Helman: failed to load the inverter overview", err);
         }
     }
 
@@ -486,6 +510,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         for (const id of this._scheduleWatchedIds) {
             ids.add(id);
         }
+
+        // The distribution row's inverter cell: its mode and link cue.
+        for (const id of inverterCellEntityIds(this._inverter)) ids.add(id);
 
         for (const id of this._detailEntityIds) ids.add(id);
         this._watchedEntityIds = ids;

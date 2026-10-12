@@ -6,9 +6,9 @@ import { loadBundle } from "./support/card-page";
 /**
  * The inverter from the power card's distribution row.
  *
- * The full card's central "Energy Consumers" aggregate is where the source and
- * consumer flows meet, so it carries an icon-only inverter button that opens the
- * same inverter detail the simple card's centre cell opens. Mounted on the real
+ * The full card's central "Distribution" aggregate is where the source and
+ * consumer flows meet, so it carries the simple card's inverter cell, with the
+ * commanded mode, opening the same inverter detail. Mounted on the real
  * `helman-card` against a fake backend that answers the device tree, the
  * schedule and `helman/get_node_detail` with an inverter that has no hardware
  * profile; the inverter detail itself is pinned in `node-detail-inverter.spec.ts`.
@@ -68,7 +68,7 @@ async function mountCard(page: Page): Promise<void> {
             asOf: "2026-10-21T12:00:00+00:00",
             configured: true,
             profile: null,
-            mode: { entityId: "select.helman_inverter_mode", actionOptions: { normal: "normal" } },
+            mode: { entityId: "select.helman_inverter_mode", actionOptions: { normal: "normal", stop_charging: "stop_charging" } },
             entities: { battery_min_soc: "number.min_soc", battery_max_soc: "number.max_soc" },
             maxAllowedExportPower: null,
             agreement: { status: "unknown", reason: "no_profile", commanded: "normal", observedOption: null, observedFrom: [], registers: [] },
@@ -105,13 +105,14 @@ async function mountCard(page: Page): Promise<void> {
         const card = document.createElement("helman-card") as any;
         await card.setConfig({ type: "custom:helman-card" });
         card.hass = hass;
+        (window as any).__hass = hass;
         document.body.appendChild(card);
     }, tree);
 
     await expect(button(page)).toBeVisible();
 }
 
-const button = (page: Page) => page.locator("helman-tree-item .inverter-button");
+const button = (page: Page) => page.locator("helman-tree-item helman-inverter-cell .inverter-cell");
 const content = (page: Page) => page.locator("node-detail-inverter-content");
 const dialog = (page: Page) => page.locator("node-detail-dialog ha-dialog");
 
@@ -126,8 +127,8 @@ function layout(page: Page) {
             const { left, right, top, bottom } = element.getBoundingClientRect();
             return { left, right, top, bottom };
         };
-        const buttonElement = root.querySelector(".inverter-button")!;
-        const buttonRect = rect(buttonElement);
+        const cellElement = root.querySelector("helman-inverter-cell")!;
+        const buttonRect = rect(cellElement.shadowRoot!.querySelector(".inverter-cell")!);
         const display = root.querySelector("helman-tree-item-power-display")!;
         const hit = root.elementFromPoint((buttonRect.left + buttonRect.right) / 2, (buttonRect.top + buttonRect.bottom) / 2);
         return {
@@ -137,7 +138,7 @@ function layout(page: Page) {
             nameText: root.querySelector(".deviceName")!.textContent!.trim(),
             power: rect(display.shadowRoot!.querySelector(".powerDisplay")!),
             powerText: display.shadowRoot!.querySelector(".powerValue")!.textContent!.replace(/\s+/g, " ").trim(),
-            unobstructed: hit === buttonElement || buttonElement.contains(hit),
+            unobstructed: hit === cellElement || cellElement.contains(hit),
         };
     });
 }
@@ -145,14 +146,31 @@ function layout(page: Page) {
 type Box = { left: number; right: number; top: number; bottom: number };
 const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 
-test.describe("the distribution row's inverter button", () => {
+test.describe("the distribution row's inverter cell", () => {
     test("is a single labelled button, on the distribution root only", async ({ page }) => {
         await mountCard(page);
         await expect(button(page)).toHaveCount(1);
-        await expect(button(page)).toHaveAttribute("aria-label", "Inverter");
-        await expect(button(page)).toHaveAttribute("title", "Inverter");
-        const owner = await button(page).evaluate((element) => ((element.getRootNode() as ShadowRoot).host as any).device.id);
+        await expect(button(page)).toHaveAttribute("aria-label", "Inverter: Normal");
+        await expect(button(page)).toHaveAttribute("title", "Inverter: Normal");
+        const owner = await button(page).evaluate((element) => {
+            const cell = (element.getRootNode() as ShadowRoot).host;
+            return ((cell.getRootNode() as ShadowRoot).host as any).device.id;
+        });
         expect(owner).toBe("consumers");
+    });
+
+    test("shows the commanded mode, live", async ({ page }) => {
+        await mountCard(page);
+        await expect(button(page).locator(".inverter-mode")).toHaveText("Normal");
+        await page.evaluate(() => {
+            const previous = (window as any).__hass;
+            const hass = {
+                ...previous,
+                states: { ...previous.states, "select.helman_inverter_mode": { state: "stop_charging", attributes: {} } },
+            };
+            (document.querySelector("helman-card") as any).hass = hass;
+        });
+        await expect(button(page).locator(".inverter-mode")).toHaveText("No charging");
     });
 
     for (const width of [1200, 320]) {
@@ -168,7 +186,7 @@ test.describe("the distribution row's inverter button", () => {
             expect(overlaps(box.button, box.power)).toBe(false);
             expect(box.unobstructed).toBe(true);
             // The row keeps its title and its reading.
-            expect(box.nameText).toBe("Energy Consumers");
+            expect(box.nameText).toBe("Distribution");
             expect(box.powerText).toMatch(/\d.*W$/);
         });
     }
