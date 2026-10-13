@@ -1,12 +1,12 @@
 """Shared ``sys.modules`` stub moves for the backend test files.
 
-Each test file still runs in its own process (see ``conftest.py``) and still
-decides *which* modules it stubs; these helpers only remove the boilerplate of
-*how*. Import them like any other test helper: ``from _ha_stubs import ...``.
+Each test file decides which helman modules it stubs. Home Assistant imports
+always use the real installed modules.
 """
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 from datetime import datetime
@@ -16,8 +16,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def stub_module(name: str, **attrs) -> types.ModuleType:
-    """Get ``name`` from ``sys.modules`` (creating and registering an empty
-    module when it is missing) and set ``attrs`` on it."""
+    """Stub a helman module, or return an unmodified real Home Assistant module."""
+    if name == "homeassistant" or name.startswith("homeassistant."):
+        return importlib.import_module(name)
+
     module = sys.modules.get(name)
     if module is None:
         module = types.ModuleType(name)
@@ -42,15 +44,8 @@ def install_helman_packages(*subpackages: str) -> None:
 
 
 def stub_ha_dt(now: datetime | None = None) -> types.ModuleType:
-    """Install the fixed-clock ``homeassistant.util.dt`` stub: ISO parsing,
-    identity ``as_local``/``as_utc`` and, when ``now`` is given, ``now()``
-    returning it."""
-    module = stub_module(
-        "homeassistant.util.dt",
-        parse_datetime=datetime.fromisoformat,
-        as_local=lambda value: value,
-        as_utc=lambda value: value,
-    )
+    """Use Home Assistant's datetime helpers with an optional fixed clock."""
+    module = importlib.import_module("homeassistant.util.dt")
     if now is not None:
         module.now = lambda: now
     return module

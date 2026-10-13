@@ -13,18 +13,10 @@ The coordinator therefore smooths the raw difference before flooring it.
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 import unittest
 from types import SimpleNamespace
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-try:
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-except Exception:  # pragma: no cover - environment guard
-    coordinator_module = None
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 HOUSE = "sensor.house_power"
 CIRCUIT_A = "sensor.circuit_a_power"
@@ -72,7 +64,6 @@ def _make_coordinator(states: dict[str, str]):
     return c
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class UnmeasuredSmoothingTests(unittest.TestCase):
     def test_meter_jitter_no_longer_blanks_the_remainder(self):
         # A 100 W remainder under a house meter that jitters +-150 W: every other

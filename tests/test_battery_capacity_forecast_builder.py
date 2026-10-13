@@ -17,12 +17,10 @@ DST_REFERENCE_TIME = datetime.fromisoformat("2026-03-29T01:50:00+01:00")
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None

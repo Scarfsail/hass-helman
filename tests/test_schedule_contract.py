@@ -14,7 +14,6 @@ CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 
 def _install_import_stubs() -> None:
     install_helman_packages("scheduling")
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func

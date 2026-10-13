@@ -6,18 +6,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from _ha_stubs import install_helman_packages, stub_module
+from homeassistant.util import dt as dt_util
 
 TZ = timezone.utc
 
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
@@ -92,6 +91,19 @@ class _FixedDateTime(datetime):
 
 
 class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        previous_time_zone = dt_util.DEFAULT_TIME_ZONE
+        dt_util.set_default_time_zone(TZ)
+        self.addCleanup(dt_util.set_default_time_zone, previous_time_zone)
+
+        oldest_state_patch = patch.object(
+            actuals,
+            "query_oldest_state_date",
+            new=AsyncMock(return_value=date(2000, 1, 1)),
+        )
+        oldest_state_patch.start()
+        self.addCleanup(oldest_state_patch.stop)
+
     async def test_reads_boundary_sampled_slot_actuals_as_wh(self) -> None:
         with patch.object(
             actuals,

@@ -75,7 +75,6 @@ _defused_modules: set[str] = set()
 
 def _install_basic_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod
@@ -417,13 +416,11 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     core_mod.DOMAIN = "homeassistant"
 
     components_pkg = stub_module("homeassistant.components")
-    components_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``scheduling.actual_history`` reads what really happened from the
     # recorder; the coordinator imports it at module level.
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
@@ -435,7 +432,6 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    stub_module("homeassistant.components.energy")
     energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
@@ -444,7 +440,6 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     energy_data_mod.async_get_manager = async_get_manager
 
     helpers_pkg = stub_module("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``automation.day_context_store`` does ``from homeassistant.helpers import
     # storage`` and builds a ``storage.Store``; provide a lightweight stub.
@@ -497,7 +492,6 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     start_mod.async_at_started = _async_at_started
     helpers_pkg.start = start_mod
 
-    stub_module("homeassistant.helpers.entity_registry")
 
     return previous_modules
 

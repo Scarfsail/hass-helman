@@ -8,8 +8,6 @@ from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
-    stub_module("homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}))
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(datetime.fromisoformat("2026-04-05T12:00:00+00:00"))
     util_pkg.dt = dt_mod

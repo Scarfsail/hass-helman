@@ -276,19 +276,16 @@ def _install_import_stubs() -> None:
     storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
     components_pkg = stub_module("homeassistant.components")
-    components_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``scheduling.actual_history`` reads what really happened from the
     # recorder; the coordinator imports it at module level.
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
@@ -300,7 +297,6 @@ def _install_import_stubs() -> None:
     statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    stub_module("homeassistant.components.energy")
     energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
@@ -309,7 +305,6 @@ def _install_import_stubs() -> None:
     energy_data_mod.async_get_manager = async_get_manager
 
     helpers_pkg = stub_module("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
 
     debounce_mod = stub_module("homeassistant.helpers.debounce")
     debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
@@ -355,7 +350,6 @@ def _install_import_stubs() -> None:
     start_mod.async_at_started = _async_at_started
     helpers_pkg.start = start_mod
 
-    stub_module("homeassistant.helpers.entity_registry")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod
@@ -1656,7 +1650,7 @@ class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
         (line,) = captured.output
         self.assertIn("reason=partial_slot", line)
         # The slot the entities are down *for*, not the stamp on the entry.
-        self.assertIn("slot=2026-03-20T21:00:00+01:00", line)
+        self.assertIn("slot=2026-03-20T20:00:00+00:00", line)
         self.assertIn("0.1333", line)
 
     def test_the_reason_is_logged_once_per_slot_not_once_per_read(self):

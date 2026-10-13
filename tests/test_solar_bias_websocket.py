@@ -13,7 +13,6 @@ from _ha_stubs import install_helman_packages, stub_module
 
 def _install_import_stubs() -> None:
     install_helman_packages("solar_bias_correction", "scheduling")
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func

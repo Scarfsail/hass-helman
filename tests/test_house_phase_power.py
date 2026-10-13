@@ -9,21 +9,12 @@ whenever a phase is.
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-try:
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-    from custom_components.helman.vendors import PROFILES, DeviceTelemetry
-except Exception as exc:  # pragma: no cover - environment guard
-    coordinator_module = None
-    _IMPORT_ERROR = exc
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+from custom_components.helman.vendors import PROFILES, DeviceTelemetry
 
 RUN_MODE = "sensor.solax_run_mode"
 
@@ -73,7 +64,6 @@ def _phases(**readings: str) -> dict[str, str]:
     return {_entity(names[key[:-1]], int(key[-1])): value for key, value in readings.items()}
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class HousePhasePowerTests(unittest.TestCase):
     def test_on_grid_phase_is_inverter_output_minus_export_plus_eps(self):
         # The Solax meter reads positive while exporting.

@@ -280,19 +280,16 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
     components_pkg = stub_module("homeassistant.components")
-    components_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``scheduling.actual_history`` reads what really happened from the
     # recorder; the coordinator imports it at module level.
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
@@ -304,7 +301,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    stub_module("homeassistant.components.energy")
     energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
@@ -313,7 +309,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     energy_data_mod.async_get_manager = async_get_manager
 
     helpers_pkg = stub_module("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
 
     debounce_mod = stub_module("homeassistant.helpers.debounce")
     debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
@@ -321,6 +316,9 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     # ``automation.day_context_store`` does ``from homeassistant.helpers import
     # storage`` and builds a ``storage.Store``; provide a lightweight stub so a
     # ``FakeHass`` without real ``data``/``config`` can back it.
+    # Import before replacing storage: HA's event helper imports the registry,
+    # which subclasses the real generic Store.
+    event_mod = stub_module("homeassistant.helpers.event")
     storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
 
     class _HelperStore:
@@ -337,7 +335,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
     helpers_pkg.storage = storage_helper_mod
 
-    event_mod = stub_module("homeassistant.helpers.event")
     event_mod.async_track_state_change_event = (
         lambda hass, entity_ids, action: lambda: None
     )
@@ -359,7 +356,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     start_mod.async_at_started = _async_at_started
     helpers_pkg.start = start_mod
 
-    stub_module("homeassistant.helpers.entity_registry")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod

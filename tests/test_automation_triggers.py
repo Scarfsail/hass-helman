@@ -153,7 +153,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}

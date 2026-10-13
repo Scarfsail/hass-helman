@@ -24,7 +24,6 @@ def _install_import_stubs() -> None:
     recorder_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod
