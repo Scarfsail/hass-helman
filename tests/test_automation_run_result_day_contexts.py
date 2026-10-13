@@ -12,7 +12,6 @@ TZ = timezone(timedelta(hours=2))
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(datetime(2026, 7, 10, 12, 0, tzinfo=TZ))
     util_pkg.dt = dt_mod

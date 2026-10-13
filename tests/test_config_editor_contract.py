@@ -126,7 +126,6 @@ def _install_voluptuous_stub() -> None:
 
 def _install_import_stubs() -> None:
     install_helman_packages("scheduling")
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
@@ -176,8 +175,8 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-_install_voluptuous_stub()
 _install_import_stubs()
+_install_voluptuous_stub()
 
 from custom_components.helman.automation import config as automation_config_module
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN

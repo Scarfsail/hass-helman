@@ -18,6 +18,7 @@ from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
+CURRENT_SLOT_ID_UTC = "2026-03-20T20:00:00+00:00"
 
 
 def _install_voluptuous_stub() -> None:
@@ -176,7 +177,6 @@ def _install_import_stubs() -> None:
     tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
 
-    stub_module("homeassistant", __path__=[])
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
@@ -199,7 +199,6 @@ def _install_import_stubs() -> None:
 
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
@@ -211,7 +210,6 @@ def _install_import_stubs() -> None:
     statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    stub_module("homeassistant.components.energy", __path__=[])
     energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
@@ -265,14 +263,13 @@ def _install_import_stubs() -> None:
 
     storage_mod.Store = DummyStore
 
-    stub_module("homeassistant.helpers.entity_registry")
     util_pkg = stub_module("homeassistant.util", __path__=[])
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod
 
 
-_install_voluptuous_stub()
 _install_import_stubs()
+_install_voluptuous_stub()
 
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
@@ -1655,7 +1652,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         written_schedule = ScheduleDocument(
             execution_enabled=True,
             slots={
-                CURRENT_SLOT_ID: {
+                CURRENT_SLOT_ID_UTC: {
                     "inverter": {"kind": "normal"},
                     "boiler": {"on": True, "setBy": "automation"},
                 }
@@ -2418,11 +2415,12 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         import voluptuous as vol
 
         schema = vol.Schema(ws_get_schedule_explanation.websocket_schema)
+        message = {key: value for key, value in self.MESSAGE.items() if key != "id"}
         with self.assertRaises(vol.Invalid):
-            schema({**self.MESSAGE, "date": "31.7.2026"})
+            schema({**message, "date": "31.7.2026"})
         with self.assertRaises(vol.Invalid):
-            schema({**self.MESSAGE, "controllable_id": ""})
-        self.assertEqual(schema(dict(self.MESSAGE))["date"], "2026-07-31")
+            schema({**message, "controllable_id": ""})
+        self.assertEqual(schema(message)["date"], "2026-07-31")
 
 
 class _RecordingOptimizer:

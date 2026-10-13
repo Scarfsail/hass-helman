@@ -284,19 +284,16 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
-    stub_module("homeassistant")
     core_mod = stub_module("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
 
     components_pkg = stub_module("homeassistant.components")
-    components_pkg.__path__ = []  # mark as package so sub-imports work
 
     # ``scheduling.actual_history`` reads what really happened from the
     # recorder; the coordinator imports it at module level.
     recorder_mod = stub_module("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
 
     history_mod = stub_module("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
@@ -308,7 +305,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     statistics_mod = stub_module("homeassistant.components.recorder.statistics")
     statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
 
-    stub_module("homeassistant.components.energy")
     energy_data_mod = stub_module("homeassistant.components.energy.data")
 
     async def async_get_manager(hass):
@@ -365,7 +361,6 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     start_mod.async_at_started = _async_at_started
     helpers_pkg.start = start_mod
 
-    stub_module("homeassistant.helpers.entity_registry")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod

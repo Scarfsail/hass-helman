@@ -31,19 +31,6 @@ if "custom_components.helman" not in sys.modules:
     helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
     sys.modules["custom_components.helman"] = helman_pkg
 
-if "homeassistant" not in sys.modules:
-    ha_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = ha_pkg
-
-# minimal homeassistant.core with HomeAssistant type
-core_mod = types.ModuleType("homeassistant.core")
-core_mod.HomeAssistant = type("HomeAssistant", (), {})
-sys.modules["homeassistant.core"] = core_mod
-
-# minimal helpers.storage module
-helpers_mod = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers"] = helpers_mod
-
 storage_stub = types.ModuleType("homeassistant.helpers.storage")
 
 class _DummyStore:

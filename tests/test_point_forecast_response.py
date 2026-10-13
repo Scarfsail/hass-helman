@@ -13,7 +13,6 @@ UTC = timezone.utc
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_module("homeassistant.util.dt")
     if not hasattr(dt_mod, "as_local"):

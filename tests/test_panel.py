@@ -13,10 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _install_import_stubs() -> None:
     install_helman_packages()
-    stub_module("homeassistant")
-    stub_module("homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}))
     components_pkg = stub_module("homeassistant.components")
     frontend_mod = stub_module("homeassistant.components.frontend", removed_panels=[])
+    frontend_mod.removed_panels = []
 
     def async_remove_panel(_hass, path):
         frontend_mod.removed_panels.append(path)
@@ -24,6 +23,7 @@ def _install_import_stubs() -> None:
     frontend_mod.async_remove_panel = async_remove_panel
 
     panel_custom_mod = stub_module("homeassistant.components.panel_custom", calls=[])
+    panel_custom_mod.calls = []
 
     async def async_register_panel(*args, **kwargs):
         panel_custom_mod.calls.append((args, kwargs))

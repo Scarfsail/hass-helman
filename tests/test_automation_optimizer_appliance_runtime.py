@@ -26,7 +26,6 @@ def _install_import_stubs() -> None:
     recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
     recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
 
-    stub_module("homeassistant")
     # `battery_state` — reached through the self-sustainability simulator —
     # imports `HomeAssistant` purely for a type annotation on its live readers.
     core_mod = stub_module("homeassistant.core")

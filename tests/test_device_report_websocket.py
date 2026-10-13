@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import os
-import sys
 import unittest
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
@@ -20,9 +18,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
 import voluptuous as vol  # noqa: E402
 

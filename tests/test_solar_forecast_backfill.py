@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from custom_components.helman import solar_forecast_backfill as mod  # noqa: E402
 

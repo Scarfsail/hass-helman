@@ -10,15 +10,12 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 from __future__ import annotations
 
 import json
-import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from homeassistant.core import State  # noqa: E402
 

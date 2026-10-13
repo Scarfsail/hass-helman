@@ -11,19 +11,11 @@ reach it, so it is tested on its own.
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-try:
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-except Exception:  # pragma: no cover - environment guard
-    coordinator_module = None
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 BATTERY = "sensor.battery_power"
 HOUSE = "sensor.house_power"
@@ -102,7 +94,6 @@ def _run(battery_power: str, polarity: str | None):
     return c
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class BatteryEtaPolarityTests(unittest.TestCase):
     def test_default_polarity_reads_positive_as_charging(self):
         c = _run("2000", None)

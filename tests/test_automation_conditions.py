@@ -20,7 +20,6 @@ SLOT_2 = "2026-03-20T21:30:00+01:00"
 
 def _install_import_stubs() -> None:
     install_helman_packages("scheduling")
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod

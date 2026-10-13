@@ -24,17 +24,12 @@ really exercised, in the style of ``test_solar_forecast_slot_history.py``.
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 from datetime import date, datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from custom_components.helman import battery_forecast_backfill as mod  # noqa: E402
 from custom_components.helman import recorder_statistics_span as span  # noqa: E402

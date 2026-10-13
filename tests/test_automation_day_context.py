@@ -12,7 +12,6 @@ PRAGUE = ZoneInfo("Europe/Prague")
 
 def _install_import_stubs() -> None:
     install_helman_packages("automation")
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_module("homeassistant.util.dt")
 

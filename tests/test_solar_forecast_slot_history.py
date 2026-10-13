@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from custom_components.helman import solar_forecast_backfill as backfill_mod  # noqa: E402
 from custom_components.helman.solar_bias_correction import (  # noqa: E402

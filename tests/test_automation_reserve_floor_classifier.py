@@ -39,7 +39,6 @@ GOLDEN_PATH = Path(__file__).with_name("fixtures") / "reserve_floor_classifier_g
 
 def _install_import_stubs() -> None:
     install_helman_packages("scheduling")
-    stub_module("homeassistant")
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod

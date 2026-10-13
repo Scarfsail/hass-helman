@@ -18,7 +18,6 @@ DAY = date(2026, 7, 10)
 
 def _install_import_stubs() -> None:
     install_helman_packages("scheduling")
-    stub_module("homeassistant")
     # ``battery_state`` imports ``HomeAssistant`` only for annotations; stubbing
     # it lets the real horizon simulator load.
     core_mod = stub_module("homeassistant.core")

@@ -42,10 +42,7 @@ def _load_sensor_module():
 
     install_helman_packages()
 
-    homeassistant_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = homeassistant_pkg
-    components_pkg = types.ModuleType("homeassistant.components")
-    sys.modules["homeassistant.components"] = components_pkg
+    importlib.import_module("homeassistant.components")
 
     sensor_mod = types.ModuleType("homeassistant.components.sensor")
     sensor_mod.SensorDeviceClass = type(
@@ -90,9 +87,7 @@ def _load_sensor_module():
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     sys.modules["homeassistant.core"] = core_mod
 
-    helpers_pkg = types.ModuleType("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
-    sys.modules["homeassistant.helpers"] = helpers_pkg
+    helpers_pkg = importlib.import_module("homeassistant.helpers")
     entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
     entity_platform_mod.AddEntitiesCallback = object
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
