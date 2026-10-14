@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import types
@@ -30,7 +31,7 @@ HelmanCoordinator = coordinator_module.HelmanCoordinator
 
 class CoordinatorHouseForecastTests(unittest.TestCase):
     def test_has_matching_forecast_snapshot_rejects_legacy_hourly_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "actualHistory": [],
@@ -54,7 +55,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         )
 
     def test_has_matching_forecast_snapshot_accepts_canonical_slot_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "actualHistory": [],
@@ -82,7 +83,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         # The current slot covers 21:16 (the stubbed now); its adjusted
         # nonDeferrable already carries scheduled appliance demand (0.6 kWh).
         # The deferrableConsumers band and the unadjusted cache must be ignored.
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "currentSlot": {
@@ -113,7 +114,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
     def test_current_w_falls_back_to_base_load_when_pipeline_cold(self) -> None:
         # With no pipeline, the sensor reports the unadjusted base load only,
         # never base + deferrableConsumers.
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_appliance_forecast_pipeline = None
         coordinator._cached_forecast = {
             "status": "available",
@@ -165,7 +166,7 @@ class CoordinatorHouseProfileAdoptionTests(unittest.TestCase):
     """
 
     def _make_coordinator(self, section: dict | None) -> HelmanCoordinator:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._training_artifacts_store = types.SimpleNamespace(
             house_consumption=section
         )
@@ -247,7 +248,7 @@ class HouseProfileRefitDeferralTests(unittest.TestCase):
         started_callbacks: list = []
         runs: list[str] = []
 
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = types.SimpleNamespace()
         coordinator._unsub_listeners = []
         coordinator._training_batch = types.SimpleNamespace(
@@ -313,7 +314,7 @@ class StartupForecastRefreshDeferralTests(unittest.TestCase):
     def _make_coordinator(self) -> tuple[HelmanCoordinator, list[str]]:
         reasons: list[str] = []
 
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = types.SimpleNamespace()
         coordinator._unsub_listeners = []
         coordinator._async_refresh_forecast = lambda *, reason: reasons.append(reason)
