@@ -5,8 +5,9 @@ from _fakes import FakeHass as SharedFakeHass
 from _fakes import FakeBus, FakeConnection as SharedFakeConnection
 
 import unittest
+import importlib
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 from custom_components.helman.automation import config as automation_config_module
@@ -424,12 +425,36 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertTrue(connection.results[0][1]["reloadSucceeded"])
         self.assertIsNone(connection.results[0][1]["reloadError"])
-        # Announced only after the reload, so an editor that reloads on this
-        # event reads the config the entry is now actually running on.
-        self.assertEqual(
-            hass.bus.fired,
-            [("helman_data_changed", {"kind": "config"})],
-        )
+        # This fake reload does not run async_setup_entry, the sole config emitter.
+        self.assertEqual(hass.bus.fired, [])
+
+    async def test_save_config_reloaded_entry_announces_config_once(self) -> None:
+        helman_init = importlib.import_module("custom_components.helman")
+        storage = FakeStorage()
+        hass = FakeHass(storage)
+        hass.is_running = True
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        coordinator = SimpleNamespace(async_setup=AsyncMock())
+
+        async def reload_entry(entry_id):
+            self.assertEqual(entry_id, "entry-1")
+            await helman_init.async_setup_entry(hass, FakeConfigEntry(entry_id))
+            return True
+
+        hass.config_entries.async_reload = reload_entry
+        with (
+            patch.object(helman_init, "HelmanCoordinator", return_value=coordinator),
+            patch.object(helman_init, "async_update_group_service_schemas"),
+            patch.object(helman_init, "async_register_frontend", new=AsyncMock()),
+            patch.object(helman_init, "async_register_panel", new=AsyncMock()),
+        ):
+            await _save_config_handler(
+                hass,
+                FakeConnection(is_admin=True),
+                {"id": 1, "type": "helman/save_config", "config": {}},
+            )
+
+        self.assertEqual(hass.bus.fired, [("helman_data_changed", {"kind": "config"})])
 
     async def test_save_config_does_not_announce_a_failed_reload(self) -> None:
         # A save whose reload blew up left the running config untouched; waking

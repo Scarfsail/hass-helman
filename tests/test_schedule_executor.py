@@ -55,6 +55,11 @@ from custom_components.helman.scheduling.schedule_executor import (  # noqa: E40
     ScheduleExecutor,
     ScheduleExecutorDependencies,
 )
+from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
+    ActiveSlotRuntimeStatus,
+    InverterRuntimeStatus,
+    ScheduleExecutionStatus,
+)
 
 
 class FakeState:
@@ -168,6 +173,8 @@ def _build_executor(
     registry: AppliancesRuntimeRegistry | None = None,
     extra_states: dict[str, FakeState] | None = None,
     now=None,
+    announce_schedule_changed=None,
+    save_pruned_schedule_document=None,
 ) -> tuple[ScheduleExecutor, FakeHass, FakeScheduleStore]:
     states = {} if state is None else {entity_id: state}
     states.update(extra_states or {})
@@ -184,10 +191,80 @@ def _build_executor(
             read_battery_state=lambda: battery_state,
             read_appliances_registry=lambda: registry or AppliancesRuntimeRegistry(),
             check_reality_and_maybe_replan=check_reality_and_maybe_replan,
+            announce_schedule_changed=announce_schedule_changed,
+            save_pruned_schedule_document=save_pruned_schedule_document,
         ),
         now=now,
     )
     return executor, hass, store
+
+
+class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_changed_error_code_announces_without_timestamp_noise(self) -> None:
+        announced = []
+        executor, _hass, _store = _build_executor(
+            entity_id="select.mode",
+            state=None,
+            document=ScheduleDocument(execution_enabled=True, slots={}),
+            announce_schedule_changed=lambda: announced.append("schedule"),
+        )
+
+        def status(error_code, reconciled_at):
+            return ScheduleExecutionStatus(
+                active_slot_id=CURRENT_SLOT_ID,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    inverter=InverterRuntimeStatus(
+                        action_kind="apply", outcome="failed", error_code=error_code
+                    ),
+                    reconciled_at=reconciled_at,
+                ),
+            )
+
+        executor._set_execution_status(status("unavailable", "first"))
+        executor._set_execution_status(status("unavailable", "second"))
+        executor._set_execution_status(status("invalid_option", "third"))
+
+        self.assertEqual(announced, ["schedule", "schedule"])
+
+    async def test_executor_prune_uses_quiet_persistence(self) -> None:
+        quietly_saved = []
+        executor, _hass, store = _build_executor(
+            entity_id="select.mode",
+            state=None,
+            document=ScheduleDocument(
+                execution_enabled=False,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
+            save_pruned_schedule_document=(
+                lambda doc: quietly_saved.append(doc) or store.save(doc)
+            ),
+        )
+
+        await executor._load_pruned_schedule_document_locked(
+            reference_time=AFTER_NEXT_SLOT_BOUNDARY
+        )
+
+        self.assertEqual(len(quietly_saved), 1)
+        self.assertEqual(quietly_saved[0].slots, {})
+
+    async def test_material_runtime_change_announces_once_per_change(self) -> None:
+        announced = []
+        executor, _hass, _store = _build_executor(
+            entity_id="select.mode",
+            state=None,
+            document=ScheduleDocument(execution_enabled=True, slots={}),
+            announce_schedule_changed=lambda: announced.append("schedule"),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        await executor.async_reconcile(
+            reason="test", reference_time=AFTER_NEXT_SLOT_BOUNDARY
+        )
+
+        self.assertEqual(announced, ["schedule", "schedule"])
 
 
 def _build_ev_registry() -> AppliancesRuntimeRegistry:

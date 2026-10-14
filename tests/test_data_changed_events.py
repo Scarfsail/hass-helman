@@ -88,6 +88,22 @@ class DataChangedEventTests(unittest.IsolatedAsyncioTestCase):
             [DATA_CHANGED_KIND_SCHEDULE],
         )
 
+    async def test_expired_slot_read_persists_without_announcing(self) -> None:
+        expired_slot = "2026-03-20T20:30:00+01:00"
+        coordinator, storage, hass = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    expired_slot: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            }
+        )
+
+        await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(storage.schedule_document["slots"], {})
+        self.assertEqual(self._data_changed_kinds(hass), [])
+
     async def test_execution_toggle_announces_the_schedule(self) -> None:
         coordinator, _storage, hass = self._build_coordinator(
             schedule_document={

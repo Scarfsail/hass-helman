@@ -683,6 +683,8 @@ class HelmanCoordinator:
         self._hass = hass
         self._storage = storage
         self._cached_tree: dict | None = None
+        self._buffer_tree: dict | None = None
+        self._unloaded = False
         self._device_datasets: OrderedDict[
             tuple[date, date, ZoneInfo], _CachedDeviceDataset
         ] = OrderedDict()
@@ -861,6 +863,10 @@ class HelmanCoordinator:
                 schedule_lock=self._schedule_lock,
                 load_schedule_document=self._load_schedule_document,
                 save_schedule_document=self._save_schedule_document,
+                save_pruned_schedule_document=self._save_pruned_schedule_document,
+                announce_schedule_changed=lambda: self._fire_data_changed(
+                    DATA_CHANGED_KIND_SCHEDULE
+                ),
                 read_schedule_control_config=self._read_schedule_executor_control_config,
                 read_battery_state=self._read_schedule_executor_battery_state,
                 read_appliances_registry=lambda: self._appliances_registry,
@@ -1337,7 +1343,7 @@ class HelmanCoordinator:
             self._hass.config_entries.async_schedule_reload(self._entry.entry_id)
             return
         self._cached_tree = None
-        self._hass.async_create_task(self._async_rebuild_subscriptions())
+        self._create_tracked_refresh_task(self._async_rebuild_subscriptions())
 
     @callback
     def _on_solar_bias_changed(self, event) -> None:
@@ -1354,14 +1360,23 @@ class HelmanCoordinator:
 
     async def _async_rebuild_subscriptions(self) -> None:
         """Rebuild tree and restart tick after tree invalidation."""
+        if self._unloaded:
+            return
         try:
-            self._stop_tick()
             tree = await self.get_device_tree()
+            if self._unloaded:
+                return
+            if tree == self._buffer_tree:
+                self._refresh_inverter_telemetry()
+                return
+            self._stop_tick()
             self._power_sensor_ids = self._collect_power_sensor_ids(tree)
             self._source_sensor_ids = self._collect_source_sensor_ids(tree)
             self._source_value_types = self._collect_source_value_types(tree)
             self._init_buffers(tree)
             self._start_tick()
+            if self._unloaded:
+                return
             await self._sync_derived_sensors(tree)
         except Exception:
             logging.getLogger(__name__).exception(
@@ -2832,12 +2847,15 @@ class HelmanCoordinator:
         """
         self._hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": kind})
 
-    async def _save_schedule_document(self, doc: ScheduleDocument) -> None:
+    async def _save_schedule_document(
+        self, doc: ScheduleDocument, *, notify: bool = True
+    ) -> None:
         await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
-        # Every schedule mutation in this file funnels through here -- user
-        # edits, automation results, execution toggles, pruning and cleanup --
-        # so this is the one place the announcement has to live.
-        self._fire_data_changed(DATA_CHANGED_KIND_SCHEDULE)
+        if notify:
+            self._fire_data_changed(DATA_CHANGED_KIND_SCHEDULE)
+
+    async def _save_pruned_schedule_document(self, doc: ScheduleDocument) -> None:
+        await self._save_schedule_document(doc, notify=False)
 
     def _build_pruned_schedule_document(
         self,
@@ -2869,7 +2887,7 @@ class HelmanCoordinator:
             reference_time=reference_time
         )
         if pruned_document != loaded_document:
-            await self._save_schedule_document(pruned_document)
+            await self._save_pruned_schedule_document(pruned_document)
         return pruned_document
 
     def _build_automation_working_schedule_document_locked(
@@ -5645,8 +5663,11 @@ class HelmanCoordinator:
         return read_visualization(self._active_config)
 
     def _init_buffers(self, tree: dict) -> None:
-        """Initialize empty rolling deques for all tracked sensors."""
+        """Initialize rolling deques, retaining history for surviving sensors."""
         history_buckets: int = self._visualization_config()["history_buckets"]
+        previous_history = self._power_history
+        previous_unmeasured = self._unmeasured_raw_history
+        previous_unmeasured_ids = self._unmeasured_entity_id_map
 
         self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
         self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
@@ -5672,20 +5693,27 @@ class HelmanCoordinator:
             for shared in shared_meters
             for member_id, _entity_id, _activity in shared["members"]
         }
-        # The smoothing windows belong to the tree they were filled from: a rebuild
-        # can drop or re-parent a node, and a stale window would then smooth the
-        # new node's remainder with readings from a different set of children.
-        self._unmeasured_raw_history = {}
-        self._inverter_telemetry = resolve_vendor_telemetry(
-            self._hass, self._active_config
-        ).get(INVERTER_TELEMETRY_KEY)
+        # Keep smoothing windows only for unmeasured entity ids that survive.
+        self._unmeasured_raw_history = {
+            node_id: history
+            for node_id, history in previous_unmeasured.items()
+            if node_id in previous_unmeasured_ids
+            and previous_unmeasured_ids.get(node_id)
+            == self._unmeasured_entity_id_map.get(node_id)
+        }
+        self._refresh_inverter_telemetry()
 
         # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
         self._power_history = {
-            eid: deque(maxlen=history_buckets) for eid in self._power_sensor_ids
+            eid: previous_history.get(eid, deque(maxlen=history_buckets))
+            for eid in self._power_sensor_ids
         }
-        self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
-        self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
+        self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = previous_history.get(
+            CONSUMPTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
+        )
+        self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = previous_history.get(
+            PRODUCTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
+        )
         # Add deques for source ratio sensors so their history is included in get_history().
         # Derive the ratio entity IDs from the tree (NOT from _source_ratio_sensors, which the
         # sensor platform only populates via set_sensors AFTER async_setup has already built these
@@ -5695,12 +5723,20 @@ class HelmanCoordinator:
         # read loop must not also append them (that would double-append per tick and desync them).
         self._source_ratio_entity_ids = self._collect_source_ratio_entity_ids(tree)
         for ratio_entity_id in self._source_ratio_entity_ids.values():
-            self._power_history[ratio_entity_id] = deque(maxlen=history_buckets)
+            self._power_history[ratio_entity_id] = previous_history.get(
+                ratio_entity_id, deque(maxlen=history_buckets)
+            )
             self._virtual_sensor_ids.add(ratio_entity_id)
+        self._buffer_tree = tree
+
+    def _refresh_inverter_telemetry(self) -> None:
+        self._inverter_telemetry = resolve_vendor_telemetry(
+            self._hass, self._active_config
+        ).get(INVERTER_TELEMETRY_KEY)
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
-        if self._unsub_tick is not None:
+        if self._unloaded or self._unsub_tick is not None:
             return
         bucket_duration: int = self._visualization_config()["history_bucket_duration"]
         self._unsub_tick = async_track_time_interval(
@@ -6125,6 +6161,10 @@ class HelmanCoordinator:
 
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
+        self._unloaded = True
+        for unsub in self._unsub_listeners:
+            unsub()
+        self._unsub_listeners.clear()
         self._stop_tick()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
@@ -6172,10 +6212,6 @@ class HelmanCoordinator:
         self._power_history.clear()
         self._explanation_book.clear()
         self._condition_traces.clear()
-
-        for unsub in self._unsub_listeners:
-            unsub()
-        self._unsub_listeners.clear()
 
     def _create_tracked_refresh_task(
         self,
