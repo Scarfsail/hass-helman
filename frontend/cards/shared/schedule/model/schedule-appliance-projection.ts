@@ -324,17 +324,17 @@ export function mergeScheduleApplianceProjectionBadges(
     if (current === null) {
         return next;
     }
-    if (next === null || current.kind !== next.kind) {
-        return current;
-    }
-
-    if (current.kind === "vehicle_soc") {
+    if (current.kind === "vehicle_soc" && next?.kind === "vehicle_soc") {
         const expectedVehicleSocPct = Math.max(current.expectedVehicleSocPct, next.expectedVehicleSocPct);
         return {
             kind: "vehicle_soc",
             text: String(expectedVehicleSocPct),
             expectedVehicleSocPct,
         };
+    }
+
+    if (current.kind !== "energy" || next?.kind !== "energy") {
+        return current;
     }
 
     const energyKwh = current.energyKwh + next.energyKwh;

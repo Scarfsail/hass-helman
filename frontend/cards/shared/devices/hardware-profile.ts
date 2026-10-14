@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import {
     css,
     html,
@@ -12,7 +13,6 @@ import { deviceKind, findInverter, INVERTER_PATH, iterDevices, validationPath } 
 import { renderHelpIcon, stringValue, type FormFieldHost } from "../config/form-fields";
 import { answersFor, writeProvided } from "../config/resolved-draft";
 import type {
-    HomeAssistantLike,
     JsonObject,
     JsonValue,
     PathSegment,
@@ -35,7 +35,7 @@ import { sharedHaDevice, suggestionAnchors } from "./device-scope";
 
 /** What the hardware profile UI needs of its host, beyond the form primitives. */
 export interface HardwareProfileHost extends FormFieldHost {
-    hass?: HomeAssistantLike;
+    hass?: HomeAssistant;
     /** Apply one edit to the host's draft. */
     mutateDraft(mutator: (draft: JsonObject) => void): void;
 }
@@ -126,7 +126,7 @@ export class VendorsController implements ReactiveController {
     constructor(
         private readonly _host: ReactiveControllerHost,
         private readonly _options: {
-            hass: () => HomeAssistantLike | undefined;
+            hass: () => HomeAssistant | undefined;
             config: () => JsonObject | null;
         },
     ) {

@@ -491,15 +491,6 @@ export function getDescendantScopeIds(scopeId: ScopeId): ScopeId[] {
   return descendants;
 }
 
-function createRootProjectionMembers(
-  keys: readonly string[],
-): ScopeProjectionMember[] {
-  return keys.map((key) => ({
-    yamlKey: key,
-    documentPath: [key],
-  }));
-}
-
 function buildChildScopeIds(): Record<ScopeId, ScopeId[]> {
   const children = Object.fromEntries(
     Object.keys(EDITOR_SCOPES).map((scopeId) => [scopeId, []]),

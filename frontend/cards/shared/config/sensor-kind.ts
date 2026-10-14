@@ -1,4 +1,4 @@
-import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
+import type { HaEntityPickerEntityFilterFunc } from "../../../types/ha";
 
 /** What a sensor field measures, and so which sensors its picker offers. */
 export type SensorKind = "energy" | "power" | "soc";

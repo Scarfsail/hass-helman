@@ -1,7 +1,7 @@
 import { LitElement, css, html, svg } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";

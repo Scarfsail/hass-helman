@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import type { ReactiveController, ReactiveElement } from "lit";
 
 import { cloneJson, getValueAtPath, setValueAtPath, unsetValueAtPath } from "./config-document";
@@ -9,7 +10,7 @@ import {
     type HelmanEntityGroup,
 } from "./entity-group";
 import { stringValue } from "./form-fields";
-import type { HomeAssistantLike, JsonObject, JsonValue, PathSegment } from "./types";
+import type { JsonObject, JsonValue, PathSegment } from "./types";
 
 /**
  * How often the editor asks what its picked entities currently read.
@@ -72,7 +73,7 @@ export interface EntityInspectionTarget {
 
 /** What the collector needs of the element that owns it. */
 export interface EntityInspectionSource {
-    hass(): HomeAssistantLike | undefined;
+    hass(): HomeAssistant | undefined;
     /** The draft: what the poll sends, and what "is this picker set" reads. */
     config(): JsonObject | null;
     /** The stored document: the saved reading, and what a revert restores. */

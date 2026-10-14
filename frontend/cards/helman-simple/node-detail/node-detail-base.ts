@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
 import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";

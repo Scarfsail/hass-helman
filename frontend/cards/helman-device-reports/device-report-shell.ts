@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import {
     DEVICE_REPORT_GRANULARITIES,
     fetchDeviceReport,
@@ -266,7 +266,7 @@ export class HelmanDeviceReportShell extends LitElement {
         this._ensureFresh();
     };
 
-    protected willUpdate(changed: PropertyValues<this>): void {
+    protected willUpdate(changed: PropertyValues): void {
         // A refresh or another query reuses the glyph: its popup would keep the old figures.
         if (changed.has("_memoVersion") || changed.has("_inflightKey")) this._tooltip.hide();
         if (changed.has("hass")) {

@@ -1,4 +1,5 @@
-import type { HomeAssistantLike, JsonObject, ValidationReport } from "./shared/config/types";
+import type { HomeAssistant } from "../types/ha";
+import type { JsonObject, ValidationReport } from "./shared/config/types";
 /**
  * Backend API types for the helman integration.
  *
@@ -145,7 +146,7 @@ export interface DeviceStats {
 
 /** A device's usage record by its `deviceKey`, or `null` when it has none. */
 export function fetchDeviceStats(
-    hass: HomeAssistantLike,
+    hass: HomeAssistant,
     deviceKey: string,
 ): Promise<DeviceStats | null> {
     return hass.callWS({ type: "helman/get_device_stats", device_key: deviceKey });
@@ -316,7 +317,7 @@ export interface DailyProfileReportPayload extends DeviceReportCommon {
 
 /** One device report over `query`'s period. */
 export function fetchDeviceReport(
-    hass: Pick<HomeAssistantLike, "callWS">,
+    hass: Pick<HomeAssistant, "callWS">,
     report: string,
     query: DeviceReportQuery,
 ): Promise<DeviceReportPayload> {
@@ -1348,7 +1349,7 @@ export interface GridDayAggregatesPayload {
 }
 
 /** One local day's measured grid figures and their money, from the inspector's span read. */
-export function fetchGridDayAggregates(hass: Pick<HomeAssistantLike, "callWS">, date: string): Promise<GridDayAggregatesPayload> {
+export function fetchGridDayAggregates(hass: Pick<HomeAssistant, "callWS">, date: string): Promise<GridDayAggregatesPayload> {
     return hass.callWS({ type: "helman/solar_bias/day_aggregates", start_date: date, end_date: date });
 }
 
@@ -1494,7 +1495,7 @@ export interface EnergyImportPreview {
   validation: ValidationReport;
 }
 export function fetchDeviceSuggestions(
-  hass: HomeAssistantLike,
+  hass: HomeAssistant,
   /** Tried in order; the first with an HA device is used. */
   anchorEntityIds: string[],
   config: object,
@@ -1506,7 +1507,7 @@ export function fetchDeviceSuggestions(
   });
 }
 export function fetchEnergyImportPreview(
-  hass: HomeAssistantLike,
+  hass: HomeAssistant,
   config: object,
 ): Promise<EnergyImportPreview> {
   return hass.callWS({ type: "helman/preview_energy_import", config });

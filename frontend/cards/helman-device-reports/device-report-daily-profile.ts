@@ -6,7 +6,7 @@ import type {
     DeviceReportQuery,
 } from "../helman-api";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PRICE_NEGATIVE_COLOR } from "../color-utils";
-import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import type { LocalizeFunction } from "../localize/localize";
 import { formatPower } from "../power-format";
 import { formatKwhValue } from "../shared/forecast-value-format";
 import {
@@ -298,18 +298,12 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                 tooltip: this._priceTooltip(label, rates, payload.currency),
                 cells: HOURS.map((hour): Cell => {
                     const rate = rates[hour] ?? null;
-                    const level = rate === null
-                        ? null
-                        : rate < 0 || high <= low
-                            ? 1
-                            : PRICE_FLOOR_LEVEL + (1 - PRICE_FLOOR_LEVEL) * (rate - low) / (high - low);
-                    return {
-                        level,
-                        style: rate === null
-                            ? ""
-                            : shade(rate < 0 ? PRICE_NEGATIVE_COLOR : color, level),
-                        tooltip: { title: hourSpan(hour), hasActual: false, rows: priceRows[hour] },
-                    };
+                    const tooltip = { title: hourSpan(hour), hasActual: false, rows: priceRows[hour] };
+                    if (rate === null) return { level: null, style: "", tooltip };
+                    const level = rate < 0 || high <= low
+                        ? 1
+                        : PRICE_FLOOR_LEVEL + (1 - PRICE_FLOOR_LEVEL) * (rate - low) / (high - low);
+                    return { level, style: shade(rate < 0 ? PRICE_NEGATIVE_COLOR : color, level), tooltip };
                 }),
             };
         });

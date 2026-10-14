@@ -1,6 +1,6 @@
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
 import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
@@ -1656,7 +1656,7 @@ export class HelmanSolarInspector extends LitElement {
     }
   `];
 
-  protected connectedCallback() {
+  connectedCallback() {
     super.connectedCallback();
     // The wall clock owns a timer, because `hass` churn is not a clock. The card
     // above filters `hass` down to the entities this subtree actually reads, so
@@ -1674,7 +1674,7 @@ export class HelmanSolarInspector extends LitElement {
     window.addEventListener("resize", this._dismissTooltipOnScroll, { passive: true });
   }
 
-  protected disconnectedCallback() {
+  disconnectedCallback() {
     super.disconnectedCallback();
     this._stopNowClock?.();
     this._stopNowClock = undefined;
@@ -5509,18 +5509,6 @@ export class HelmanSolarInspector extends LitElement {
     node.hideChildren = true;
     node.hideChildrenIndicator = true;
     return node;
-  }
-
-  /** Ask HA to open an entity's more-info dialog; a no-op without an entity. */
-  private _showMoreInfo(entityId: string | null) {
-    if (!entityId) return;
-    this.dispatchEvent(
-      new CustomEvent("hass-more-info", {
-        bubbles: true,
-        composed: true,
-        detail: { entityId },
-      }),
-    );
   }
 
   /**

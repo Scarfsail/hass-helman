@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit-element";
 import { property, state } from "lit/decorators.js";
 
@@ -18,7 +19,6 @@ import {
 } from "../config/localize/localize";
 import type {
     ApplianceMetadataResponse,
-    HomeAssistantLike,
     JsonObject,
     PathSegment,
     SaveConfigResponse,
@@ -156,7 +156,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         }
     `;
 
-    @property({ attribute: false }) public hass?: HomeAssistantLike;
+    @property({ attribute: false }) public hass?: HomeAssistant;
 
     /** The card bundle's localize, for this dialog's own chrome. */
     @property({ attribute: false }) public localize!: LocalizeFunction;

@@ -1,7 +1,6 @@
 import { LitElement, css, html } from "lit-element"
 import { customElement, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
+import type { HomeAssistant, LovelaceCard, LovelaceCardEditor } from "../../types/ha";
 import { TreeItem } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
@@ -30,7 +29,6 @@ import {
 } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import { WATCHED_ENTITIES_EVENT, type WatchedEntitiesDetail } from "../shared/hass-change";
 import "./helman-card-editor"
-import type { LovelaceCardEditor } from "../../hass-frontend/src/panels/lovelace/types";
 
 const EMPTY_ARRAY: readonly TreeItem[] = Object.freeze([]);
 

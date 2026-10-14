@@ -1,4 +1,4 @@
-import type { LovelaceCardConfig } from "../../hass-frontend/src/data/lovelace/config/card";
+import type { LovelaceCardConfig } from "../../types/ha";
 import type { SeriesKey } from "./helman-solar-inspector";
 
 export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {

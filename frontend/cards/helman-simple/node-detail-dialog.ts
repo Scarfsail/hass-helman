@@ -1,7 +1,7 @@
 import { LitElement, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing, TemplateResult } from "lit-html";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import type { NodeDetailParams } from "./node-detail/node-detail-types";
 import type { TreeItem } from "../helman/tree-item";

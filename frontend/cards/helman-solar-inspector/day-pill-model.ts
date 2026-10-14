@@ -170,9 +170,9 @@ export function buildDayPillCalendarCells(
 /**
  * Which weekday a calendar starts on, from Home Assistant's locale settings.
  *
- * This is `firstWeekdayIndex` from `hass-frontend/src/common/datetime/first_weekday`
+ * This is HA's `firstWeekdayIndex` (`common/datetime/first_weekday`)
  * reimplemented rather than imported, and the reason is mechanical: that module
- * falls back to the `weekstart` package, which is a dependency of the vendored
+ * falls back to the `weekstart` package, which is a dependency of HA's
  * frontend and is not installed for the card bundle, so importing it fails the
  * build. What is left is the same logic without that fallback — an explicit
  * setting wins, `"language"` asks `Intl`, and anything `Intl` cannot answer is

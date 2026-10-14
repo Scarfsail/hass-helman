@@ -209,32 +209,35 @@ function _cloneClimateScheduleCapabilities(
 function _isEvChargerApplianceMetadata(
     appliance: ApplianceMetadataDTO,
 ): appliance is EvChargerApplianceMetadataDTO {
+    const { metadata, controls, vehicles } = appliance as Partial<EvChargerApplianceMetadataDTO>;
     return appliance.kind === "ev_charger"
-        && typeof appliance.metadata?.maxChargingPowerKw === "number"
-        && Array.isArray(appliance.metadata?.scheduleCapabilities?.useModes)
-        && Array.isArray(appliance.metadata?.scheduleCapabilities?.ecoGears)
-        && typeof appliance.metadata?.scheduleCapabilities?.chargeToggle === "boolean"
-        && typeof appliance.metadata?.scheduleCapabilities?.requiresVehicleSelection === "boolean"
-        && typeof appliance.controls?.charge?.entityId === "string"
-        && typeof appliance.controls?.useMode?.entityId === "string"
-        && typeof appliance.controls?.ecoGear?.entityId === "string"
-        && Array.isArray(appliance.vehicles);
+        && typeof metadata?.maxChargingPowerKw === "number"
+        && Array.isArray(metadata?.scheduleCapabilities?.useModes)
+        && Array.isArray(metadata?.scheduleCapabilities?.ecoGears)
+        && typeof metadata?.scheduleCapabilities?.chargeToggle === "boolean"
+        && typeof metadata?.scheduleCapabilities?.requiresVehicleSelection === "boolean"
+        && typeof controls?.charge?.entityId === "string"
+        && typeof controls?.useMode?.entityId === "string"
+        && typeof controls?.ecoGear?.entityId === "string"
+        && Array.isArray(vehicles);
 }
 
 function _isGenericApplianceMetadata(
     appliance: ApplianceMetadataDTO,
 ): appliance is GenericApplianceMetadataRecordDTO {
+    const { metadata, controls } = appliance as Partial<GenericApplianceMetadataRecordDTO>;
     return appliance.kind === "generic"
-        && typeof appliance.metadata?.scheduleCapabilities?.onOffToggle === "boolean"
-        && typeof appliance.controls?.switch?.entityId === "string";
+        && typeof metadata?.scheduleCapabilities?.onOffToggle === "boolean"
+        && typeof controls?.switch?.entityId === "string";
 }
 
 function _isClimateApplianceMetadata(
     appliance: ApplianceMetadataDTO,
 ): appliance is ClimateApplianceMetadataRecordDTO {
+    const { metadata, controls } = appliance as Partial<ClimateApplianceMetadataRecordDTO>;
     return appliance.kind === "climate"
-        && Array.isArray(appliance.metadata?.scheduleCapabilities?.modes)
-        && typeof appliance.controls?.climate?.entityId === "string";
+        && Array.isArray(metadata?.scheduleCapabilities?.modes)
+        && typeof controls?.climate?.entityId === "string";
 }
 
 function _normalizeCapacityKwh(value: number | null | undefined): number {

@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
@@ -22,7 +23,6 @@ import {
     type LocalizeFunction as EditorLocalizeFunction,
 } from "../config/localize/localize";
 import type {
-    HomeAssistantLike,
     JsonObject,
     SaveConfigResponse,
     ValidationReport,
@@ -109,7 +109,7 @@ export class HelmanDeviceEditDialog extends LitElement {
         `,
     ];
 
-    @property({ attribute: false }) public hass?: HomeAssistantLike;
+    @property({ attribute: false }) public hass?: HomeAssistant;
 
     /** The card bundle's localize, for this dialog's own chrome. */
     @property({ attribute: false }) public localize!: LocalizeFunction;
@@ -467,7 +467,7 @@ export class HelmanDeviceEditDialog extends LitElement {
         }
         try {
             const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
-            if (current !== null) {
+            if (current !== undefined) {
                 this._baseline = canonicalJson(current);
                 this._saved = cloneJson(current);
             }

@@ -408,7 +408,6 @@ Things worth checking, roughly in order:
 Frontend TypeScript source lives at repo-root `frontend/` (dev-only, never shipped to users).
 
 ```bash
-git submodule update --init frontend/hass-frontend
 npm --prefix frontend ci
 npm --prefix frontend run build   # → custom_components/helman/frontend_compiled/
 npm --prefix frontend run watch   # dev/watch mode

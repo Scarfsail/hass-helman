@@ -1,8 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
-import type { LovelaceCardConfig } from "../../hass-frontend/src/data/lovelace/config/card";
+import type { HomeAssistant, LovelaceCard, LovelaceCardConfig } from "../../types/ha";
 import { hassContextChanged } from "../shared/hass-change";
 import "./device-report-shell";
 

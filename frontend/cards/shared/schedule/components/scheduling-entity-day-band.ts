@@ -1,7 +1,7 @@
 import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../../../types/ha";
 import { helmanColorVars } from "../../../color-vars";
 import {
     resolveSocDirection,
@@ -37,7 +37,6 @@ import {
     getSharedAutomationCoverage,
     type AutomationCoverageIndex,
 } from "../../optimizer/automation-coverage";
-import type { HomeAssistantLike } from "../../config/types";
 
 const MINUTE_MS = 60_000;
 /** An hour label this close to an edge is pulled inside it rather than centred. */
@@ -1251,7 +1250,7 @@ export class SchedulingEntityDayBand extends LitElement {
 
         this._unsubscribeAutomationCoverage?.();
         this._coverageHass = hass;
-        const source = getSharedAutomationCoverage(hass as unknown as HomeAssistantLike);
+        const source = getSharedAutomationCoverage(hass);
         this._automationCoverage = source.get();
         this._unsubscribeAutomationCoverage = source.subscribe((index) => {
             this._automationCoverage = index;
@@ -1943,7 +1942,7 @@ export class SchedulingEntityDayBand extends LitElement {
 
         return html`
             <helman-optimizer-edit-dialog
-                .hass=${this.hass as unknown as HomeAssistantLike}
+                .hass=${this.hass}
                 .localize=${this.localize}
                 .open=${true}
                 .optimizerIds=${optimizerIds}

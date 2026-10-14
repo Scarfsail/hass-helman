@@ -15,10 +15,9 @@
 /**
  * The events API this feed needs.
  *
- * Structural rather than HA's `Connection`, because the config editor is built
- * as its own bundle against a deliberately narrow `HomeAssistantLike` — and
- * this module is the one thing both bundles share. HA's real connection
- * satisfies it.
+ * Structural rather than HA's `Connection`, and optional throughout: the
+ * Playwright mounts hand in hosts with no connection, or one without the
+ * subscribe API. HA's real connection satisfies it.
  */
 export interface DataChangedConnection {
     subscribeMessage?<ResultType>(

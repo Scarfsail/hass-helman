@@ -20,7 +20,7 @@ export class SchedulingActionOptionCard extends LitElement {
     @property({ type: String }) public labelVariant: ScheduleActionLabelVariant = "default";
     @property({ attribute: false }) public authorship: ScheduleActionAuthorshipSummary | null = null;
 
-    protected createRenderRoot(): Element | ShadowRoot {
+    protected createRenderRoot(): HTMLElement | DocumentFragment {
         return this;
     }
 

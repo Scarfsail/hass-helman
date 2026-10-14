@@ -1,7 +1,7 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../../../types/ha";
 import type { LocalizeFunction } from "../../../localize/localize";
 import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";

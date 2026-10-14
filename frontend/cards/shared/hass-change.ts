@@ -1,4 +1,4 @@
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 
 /**
  * Deciding whether a new `hass` object means anything.
@@ -43,7 +43,7 @@ export function watchedEntityChanged(
  *
  * `hass.themes` is deliberately *not* compared. It was proposed on the theory
  * that HA's `state-badge` reads it for dark-mode state colouring, but that
- * dependency was never confirmed against the pinned `hass-frontend`; most of the
+ * dependency was never confirmed against HA's frontend source; most of the
  * badge's colour arrives through document-level CSS custom properties, which
  * reach the subtree whatever `hass`'s identity is. It goes in if a stale-colour
  * bug actually appears, when there is a symptom to verify the fix against.
