@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import logging
 import os
 
-from homeassistant.components import frontend, panel_custom
+from homeassistant.components import panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 
@@ -20,7 +19,6 @@ from .const import (
 )
 from .frontend import registered_card_module_url
 
-_LOGGER = logging.getLogger(__name__)
 _PANEL_STATIC_REGISTERED = "panel_static_registered"
 _PANEL_REGISTERED = "panel_registered"
 
@@ -58,12 +56,3 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         config_panel_domain=DOMAIN,
     )
     domain_data[_PANEL_REGISTERED] = True
-
-
-def async_unregister_panel(hass: HomeAssistant) -> None:
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if not domain_data.get(_PANEL_REGISTERED):
-        return
-    frontend.async_remove_panel(hass, PANEL_FRONTEND_URL_PATH)
-    domain_data[_PANEL_REGISTERED] = False
-    _LOGGER.debug("Removed Helman config editor panel")

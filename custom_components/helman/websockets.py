@@ -15,7 +15,6 @@ from .const import (
     DOMAIN,
     EVENT_DATA_CHANGED,
     MAX_FORECAST_DAYS,
-    SCHEDULE_ACTION_KINDS,
 )
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
@@ -43,14 +42,6 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-ACTION_KIND_SCHEMA = vol.In(SCHEDULE_ACTION_KINDS)
-SCHEDULE_ACTION_SCHEMA = vol.Schema(
-    {
-        vol.Required("kind"): ACTION_KIND_SCHEMA,
-        vol.Optional("targetSoc"): vol.Coerce(int),
-    },
-    extra=vol.PREVENT_EXTRA,
-)
 SET_SCHEDULE_REQUEST_FIELDS = {
     vol.Required("type"): "helman/set_schedule",
     vol.Required("slots"): [dict],
@@ -65,10 +56,6 @@ GET_FORECAST_REQUEST_FIELDS = {
         lambda value: _validate_forecast_days(value)
     ),
 }
-GET_FORECAST_REQUEST_SCHEMA = vol.Schema(
-    GET_FORECAST_REQUEST_FIELDS,
-    extra=vol.PREVENT_EXTRA,
-)
 
 
 def _validate_schedule_date(value: object) -> str:

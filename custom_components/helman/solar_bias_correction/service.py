@@ -236,15 +236,6 @@ class SolarBiasCorrectionService:
         )
         self._is_stale = metadata.training_config_fingerprint != current_fingerprint
 
-    def update_config(self, cfg: BiasConfig) -> None:
-        self._cfg = cfg
-        if self._metadata.last_outcome == "no_training_yet" and self._profile is None:
-            self._is_stale = False
-            return
-        self._is_stale = (
-            self._metadata.training_config_fingerprint != self._current_fingerprint
-        )
-
     async def async_train(self) -> dict[str, Any]:
         if self._training_in_progress:
             raise TrainingInProgressError("Solar bias training already in progress")
@@ -257,10 +248,7 @@ class SolarBiasCorrectionService:
         previous_is_stale = self._is_stale
         self._training_in_progress = True
         await self._training_lock.acquire()
-        # Captured once, before the first await: a configuration change landing
-        # mid-run must not have the profile fitted to one configuration and
-        # stamped with another's fingerprint. Whether the captured one is still
-        # current is settled below, where the result is adopted.
+        # Use this service instance's configuration throughout the training run.
         cfg = self._cfg
         try:
             now = dt_util.now()
@@ -286,12 +274,7 @@ class SolarBiasCorrectionService:
             self._profile = outcome.profile
             self._metadata = outcome.metadata
             self._explainability = outcome.explainability
-            # Fresh against the configuration it was fitted to; stale if that
-            # configuration was replaced while the fit was running.
-            self._is_stale = (
-                outcome.metadata.training_config_fingerprint
-                != self._current_fingerprint
-            )
+            self._is_stale = False
         except Exception as err:
             preserve_profile = self._should_preserve_profile(
                 previous_profile,

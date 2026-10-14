@@ -184,12 +184,6 @@ class HelmanStorage:
         self._config = new_config
         await self._store.async_save(new_config)
 
-    async def async_save_snapshot(self, snapshot: dict[str, Any]) -> None:
-        await self.async_save_snapshots(
-            house_snapshot=snapshot,
-            solar_snapshot=self._solar_snapshot,
-        )
-
     async def async_save_snapshots(
         self,
         *,

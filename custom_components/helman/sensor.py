@@ -225,9 +225,6 @@ class HelmanBatteryTimeSensor(_HelmanDeviceEntity):
             "target_soc": self._target_soc,
         }
 
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
-
     def update_value(
         self,
         minutes: float | None,
@@ -270,9 +267,6 @@ class _HelmanDerivedPowerSensor(_HelmanDeviceEntity):
     @property
     def native_value(self) -> float | None:
         return round(self._value) if self._value is not None else None
-
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
 
     def _should_emit(self, watts: float | None) -> bool:
         if not self._emitted:
@@ -405,9 +399,6 @@ class HelmanConsumptionTotalSensor(_HelmanDeviceEntity):
     def native_value(self) -> float | None:
         return round(self._value) if self._value is not None else None
 
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
-
     def _should_emit(self, watts: float) -> bool:
         last = getattr(self, "_last_emit_value", None)
         last_ts = getattr(self, "_last_emit_ts", 0.0)
@@ -455,9 +446,6 @@ class HelmanProductionTotalSensor(_HelmanDeviceEntity):
     def native_value(self) -> float | None:
         return round(self._value) if self._value is not None else None
 
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
-
     def _should_emit(self, watts: float) -> bool:
         last = getattr(self, "_last_emit_value", None)
         last_ts = getattr(self, "_last_emit_ts", 0.0)
@@ -496,9 +484,6 @@ class HelmanSourceRatioSensor(_HelmanDeviceEntity):
     @property
     def native_value(self) -> float | None:
         return self._value
-
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.register_sensor_ready()
 
     def update_value(self, pct: float) -> None:
         self._value = round(pct, 1)
