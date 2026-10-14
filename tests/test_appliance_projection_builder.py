@@ -7,68 +7,22 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from _ha_stubs import restore_modules, snapshot_modules
+from _fakes import FakeHass as _FakeHass, FakeState as _FakeState
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
-_STUBBED_MODULES = (
-    "custom_components",
-    "custom_components.helman",
-    "custom_components.helman.recorder_hourly_series",
-    "homeassistant",
-    "homeassistant.util",
-    "homeassistant.util.dt",
+config_module = importlib.import_module("custom_components.helman.appliances.config")
+const_module = importlib.import_module("custom_components.helman.const")
+ev_charger_module = importlib.import_module(
+    "custom_components.helman.appliances.ev_charger"
 )
-
-
-def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = snapshot_modules(_STUBBED_MODULES)
-    custom_components_pkg = types.ModuleType("custom_components")
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-    sys.modules["custom_components"] = custom_components_pkg
-
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-    recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
-
-    import homeassistant.util.dt  # type: ignore  # noqa: F401
-
-    dt_mod = sys.modules["homeassistant.util.dt"]
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util"].dt = dt_mod
-    return previous_modules
-
-
-_previous_modules = _install_import_stubs()
-try:
-    config_module = importlib.import_module("custom_components.helman.appliances.config")
-    const_module = importlib.import_module("custom_components.helman.const")
-    ev_charger_module = importlib.import_module(
-        "custom_components.helman.appliances.ev_charger"
-    )
-    projection_builder_module = importlib.import_module(
-        "custom_components.helman.appliances.projection_builder"
-    )
-    schedule_module = importlib.import_module(
-        "custom_components.helman.scheduling.schedule"
-    )
-    state_module = importlib.import_module("custom_components.helman.appliances.state")
-finally:
-    restore_modules(_previous_modules)
+projection_builder_module = importlib.import_module(
+    "custom_components.helman.appliances.projection_builder"
+)
+schedule_module = importlib.import_module(
+    "custom_components.helman.scheduling.schedule"
+)
+state_module = importlib.import_module("custom_components.helman.appliances.state")
 
 build_appliance_projection_plan = projection_builder_module.build_appliance_projection_plan
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
@@ -842,24 +796,6 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         self.assertEqual(series[0].energy_kwh, 0.2)
         self.assertEqual(series[0].mode, "heat")
         self.assertEqual(series[0].projection_method, "fixed_fallback")
-
-
-class _FakeState:
-    def __init__(self, state) -> None:
-        self.state = state
-
-
-class _FakeStates:
-    def __init__(self, states: dict[str, _FakeState]) -> None:
-        self._states = states
-
-    def get(self, entity_id: str):
-        return self._states.get(entity_id)
-
-
-class _FakeHass:
-    def __init__(self, states: dict[str, _FakeState]) -> None:
-        self.states = _FakeStates(states)
 
 
 def _registry_with_charge_limit() -> AppliancesRuntimeRegistry:

@@ -3,11 +3,9 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta
 
-from _ha_stubs import install_helman_packages
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
 
     import homeassistant.util.dt  # type: ignore  # noqa: F401
     import homeassistant.core  # type: ignore  # noqa: F401

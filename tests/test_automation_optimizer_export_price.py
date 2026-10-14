@@ -4,7 +4,7 @@ import unittest
 from copy import deepcopy
 from datetime import datetime, timedelta
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -16,8 +16,7 @@ THIRD_SLOT_ID = "2026-03-20T21:30:00+01:00"
 NEXT_HOUR_ID = "2026-03-20T22:00:00+01:00"
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
-    stub_module("homeassistant")
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod

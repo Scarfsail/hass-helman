@@ -8,11 +8,12 @@ dataset tests' business.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
+
+from _fakes import FakeConnection
 
 import asyncio
 import importlib
-import os
-import sys
 import unittest
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
@@ -20,9 +21,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
 import voluptuous as vol  # noqa: E402
 
@@ -66,16 +64,6 @@ TREE = {
 }
 
 
-class FakeConnection:
-    def __init__(self) -> None:
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 class FakeService:
@@ -139,7 +127,7 @@ async def _executor(func, *args):
 class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.recorder = FakeRecorder()
-        self.coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        self.coordinator = make_coordinator()
         self.coordinator._cached_tree = TREE
         self.coordinator._device_datasets = OrderedDict()
         self.coordinator._solar_bias_service = FakeService()

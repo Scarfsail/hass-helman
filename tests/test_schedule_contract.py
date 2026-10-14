@@ -1,72 +1,32 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
+from _fakes import FakeConnection
+
 import importlib
-import sys
 import unittest
+import pytest
 from datetime import datetime
 
 import voluptuous as vol
-from _ha_stubs import install_helman_packages, stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
-    stub_module("homeassistant")
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(dt_util, "now", lambda: REFERENCE_TIME)
 
-    components_pkg = stub_module("homeassistant.components")
-    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
-    websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
-    websocket_api_mod.async_register_command = lambda hass, command: None
-    websocket_api_mod.async_response = lambda func: func
-
-    def websocket_command(schema):
-        def decorator(func):
-            func.websocket_schema = schema
-            return func
-
-        return decorator
-
-    websocket_api_mod.websocket_command = websocket_command
-    components_pkg.websocket_api = websocket_api_mod
-
-    helpers_pkg = stub_module("homeassistant.helpers")
-    storage_mod = stub_module("homeassistant.helpers.storage")
-
-    class DummyStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_mod.Store = DummyStore
-    helpers_pkg.storage = storage_mod
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt", as_local=lambda value: value)
-    dt_mod.now = lambda: REFERENCE_TIME
-    dt_mod.parse_datetime = datetime.fromisoformat
-    util_pkg.dt = dt_mod
-
-
-_install_import_stubs()
-sys.modules.pop("custom_components.helman.websockets", None)
 
 from custom_components.helman.const import DOMAIN  # noqa: E402
 websockets_module = importlib.import_module("custom_components.helman.websockets")
 SET_SCHEDULE_REQUEST_SCHEMA = websockets_module.SET_SCHEDULE_REQUEST_SCHEMA
-ws_get_appliance_projections = websockets_module.ws_get_appliance_projections
-ws_get_appliances = websockets_module.ws_get_appliances
-ws_set_schedule = websockets_module.ws_set_schedule
+ws_get_appliance_projections = websockets_module.ws_get_appliance_projections.__wrapped__
+ws_get_appliances = websockets_module.ws_get_appliances.__wrapped__
+ws_set_schedule = websockets_module.ws_set_schedule.__wrapped__
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleActionError,
     appliance_actions,
@@ -107,20 +67,11 @@ class FakeCoordinator:
         return self.projections_response
 
 
-class FakeConnection:
-    def __init__(self) -> None:
-        self.results: list[tuple[int, dict]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: dict) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self, coordinator: FakeCoordinator | None) -> None:
+        super().__init__()
         self.data = {DOMAIN: {"coordinator": coordinator}}
 
 

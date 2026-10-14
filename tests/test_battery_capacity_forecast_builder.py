@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import importlib
 import unittest
 from datetime import datetime, timezone
@@ -7,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -16,13 +18,11 @@ DST_REFERENCE_TIME = datetime.fromisoformat("2026-03-29T01:50:00+01:00")
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
-    stub_module("homeassistant")
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
@@ -46,26 +46,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
-
-    @staticmethod
-    def parse_datetime(value: str) -> datetime:
-        return datetime.fromisoformat(value)
-
-    @staticmethod
-    def now() -> datetime:
-        return REFERENCE_TIME
 
 
 def _make_house_forecast(
@@ -79,9 +59,9 @@ def _make_house_forecast(
         "nonDeferrable": {"value": current_slot_value},
     }
     series = []
-    next_slot_utc = _FakeDtUtil.as_utc(current_slot_start)
+    next_slot_utc = dt_util.as_utc(current_slot_start)
     for index, value in enumerate(future_values, start=1):
-        slot_start = _FakeDtUtil.as_local(
+        slot_start = dt_util.as_local(
             next_slot_utc + battery_capacity_forecast_builder._CANONICAL_SLOT_DURATION * index
         )
         series.append(
@@ -149,8 +129,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.helman.battery_capacity_forecast_builder"
             )
         )
-        module.dt_util = _FakeDtUtil
-        recorder_module.dt_util = _FakeDtUtil
+        module.dt_util = dt_util
+        recorder_module.dt_util = dt_util
         return module, module.BatteryCapacityForecastBuilder({})
 
     async def test_build_is_canonical_quarter_hour_and_uses_slot_values(self) -> None:
@@ -189,8 +169,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -260,8 +240,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -318,8 +298,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             return builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -405,8 +385,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -466,8 +446,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -534,8 +514,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -611,8 +591,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -683,8 +663,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -750,8 +730,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -823,8 +803,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -904,9 +884,9 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-            patch.object(battery_forecast_response, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(battery_forecast_response, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -984,8 +964,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1055,8 +1035,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1130,8 +1110,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1205,8 +1185,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1280,8 +1260,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1351,8 +1331,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1428,8 +1408,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(module, "dt_util", dt_util),
+            patch.object(recorder_hourly_series, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1495,7 +1475,7 @@ class ExtractedSimulatorParityTests(unittest.TestCase):
                 "custom_components.helman.battery_capacity_forecast_builder"
             )
         )
-        module.dt_util = _FakeDtUtil
+        module.dt_util = dt_util
         return module
 
     @staticmethod

@@ -9,16 +9,17 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass, make_coordinator
+
+from _fakes import FakeConnection as SharedFakeConnection
+
 import json
-import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from homeassistant.core import State  # noqa: E402
 
@@ -51,12 +52,13 @@ class FakeStates:
         return self._states.get(entity_id)
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(
         self,
         states: dict[str, str] | None = None,
         attributes: dict[str, dict] | None = None,
     ) -> None:
+        super().__init__()
         self.bus = FakeBus()
         self.states = FakeStates(
             {
@@ -76,17 +78,11 @@ class FakeStorage:
         self.schedule_document: dict = {}
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = True) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
 
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 def _optimizer(*groups: dict) -> dict:
@@ -95,7 +91,7 @@ def _optimizer(*groups: dict) -> dict:
 
 def _coordinator(hass: FakeHass, *optimizers: dict) -> HelmanCoordinator:
     config = {"automation": {"system_optimizers": list(optimizers)}}
-    coordinator = HelmanCoordinator(hass, FakeStorage(config))
+    coordinator = make_coordinator(_hass=hass, _storage=FakeStorage(config))
     coordinator._active_config = config
     return coordinator
 

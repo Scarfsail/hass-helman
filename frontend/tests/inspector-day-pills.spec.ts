@@ -1194,10 +1194,23 @@ test.describe("continuous detail calendar", () => {
     test("August 1 to July 31 scrolls without loading, then loads exactly once at the click position", async ({ page }) => {
         await browseMonth(page, "2026-08");
         await page.locator('helman-solar-day-pills [data-day="2026-08-01"]').click();
+        // Let the click's own scroll/render settle so the wheel is not swallowed
+        // by a scroll position that is still being restored.
+        let settledTop = -1;
+        await expect.poll(async () => {
+            const top = (await calendarState(page)).top;
+            const stable = top === settledTop;
+            settledTop = top;
+            return stable;
+        }).toBe(true);
         const before = await calendarState(page);
         await calendarRow(page).hover();
-        await page.mouse.wheel(0, -144);
-        await expect.poll(async () => (await calendarState(page)).top).toBeLessThan(before.top);
+        // Re-send the wheel until it takes effect; a single event can be dropped on a busy runner.
+        await expect.poll(async () => {
+            await page.mouse.wheel(0, -144);
+            await page.waitForTimeout(100);
+            return (await calendarState(page)).top;
+        }).toBeLessThan(before.top);
         const scrolled = await calendarState(page);
         expect(scrolled.selected).toBe("2026-08-01");
         expect(scrolled.requests).toEqual(before.requests);

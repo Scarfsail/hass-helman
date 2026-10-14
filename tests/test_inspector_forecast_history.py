@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import sys
 import types
 import unittest
@@ -7,7 +9,6 @@ from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from _ha_stubs import install_helman_packages
 
 
 NOW = "2026-05-11T10:07:00+02:00"
@@ -15,73 +16,8 @@ TODAY = "2026-05-11"
 PAST_DAY = "2026-05-10"
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-
-    async def _fake_get_significant_states(*args, **kwargs):
-        return {}
-
-    history_mod.get_significant_states = _fake_get_significant_states
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    # The inspector day asks the recorder where its statistics begin, which
-    # imports the span module. Answering with nothing leaves the floor at the
-    # trainer's window, which is what every assertion in this file was written
-    # against.
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    helpers_mod = types.ModuleType("homeassistant.helpers")
-    helpers_mod.__path__ = []
-    sys.modules["homeassistant.helpers"] = helpers_mod
-
-    # The tests patch in their own Store; this only has to satisfy the import.
-    storage_mod = types.ModuleType("homeassistant.helpers.storage")
-    storage_mod.Store = type("Store", (), {})
-    sys.modules["homeassistant.helpers.storage"] = storage_mod
-    helpers_mod.storage = storage_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime.fromisoformat(NOW)
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    # Force a fresh service import, matching test_inspector_house_battery_payload.
-    # Nothing more than this: popping modules other suites hold references to
-    # (recorder_hourly_series in particular) makes them re-import under these stubs.
-    for name in (
-        "custom_components.helman.solar_bias_correction.service",
-        "custom_components.helman.solar_bias_correction.house_forecast_history",
-    ):
-        sys.modules.pop(name, None)
 
 
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -170,13 +106,6 @@ def _entry(
     if discharged is not None:
         entry["dischargedKwh"] = discharged
     return entry
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_cfg():

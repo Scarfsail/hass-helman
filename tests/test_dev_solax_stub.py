@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
-DEV = Path(__file__).resolve().parents[1] / "dev"
-if str(DEV) not in sys.path:
-    sys.path.insert(0, str(DEV))
 
-from solax_modbus import claim_rows, load_snapshot  # noqa: E402
+from dev.solax_modbus import claim_rows, load_snapshot
 
 ENTRY_ID = "stub-entry"
 INVERTER = "SolaX Inverter"

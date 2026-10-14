@@ -8,14 +8,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_package_stubs() -> None:
-    install_helman_packages()
-
-
-_install_package_stubs()
 
 device_stats = importlib.import_module("custom_components.helman.training.device_stats")
 recorder_module = importlib.import_module(

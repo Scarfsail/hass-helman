@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import asyncio
 import re
 import unittest
 from pathlib import Path
 
-from _ha_stubs import install_helman_packages
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +14,6 @@ HELMAN_ROOT = ROOT / "custom_components" / "helman"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
 
     import homeassistant.core  # type: ignore  # noqa: F401
 
@@ -57,8 +57,9 @@ class FakeServices:
             await self.release.wait()
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self, states: dict[str, object] | None = None) -> None:
+        super().__init__()
         self.states = FakeStates(states or {})
         self.services = FakeServices()
 

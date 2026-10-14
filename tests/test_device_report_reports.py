@@ -15,10 +15,6 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 model = importlib.import_module("custom_components.helman.span_history_model")
 dataset_mod = importlib.import_module("custom_components.helman.device_reports.dataset")

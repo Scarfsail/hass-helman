@@ -17,26 +17,15 @@ ratio history returned by ``get_history()``. Two properties must hold:
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
-import os
-import sys
 import unittest
 from collections import deque
 from datetime import datetime
 from types import SimpleNamespace
 
-# The coordinator pulls in the full Home Assistant import graph. Import it directly
-# (the integration is exercised inside an HA test environment); skip cleanly when
-# Home Assistant is not importable so this file never breaks unrelated collection.
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-try:
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-except Exception as exc:  # pragma: no cover - environment guard
-    coordinator_module = None
-    _IMPORT_ERROR = exc
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 HOUSE = "sensor.house_power"
 SOLAR = "sensor.solar_power"
@@ -80,7 +69,7 @@ class _FakeStates:
 
 
 def _make_coordinator(states: dict[str, str]):
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._active_config = {
         "visualization": {"history_buckets": 5, "history_bucket_duration": 1}
     }
@@ -106,7 +95,6 @@ def _make_coordinator(states: dict[str, str]):
     return c
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class RatioHistoryTests(unittest.TestCase):
     def test_ratio_history_is_present_and_aligned_without_registered_sensors(self):
         # Solar carries the whole 1 kW house load; grid contributes nothing. The ratio

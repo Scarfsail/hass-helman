@@ -11,14 +11,14 @@ than as an error.
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
+import pytest
+import importlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -39,112 +39,74 @@ RECORDER: dict[str, object] = {
 }
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
+async def _run_in_executor(func, *args):
+    return func(*args)
 
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
 
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _run_in_executor(func, *args):
-        return func(*args)
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
+def _get_instance(hass):
+    return SimpleNamespace(
         async_add_executor_job=_run_in_executor,
-        recorder_runs_manager=SimpleNamespace(
-            recording_start=RECORDER["recording_start"]
-        ),
+        recorder_runs_manager=SimpleNamespace(recording_start=RECORDER["recording_start"]),
     )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    def _state_changes_during_period(
-        hass, start, end, entity_id, *args, limit=None, **kwargs
-    ):
-        # The coverage probe: one indexed ``LIMIT 1`` ascending row per entity.
-        RECORDER["probe_queries"].append(entity_id)
-        oldest = RECORDER["oldest_state"].get(entity_id)
-        return {} if oldest is None else {entity_id: [_state(oldest, 0.0)]}
-
-    def _get_significant_states(hass, start, end, entity_ids=None, *args, **kwargs):
-        RECORDER["state_queries"].append(
-            {"entity_ids": list(entity_ids or []), "start": start, "end": end}
-        )
-        # Modelled on what ``include_start_time_state`` really returns: the rows
-        # inside the window, preceded by the state standing when it opened --
-        # and that one comes back *restamped to the query start*, its real age
-        # erased. A stub that handed it over at its true timestamp would hide the
-        # very thing these cases are about, since a carry that looks like a write
-        # at the first boundary would vouch for its own hour.
-        replayed = {}
-        for entity_id in entity_ids or []:
-            rows = RECORDER["states"].get(entity_id, [])
-            before = [row for row in rows if row.last_updated < start]
-            within = [row for row in rows if start <= row.last_updated < end]
-            replayed[entity_id] = [
-                *([_state(start, before[-1].state)] if before else []),
-                *within,
-            ]
-        return replayed
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = _state_changes_during_period
-    history_mod.get_significant_states = _get_significant_states
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    def _statistics_during_period(
-        hass, start, end, statistic_ids, period, *args, **kwargs
-    ):
-        RECORDER["statistics_queries"].append(
-            {"statistic_ids": set(statistic_ids or ()), "period": period}
-        )
-        return {
-            statistic_id: RECORDER["statistics"].get(statistic_id, [])
-            for statistic_id in (statistic_ids or ())
-        }
-
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = _statistics_during_period
-    statistics_mod.get_metadata = lambda hass, statistic_ids=None: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    # Real conversions, not identities: this file is about which UTC instant a
-    # slot is, and a DST day is one of the cases under test.
-    dt_mod.now = lambda: datetime(2026, 5, 11, 10, 0, tzinfo=PRAGUE)
-    dt_mod.as_local = lambda value: value.astimezone(PRAGUE)
-    dt_mod.as_utc = lambda value: value.astimezone(timezone.utc)
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
-    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
 
 
-def _state(when: datetime, value):
-    return SimpleNamespace(last_updated=when, state=value)
+def _state_changes_during_period(hass, start, end, entity_id, *args, limit=None, **kwargs):
+    RECORDER["probe_queries"].append(entity_id)
+    oldest = RECORDER["oldest_state"].get(entity_id)
+    return {} if oldest is None else {entity_id: [_state(oldest, 0.0)]}
 
 
-_install_import_stubs()
+def _get_significant_states(hass, start, end, entity_ids=None, *args, **kwargs):
+    RECORDER["state_queries"].append(
+        {"entity_ids": list(entity_ids or []), "start": start, "end": end}
+    )
+    replayed = {}
+    for entity_id in entity_ids or []:
+        rows = RECORDER["states"].get(entity_id, [])
+        before = [row for row in rows if row.last_updated < start]
+        within = [row for row in rows if start <= row.last_updated < end]
+        replayed[entity_id] = [
+            *([_state(start, before[-1].state)] if before else []), *within
+        ]
+    return replayed
 
-import importlib  # noqa: E402
+
+def _statistics_during_period(hass, start, end, statistic_ids, period, *args, **kwargs):
+    RECORDER["statistics_queries"].append(
+        {"statistic_ids": set(statistic_ids or ()), "period": period}
+    )
+    return {
+        statistic_id: RECORDER["statistics"].get(statistic_id, [])
+        for statistic_id in (statistic_ids or ())
+    }
+
+
+@pytest.fixture(autouse=True)
+def _recorder(monkeypatch):
+    from homeassistant.components.recorder import history, statistics
+    from homeassistant.util import dt as dt_util
+    from custom_components.helman import recorder_hourly_series as series_mod
+
+    monkeypatch.setattr(span_mod, "get_instance", _get_instance)
+    monkeypatch.setattr(span_mod, "statistics_during_period", _statistics_during_period)
+    monkeypatch.setattr(history, "state_changes_during_period", _state_changes_during_period)
+    monkeypatch.setattr(history, "get_significant_states", _get_significant_states)
+    monkeypatch.setattr(series_mod, "get_instance", _get_instance)
+    monkeypatch.setattr(series_mod, "state_changes_during_period", _state_changes_during_period)
+    monkeypatch.setattr(series_mod, "get_significant_states", _get_significant_states)
+    monkeypatch.setattr(statistics, "get_metadata", lambda hass, statistic_ids=None: {})
+    monkeypatch.setattr(dt_util, "now", lambda: datetime(2026, 5, 11, 10, 0, tzinfo=PRAGUE))
+
 
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 
 IMPORT_PRICE = "sensor.helman_grid_import_price"
 EXPORT_PRICE = "sensor.helman_grid_export_price"
 EXTERNAL_PRICE = "sensor.spot_sell_price"
+
+
+def _state(when: datetime, value):
+    return SimpleNamespace(last_updated=when, state=value)
 
 
 def _row(hour: datetime, mean):
@@ -860,18 +822,15 @@ class TestStatisticsUnit(unittest.IsolatedAsyncioTestCase):
     """The unit of last resort, read off the archived metadata."""
 
     async def test_the_archived_unit_is_read_off_the_metadata_row(self):
-        statistics_mod = sys.modules["homeassistant.components.recorder.statistics"]
+        from homeassistant.components.recorder import statistics as statistics_mod
         asked: list[set] = []
 
         def _get_metadata(hass, statistic_ids=None):
             asked.append(set(statistic_ids or ()))
             return {EXPORT_PRICE: (7, {"unit_of_measurement": "CZK/kWh"})}
 
-        statistics_mod.get_metadata = _get_metadata
-        try:
+        with patch.object(statistics_mod, "get_metadata", _get_metadata):
             unit = await span_mod.query_statistics_unit(SimpleNamespace(), EXPORT_PRICE)
-        finally:
-            statistics_mod.get_metadata = lambda hass, statistic_ids=None: {}
 
         self.assertEqual(unit, "CZK/kWh")
         self.assertEqual(asked, [{EXPORT_PRICE}])

@@ -5,19 +5,17 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 LOCAL_TZ = timezone(timedelta(hours=2))
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-    stub_module("homeassistant")
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None

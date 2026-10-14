@@ -13,10 +13,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 import voluptuous as vol  # noqa: E402
 from homeassistant.core import SupportsResponse  # noqa: E402

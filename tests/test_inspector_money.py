@@ -12,67 +12,19 @@ it -- alongside the pricing properties themselves, which moved here from
 
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import sys
 import types
 import unittest
+
+import pytest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-
-    async def _fake_get_significant_states(*args, **kwargs):
-        return {}
-
-    history_mod.get_significant_states = _fake_get_significant_states
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    # The inspector day asks the recorder where its statistics begin, which
-    # imports the span module. Answering with nothing leaves the floor at the
-    # trainer's window, which is what every assertion in this file was written
-    # against.
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00")
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-
-
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -84,16 +36,15 @@ models = importlib.import_module(
 )
 
 
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(dt_util, "now", lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00"))
+
+
 PRAGUE = ZoneInfo("Europe/Prague")
 #: "Now" for every test here: 10:00 local on 2026-05-11.
 TODAY = "2026-05-11"
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_cfg():

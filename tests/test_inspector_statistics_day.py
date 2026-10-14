@@ -25,16 +25,18 @@ style of ``test_inspector_span_aggregates.py``.
 
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import asyncio
-import sys
-import types
 import unittest
+import pytest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+from homeassistant.components import recorder
+from homeassistant.util import dt as dt_util
 
-from _ha_stubs import install_helman_packages
 
 
 #: What the fake recorder hands back for ``period="hour"``, keyed by statistic id.
@@ -45,37 +47,11 @@ STATISTICS_ROWS_MONTH: dict[str, list[dict]] = {}
 STATISTICS_CALLS: list[dict] = []
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _run_in_executor(func, *args):
+async def _run_in_executor(func, *args):
         await asyncio.sleep(0)
         return func(*args)
 
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    # One shared instance, so a test can give the recorder a purge horizon.
-    # ``keep_days``/``auto_purge`` absent is how the fake says "no horizon".
-    recorder_mod.instance_stub = SimpleNamespace(async_add_executor_job=_run_in_executor)
-    recorder_mod.get_instance = lambda hass: recorder_mod.instance_stub
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    # Raw states are gone -- which is the situation under test. Every raw-state
-    # loader therefore comes back empty on its own, without being stubbed out
-    # one by one.
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    def _fake_statistics_during_period(
+def _fake_statistics_during_period(
         hass, start_time, end_time, statistic_ids, period, units, types_
     ):
         STATISTICS_CALLS.append(
@@ -99,46 +75,30 @@ def _install_import_stubs() -> None:
             if statistic_ids is None or statistic_id in statistic_ids
         }
 
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = _fake_statistics_during_period
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: NOW
-    dt_mod.as_local = lambda value: value.astimezone(PRAGUE)
-    dt_mod.as_utc = lambda value: value.astimezone(timezone.utc)
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-
-
 PRAGUE = ZoneInfo("Europe/Prague")
 NOW = datetime(2026, 5, 25, 10, 0, tzinfo=PRAGUE)
+RECORDER_STUB = SimpleNamespace(async_add_executor_job=_run_in_executor)
 
-_install_import_stubs()
+import importlib
+service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
+recorder_series_mod = importlib.import_module("custom_components.helman.recorder_hourly_series")
+span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 
-RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
 
-import importlib  # noqa: E402
+@pytest.fixture(autouse=True)
+def _recorder(monkeypatch):
+    from homeassistant.components.recorder import history
+    monkeypatch.setattr(recorder, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(span_mod, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(span_mod, "statistics_during_period", _fake_statistics_during_period)
+    monkeypatch.setattr(recorder_series_mod, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(recorder_series_mod, "get_significant_states", lambda *args, **kwargs: {})
+    monkeypatch.setattr(recorder_series_mod, "state_changes_during_period", lambda *args, **kwargs: {})
+    monkeypatch.setattr(history, "state_changes_during_period", lambda *args, **kwargs: {})
+    monkeypatch.setattr(history, "get_significant_states", lambda *args, **kwargs: {})
+    monkeypatch.setattr(dt_util, "now", lambda: NOW)
 
-service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
-)
-models = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.models"
-)
-recorder_series_mod = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
-)
 
 SOLAR_METER = "sensor.solar_total"
 HOUSE_METER = "sensor.house_energy"
@@ -218,13 +178,6 @@ def _set_rows(
     STATISTICS_ROWS_MONTH.update(
         month if month is not None else {SOLAR_METER: [_month_row(FLOOR_MONTH)]}
     )
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_service(*, with_consumers: bool = False):

@@ -8,16 +8,18 @@ normal account looking at cards that never refreshed. These tests pin what that
 command has to keep doing -- forward every announcement, ask nobody for admin,
 and let go of the bus when the client goes away.
 
-The ``sys.modules`` stubs come from ``test_schedule_contract``; importing it
-installs the same ones this module needs, which is safe because the suite runs
-one process per file.
+The shared test fakes provide the Home Assistant and connection behavior used here.
 """
 
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
+from _fakes import FakeConnection as SharedFakeConnection
+
 import unittest
 
-from test_schedule_contract import websockets_module  # noqa: E402
+from custom_components.helman import websockets as websockets_module
 
 from custom_components.helman.const import (  # noqa: E402
     DATA_CHANGED_KIND_PLAN,
@@ -25,16 +27,6 @@ from custom_components.helman.const import (  # noqa: E402
 )
 
 ws_subscribe_updates = websockets_module.ws_subscribe_updates
-
-# The stub websocket_api module the test harness installs carries only what the
-# request/response commands need; this is the one message helper this command
-# uses, in the shape the real one produces.
-websockets_module.websocket_api.event_message = lambda msg_id, event: {
-    "id": msg_id,
-    "type": "event",
-    "event": event,
-}
-
 
 class FakeEvent:
     def __init__(self, data: dict) -> None:
@@ -60,26 +52,24 @@ class FakeBus:
             listener(FakeEvent(data))
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = False) -> None:
+        super().__init__()
         self.user = type("User", (), {"is_admin": is_admin, "id": "u1", "name": "Doma"})()
         self.subscriptions: dict[int, object] = {}
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
         self.messages: list[dict] = []
 
     def send_result(self, msg_id: int, result: object = None) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
+        super().send_result(msg_id, result)
 
     def send_message(self, message: dict) -> None:
         self.messages.append(message)
 
 
-class FakeHass:
+
+class FakeHass(SharedFakeHass):
     def __init__(self) -> None:
+        super().__init__()
         self.bus = FakeBus()
         self.data = {}
 

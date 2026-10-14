@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import importlib
 import unittest
 from datetime import date, datetime, timezone
@@ -7,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -15,13 +17,11 @@ UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
-    stub_module("homeassistant")
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
@@ -41,18 +41,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 class _FakeStateMachine:
@@ -96,7 +84,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_solar_actual_history_defaults_to_hourly_query(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
-        query_mock = AsyncMock(return_value={_FakeDtUtil.as_utc(slot_start): 1.5})
+        query_mock = AsyncMock(return_value={dt_util.as_utc(slot_start): 1.5})
         forecast_builder_module, builder = self._make_builder(query_mock=query_mock)
 
         with (
@@ -107,7 +95,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {"dt_util": _FakeDtUtil},
+                {"dt_util": dt_util},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)
@@ -131,7 +119,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         query_mock = AsyncMock(
             return_value={
-                _FakeDtUtil.as_utc(slot_start): 0.25,
+                dt_util.as_utc(slot_start): 0.25,
                 datetime(2026, 3, 20, 19, 30, tzinfo=UTC): 0.3,
             }
         )
@@ -145,7 +133,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {"dt_util": _FakeDtUtil},
+                {"dt_util": dt_util},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(
@@ -184,7 +172,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.dict(
                 forecast_builder_module.HelmanForecastBuilder._build_solar_actual_history.__globals__,
-                {"dt_util": _FakeDtUtil},
+                {"dt_util": dt_util},
             ),
         ):
             actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)
@@ -247,7 +235,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
         self.assertEqual(len(points), 96)
@@ -272,7 +260,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 29))
 
         # 23 real local hours on a spring-forward day.
@@ -306,7 +294,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
         self.assertEqual(len(points), 96)
@@ -333,7 +321,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
         self.assertEqual([point["value"] for _, point in points[:4]], [0.0, 0.0, 100.0, 0.0])
@@ -355,7 +343,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
         self.assertEqual([point["value"] for _, point in points[:4]], [25.0, 25.0, 25.0, 25.0])

@@ -5,14 +5,8 @@ from __future__ import annotations
 import importlib
 import unittest
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_package_stubs() -> None:
-    install_helman_packages()
-
-
-_install_package_stubs()
 
 split = importlib.import_module("custom_components.helman.shared_meter_split")
 fit_member_weights = split.fit_member_weights

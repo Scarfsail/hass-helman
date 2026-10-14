@@ -6,23 +6,9 @@ import types
 import unittest
 
 
-from _ha_stubs import install_helman_packages, stub_module
 
 
 def _load_energy_module():
-    for module_name in [
-        "custom_components.helman.energy",
-        "custom_components.helman.const",
-    ]:
-        sys.modules.pop(module_name, None)
-
-    install_helman_packages()
-    stub_module("homeassistant")
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    sys.modules["homeassistant.core"] = core_mod
-
     return importlib.import_module("custom_components.helman.energy")
 
 

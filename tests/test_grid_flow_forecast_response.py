@@ -1,54 +1,17 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages()
-    recorder_mod = stub_module("custom_components.helman.recorder_hourly_series")
-    recorder_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    recorder_mod.SWITCH_ACTIVE_STATES = ("on",)
-    recorder_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
-
-    stub_module("homeassistant")
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_ha_dt()
-    util_pkg.dt = dt_mod
-
-
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
-
-    @staticmethod
-    def parse_datetime(value: str) -> datetime:
-        return datetime.fromisoformat(value)
-
-
-_install_import_stubs()
 
 from custom_components.helman import grid_flow_forecast_response  # noqa: E402
 

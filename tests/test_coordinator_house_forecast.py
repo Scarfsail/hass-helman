@@ -1,366 +1,25 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
-import sys
 import types
 from types import SimpleNamespace
 import unittest
+import pytest
 import unittest.mock
 from datetime import datetime, timedelta
 
-from _ha_stubs import (
-    install_helman_packages,
-    restore_modules,
-    snapshot_modules,
-    stub_ha_dt,
-    stub_module,
-)
-
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
-_STUBBED_MODULES = (
-    "custom_components",
-    "custom_components.helman",
-    "custom_components.helman.battery_capacity_forecast_builder",
-    "custom_components.helman.battery_state",
-    "custom_components.helman.consumption_forecast_builder",
-    "custom_components.helman.forecast_builder",
-    "custom_components.helman.recorder_hourly_series",
-    "custom_components.helman.scheduling",
-    "custom_components.helman.scheduling.action_resolution",
-    "custom_components.helman.scheduling.runtime_status",
-    "custom_components.helman.scheduling.schedule",
-    "custom_components.helman.scheduling.schedule_executor",
-    "custom_components.helman.storage",
-    "custom_components.helman.tree_builder",
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.energy",
-    "homeassistant.components.energy.data",
-    "homeassistant.components.recorder",
-    "homeassistant.components.recorder.history",
-    "homeassistant.components.recorder.statistics",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.storage",
-    "homeassistant.helpers.debounce",
-    "homeassistant.helpers.entity_registry",
-    "homeassistant.helpers.event",
-    "homeassistant.util",
-    "homeassistant.util.dt",
-)
-
-_original_helman_modules = {
-    module_name
-    for module_name in sys.modules
-    if module_name == "custom_components.helman"
-    or module_name.startswith("custom_components.helman.")
-}
+const_module = importlib.import_module("custom_components.helman.const")
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 
-def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = snapshot_modules(_STUBBED_MODULES)
-    install_helman_packages("scheduling")
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(dt_util, "now", lambda: REFERENCE_TIME)
 
-    battery_builder_mod = types.ModuleType(
-        "custom_components.helman.battery_capacity_forecast_builder"
-    )
-    battery_builder_mod.BatteryCapacityForecastBuilder = type(
-        "BatteryCapacityForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[battery_builder_mod.__name__] = battery_builder_mod
-
-    consumption_builder_mod = types.ModuleType(
-        "custom_components.helman.consumption_forecast_builder"
-    )
-    consumption_builder_mod.ConsumptionForecastBuilder = type(
-        "ConsumptionForecastBuilder",
-        (),
-        {
-            "_MAX_ALIGNMENT_PADDING_SLOTS": 3,
-            "_make_payload": staticmethod(lambda **kwargs: kwargs),
-        },
-    )
-    # Coordinator reads (min_history_days, training_window_days) via this
-    # shared helper since the v14 training-section relocation.
-    consumption_builder_mod.read_house_training_window_config = (
-        lambda config: (14, 56)
-    )
-    sys.modules[consumption_builder_mod.__name__] = consumption_builder_mod
-
-    forecast_builder_mod = types.ModuleType("custom_components.helman.forecast_builder")
-    forecast_builder_mod.HelmanForecastBuilder = type(
-        "HelmanForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
-
-    tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
-    tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
-    sys.modules[tree_builder_mod.__name__] = tree_builder_mod
-
-    battery_state_mod = types.ModuleType("custom_components.helman.battery_state")
-    battery_state_mod.describe_battery_entity_config_issue = lambda config: None
-    battery_state_mod.describe_battery_live_state_issue = (
-        lambda hass, config=None: None
-    )
-    battery_state_mod.read_battery_entity_config = lambda config: None
-    battery_state_mod.read_battery_live_state = lambda hass, config=None: None
-    battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
-    battery_state_mod.read_battery_soc_bounds_config = lambda config: None
-    battery_state_mod.read_battery_forecast_settings = lambda config: None
-    sys.modules[battery_state_mod.__name__] = battery_state_mod
-
-    recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
-
-    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
-        return {}
-
-    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
-        _query_cumulative_hourly_energy_changes
-    )
-    recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
-    recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
-    class _ApplianceRuntimeHistoryReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_active_hours_by_local_date(self, requests, **kwargs):
-            return {request.key: {} for request in requests}
-
-    recorder_slots_mod.ApplianceRuntimeHistoryReader = _ApplianceRuntimeHistoryReader
-    recorder_slots_mod.ApplianceRuntimeRequest = type(
-        "ApplianceRuntimeRequest",
-        (SimpleNamespace,),
-        {},
-    )
-
-    class _TodaySlotEnergyReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_slot_energy_changes(self, *args, **kwargs):
-            return {}
-
-    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
-
-    class _TodaySlotBoundaryStateReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_slot_boundary_state_values(self, *args, **kwargs):
-            return {}
-
-    recorder_slots_mod.TodaySlotBoundaryStateReader = _TodaySlotBoundaryStateReader
-    sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
-
-    schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
-    schedule_mod.ScheduleControlConfig = type("ScheduleControlConfig", (), {})
-    schedule_mod.strip_candidate_actions = lambda doc: doc
-    schedule_mod.ScheduleDocument = type(
-        "ScheduleDocument",
-        (),
-        {"__init__": lambda self, execution_enabled=False, slots=None: None},
-    )
-    schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
-    schedule_mod.ScheduleExecutionUnavailableError = type(
-        "ScheduleExecutionUnavailableError", (schedule_mod.ScheduleError,), {}
-    )
-    schedule_mod.ScheduleResponseDict = dict
-    schedule_mod.ScheduleSlot = dict
-    schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
-    schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
-    schedule_mod.EMPTY_SCHEDULE_ACTION = None
-    schedule_mod.appliance_actions = lambda actions: {
-        controllable_id: action
-        for controllable_id, action in actions.items()
-        if controllable_id != "inverter"
-    }
-    schedule_mod.inverter_action = lambda actions: actions.get("inverter")
-    schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
-    schedule_mod.build_horizon_end = lambda reference_time: reference_time
-    schedule_mod.build_horizon_start = lambda reference_time: reference_time
-    schedule_mod.describe_schedule_control_config_issue = lambda config: None
-    schedule_mod.format_slot_id = lambda slot: ""
-    schedule_mod.iter_horizon_slot_ids = lambda reference_time: iter([])
-    schedule_mod.parse_slot_id = datetime.fromisoformat
-    schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
-    schedule_mod.normalize_schedule_document_for_registry = (
-        lambda schedule_document, runtime_registry=None: schedule_document
-    )
-    schedule_mod.normalize_slot_patch_request = (
-        lambda slot_patch, runtime_registry=None: slot_patch
-    )
-    schedule_mod.prune_expired_slots = (
-        lambda stored_slots, reference_time: stored_slots
-    )
-    schedule_mod.read_schedule_control_config = lambda config: None
-    schedule_mod.schedule_document_from_dict = lambda raw_document: raw_document
-    schedule_mod.schedule_document_to_dict = lambda doc: {}
-    schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
-    schedule_mod.slot_from_dict = lambda raw_slot: raw_slot
-    schedule_mod.with_slot_set_by = lambda slot, set_by=None: slot
-    schedule_mod.validate_slot_patch_request = (
-        lambda slots, reference_time, battery_soc_bounds: None
-    )
-    sys.modules[schedule_mod.__name__] = schedule_mod
-
-    runtime_status_mod = types.ModuleType(
-        "custom_components.helman.scheduling.runtime_status"
-    )
-    runtime_status_mod.ScheduleExecutionStatus = type(
-        "ScheduleExecutionStatus",
-        (),
-        {"active_slot_id": None, "active_slot_runtime": None},
-    )
-    runtime_status_mod.schedule_execution_status_to_dict = (
-        lambda execution_status: None
-    )
-    sys.modules[runtime_status_mod.__name__] = runtime_status_mod
-
-    action_resolution_mod = types.ModuleType(
-        "custom_components.helman.scheduling.action_resolution"
-    )
-    action_resolution_mod.resolve_executed_schedule_action = (
-        lambda action, current_soc: None
-    )
-    sys.modules[action_resolution_mod.__name__] = action_resolution_mod
-
-    schedule_executor_mod = types.ModuleType(
-        "custom_components.helman.scheduling.schedule_executor"
-    )
-    schedule_executor_mod.ScheduleExecutor = type(
-        "ScheduleExecutor",
-        (),
-        {"__init__": lambda self, hass, deps: None},
-    )
-    schedule_executor_mod.ScheduleExecutorDependencies = type(
-        "ScheduleExecutorDependencies",
-        (),
-        {"__init__": lambda self, **kwargs: None},
-    )
-    sys.modules[schedule_executor_mod.__name__] = schedule_executor_mod
-
-    storage_mod = types.ModuleType("custom_components.helman.storage")
-    storage_mod.HelmanStorage = type("HelmanStorage", (), {})
-    storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
-    sys.modules[storage_mod.__name__] = storage_mod
-
-    stub_module("homeassistant")
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-
-    components_pkg = stub_module("homeassistant.components")
-    components_pkg.__path__ = []  # mark as package so sub-imports work
-
-    # ``scheduling.actual_history`` reads what really happened from the
-    # recorder; the coordinator imports it at module level.
-    recorder_mod = stub_module("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-    recorder_mod.__path__ = []
-
-    history_mod = stub_module("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-
-    # The house consumption trainer splices its window's tail out of hourly
-    # long-term statistics, so importing the coordinator now reaches this
-    # module too. Nothing here exercises that read; it answers with nothing.
-    statistics_mod = stub_module("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-
-    stub_module("homeassistant.components.energy")
-    energy_data_mod = stub_module("homeassistant.components.energy.data")
-
-    async def async_get_manager(hass):
-        return types.SimpleNamespace(async_listen_updates=lambda callback: lambda: None)
-
-    energy_data_mod.async_get_manager = async_get_manager
-
-    helpers_pkg = stub_module("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
-
-    debounce_mod = stub_module("homeassistant.helpers.debounce")
-    debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
-
-    # ``automation.day_context_store`` does ``from homeassistant.helpers import
-    # storage`` and builds a ``storage.Store``; provide a lightweight stub so a
-    # ``FakeHass`` without real ``data``/``config`` can back it.
-    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
-
-    class _HelperStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_helper_mod.Store = _HelperStore
-    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
-    helpers_pkg.storage = storage_helper_mod
-
-    event_mod = stub_module("homeassistant.helpers.event")
-    event_mod.async_track_state_change_event = (
-        lambda hass, entity_ids, action: lambda: None
-    )
-    event_mod.async_track_time_change = (
-        lambda hass, callback, **kwargs: lambda: None
-    )
-    event_mod.async_track_time_interval = (
-        lambda hass, callback, interval: lambda: None
-    )
-
-    # Mirrors the real helper: fires at once when HA is already running, which
-    # is the state a test's fake hass is always in.
-    start_mod = stub_module("homeassistant.helpers.start")
-
-    def _async_at_started(hass, at_start_cb):
-        at_start_cb(hass)
-        return lambda: None
-
-    start_mod.async_at_started = _async_at_started
-    helpers_pkg.start = start_mod
-
-    stub_module("homeassistant.helpers.entity_registry")
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_ha_dt(REFERENCE_TIME)
-    util_pkg.dt = dt_mod
-    return previous_modules
-
-
-_previous_modules = _install_import_stubs()
-try:
-    const_module = importlib.import_module("custom_components.helman.const")
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-finally:
-    restore_modules(_previous_modules)
-    sys.modules.pop("custom_components.helman.coordinator", None)
-    for module_name in list(sys.modules):
-        if (
-            module_name not in _original_helman_modules
-            and (
-                module_name == "custom_components.helman"
-                or module_name.startswith("custom_components.helman.")
-            )
-        ):
-            sys.modules.pop(module_name, None)
 
 FORECAST_CANONICAL_GRANULARITY_MINUTES = (
     const_module.FORECAST_CANONICAL_GRANULARITY_MINUTES
@@ -372,7 +31,7 @@ HelmanCoordinator = coordinator_module.HelmanCoordinator
 
 class CoordinatorHouseForecastTests(unittest.TestCase):
     def test_has_matching_forecast_snapshot_rejects_legacy_hourly_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "actualHistory": [],
@@ -396,7 +55,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         )
 
     def test_has_matching_forecast_snapshot_accepts_canonical_slot_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "actualHistory": [],
@@ -424,7 +83,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         # The current slot covers 21:16 (the stubbed now); its adjusted
         # nonDeferrable already carries scheduled appliance demand (0.6 kWh).
         # The deferrableConsumers band and the unadjusted cache must be ignored.
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
             "currentSlot": {
@@ -455,7 +114,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
     def test_current_w_falls_back_to_base_load_when_pipeline_cold(self) -> None:
         # With no pipeline, the sensor reports the unadjusted base load only,
         # never base + deferrableConsumers.
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_appliance_forecast_pipeline = None
         coordinator._cached_forecast = {
             "status": "available",
@@ -507,7 +166,7 @@ class CoordinatorHouseProfileAdoptionTests(unittest.TestCase):
     """
 
     def _make_coordinator(self, section: dict | None) -> HelmanCoordinator:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._training_artifacts_store = types.SimpleNamespace(
             house_consumption=section
         )
@@ -589,7 +248,7 @@ class HouseProfileRefitDeferralTests(unittest.TestCase):
         started_callbacks: list = []
         runs: list[str] = []
 
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = types.SimpleNamespace()
         coordinator._unsub_listeners = []
         coordinator._training_batch = types.SimpleNamespace(
@@ -655,7 +314,7 @@ class StartupForecastRefreshDeferralTests(unittest.TestCase):
     def _make_coordinator(self) -> tuple[HelmanCoordinator, list[str]]:
         reasons: list[str] = []
 
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = types.SimpleNamespace()
         coordinator._unsub_listeners = []
         coordinator._async_refresh_forecast = lambda *, reason: reasons.append(reason)

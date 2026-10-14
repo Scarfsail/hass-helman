@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import sys
@@ -7,119 +8,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from _ha_stubs import install_helman_packages, restore_modules
-from test_solar_bias_response import (
-    REFERENCE_TIME,
-    _install_coordinator_import_stubs,
-)
+from datetime import datetime
 
+REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 def _load_coordinator_module():
-    """Import the coordinator against the shared stub set, then unregister it."""
-    previous_modules = _install_coordinator_import_stubs()
-    try:
-        sys.modules.pop("custom_components.helman.coordinator", None)
-        return importlib.import_module("custom_components.helman.coordinator")
-    finally:
-        restore_modules(previous_modules)
-        sys.modules.pop("custom_components.helman.coordinator", None)
-
+    return importlib.import_module("custom_components.helman.coordinator")
 
 def _load_sensor_module():
-    for module_name in [
-        "custom_components.helman.sensor",
-        "custom_components.helman.const",
-        "homeassistant",
-        "homeassistant.components",
-        "homeassistant.components.sensor",
-        "homeassistant.config_entries",
-        "homeassistant.const",
-        "homeassistant.core",
-        "homeassistant.helpers",
-        "homeassistant.helpers.entity_platform",
-    ]:
-        sys.modules.pop(module_name, None)
-
-    install_helman_packages()
-
-    homeassistant_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = homeassistant_pkg
-    components_pkg = types.ModuleType("homeassistant.components")
-    sys.modules["homeassistant.components"] = components_pkg
-
-    sensor_mod = types.ModuleType("homeassistant.components.sensor")
-    sensor_mod.SensorDeviceClass = type(
-        "SensorDeviceClass",
-        (),
-        {
-            "DURATION": "duration",
-            "POWER": "power",
-            "ENERGY": "energy",
-            "BATTERY": "battery",
-        },
-    )
-    sensor_mod.SensorStateClass = type(
-        "SensorStateClass",
-        (),
-        {"MEASUREMENT": "measurement"},
-    )
-
-    class SensorEntity:
-        def __init__(self) -> None:
-            self.hass = None
-            self.entity_id = None
-
-        async def async_added_to_hass(self) -> None:
-            return None
-
-        def async_write_ha_state(self) -> None:
-            return None
-
-    sensor_mod.SensorEntity = SensorEntity
-    sys.modules["homeassistant.components.sensor"] = sensor_mod
-
-    config_entries_mod = types.ModuleType("homeassistant.config_entries")
-    config_entries_mod.ConfigEntry = type("ConfigEntry", (), {})
-    sys.modules["homeassistant.config_entries"] = config_entries_mod
-
-    const_mod = types.ModuleType("homeassistant.const")
-    const_mod.UnitOfTime = type("UnitOfTime", (), {"MINUTES": "min"})
-    sys.modules["homeassistant.const"] = const_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    sys.modules["homeassistant.core"] = core_mod
-
-    helpers_pkg = types.ModuleType("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
-    sys.modules["homeassistant.helpers"] = helpers_pkg
-    entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
-    entity_platform_mod.AddEntitiesCallback = object
-    sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
-
-    device_registry_mod = types.ModuleType("homeassistant.helpers.device_registry")
-    device_registry_mod.DeviceEntryType = type("DeviceEntryType", (), {"SERVICE": "service"})
-    device_registry_mod.DeviceInfo = dict
-    sys.modules["homeassistant.helpers.device_registry"] = device_registry_mod
-
-    # ``automation.day_context_store`` (pulled in transitively) does
-    # ``from homeassistant.helpers import storage``; provide a lightweight stub.
-    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
-
-    class _HelperStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_helper_mod.Store = _HelperStore
-    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
-    helpers_pkg.storage = storage_helper_mod
-
     return importlib.import_module("custom_components.helman.sensor")
 
 
@@ -128,6 +24,13 @@ class _FakeEntry:
 
 
 class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        from homeassistant.util import dt as dt_util
+
+        patcher = patch.object(dt_util, "now", return_value=REFERENCE_TIME)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def test_async_setup_entry_registers_forecast_entities_with_coordinator(
         self,
     ) -> None:
@@ -383,7 +286,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -398,7 +301,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_today_remaining_excludes_elapsed_points(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -437,7 +340,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_sparse_day_offsets_and_today_remaining_use_shared_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -498,7 +401,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_coordinator_absorbs_the_import_price_from_the_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_import_price(
             {"import": {"status": "available", "unit": "CZK/kWh", "currentPrice": 4.25}}
@@ -603,7 +506,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_coordinator_absorbs_the_export_price_from_the_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_export_price(
             {"export": {"status": "available", "unit": "CZK/kWh", "currentPrice": 1.85}}
@@ -644,7 +547,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_coordinator_owns_the_export_schedule_from_one_ingestion(self) -> None:
         coordinator_module = _load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_export_price(
             {
@@ -729,7 +632,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_ingestion_reads_the_configured_sell_price_entity(self) -> None:
         coordinator_module = _load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._grid_export_price_channel = None
@@ -771,7 +674,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_current_slot_solar_forecast_is_published_as_power(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
@@ -834,26 +737,19 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # has one without the other.
         coordinator_module = _load_coordinator_module()
 
-        # The starter lazily imports the back-fill module; stand in for it so
-        # the import does not drag the whole integration into this stubbed
-        # environment. What is under test is the gate, not the walk.
-        backfill_stub = types.ModuleType(
-            "custom_components.helman.grid_export_price_backfill"
-        )
-
         async def _never_runs(*args, **kwargs):
             return None
 
-        backfill_stub.async_backfill_grid_export_price_statistics = _never_runs
-        sys.modules["custom_components.helman.grid_export_price_backfill"] = backfill_stub
-        self.addCleanup(
-            sys.modules.pop,
-            "custom_components.helman.grid_export_price_backfill",
-            None,
+        patcher = patch(
+            "custom_components.helman.grid_export_price_backfill."
+            "async_backfill_grid_export_price_statistics",
+            _never_runs,
         )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         started: list[object] = []
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._grid_export_price_backfill_started = False
         coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
         coordinator._hass = SimpleNamespace(

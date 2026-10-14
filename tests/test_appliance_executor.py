@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import asyncio
 import unittest
 from dataclasses import replace
@@ -7,7 +9,6 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -15,7 +16,6 @@ CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
 
     import homeassistant.core  # type: ignore  # noqa: F401
     import homeassistant.util.dt  # type: ignore  # noqa: F401
@@ -110,8 +110,9 @@ class FakeServices:
             self._hass.states._states[entity_id].state = data["option"]
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self, states: dict[str, FakeState], *, auto_turn_on: bool = True) -> None:
+        super().__init__()
         self.states = FakeStates(states)
         self.auto_turn_on = auto_turn_on
         self.services = FakeServices(self)

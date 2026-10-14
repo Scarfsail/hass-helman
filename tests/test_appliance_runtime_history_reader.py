@@ -23,66 +23,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from homeassistant.util import dt as dt_util
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages()
-    stub_module("homeassistant")
-    core_mod = stub_module("homeassistant.core")
-    if not hasattr(core_mod, "HomeAssistant"):
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-
-    stub_module("homeassistant.components")
-    recorder_mod = stub_module("homeassistant.components.recorder")
-    if not hasattr(recorder_mod, "get_instance"):
-        recorder_mod.get_instance = lambda hass: None
-
-    history_mod = stub_module("homeassistant.components.recorder.history")
-    if not hasattr(history_mod, "state_changes_during_period"):
-        history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    if not hasattr(history_mod, "get_significant_states"):
-        history_mod.get_significant_states = lambda *args, **kwargs: {}
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt")
-    if not hasattr(dt_mod, "as_local"):
-        dt_mod.as_local = lambda value: value
-    if not hasattr(dt_mod, "as_utc"):
-        dt_mod.as_utc = lambda value: value
-    util_pkg.dt = dt_mod
-
-    # A sibling test may have installed a fake recorder module; drop it so the
-    # real module (with the reader under test) is imported.
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
-
-
-_install_import_stubs()
 
 from custom_components.helman import recorder_hourly_series  # noqa: E402
 from custom_components.helman.recorder_hourly_series import (  # noqa: E402
     ApplianceRuntimeHistoryReader,
     ApplianceRuntimeRequest,
 )
-
-
-class _FakeDtUtil:
-    tz = TZ
-
-    @classmethod
-    def as_local(cls, value: datetime) -> datetime:
-        if value.tzinfo == cls.tz:
-            return value
-        return value.astimezone(cls.tz)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 async def _inline_executor_job(func, *args):
@@ -97,7 +48,7 @@ def _state(instant: datetime, value: str) -> SimpleNamespace:
     return SimpleNamespace(
         state=value,
         attributes={},
-        last_updated=_FakeDtUtil.as_utc(instant),
+        last_updated=dt_util.as_utc(instant),
     )
 
 
@@ -157,18 +108,8 @@ class _Recorder:
 
 
 class _ReaderHarness(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
-        _FakeDtUtil.tz = TZ
-
     def setUp(self) -> None:
-        _FakeDtUtil.tz = TZ
+        dt_util.set_default_time_zone(TZ)
 
     async def _query(self, reader, recorder, requests, *, at):
         with (
@@ -261,8 +202,8 @@ class QueryCountTests(_ReaderHarness):
         self.assertEqual(
             recorder.spans[0],
             (
-                (_FakeDtUtil.as_utc(_at(-3, 0)) - timedelta(microseconds=1)),
-                _FakeDtUtil.as_utc(_at(0, 12)),
+                (dt_util.as_utc(_at(-3, 0)) - timedelta(microseconds=1)),
+                dt_util.as_utc(_at(0, 12)),
             ),
         )
         # The second read opens at today's midnight: the three earlier days are
@@ -270,8 +211,8 @@ class QueryCountTests(_ReaderHarness):
         self.assertEqual(
             recorder.spans[1],
             (
-                (_FakeDtUtil.as_utc(_at(0, 0)) - timedelta(microseconds=1)),
-                _FakeDtUtil.as_utc(_at(0, 12, 15)),
+                (dt_util.as_utc(_at(0, 0)) - timedelta(microseconds=1)),
+                dt_util.as_utc(_at(0, 12, 15)),
             ),
         )
         self.assertEqual(
@@ -491,11 +432,11 @@ class LookbackTests(_ReaderHarness):
         spans = {query[2]: (query[0], query[1]) for query in recorder.queries}
         self.assertEqual(
             spans[("switch.short",)][0],
-            _FakeDtUtil.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
         )
         self.assertEqual(
             spans[("switch.long",)][0],
-            _FakeDtUtil.as_utc(datetime(2026, 4, 26, 0, 0, tzinfo=TZ))
+            dt_util.as_utc(datetime(2026, 4, 26, 0, 0, tzinfo=TZ))
             - timedelta(microseconds=1),
         )
         # The short appliance never sees the fortnight of days the long one needs.
@@ -540,7 +481,7 @@ class LookbackTests(_ReaderHarness):
 
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(_at(-6, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-6, 0)) - timedelta(microseconds=1),
         )
         self.assertEqual(widened["pool"][date(2026, 5, 5)], 1.0)
 
@@ -560,14 +501,14 @@ class InvalidationTests(_ReaderHarness):
         # guaranteed committed yet, so yesterday is still in the window.
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-1, 0)) - timedelta(microseconds=1),
         )
 
         await self._query(reader, recorder, requests, at=_at(0, 0, 40))
         await self._query(reader, recorder, requests, at=_at(0, 0, 45))
         self.assertEqual(
             recorder.spans[3][0],
-            _FakeDtUtil.as_utc(_at(0, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(0, 0)) - timedelta(microseconds=1),
         )
 
     async def test_a_late_write_for_yesterday_still_lands(self) -> None:
@@ -594,7 +535,7 @@ class InvalidationTests(_ReaderHarness):
         retried = await self._query(reader, recorder, requests, at=_at(0, 12, 15))
         self.assertEqual(
             recorder.spans[-1][0],
-            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
         )
         self.assertEqual(retried["pool"][date(2026, 5, 9)], 1.0)
         self.assertEqual(retried["pool"][date(2026, 5, 10)], 1.0)
@@ -620,7 +561,7 @@ class InvalidationTests(_ReaderHarness):
 
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
         )
 
     async def test_a_changed_entity_discards_the_prefix_and_is_not_kept(self) -> None:
@@ -641,7 +582,7 @@ class InvalidationTests(_ReaderHarness):
 
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-2, 0)) - timedelta(microseconds=1),
         )
         # The abandoned entity's prefix is dropped rather than kept forever.
         self.assertEqual(
@@ -654,17 +595,17 @@ class InvalidationTests(_ReaderHarness):
         requests = [_request("pool", "switch.pool", lookback_days=2)]
 
         await self._query(reader, recorder, requests, at=_at(0, 12))
-        _FakeDtUtil.tz = ZoneInfo("America/New_York")
+        dt_util.set_default_time_zone(ZoneInfo("America/New_York"))
         try:
             await self._query(reader, recorder, requests, at=_at(0, 12, 15))
         finally:
-            _FakeDtUtil.tz = TZ
+            dt_util.set_default_time_zone(TZ)
 
         self.assertEqual(len(recorder.queries), 2)
         self.assertLess(recorder.spans[1][0], recorder.spans[0][1])
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(
+            dt_util.as_utc(
                 datetime(2026, 5, 8, 0, 0, tzinfo=ZoneInfo("America/New_York"))
             ) - timedelta(microseconds=1),
         )
@@ -679,7 +620,7 @@ class InvalidationTests(_ReaderHarness):
 
         self.assertEqual(
             recorder.spans[1][0],
-            _FakeDtUtil.as_utc(_at(-3, 0)) - timedelta(microseconds=1),
+            dt_util.as_utc(_at(-3, 0)) - timedelta(microseconds=1),
         )
 
     async def test_an_entity_id_configured_with_capitals_still_reads(self) -> None:

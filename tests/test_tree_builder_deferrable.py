@@ -13,10 +13,6 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 from custom_components.helman.tree_builder import HelmanTreeBuilder  # noqa: E402
 

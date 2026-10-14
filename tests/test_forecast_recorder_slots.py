@@ -1,25 +1,25 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
-    stub_module("homeassistant")
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
@@ -39,18 +39,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 _install_import_stubs()
@@ -64,7 +52,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         cls._dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 
@@ -463,7 +451,7 @@ class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
         cls._dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 
@@ -575,7 +563,7 @@ class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
         cls._dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 

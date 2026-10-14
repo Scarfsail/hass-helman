@@ -4,91 +4,15 @@ import importlib
 import sys
 import types
 
-from _ha_stubs import install_helman_packages
 
 
 def _load_sensor_module():
-    for module_name in [
-        "custom_components.helman.sensor",
-        "custom_components.helman.const",
-        "homeassistant",
-        "homeassistant.components",
-        "homeassistant.components.sensor",
-        "homeassistant.config_entries",
-        "homeassistant.const",
-        "homeassistant.core",
-        "homeassistant.helpers",
-        "homeassistant.helpers.entity_platform",
-    ]:
-        sys.modules.pop(module_name, None)
-
-    install_helman_packages()
-
-    homeassistant_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = homeassistant_pkg
-    components_pkg = types.ModuleType("homeassistant.components")
-    sys.modules["homeassistant.components"] = components_pkg
-
-    sensor_mod = types.ModuleType("homeassistant.components.sensor")
-    sensor_mod.SensorDeviceClass = type(
-        "SensorDeviceClass",
-        (),
-        {
-            "DURATION": "duration",
-            "POWER": "power",
-            "ENERGY": "energy",
-            "BATTERY": "battery",
-        },
-    )
-    sensor_mod.SensorStateClass = type(
-        "SensorStateClass",
-        (),
-        {"MEASUREMENT": "measurement"},
-    )
-
-    class SensorEntity:
-        def __init__(self) -> None:
-            self.hass = None
-            self.entity_id = None
-
-        async def async_added_to_hass(self) -> None:
-            return None
-
-        def async_write_ha_state(self) -> None:
-            return None
-
-    sensor_mod.SensorEntity = SensorEntity
-    sys.modules["homeassistant.components.sensor"] = sensor_mod
-
-    config_entries_mod = types.ModuleType("homeassistant.config_entries")
-    config_entries_mod.ConfigEntry = type("ConfigEntry", (), {})
-    sys.modules["homeassistant.config_entries"] = config_entries_mod
-
-    const_mod = types.ModuleType("homeassistant.const")
-    const_mod.UnitOfTime = type("UnitOfTime", (), {"MINUTES": "min"})
-    sys.modules["homeassistant.const"] = const_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    sys.modules["homeassistant.core"] = core_mod
-
-    helpers_pkg = types.ModuleType("homeassistant.helpers")
-    helpers_pkg.__path__ = []  # mark as package so sub-imports work
-    sys.modules["homeassistant.helpers"] = helpers_pkg
-    entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
-    entity_platform_mod.AddEntitiesCallback = object
-    sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
-
-    device_registry_mod = types.ModuleType("homeassistant.helpers.device_registry")
-    device_registry_mod.DeviceEntryType = type("DeviceEntryType", (), {"SERVICE": "service"})
-    device_registry_mod.DeviceInfo = dict
-    sys.modules["homeassistant.helpers.device_registry"] = device_registry_mod
-
     return importlib.import_module("custom_components.helman.sensor")
 
 
 class _FakeHass:
     def __init__(self) -> None:
+        self.data = {}
         self.states = type("S", (), {"get": staticmethod(lambda *_: None)})()
 
 
@@ -187,6 +111,7 @@ def test_unmeasured_none_is_unavailable_even_with_a_readable_parent() -> None:
         _FakeCoordinator(), _FakeEntry(), hass, "node", "sensor.parent_power"
     )
     sensor.hass = hass
+    sensor.async_write_ha_state = lambda: None
     sensor.update_value(0.0)
     assert sensor.available
     sensor.update_value(None)

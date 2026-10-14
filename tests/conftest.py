@@ -1,26 +1,67 @@
-"""Pytest configuration for the helman test suite.
-
-IMPORTANT: this suite is NOT meant to be run as a single in-process
-``pytest tests/`` invocation. Many test modules install their own conflicting
-``sys.modules`` stubs at import time (some need the real ``homeassistant``
-package present, others need it absent), so importing them all into one process
-causes cross-file pollution and spurious failures. Run each file in its own
-process instead -- use ``scripts/run_tests.sh`` locally and in CI.
-
-Shared stub moves (registering the helman packages, get-or-create a stub
-module, the fixed-clock ``homeassistant.util.dt``, snapshot/restore of
-``sys.modules`` entries) live in ``_ha_stubs.py``; import them with
-``from _ha_stubs import ...``. Each file still decides which modules it stubs.
-
-This conftest is intentionally minimal: it only pins Home Assistant's default
-time zone for modules that use the *real* ``homeassistant`` package. It never
-imports ``homeassistant`` at collection time, so modules that stub it themselves
-are left untouched.
-"""
+"""Pytest configuration and per-module import isolation for the test suite."""
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 import pytest
+
+
+_MODULE_PREFIXES = (
+    "homeassistant",
+    "custom_components",
+    "voluptuous",
+    "automation_",
+    "_ha_stubs",
+    "dev",
+    "test_",
+)
+_collected_modules: dict[pytest.Module, dict[str, ModuleType]] = {}
+
+
+def _isolated_modules() -> dict[str, ModuleType]:
+    """Find modules whose imports or stubs vary between test files."""
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if name.startswith(_MODULE_PREFIXES)
+    }
+
+
+def _clear_isolated_modules() -> None:
+    for name in _isolated_modules():
+        sys.modules.pop(name, None)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector: pytest.Collector):
+    """Collect each test module with a fresh set of importable modules."""
+    if not isinstance(collector, pytest.Module):
+        yield
+        return
+
+    _clear_isolated_modules()
+    yield
+    _collected_modules[collector] = _isolated_modules()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item):
+    """Restore the module imports captured while collecting this test file."""
+    collector = item.getparent(pytest.Module)
+    if collector is None or collector not in _collected_modules:
+        yield
+        return
+
+    previous = _isolated_modules()
+    _clear_isolated_modules()
+    sys.modules.update(_collected_modules[collector])
+    try:
+        yield
+    finally:
+        _clear_isolated_modules()
+        sys.modules.update(previous)
 
 
 @pytest.fixture(autouse=True)

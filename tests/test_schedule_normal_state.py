@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from _ha_stubs import install_helman_packages
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
 
     import homeassistant.core  # type: ignore  # noqa: F401
 

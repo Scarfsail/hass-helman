@@ -6,18 +6,16 @@ so faking the record would test nothing.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
+
+from _fakes import FakeConnection as SharedFakeConnection
 
 import asyncio
 import importlib
-import os
-import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 training_ws = importlib.import_module("custom_components.helman.training.websocket")
@@ -41,17 +39,11 @@ HOUSE_FP = "house-fp"
 APPLIANCE_FP = "appliance-fp"
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = True) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
 
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 class _MemoryBackend:
@@ -164,7 +156,7 @@ def _make_coordinator(
     house_profile=None,
     appliance_estimates=None,
 ):
-    coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+    coordinator = make_coordinator()
     coordinator._solar_bias_service = bias_service or _make_bias_service()
     coordinator._training_artifacts_store = store or _make_store()
     coordinator._house_profile = house_profile

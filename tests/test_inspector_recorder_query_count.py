@@ -9,75 +9,26 @@ counts the queries rather than trusting the shape of the call site.
 
 from __future__ import annotations
 
-import sys
+from _fakes import DummyStore as _DummyStore
+
 import types
 import unittest
+
+import pytest
+from homeassistant.components import recorder
+from homeassistant.components.recorder import history as recorder_history
 from contextlib import contextmanager
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
 QUERIES: dict[str, list] = {"batched": [], "per_entity": [], "all": []}
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
 
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _run_in_executor(func, *args):
-        return func(*args)
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        async_add_executor_job=_run_in_executor
-    )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    # The inspector day asks the recorder where its statistics begin, which
-    # imports the span module. Nothing here is about that read -- it is
-    # month-reduced and cached, and this file counts the *raw state* queries the
-    # meters cost -- so it answers with nothing and the floor falls back to the
-    # trainer's window.
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00")
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
-    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-
-
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -94,6 +45,13 @@ recorder_series_mod = importlib.import_module(
 span_mod = importlib.import_module(
     "custom_components.helman.recorder_statistics_span"
 )
+
+
+@pytest.fixture(autouse=True)
+def _recorder_bindings(monkeypatch):
+    monkeypatch.setattr(recorder, "get_instance", lambda hass: SimpleNamespace(async_add_executor_job=_run_in_executor_now))
+    monkeypatch.setattr(recorder_series_mod, "get_instance", lambda hass: recorder.get_instance(hass))
+    monkeypatch.setattr(span_mod, "get_instance", lambda hass: recorder.get_instance(hass))
 
 
 @contextmanager
@@ -131,7 +89,7 @@ def _counting_queries():
         get_significant_states=_batched,
         state_changes_during_period=_per_entity,
     ), patch.multiple(
-        sys.modules["homeassistant.components.recorder.history"],
+        recorder_history,
         get_significant_states=_shared_batched,
         state_changes_during_period=_per_entity,
     ):
@@ -141,6 +99,12 @@ def _counting_queries():
 def _reads_touching(entity_id: str) -> list[list[str]]:
     """Every counted read whose entity list contains ``entity_id``."""
     return [read for read in QUERIES["all"] if entity_id in read]
+
+
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(dt_util, "now", lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00"))
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -177,13 +141,6 @@ def _keeping_raw_states():
 
 async def _run_in_executor_now(func, *args):
     return func(*args)
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_cfg():
@@ -395,7 +352,7 @@ class TestStatisticsDayIssuesOneStatisticsQuery(unittest.IsolatedAsyncioTestCase
             return {}
 
         with patch.object(
-            sys.modules["homeassistant.components.recorder.history"],
+            recorder_history,
             "get_significant_states",
             _count_soc_reads,
         ), patch.multiple(
@@ -464,7 +421,7 @@ class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
             return {}
 
         with _keeping_raw_states(), patch.multiple(
-            sys.modules["homeassistant.components.recorder.history"],
+            recorder_history,
             state_changes_during_period=_probe,
             get_significant_states=_raw,
         ), patch.multiple(

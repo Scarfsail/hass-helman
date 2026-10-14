@@ -13,10 +13,6 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages("solar_bias_correction")
 
 from custom_components.helman.solar_bias_correction.forecast_slot_sampling import (  # noqa: E402
     resolve_forecast_slot_values,

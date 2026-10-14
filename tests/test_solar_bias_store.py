@@ -15,57 +15,6 @@ import types
 
 from _ha_stubs import stub_module
 
-# Ensure Python can import the local custom_components package and a minimal
-# homeassistant package used by the integration during import.
-ROOT = Path(__file__).resolve().parents[1]
-
-if "custom_components" not in sys.modules:
-    custom_components_pkg = types.ModuleType("custom_components")
-    sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-# Create a package module for custom_components.helman to allow importing
-# submodules (like storage) without executing the package __init__.py.
-if "custom_components.helman" not in sys.modules:
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-if "homeassistant" not in sys.modules:
-    ha_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = ha_pkg
-
-# minimal homeassistant.core with HomeAssistant type
-core_mod = types.ModuleType("homeassistant.core")
-core_mod.HomeAssistant = type("HomeAssistant", (), {})
-sys.modules["homeassistant.core"] = core_mod
-
-# minimal helpers.storage module
-helpers_mod = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers"] = helpers_mod
-
-storage_stub = types.ModuleType("homeassistant.helpers.storage")
-
-class _DummyStore:
-    def __init__(self, hass, version, key):
-        self.hass = hass
-        self.version = version
-        self.key = key
-        self._async_migrate_func = self._default_async_migrate_func
-
-    async def async_load(self):
-        return None
-
-    async def async_save(self, data):
-        return None
-
-    async def _default_async_migrate_func(self, old_major_version, old_minor_version, old_data):
-        raise NotImplementedError
-
-storage_stub.Store = _DummyStore
-sys.modules["homeassistant.helpers.storage"] = storage_stub
-
-
 def _make_fake_store_backend():
     # simple in-memory backend keyed by storage key
     storage_data: dict[str, dict] = {}
@@ -141,61 +90,18 @@ def _make_versioned_fake_store_backend():
     return FakeStore, storage_data
 
 
-def _install_service_import_stubs() -> None:
-    util_mod = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt", now=lambda: None)
-    dt_mod.as_local = lambda value: value
-    util_mod.dt = dt_mod
-
-    actuals_mod = types.ModuleType(
-        "custom_components.helman.solar_bias_correction.actuals"
-    )
-
-    async def _load_actuals_window(*args, **kwargs):
-        return None
-
-    async def _load_actuals_for_day(*args, **kwargs):
-        return {}
-
-    actuals_mod.load_actuals_window = _load_actuals_window
-    actuals_mod.load_actuals_for_day = _load_actuals_for_day
-    actuals_mod.slot_actuals_from_batched_slot_energy = lambda *args, **kwargs: {}
-    sys.modules[actuals_mod.__name__] = actuals_mod
-
-    forecast_history_mod = types.ModuleType(
-        "custom_components.helman.solar_bias_correction.forecast_history"
-    )
-
-    async def _load_archived_forecast_points(*args, **kwargs):
-        return []
-
-    async def _load_trainer_samples(*args, **kwargs):
-        return []
-
-    def _forecast_points_from_slot_map(*args, **kwargs):
-        return []
-
-    forecast_history_mod.load_archived_forecast_points = _load_archived_forecast_points
-    forecast_history_mod.load_trainer_samples = _load_trainer_samples
-    forecast_history_mod.forecast_points_from_slot_map = _forecast_points_from_slot_map
-    sys.modules[forecast_history_mod.__name__] = forecast_history_mod
-
-
 def _load_service_module():
-    _install_service_import_stubs()
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
     return importlib.import_module("custom_components.helman.solar_bias_correction.service")
 
 
-def test_initial_profile_is_none_after_load():
+def test_initial_profile_is_none_after_load(monkeypatch):
     async def _inner():
         # Import module under test and monkeypatch the underlying HA storage.Store
         storage_mod = importlib.import_module("custom_components.helman.storage")
         # Ensure we have the latest module implementation (tests may import it earlier)
-        importlib.reload(storage_mod)
 
         FakeStore = _make_fake_store_backend()
-        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+        monkeypatch.setattr(storage_mod.storage, "Store", FakeStore)
 
         # Ensure class exists (will fail until implemented)
         store = storage_mod.SolarBiasCorrectionStore(object())
@@ -207,12 +113,11 @@ def test_initial_profile_is_none_after_load():
     asyncio.run(_inner())
 
 
-def test_save_and_reload_roundtrip():
+def test_save_and_reload_roundtrip(monkeypatch):
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
-        importlib.reload(storage_mod)
         FakeStore = _make_fake_store_backend()
-        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+        monkeypatch.setattr(storage_mod.storage, "Store", FakeStore)
 
         store = storage_mod.SolarBiasCorrectionStore(object())
 
@@ -237,12 +142,11 @@ def test_save_and_reload_roundtrip():
     asyncio.run(_inner())
 
 
-def test_load_accepts_v1_payload():
+def test_load_accepts_v1_payload(monkeypatch):
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
-        importlib.reload(storage_mod)
         FakeStore = _make_fake_store_backend()
-        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+        monkeypatch.setattr(storage_mod.storage, "Store", FakeStore)
 
         v1_payload = {
             "version": 1,
@@ -268,12 +172,11 @@ def test_load_accepts_v1_payload():
     asyncio.run(_inner())
 
 
-def test_load_migrates_outer_store_version_1_to_2():
+def test_load_migrates_outer_store_version_1_to_2(monkeypatch):
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
-        importlib.reload(storage_mod)
         FakeStore, storage_data = _make_versioned_fake_store_backend()
-        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+        monkeypatch.setattr(storage_mod.storage, "Store", FakeStore)
 
         storage_data["helman.solar_bias_correction"] = {
             "version": 1,
@@ -301,10 +204,9 @@ def test_load_migrates_outer_store_version_1_to_2():
     asyncio.run(_inner())
 
 
-def test_store_init_uses_constructor_supported_by_home_assistant_core():
+def test_store_init_uses_constructor_supported_by_home_assistant_core(monkeypatch):
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
-        importlib.reload(storage_mod)
 
         class StrictStore:
             def __init__(self, hass, version, key):
@@ -324,7 +226,7 @@ def test_store_init_uses_constructor_supported_by_home_assistant_core():
             ):
                 raise NotImplementedError
 
-        sys.modules["homeassistant.helpers.storage"].Store = StrictStore
+        monkeypatch.setattr(storage_mod.storage, "Store", StrictStore)
 
         store = storage_mod.SolarBiasCorrectionStore(object())
 
@@ -333,12 +235,11 @@ def test_store_init_uses_constructor_supported_by_home_assistant_core():
     asyncio.run(_inner())
 
 
-def test_unsupported_version_is_treated_as_no_profile():
+def test_unsupported_version_is_treated_as_no_profile(monkeypatch):
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
-        importlib.reload(storage_mod)
         FakeStore = _make_fake_store_backend()
-        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+        monkeypatch.setattr(storage_mod.storage, "Store", FakeStore)
 
         # Pre-populate backend with an unsupported version document
         bad_payload = {
@@ -361,7 +262,7 @@ def test_unsupported_version_is_treated_as_no_profile():
     asyncio.run(_inner())
 
 
-def test_metadata_from_dict_defaults_missing_invalidation_fields():
+def test_metadata_from_dict_defaults_missing_invalidation_fields(monkeypatch):
     service_mod = _load_service_module()
 
     metadata = service_mod._metadata_from_dict(
@@ -384,7 +285,7 @@ def test_metadata_from_dict_defaults_missing_invalidation_fields():
     assert metadata.invalidated_slot_count == 0
 
 
-def test_metadata_from_dict_reads_invalidation_fields():
+def test_metadata_from_dict_reads_invalidation_fields(monkeypatch):
     service_mod = _load_service_module()
 
     metadata = service_mod._metadata_from_dict(
@@ -415,7 +316,7 @@ def test_metadata_from_dict_reads_invalidation_fields():
     assert metadata.invalidated_slot_count == 3
 
 
-def test_serialize_state_writes_version_2():
+def test_serialize_state_writes_version_2(monkeypatch):
     service_mod = _load_service_module()
     models_mod = importlib.import_module(
         "custom_components.helman.solar_bias_correction.models"
@@ -466,7 +367,7 @@ def test_serialize_state_writes_version_2():
     assert payload["version"] == 2
 
 
-def test_training_explainability_from_dict_parses_valid_snapshot():
+def test_training_explainability_from_dict_parses_valid_snapshot(monkeypatch):
     service_mod = _load_service_module()
 
     parsed = service_mod._training_explainability_from_dict(
@@ -501,7 +402,7 @@ def test_training_explainability_from_dict_parses_valid_snapshot():
     assert parsed.slots["12:00"].rows[0].status == "included"
 
 
-def test_training_explainability_from_dict_preserves_interpolation_metadata():
+def test_training_explainability_from_dict_preserves_interpolation_metadata(monkeypatch):
     service_mod = _load_service_module()
 
     parsed = service_mod._training_explainability_from_dict(
@@ -538,13 +439,13 @@ def test_training_explainability_from_dict_preserves_interpolation_metadata():
     assert slot.interpolation_anchors == ("14:00", "16:15")
 
 
-def test_training_explainability_from_dict_returns_none_for_missing_snapshot():
+def test_training_explainability_from_dict_returns_none_for_missing_snapshot(monkeypatch):
     service_mod = _load_service_module()
 
     assert service_mod._training_explainability_from_dict(None) is None
 
 
-def test_async_train_saves_version_2_payload():
+def test_async_train_saves_version_2_payload(monkeypatch):
     async def _inner():
         service_mod = _load_service_module()
         models_mod = importlib.import_module(

@@ -6,67 +6,26 @@ import types
 import unittest
 from pathlib import Path
 
-from _ha_stubs import restore_modules, snapshot_modules
+from _fakes import FakeHass as _FakeHass, FakeState as _FakeState
 
 ROOT = Path(__file__).resolve().parents[1]
 
-_STUBBED_MODULES = (
-    "custom_components",
-    "custom_components.helman",
-    "custom_components.helman.recorder_hourly_series",
-    "homeassistant",
-    "homeassistant.util",
-    "homeassistant.util.dt",
+climate_appliance_module = importlib.import_module(
+    "custom_components.helman.appliances.climate_appliance"
 )
-
-
-def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = snapshot_modules(_STUBBED_MODULES)
-    custom_components_pkg = types.ModuleType("custom_components")
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-    sys.modules["custom_components"] = custom_components_pkg
-
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-    recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-
-    sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
-
-    import homeassistant.util.dt  # type: ignore  # noqa: F401
-    return previous_modules
-
-
-_previous_modules = _install_import_stubs()
-try:
-    climate_appliance_module = importlib.import_module(
-        "custom_components.helman.appliances.climate_appliance"
-    )
-    ev_charger_module = importlib.import_module(
-        "custom_components.helman.appliances.ev_charger"
-    )
-    generic_appliance_module = importlib.import_module(
-        "custom_components.helman.appliances.generic_appliance"
-    )
-    projection_builder_module = importlib.import_module(
-        "custom_components.helman.appliances.projection_builder"
-    )
-    projection_response_module = importlib.import_module(
-        "custom_components.helman.appliances.projection_response"
-    )
-    state_module = importlib.import_module("custom_components.helman.appliances.state")
-finally:
-    restore_modules(_previous_modules)
+ev_charger_module = importlib.import_module(
+    "custom_components.helman.appliances.ev_charger"
+)
+generic_appliance_module = importlib.import_module(
+    "custom_components.helman.appliances.generic_appliance"
+)
+projection_builder_module = importlib.import_module(
+    "custom_components.helman.appliances.projection_builder"
+)
+projection_response_module = importlib.import_module(
+    "custom_components.helman.appliances.projection_response"
+)
+state_module = importlib.import_module("custom_components.helman.appliances.state")
 
 ApplianceProjectionPlan = projection_builder_module.ApplianceProjectionPlan
 ApplianceProjectionPlanPoint = projection_builder_module.ApplianceProjectionPlanPoint
@@ -81,24 +40,6 @@ GenericApplianceRuntime = generic_appliance_module.GenericApplianceRuntime
 build_appliance_projections_response = (
     projection_response_module.build_appliance_projections_response
 )
-
-
-class _FakeState:
-    def __init__(self, state) -> None:
-        self.state = state
-
-
-class _FakeStates:
-    def __init__(self, states: dict[str, _FakeState]) -> None:
-        self._states = states
-
-    def get(self, entity_id: str):
-        return self._states.get(entity_id)
-
-
-class _FakeHass:
-    def __init__(self, states: dict[str, _FakeState]) -> None:
-        self.states = _FakeStates(states)
 
 
 def _registry() -> AppliancesRuntimeRegistry:

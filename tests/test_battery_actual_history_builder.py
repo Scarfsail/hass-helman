@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -14,13 +16,11 @@ UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
-    stub_module("homeassistant")
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
-    stub_module("homeassistant.components")
     recorder_mod = stub_module("homeassistant.components.recorder")
     if not hasattr(recorder_mod, "get_instance"):
         recorder_mod.get_instance = lambda hass: None
@@ -40,18 +40,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 _install_import_stubs()
@@ -65,7 +53,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
         cls._dt_patcher = patch.object(
             battery_actual_history_builder,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 
@@ -83,8 +71,8 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_interval_keeps_hourly_behavior(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
         boundary_samples = {
-            _FakeDtUtil.as_utc(slot_start): 30.0,
-            _FakeDtUtil.as_utc(slot_start.replace(hour=21)): 35.0,
+            dt_util.as_utc(slot_start): 30.0,
+            dt_util.as_utc(slot_start.replace(hour=21)): 35.0,
         }
 
         query_mock = AsyncMock(return_value=boundary_samples)
@@ -122,7 +110,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
     async def test_interval_minutes_15_emits_quarter_hour_entry(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         boundary_samples = {
-            _FakeDtUtil.as_utc(slot_start): 40.0,
+            dt_util.as_utc(slot_start): 40.0,
             datetime(2026, 3, 20, 19, 30, tzinfo=UTC): 41.25,
         }
 
@@ -161,7 +149,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_or_missing_soc_boundaries_are_skipped(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 15, tzinfo=TZ)
         boundary_samples = {
-            _FakeDtUtil.as_utc(slot_start): 120.0,
+            dt_util.as_utc(slot_start): 120.0,
         }
 
         query_mock = AsyncMock(return_value=boundary_samples)

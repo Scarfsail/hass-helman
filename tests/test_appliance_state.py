@@ -2,14 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-
-_install_import_stubs()
 
 from custom_components.helman.appliances import (
     AppliancesRuntimeRegistry,

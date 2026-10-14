@@ -4,41 +4,11 @@ import unittest
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
 
 
 TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
-
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-    recorder_slots_mod = stub_module("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
-    recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
-
-    stub_module("homeassistant")
-    # `battery_state` — reached through the self-sustainability simulator —
-    # imports `HomeAssistant` purely for a type annotation on its live readers.
-    core_mod = stub_module("homeassistant.core")
-    if not hasattr(core_mod, "HomeAssistant"):
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_ha_dt()
-    util_pkg.dt = dt_mod
-    recorder_slots_mod.dt_util = dt_mod
-
-
-_install_import_stubs()
 
 from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime  # noqa: E402

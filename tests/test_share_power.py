@@ -10,29 +10,22 @@ is tested, not a hand-written tree.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import asyncio
 import importlib
-import os
-import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-try:
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-    tree_builder = importlib.import_module("custom_components.helman.tree_builder")
-    recorder_module = importlib.import_module(
-        "custom_components.helman.recorder_hourly_series"
-    )
-    appliance_energy_module = importlib.import_module(
-        "custom_components.helman.training.appliance_energy"
-    )
-except Exception:  # pragma: no cover - environment guard
-    coordinator_module = None
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+tree_builder = importlib.import_module("custom_components.helman.tree_builder")
+recorder_module = importlib.import_module(
+    "custom_components.helman.recorder_hourly_series"
+)
+appliance_energy_module = importlib.import_module(
+    "custom_components.helman.training.appliance_energy"
+)
 
 HOUSE = "sensor.house_power"
 BREAKER_POWER = "sensor.breaker_power"
@@ -113,7 +106,7 @@ def _make_coordinator(
     hass = SimpleNamespace(states=_States(states))
     tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
 
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._active_config = config
     c._hass = hass
     c._cached_tree = tree
@@ -133,7 +126,6 @@ def _tick(c) -> tuple[dict, dict]:
     return unmeasured[BREAKER], by_entity
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class SharePowerTests(unittest.TestCase):
     def _run(
         self,
@@ -268,7 +260,6 @@ class SharePowerTests(unittest.TestCase):
         self.assertEqual(list(c._power_history[REMAINDER]), [0.0])
 
 
-@unittest.skipIf(coordinator_module is None, "homeassistant not importable in this environment")
 class RunningPredicateTests(unittest.TestCase):
     """The live split and the history split agree on what "running" is."""
 
@@ -291,7 +282,7 @@ class RunningPredicateTests(unittest.TestCase):
                             active_states=member.active_states,
                         )
                     )
-                    c = object.__new__(coordinator_module.HelmanCoordinator)
+                    c = make_coordinator()
                     c._hass = SimpleNamespace(
                         states=SimpleNamespace(
                             get=lambda _entity_id, value=value: SimpleNamespace(state=value)

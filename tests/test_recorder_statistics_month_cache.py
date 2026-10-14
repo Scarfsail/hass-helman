@@ -13,17 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import os
-import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-_ROOT = os.path.dirname(os.path.dirname(__file__))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
 
 span_module = importlib.import_module("custom_components.helman.recorder_statistics_span")
 

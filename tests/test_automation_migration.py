@@ -11,14 +11,8 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-
-_install_import_stubs()
 
 from custom_components.helman.automation.migration import (  # noqa: E402
     _migrate_v9_to_v10,

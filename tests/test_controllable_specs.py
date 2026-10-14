@@ -16,14 +16,8 @@ import dataclasses
 import json
 import unittest
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-
-_install_import_stubs()
 
 from custom_components.helman.appliances.climate_appliance import (  # noqa: E402
     ClimateApplianceRuntime,
