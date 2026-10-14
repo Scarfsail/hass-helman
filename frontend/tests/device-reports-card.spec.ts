@@ -203,6 +203,29 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             pending[index]?.();
             pending[index] = null;
         };
+        const mock = window.__mockHass({
+"helman/device_report": async (msg: {
+                type: string; report: string; start_date: string; end_date: string; granularity?: string;
+            }) => {
+if (msg.type !== "helman/device_report") return {};
+window.__reportRequests.push({
+                    report: msg.report, start: msg.start_date, end: msg.end_date,
+                    ...(msg.granularity ? { granularity: msg.granularity } : {}),
+                });
+if (opts.fail) throw new Error("boom");
+const answer = () => opts.unavailable
+                    ? { unavailable: opts.unavailable }
+                    : msg.report === "over_time"
+                        ? overTime(msg.start_date, msg.end_date, msg.granularity ?? "day")
+                        : msg.report === "daily_profile"
+                            ? dailyProfile(msg.start_date, msg.end_date)
+                            : ranking(msg.start_date, msg.end_date);
+if (!opts.hold) return answer();
+return new Promise((resolveAnswer) => {
+                    pending.push(() => resolveAnswer(answer()));
+                });
+}
+});
         window.__fakeHass = {
             language: "en",
             locale: { language: "en" },
@@ -214,27 +237,8 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                 },
             },
             states: {},
-            callWS: async (msg: {
-                type: string; report: string; start_date: string; end_date: string; granularity?: string;
-            }) => {
-                if (msg.type !== "helman/device_report") return {};
-                window.__reportRequests.push({
-                    report: msg.report, start: msg.start_date, end: msg.end_date,
-                    ...(msg.granularity ? { granularity: msg.granularity } : {}),
-                });
-                if (opts.fail) throw new Error("boom");
-                const answer = () => opts.unavailable
-                    ? { unavailable: opts.unavailable }
-                    : msg.report === "over_time"
-                        ? overTime(msg.start_date, msg.end_date, msg.granularity ?? "day")
-                        : msg.report === "daily_profile"
-                            ? dailyProfile(msg.start_date, msg.end_date)
-                            : ranking(msg.start_date, msg.end_date);
-                if (!opts.hold) return answer();
-                return new Promise((resolveAnswer) => {
-                    pending.push(() => resolveAnswer(answer()));
-                });
-            },
+            callWS: mock.callWS,
+            setReply: mock.setReply,
         };
 
         window.__shellRoot = () => document.querySelector("helman-device-reports-card")
@@ -476,8 +480,8 @@ test.describe("the period and fetching", () => {
         await mountCard(page, { fakeTimersAt: FIXED_NOW_ISO });
         await rendered(page);
         await page.evaluate(() => {
-            const hass = window.__fakeHass as { callWS: unknown };
-            hass.callWS = async () => { throw new Error("boom"); };
+            const hass = window.__fakeHass as { setReply: (command: string, reply: Error) => void };
+            hass.setReply("helman/device_report", new Error("boom"));
         });
         await page.clock.runFor(FIVE_MINUTES + 60_000);
         await expect.poll(() => page.evaluate(() => !!window.__shellRoot()?.querySelector(".error"))).toBe(true);

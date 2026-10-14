@@ -81,34 +81,43 @@ async function installFakeBackend(page: Page): Promise<void> {
                     last_changed: new Date(nowMs).toISOString(),
                 },
             },
-            callWS: async (msg: { type: string }) => {
-                if (msg.type === "helman/get_schedule") {
+            callWS: window.__mockHass({
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                }) => {
                     return { executionEnabled: true, slots };
-                }
-                if (msg.type === "helman/get_appliances") {
+                },
+                "helman/get_appliances": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         appliances: [
                             appliance("dishwasher", "Dishwasher"),
                             appliance("boiler", "Boiler"),
                         ],
                     };
-                }
-                if (msg.type === "helman/get_controllable_entities") {
+                },
+                "helman/get_controllable_entities": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         entities: [
                             { kind: "generic", name: "Dishwasher", entityId: "switch.dishwasher", normalState: "off" },
                             { kind: "generic", name: "Boiler", entityId: "switch.boiler", normalState: "off" },
                         ],
                     };
-                }
-                if (msg.type === "helman/get_entity_actual_history") {
+                },
+                "helman/get_entity_actual_history": async (msg: {
+                    type: string;
+                }) => {
                     return { entities: {} };
-                }
-                if (msg.type === "helman/get_appliance_projections") {
+                },
+                "helman/get_appliance_projections": async (msg: {
+                    type: string;
+                }) => {
                     return { appliances: [] };
                 }
-                return {};
-            },
+            }).callWS,
         };
     });
 }
@@ -317,16 +326,12 @@ test.describe("opening the day editor from a scheduling badge", () => {
         // The backend refuses the batch the way its slot validator does.
         await page.evaluate(() => {
             const hass = window.__fakeHass as any;
-            const inner = hass.callWS;
-            hass.callWS = async (msg: { type: string }) => {
-                if (msg.type === "helman/set_schedule") {
-                    throw {
+            window.__setMockReply(hass, "helman/set_schedule", () => {
+                throw {
                         code: "invalid_slots",
                         message: "Schedule slot must be within the rolling 48-hour horizon",
-                    };
-                }
-                return inner(msg);
-            };
+                };
+            });
         });
 
         // Clear the boiler's run, so there is a draft worth writing.
@@ -354,19 +359,18 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
         await page.evaluate(() => {
             const hass = window.__fakeHass as any;
-            const inner = hass.callWS;
             let written = false;
-            hass.callWS = async (msg: { type: string }) => {
-                if (msg.type === "helman/set_schedule") {
+            window.__setMockReply(hass, "helman/set_schedule", () => {
                     written = true;
                     return { success: true };
-                }
+            });
                 // The connection drops right after the write lands.
-                if (msg.type === "helman/get_schedule" && written) {
+            window.__setMockReply(hass, "helman/get_schedule", () => {
+                if (written) {
                     throw { code: "timeout", message: "connection lost" };
                 }
-                return inner(msg);
-            };
+                return { executionEnabled: true, slots: [] };
+            });
         });
 
         await page.locator(".block-row").first().locator("button").nth(1).click();

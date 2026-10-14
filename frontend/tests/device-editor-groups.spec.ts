@@ -84,15 +84,15 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
-                    if (request.type === "helman/get_optimizer_schema") return { version: 2, kinds: [] };
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
+                        return JSON.parse(JSON.stringify(config));
+                    },
+                    "helman/validate_config": async (request: any) => {
                         return { valid: true, errors: [], warnings: [] };
-                    }
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
@@ -101,8 +101,7 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
                             })),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

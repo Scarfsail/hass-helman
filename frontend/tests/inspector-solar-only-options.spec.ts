@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import {
     HOUSE_INSPECTOR_EMBED_CONFIG,
     SOLAR_INSPECTOR_EMBED_CONFIG,

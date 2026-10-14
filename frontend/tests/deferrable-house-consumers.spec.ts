@@ -77,14 +77,15 @@ async function installFakeBackend(page: Page): Promise<void> {
             config: { time_zone: "UTC" },
             connection: {},
             states: {},
-            callWS: async (msg: { type: string }) => {
-                window.__wsSeen.push(msg.type);
-                if (msg.type === "helman/get_schedule") {
+            callWS: window.__mockHass({
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         executionEnabled: true,
                         slots: [
                             {
-                                id: slotId(slotStartMs - 3_600_000),
+                                id: slotId(slotStartMs - 3600000),
                                 controllables: {},
                             },
                             {
@@ -101,13 +102,15 @@ async function installFakeBackend(page: Page): Promise<void> {
                                 },
                             },
                             {
-                                id: slotId(slotStartMs + 3_600_000),
+                                id: slotId(slotStartMs + 3600000),
                                 controllables: {},
                             },
                         ],
                     };
-                }
-                if (msg.type === "helman/get_appliances") {
+                },
+                "helman/get_appliances": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         appliances: [
                             appliance("dishwasher", "switch.dishwasher"),
@@ -116,8 +119,10 @@ async function installFakeBackend(page: Page): Promise<void> {
                             appliance("fan", "switch.fan"),
                         ],
                     };
-                }
-                if (msg.type === "helman/get_controllable_entities") {
+                },
+                "helman/get_controllable_entities": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         entities: ["dishwasher", "boiler", "pump", "fan"].map((id) => ({
                             kind: "generic",
@@ -127,8 +132,11 @@ async function installFakeBackend(page: Page): Promise<void> {
                         })),
                     };
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+            }) => {
+                window.__wsSeen.push(msg.type);
+            }).callWS,
         };
     });
 }

@@ -263,31 +263,35 @@ async function mountInspector(
                     msg.type === "helman/get_forecast" ? forecast : {},
             },
             states: {},
-            callWS: async (msg: {
-                type: string;
-                date?: string;
-                start_date?: string;
-                end_date?: string;
-            }) => {
-                if (msg.type === "helman/get_schedule") {
+            callWS: window.__mockHass({
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    date?: string;
+                    start_date?: string;
+                    end_date?: string;
+                }) => {
                     return schedule;
-                }
-                if (msg.type === "helman/solar_bias/inspector") {
+                },
+                "helman/solar_bias/inspector": async (msg: {
+                    type: string;
+                    date?: string;
+                    start_date?: string;
+                    end_date?: string;
+                }) => {
                     requestedDates.push(msg.date ?? "");
                     return inspectorPayload(msg.date ?? "");
-                }
-                // The whole-day figures behind a past week's pills: one read for
-                // the window, and the meters have nothing beyond today.
-                if (msg.type === "helman/solar_bias/day_aggregates") {
+                },
+                "helman/solar_bias/day_aggregates": async (msg: {
+                    type: string;
+                    date?: string;
+                    start_date?: string;
+                    end_date?: string;
+                }) => {
                     const start = msg.start_date ?? "";
                     const end = msg.end_date ?? "";
                     requestedRanges.push(`${start}..${end}`);
                     const days: unknown[] = [];
-                    for (
-                        let cursor = Date.parse(`${start}T00:00:00Z`);
-                        cursor <= Date.parse(`${end}T00:00:00Z`);
-                        cursor += dayMs
-                    ) {
+                    for (let cursor = Date.parse(`${start}T00:00:00Z`); cursor <= Date.parse(`${end}T00:00:00Z`); cursor += dayMs) {
                         const day = new Date(cursor).toISOString().slice(0, 10);
                         if (day === isoDay(0) && measureToday) {
                             // Today so far: a morning's production and a
@@ -316,8 +320,7 @@ async function mountInspector(
                     }
                     return { days };
                 }
-                return {};
-            },
+            }).callWS,
         };
         document.body.appendChild(el);
     }, {
@@ -1347,10 +1350,10 @@ test.describe("continuous detail calendar", () => {
     test("pending and failed summaries retain overlap and stale replies cannot overwrite a revisited window", async ({ page }) => {
         await page.evaluate(() => {
             const inspector = document.querySelector("helman-solar-inspector") as any;
-            const original = inspector.hass.callWS;
             (window as any).__pendingSummaries = [];
-            inspector.hass.callWS = (message: any) => message.type !== "helman/solar_bias/day_aggregates"
-                ? original(message) : new Promise((resolve, reject) => (window as any).__pendingSummaries.push({ message, resolve, reject }));
+            window.__setMockReply(inspector.hass, "helman/solar_bias/day_aggregates",
+                (message: any) => new Promise((resolve, reject) =>
+                    (window as any).__pendingSummaries.push({ message, resolve, reject })));
         });
         await browseMonth(page, "2026-09");
         expect((await calendarState(page)).stored).toContain("2026-09-15");

@@ -123,14 +123,18 @@ async function mountEditor(page: Page): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                callWS: async (request: { type: string }) => {
-                    if (request.type === "helman/get_config") {
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: {
+                        type: string;
+                    }) => {
                         return JSON.parse(JSON.stringify(config));
+                    },
+                    "helman/get_optimizer_schema": async (request: {
+                        type: string;
+                    }) => {
+                        return schema;
                     }
-                    if (request.type === "helman/get_optimizer_schema") return schema;
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { HA_PANEL_RESOLVER_FAILING_STUB, HA_TRACE_STUB } from "./support/ha-trace-stub";
@@ -162,6 +163,7 @@ interface MountOptions {
  */
 async function mountPanel(page: Page, options: MountOptions = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     if (options.withoutTraceElements === true) {
         await page.addScriptTag({ content: HA_PANEL_RESOLVER_FAILING_STUB });
@@ -184,12 +186,14 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             config: { time_zone: "Europe/Prague" },
             states: {},
             localize: (key: string) => key,
-            callWS: async () => {
-                if (reject !== undefined) {
-                    throw new Error(reject);
+            callWS: window.__mockHass({
+                "helman/get_condition_trace": async (request: any) => {
+                    if (reject !== undefined) {
+                        throw new Error(reject);
+                    }
+                    return trace ?? null;
                 }
-                return trace ?? null;
-            },
+            }).callWS,
             // Not decoration: `ha-trace-path-details` writes its tab names, its
             // step heading and its "executed at" line through the `config`
             // translation fragment, and the condition's own name through the

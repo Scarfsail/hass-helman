@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -65,6 +66,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((v) => {
         const profile = v.profile !== false;
@@ -237,31 +239,62 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 },
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return schedule;
-                if (msg.type === "helman/get_node_detail") {
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
                     if (msg.section === "modes") {
                         window.__modesCalls += 1;
-                        if (window.__modesFail) throw new Error("recorder down");
+                        if (window.__modesFail)
+                            throw new Error("recorder down");
                         if (v.modesYesterdayThenFail) {
-                            if (window.__modesCalls > 1) throw new Error("recorder down");
+                            if (window.__modesCalls > 1)
+                                throw new Error("recorder down");
                             return { ...modes, period: { start: "2026-10-20T00:00:00+00:00", end: `${day}T00:00:00+00:00` } };
                         }
                         return modes;
                     }
-                    if (msg.section === "flows") return flowsSection;
+                    if (msg.section === "flows")
+                        return flowsSection;
                     if (msg.section) {
-                        if (v.sectionFails) throw new Error("recorder down");
+                        if (v.sectionFails)
+                            throw new Error("recorder down");
                         return section;
                     }
-                    if (v.overviewFails) throw new Error("backend down");
+                    if (v.overviewFails)
+                        throw new Error("backend down");
                     return window.__overview;
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+            }) => {
+                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+            }).callWS,
         };
     }, variant);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
@@ -419,11 +452,7 @@ test.describe("the inverter overview", () => {
     test("an overview that fails explains itself with a retry", async ({ page }) => {
         await mount(page);
         await page.evaluate(() => {
-            const original = window.__hass.callWS;
-            window.__hass.callWS = async (msg: any) => {
-                if (msg.type === "helman/get_node_detail") throw new Error("down");
-                return original(msg);
-            };
+            window.__setMockReply(window.__hass, "helman/get_node_detail", new Error("down"));
         });
         await cell(page).click();
         await expect(content(page)).toContainText("Inverter details could not be loaded.");

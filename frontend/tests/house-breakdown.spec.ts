@@ -251,7 +251,13 @@ async function mountInspector(
             config: { time_zone: "UTC" },
             connection: {},
             states,
-            callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: msg.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
     }, options);
@@ -601,17 +607,21 @@ test.describe("solar inspector house composition", () => {
                 config: { time_zone: "UTC" },
                 connection: {
                     sendMessagePromise: async () => ({}),
-                    subscribeMessage: async () => () => undefined,
+                    subscribeMessage: window.__mockHass().connection.subscribeMessage,
                 },
                 states: {},
-                callWS: async (msg: { type: string }) => {
-                    if (msg.type === "helman/get_device_tree") return tree;
-                    if (msg.type === "helman/get_history") {
+                callWS: window.__mockHass({
+                    "helman/get_device_tree": async (msg: {
+                        type: string;
+                    }) => {
+                        return tree;
+                    },
+                    "helman/get_history": async (msg: {
+                        type: string;
+                    }) => {
                         return { buckets: 3, bucket_duration: 5, entity_history: {} };
                     }
-                    if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                    return {};
-                },
+                }).callWS,
             };
             const walk = (nodes: any[]): any[] =>
                 nodes.flatMap((node) => [node, ...walk(node.children ?? [])]);

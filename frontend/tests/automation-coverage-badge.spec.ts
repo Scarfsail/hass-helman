@@ -150,9 +150,11 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                     };
                 },
             },
-            callWS: async (request: { type: string; config?: unknown }) => {
-                calls.push({ type: request.type, config: request.config });
-                if (request.type === "helman/get_config") {
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     if (unauthorized) {
                         // The shape the HA websocket client throws; the source
                         // reads the code and nothing else.
@@ -162,14 +164,25 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                         await new Promise<void>((release) => { held.push(release); });
                     }
                     return current;
-                }
-                if (request.type === "helman/get_optimizer_schema") return schema;
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                if (request.type === "helman/save_config") {
+                },
+                "helman/get_optimizer_schema": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
+                    return schema;
+                },
+                "helman/save_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true };
                 }
-                return {};
-            },
+            }, (request: {
+                type: string;
+                config?: unknown;
+            }) => {
+                calls.push({ type: request.type, config: request.config });
+            }).callWS,
         };
         // The dialog lives in the band's shadow root and its cards in theirs,
         // and `document.querySelector` pierces neither -- so the walk is here,

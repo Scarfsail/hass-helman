@@ -62,17 +62,14 @@ async function mountEditorWith(
             language,
             locale: { language },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: { type: string }) => {
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: {
+                    type: string;
+                }) => {
                     return JSON.parse(JSON.stringify(config));
                 }
-                if (request.type === "helman/get_optimizer_schema") {
-                    return { version: 2, kinds: [] };
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                return {};
-            },
+            }).callWS,
         };
         document.body.appendChild(element);
     }, { config, language });

@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
+import { installMockHass } from "./mock-hass";
 
 /**
  * The built bundles the specs mount, and the one way to mount them.
@@ -23,6 +24,7 @@ export const EDITOR_BUNDLE = resolve(COMPILED, "helman-config-editor.js");
  */
 export async function loadBundle(page: Page, element: string, bundle = CARD_BUNDLE): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ path: bundle, type: "module" });
     await expect.poll(() => page.evaluate((tag) => !!customElements.get(tag), element)).toBe(true);
 }

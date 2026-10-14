@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import { FIXED_NOW_ISO } from "./support/fixed-clock";
 import { CARD_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -167,39 +167,48 @@ test.describe("the schedule host's clock", () => {
                         last_changed: new Date(nowMs).toISOString(),
                     },
                 },
-                callWS: async (msg: { type: string }) => {
-                    if (msg.type === "helman/get_schedule") {
+                callWS: window.__mockHass({
+                    "helman/get_schedule": async (msg: {
+                        type: string;
+                    }) => {
                         return { executionEnabled: true, slots };
-                    }
-                    if (msg.type === "helman/get_appliances") {
+                    },
+                    "helman/get_appliances": async (msg: {
+                        type: string;
+                    }) => {
                         return {
                             appliances: [{
-                                id: "boiler",
-                                name: "Boiler",
-                                kind: "generic",
-                                metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
-                                controls: { switch: { entityId: "switch.boiler" } },
-                            }],
+                                    id: "boiler",
+                                    name: "Boiler",
+                                    kind: "generic",
+                                    metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
+                                    controls: { switch: { entityId: "switch.boiler" } },
+                                }],
                         };
-                    }
-                    if (msg.type === "helman/get_controllable_entities") {
+                    },
+                    "helman/get_controllable_entities": async (msg: {
+                        type: string;
+                    }) => {
                         return {
                             entities: [{
-                                kind: "generic",
-                                name: "Boiler",
-                                entityId: "switch.boiler",
-                                normalState: "off",
-                            }],
+                                    kind: "generic",
+                                    name: "Boiler",
+                                    entityId: "switch.boiler",
+                                    normalState: "off",
+                                }],
                         };
-                    }
-                    if (msg.type === "helman/get_entity_actual_history") {
+                    },
+                    "helman/get_entity_actual_history": async (msg: {
+                        type: string;
+                    }) => {
                         return { entities: {} };
-                    }
-                    if (msg.type === "helman/get_appliance_projections") {
+                    },
+                    "helman/get_appliance_projections": async (msg: {
+                        type: string;
+                    }) => {
                         return { appliances: [] };
                     }
-                    return {};
-                },
+                }).callWS,
             };
 
             const host = document.createElement("scheduling-day-editor-host") as any;

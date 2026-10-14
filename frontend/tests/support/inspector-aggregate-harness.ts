@@ -50,7 +50,7 @@ export async function mountInspector(
     // Off by default -- every existing case wants its span answered right
     // away. On, `helman/solar_bias/day_aggregates` returns a promise the test
     // releases itself, through `window.__pendingSpan()` / `__releaseSpan()`,
-    // the same shape `fake-hass.ts` gives the day read.
+    // the same shape `mock-hass.ts` gives the day read.
     holdSpanRequests = false,
 ): Promise<void> {
     await page.evaluate(([punchHoles, shape, floor, rawDayFloor, holdSpan]: [boolean, string, string, string | null, boolean]) => {
@@ -247,8 +247,8 @@ export async function mountInspector(
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (msg: any) => {
-                if (msg.type === "helman/solar_bias/day_aggregates") {
+            callWS: window.__mockHass({
+                "helman/solar_bias/day_aggregates": (msg: any) => {
                     (window as any).__spanRequests.push(msg);
                     const result = {
                         bucket: msg.bucket ?? "day",
@@ -272,25 +272,16 @@ export async function mountInspector(
                     return new Promise((resolveSpan) => {
                         pendingSpan.push(() => resolveSpan(result));
                     });
-                }
-                if (msg.type === "helman/get_schedule") {
-                    // An empty schedule, in the shape the backend sends one:
-                    // `{}` is not that shape, and every subscriber that reaches
-                    // for `slots` on it throws -- inside `willUpdate`, which
-                    // leaves the element unrendered until some later property
-                    // change happens to give it another go.
-                    return { executionEnabled: true, slots: [] };
-                }
-                if (msg.type === "helman/solar_bias/inspector") {
+                },
+                "helman/solar_bias/inspector": (msg: any) => {
                     (window as any).__dayRequests.push(msg.date);
                     return { ...dayPayload, date: msg.date };
-                }
-                if (msg.type === "helman/get_device_stats") {
+                },
+                "helman/get_device_stats": (msg: any) => {
                     ((window as any).__deviceStatsRequests ??= []).push(msg.device_key);
                     return null;
-                }
-                return {};
-            },
+                },
+            }).callWS,
         };
         document.body.appendChild(el);
     }, [holes, variant, minDate, dayMinDate, holdSpanRequests] as [boolean, string, string, string | null, boolean]);

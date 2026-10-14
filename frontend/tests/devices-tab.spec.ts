@@ -166,18 +166,20 @@ async function mountEditor(
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") return window.__validation;
-                    if (request.type === "helman/get_vendors" && vendors) return vendors;
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/validate_config": async (request: any) => {
+                        return window.__validation;
+                    },
+                    "helman/get_vendors": async (request: any) => {
+                        if (request.type === "helman/get_vendors" && vendors)
+                            return vendors;
+                        return {};
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => {
                                 window.__inspectKeys.push(target.key);
@@ -190,10 +192,7 @@ async function mountEditor(
                                         // Cleaned as the backend's resolution cleans it,
                                         // so the draft's regex shows in the answer.
                                         placeholder: request.config?.devices?.name_cleaner_regex
-                                            ? placeholders[target.key]?.replace(
-                                                  new RegExp(request.config.devices.name_cleaner_regex),
-                                                  "",
-                                              )
+                                            ? placeholders[target.key]?.replace(new RegExp(request.config.devices.name_cleaner_regex), "")
                                             : placeholders[target.key],
                                     },
                                     saved: null,
@@ -201,8 +200,7 @@ async function mountEditor(
                             }),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
@@ -1136,16 +1134,14 @@ async function deviceResponse(
   await page.evaluate(
     ({ type, response, deferred }) => {
       const panel = document.querySelector("helman-config-editor-panel") as any;
-      const previous = panel.hass.callWS;
-      panel.hass.callWS = async (request: any) => {
-        if (request.type !== type) return previous(request);
+      window.__setMockReply(panel.hass, type, async (request: any) => {
         (window as any).__deviceRequest = request;
         if (deferred)
           return new Promise((resolve) => {
             (window as any).__resolveDeviceRequest = () => resolve(response);
           });
         return response;
-      };
+      });
     },
     { type, response, deferred },
   );
@@ -1535,11 +1531,8 @@ test("a failed suggestion request shows a readable error that a retry clears", a
   await page.evaluate(() => {
     window.__card("breaker")!.open = true;
     const panel = document.querySelector("helman-config-editor-panel") as any;
-    const previous = panel.hass.callWS;
-    panel.hass.callWS = async (request: any) =>
-      request.type === "helman/suggest_device_entities"
-        ? Promise.reject({ code: "unknown_error" })
-        : previous(request);
+    window.__setMockReply(panel.hass, "helman/suggest_device_entities", () =>
+      Promise.reject({ code: "unknown_error" }));
   });
   await page.locator(".apply-suggestions").click();
   await expect(page.locator(".message.error")).toHaveText(

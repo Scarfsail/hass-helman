@@ -126,7 +126,19 @@ async function mountInspector(page: Page, date: string): Promise<void> {
             connection: {},
             // Echo the requested date back so the payload matches whatever day
             // the card is looking at.
-            callWS: async (msg: { date?: string }) => ({ ...payload, date: msg.date ?? day }),
+            // Echo the requested date back so the payload matches whatever day
+            // the card is looking at.
+            // Echo the requested date back so the payload matches whatever day
+            // the card is looking at.
+            // Echo the requested date back so the payload matches whatever day
+            // the card is looking at.
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date?: string;
+                }) => {
+                    return ({ ...payload, date: msg.date ?? day });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
         // Drive the card onto the day under test; the pills would otherwise
