@@ -678,15 +678,6 @@ class _CachedDeviceDataset:
 
 
 class HelmanCoordinator:
-    # Class-level default so the accessor's log dedupe works on a coordinator
-    # built with ``object.__new__`` — which the tests do, and which would
-    # otherwise turn a diagnostic log line into an AttributeError on a read
-    # path the five current-slot entities call constantly.
-    _battery_forecast_current_miss: tuple[str, str] | None = None
-
-    #: Class-level default for the same reason as the field above.
-    _battery_forecast_current_slot: tuple[str, dict[str, float]] | None = None
-
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
         self._hass = hass
         self._storage = storage
@@ -1065,14 +1056,14 @@ class HelmanCoordinator:
                     "Error publishing solar forecast sensor state: %s",
                     getattr(sensor, "entity_id", "<unknown>"),
                 )
-        hcfc_sensor = getattr(self, "_house_consumption_forecast_current_sensor", None)
+        hcfc_sensor = self._house_consumption_forecast_current_sensor
         if hcfc_sensor is not None:
             if getattr(hcfc_sensor, "hass", None) is not None:
                 hcfc_sensor.async_write_ha_state()
         # The two current-slot forecast entities ride the same slot-aligned
         # beat, which is what makes their recorded history a stair-step of what
         # was believed about each slot before it began.
-        for solar_sensor in getattr(self, "_solar_forecast_current_sensors", []):
+        for solar_sensor in self._solar_forecast_current_sensors:
             if getattr(solar_sensor, "hass", None) is not None:
                 try:
                     solar_sensor.async_write_ha_state()
@@ -1090,7 +1081,7 @@ class HelmanCoordinator:
         # day reads back -- would be dragged low by it and the error would
         # outlive the raw states. See ``_SLOT_ALIGNED_REFRESH_REASON``.
         if reason == _SLOT_ALIGNED_REFRESH_REASON:
-            for battery_sensor in getattr(self, "_battery_forecast_current_sensors", []):
+            for battery_sensor in self._battery_forecast_current_sensors:
                 if getattr(battery_sensor, "hass", None) is not None:
                     try:
                         battery_sensor.async_write_ha_state()
@@ -1103,14 +1094,14 @@ class HelmanCoordinator:
         # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
         # import windows align to the same grid, so a price change and its
         # publication land in the same slot.
-        price_sensor = getattr(self, "_grid_import_price_sensor", None)
+        price_sensor = self._grid_import_price_sensor
         if price_sensor is not None and getattr(price_sensor, "hass", None) is not None:
             price_sensor.async_write_ha_state()
         # The export mirror rides the same beat. Its source entity moves on the
         # hour and this refresh is slot-aligned, so the mirror lands in the same
         # slot as the change it copies; the recorder's own hourly mean is time
         # weighted, so a mirror written at :00 values the whole hour correctly.
-        export_price_sensor = getattr(self, "_grid_export_price_sensor", None)
+        export_price_sensor = self._grid_export_price_sensor
         if (
             export_price_sensor is not None
             and getattr(export_price_sensor, "hass", None) is not None
@@ -1664,8 +1655,6 @@ class HelmanCoordinator:
         change, so the freshness the docstring above demands is exactly what
         the cache key preserves.
         """
-        from .recorder_hourly_series import get_local_current_slot_start
-
         reference_time = dt_util.now()
         slot_start = get_local_current_slot_start(
             reference_time,
@@ -2212,7 +2201,7 @@ class HelmanCoordinator:
         # points are flat {timestamp, value} dicts, so a per-point dict() is a
         # full copy at a fraction of deepcopy's cost.
         snapshot["rawPoints"] = [dict(point) for point in raw_points]
-        solar_bias_service = getattr(self, "_solar_bias_service", None)
+        solar_bias_service = self._solar_bias_service
         if solar_bias_service is not None:
             bias_result = solar_bias_service.build_adjustment_result(
                 raw_points,
@@ -2436,7 +2425,7 @@ class HelmanCoordinator:
         where the alternative is telling a card the export price is unknown
         when the source is sitting right there with it.
         """
-        channel = getattr(self, "_grid_export_price_channel", None)
+        channel = self._grid_export_price_channel
         if channel is None:
             return self._ingest_grid_export_price()
         return channel
@@ -2459,10 +2448,9 @@ class HelmanCoordinator:
         Runs at most once per Home Assistant start; the task keeps a persisted
         cursor, so a run cut short by a restart resumes rather than restarting.
         """
-        # ``getattr`` throughout, like the sensor lookups above it: this runs
-        # off the publish beat, which several tests and the recovery path reach
-        # with a partially built coordinator.
-        if getattr(self, "_solar_forecast_backfill_started", True):
+        # Wait for the publish beat to provide a current forecast value before
+        # starting a walk that writes into the sensor's statistics series.
+        if self._solar_forecast_backfill_started:
             return
         if self.get_solar_forecast_current_wh(corrected=False) is None:
             # No value published yet, so the sensor has no series to write into
@@ -2489,7 +2477,7 @@ class HelmanCoordinator:
 
     def _get_solar_forecast_source_entity_id(self) -> str | None:
         """``daily_energy_entity_ids[0]``, the entity whose curve is recovered."""
-        config = getattr(self, "_active_config", None)
+        config = self._active_config
         if not isinstance(config, dict):
             return None
         # Each level guarded, like ``_get_grid_sell_price_entity_id``: a key
@@ -2530,10 +2518,9 @@ class HelmanCoordinator:
         done-marker, so a run cut short by a restart resumes by skipping the
         series it already wrote.
         """
-        # ``getattr`` throughout, like the sibling starters: this runs off the
-        # publish beat, which several tests and the recovery path reach with a
-        # partially built coordinator.
-        if getattr(self, "_battery_forecast_backfill_started", True):
+        # Wait for a current-slot value from the publish beat before importing
+        # statistics for the five forecast entities.
+        if self._battery_forecast_backfill_started:
             return
         if self.get_battery_forecast_current() is None:
             # No value for the current slot yet: no slot-aligned rebuild has
@@ -2568,14 +2555,13 @@ class HelmanCoordinator:
         persisted cursor, so a run cut short by a restart resumes where it
         stopped rather than starting over.
         """
-        # ``getattr`` throughout, like the sensor lookups above it: this runs
-        # off the publish beat, which several tests and the recovery path reach
-        # with a partially built coordinator.
-        if getattr(self, "_grid_export_price_backfill_started", True):
+        # Wait for the publish beat to provide a rate and unit before writing
+        # the mirror's statistics metadata.
+        if self._grid_export_price_backfill_started:
             return
-        if getattr(self, "_grid_export_price_current", None) is None:
+        if self._grid_export_price_current is None:
             return
-        unit = getattr(self, "_grid_export_price_unit", None)
+        unit = self._grid_export_price_unit
         if unit is None:
             # No unit yet, so wait. The first import writes the mirror's
             # statistics metadata, and writing it with a null unit would leave
@@ -2620,7 +2606,7 @@ class HelmanCoordinator:
         the path of every card open. The snapshot's age reaches the card in the
         payload's ``staleness`` block instead.
         """
-        cached_solar_forecast = getattr(self, "_cached_solar_forecast", None)
+        cached_solar_forecast = self._cached_solar_forecast
         if isinstance(cached_solar_forecast, dict):
             return cached_solar_forecast
         return None
@@ -2724,7 +2710,7 @@ class HelmanCoordinator:
 
     def _refresh_appliance_metadata(self) -> None:
         """Resolve identity and climate capabilities from currently available states."""
-        config = getattr(self, "_active_config", None)
+        config = self._active_config
         devices = {
             device["id"].strip(): device
             for _path, device, _parent in iter_device_paths(config)
@@ -3022,7 +3008,7 @@ class HelmanCoordinator:
         The snapshot's points are already the slot's Wh, so nothing is
         converted here: the entity publishes the figure the inspector draws.
         """
-        snapshot = getattr(self, "_cached_solar_forecast", None)
+        snapshot = self._cached_solar_forecast
         if not isinstance(snapshot, dict):
             return None
         points = None
@@ -3263,7 +3249,7 @@ class HelmanCoordinator:
         A copy, and the whole map: the sensor republishes it wholesale on every
         ingestion so a timestamp the source dropped disappears with it.
         """
-        return dict(getattr(self, "_grid_export_price_schedule", {}) or {})
+        return dict(self._grid_export_price_schedule or {})
 
     def get_house_consumption_forecast_current_w(self) -> float | None:
         # Report the same house demand the battery and grid forecasts are built
@@ -5078,13 +5064,13 @@ class HelmanCoordinator:
         signature -- the current battery forecast, the adjusted house forecast,
         the house composition -- would publish it for the rest of the slot.
         """
-        cached = getattr(self, "_cached_appliance_forecast_pipeline", None)
+        cached = self._cached_appliance_forecast_pipeline
         if cached is None:
             return False
         if dt_util.as_utc(cached.started_at) > dt_util.as_utc(started_at):
             return True
         cached_generated_at = dt_util.parse_datetime(
-            getattr(self, "_cached_battery_forecast_house_generated_at", None) or ""
+            self._cached_battery_forecast_house_generated_at or ""
         )
         generated_at = dt_util.parse_datetime(house_forecast.get("generatedAt") or "")
         return (
@@ -6157,7 +6143,7 @@ class HelmanCoordinator:
         self._stop_tick()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
-        training_batch = getattr(self, "_training_batch", None)
+        training_batch = self._training_batch
         if training_batch is not None:
             training_batch.cancel()
             self._training_batch = None
@@ -6165,15 +6151,15 @@ class HelmanCoordinator:
         # reload can easily land mid-walk. Cancelling here keeps the reloaded
         # coordinator's walk the only one holding the cursor; the work already
         # imported stands, and the persisted cursor is where the new one starts.
-        backfill_task = getattr(self, "_grid_export_price_backfill_task", None)
+        backfill_task = self._grid_export_price_backfill_task
         if backfill_task is not None:
             backfill_task.cancel()
             self._grid_export_price_backfill_task = None
-        solar_backfill_task = getattr(self, "_solar_forecast_backfill_task", None)
+        solar_backfill_task = self._solar_forecast_backfill_task
         if solar_backfill_task is not None:
             solar_backfill_task.cancel()
             self._solar_forecast_backfill_task = None
-        battery_backfill_task = getattr(self, "_battery_forecast_backfill_task", None)
+        battery_backfill_task = self._battery_forecast_backfill_task
         if battery_backfill_task is not None:
             battery_backfill_task.cancel()
             self._battery_forecast_backfill_task = None
