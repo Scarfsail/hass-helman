@@ -614,25 +614,6 @@ export function getWinningExplanationCell(
     return null;
 }
 
-/**
- * One condition node of a cell by key, across its groups.
- *
- * Nodes are flat: the backend emits one per configured condition and nothing
- * below it, so the first group carrying the key owns the answer.
- */
-export function findExplanationNode(
-    cell: ExplanationCell,
-    key: string,
-): ExplanationConditionNode | null {
-    for (const group of cell.groups) {
-        const node = group.conditions.find((candidate) => candidate.key === key);
-        if (node !== undefined) {
-            return node;
-        }
-    }
-    return null;
-}
-
 /** The cell at one row of one column, or null when the grid has no such cell. */
 export function getExplanationCell(
     model: ScheduleExplanationModel,

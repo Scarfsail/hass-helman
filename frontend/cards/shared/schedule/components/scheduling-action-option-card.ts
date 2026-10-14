@@ -2,7 +2,6 @@ import { LitElement, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../../localize/localize";
-import type { ScheduleActionLabelVariant } from "../model/schedule-labels";
 import { getScheduleActionPresentation } from "../model/schedule-action-presentation";
 import type { ScheduleAction, ScheduleActionAuthorshipSummary } from "../schedule-types";
 import "./scheduling-action-chip";
@@ -17,7 +16,6 @@ export class SchedulingActionOptionCard extends LitElement {
     @property({ attribute: false }) public localize?: LocalizeFunction;
     @property({ type: Boolean }) public checked = false;
     @property({ type: String }) public radioName = "";
-    @property({ type: String }) public labelVariant: ScheduleActionLabelVariant = "default";
     @property({ attribute: false }) public authorship: ScheduleActionAuthorshipSummary | null = null;
 
     protected createRenderRoot(): HTMLElement | DocumentFragment {
@@ -29,7 +27,7 @@ export class SchedulingActionOptionCard extends LitElement {
             return nothing;
         }
 
-        const presentation = getScheduleActionPresentation(this.action, this.localize, this.labelVariant);
+        const presentation = getScheduleActionPresentation(this.action, this.localize);
         return html`
             <label class="compact-action-option">
                 <input
@@ -45,7 +43,6 @@ export class SchedulingActionOptionCard extends LitElement {
                     .action=${this.action}
                     .authorship=${this.checked ? this.authorship : null}
                     .localize=${this.localize}
-                    .labelVariant=${this.labelVariant}
                     .interactive=${true}
                     .selected=${this.checked}
                     size="compact"

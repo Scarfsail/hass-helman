@@ -1346,24 +1346,6 @@
       "stop_discharging": "Zastavit vybíjení",
       "stop_export": "Zastavit export"
     },
-    "action_table": {
-      "empty": "Bez zásahu",
-      "normal": "Normální",
-      "charge_to_target_soc": "Do",
-      "discharge_to_target_soc": "Do",
-      "stop_charging": "Nenabíjet",
-      "stop_discharging": "Nevybíjet",
-      "stop_export": "Neexportovat"
-    },
-    "action_kind": {
-      "empty": "Bez naplánovaného zásahu",
-      "normal": "Normální režim",
-      "charge_to_target_soc": "Nabíjet do cílového SoC",
-      "discharge_to_target_soc": "Vybíjet do cílového SoC",
-      "stop_charging": "Zakázat nabíjení",
-      "stop_discharging": "Zakázat vybíjení",
-      "stop_export": "Zakázat export do sítě"
-    },
     "appliance": {
       "action": {
         "generic": "Naplánováno"
@@ -1481,15 +1463,6 @@
       "surplus": "Přebytek",
       "measured": "naměřeno",
       "expected": "očekáváno"
-    },
-    "table": {
-      "caption": "Tabulka plánu",
-      "time_label": "Čas",
-      "action_label": "Akce",
-      "soc_label": "SoC",
-      "solar_label": "Solár",
-      "grid_label": "Síť",
-      "price_label": "Prodej"
     },
     "dialog": {
       "title": {

@@ -33,7 +33,6 @@ import {
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
     buildEntityScheduleLanePatches,
-    getEmptyEntityScheduleAction,
     isEntityInverterAction,
     isInverterScheduleTarget,
     isEntityScheduleActionEmpty,
@@ -626,7 +625,6 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .day=${day}
                         .lanes=${bandLanes}
                         .selectedLaneKey=${explaining ? null : this._selectedLaneKey}
-                        .laneLabels=${"track"}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
@@ -1704,9 +1702,8 @@ export class SchedulingEntityDayEditor extends LitElement {
             return base;
         }
 
-        const emptyAction = getEmptyEntityScheduleAction(lane.target);
         const next = this._clearSlots(base, clearSlotIds);
-        const rangeAction = isEntityScheduleActionEmpty(action) ? emptyAction : action;
+        const rangeAction = isEntityScheduleActionEmpty(action) ? null : action;
         for (const slot of selectEntityScheduleSlotsInRange({ day, startMs, endMs })) {
             if (slot.startMs < day.editableFromMs) {
                 continue;
@@ -1729,7 +1726,6 @@ export class SchedulingEntityDayEditor extends LitElement {
             return base;
         }
 
-        const emptyAction = getEmptyEntityScheduleAction(lane.target);
         const editableSlotIds = new Set(this._editableSlotIds(day));
         const next: EntityScheduleDraft = { ...base };
         for (const slotId of slotIds) {
@@ -1737,7 +1733,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             // clearing it would only make the block vanish from the view while
             // the schedule kept it.
             if (editableSlotIds.has(slotId)) {
-                next[slotId] = emptyAction;
+                next[slotId] = null;
             }
         }
 

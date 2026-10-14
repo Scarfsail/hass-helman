@@ -186,10 +186,6 @@ export function materializeSlotForecastMap(
     };
 }
 
-export function getSlotForecastProjectionKey(slots: readonly ScheduleDisplaySlot[]): string {
-    return slots.map((slot) => `${slot.id}:${slot.startMs}:${slot.endMs ?? ""}`).join("|");
-}
-
 function _buildBatteryTimeline(battery: BatteryCapacityForecastDTO): Map<number, number> {
     const timeline = new Map<number, number>();
 

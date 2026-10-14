@@ -1,10 +1,13 @@
 import type {
     ScheduleControllableActions,
-    ScheduleEditIntent,
-    ScheduleRangeEditIntent,
     ScheduleSlot,
     ScheduleSlotPatch,
 } from "../schedule-types";
+
+export type ScheduleEditIntent =
+    | { kind: "set_user"; action: ScheduleControllableActions[string] }
+    | { kind: "unset_user" };
+export type ScheduleRangeEditIntent = Record<string, ScheduleEditIntent>;
 import {
     areScheduleControllableActionsEqual,
     cloneScheduleControllableAction,
@@ -77,10 +80,6 @@ function _applyIntent(
     controllableId: string,
     intent: ScheduleEditIntent,
 ): void {
-    if (intent.kind === "keep") {
-        return;
-    }
-
     if (intent.kind === "unset_user") {
         delete next[controllableId];
         return;
@@ -96,6 +95,6 @@ function _applyIntent(
  */
 function _requiresForcedPatch(slot: ScheduleSlot, result: ScheduleRangeEditIntent): boolean {
     return Object.entries(result).some(([controllableId, intent]) =>
-        intent.kind !== "keep" && slot.assignments[controllableId]?.setBy !== "user"
+        slot.assignments[controllableId]?.setBy !== "user"
     );
 }

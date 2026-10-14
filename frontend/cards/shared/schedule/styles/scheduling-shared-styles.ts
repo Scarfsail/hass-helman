@@ -31,79 +31,6 @@ export const schedulingSharedStyles = css`
         gap: 4px 8px;
     }
 
-    .mixed-summary {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .decision-inline {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 6px 12px;
-    }
-
-    .decision-copy {
-        flex: 1 1 180px;
-        min-width: 0;
-    }
-
-    .mixed-summary-header {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 8px 12px;
-    }
-
-    .mixed-summary-copy {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        min-width: 0;
-    }
-
-    .mixed-summary-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-    .mixed-editor-divider {
-        border-top: 1px solid var(--divider-color);
-        margin-top: 2px;
-        padding-top: 10px;
-    }
-
-    .decision-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-    }
-
-    .decision-button {
-        display: inline-flex;
-        align-items: center;
-        min-height: 28px;
-        padding: 4px 10px;
-        border: 1px solid var(--divider-color);
-        border-radius: 999px;
-        background: var(--card-background-color);
-        color: inherit;
-        cursor: pointer;
-        font: inherit;
-        font-size: 0.78rem;
-        line-height: 1.2;
-        transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
-    }
-
-    .decision-button.selected {
-        border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
-        background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
-        color: var(--primary-color);
-    }
-
     .panel.panel-highlight-success,
     .appliance-panel.panel-highlight-success {
         border-color: color-mix(in srgb, var(--success-color, #2e7d32) 48%, var(--divider-color));
@@ -122,7 +49,6 @@ export const schedulingSharedStyles = css`
             0 0 0 1px color-mix(in srgb, var(--error-color, #c62828) 6%, transparent);
     }
 
-    .panel-subtitle,
     .muted,
     .field-help {
         color: var(--secondary-text-color);
@@ -130,7 +56,6 @@ export const schedulingSharedStyles = css`
         line-height: 1.35;
     }
 
-    .section-heading,
     .field-label {
         color: var(--secondary-text-color);
         font-size: 0.72rem;
@@ -292,17 +217,8 @@ export const schedulingSharedStyles = css`
         color: var(--secondary-text-color);
     }
 
-    .button-reset {
-        padding: 0;
-        border: none;
-        background: none;
-        color: inherit;
-        font: inherit;
-    }
-
     .icon-button,
     .secondary-button,
-    .primary-button,
     .link-button {
         border-radius: 10px;
         border: 1px solid var(--divider-color);
@@ -318,18 +234,12 @@ export const schedulingSharedStyles = css`
     }
 
     .secondary-button,
-    .primary-button {
+    .secondary-button {
         padding: 7px 12px;
-    }
-
-    .primary-button {
-        border-color: color-mix(in srgb, var(--primary-color) 40%, var(--divider-color));
-        background: color-mix(in srgb, var(--primary-color) 14%, var(--card-background-color));
     }
 
     .icon-button:disabled,
     .secondary-button:disabled,
-    .primary-button:disabled,
     .link-button:disabled {
         opacity: 0.55;
         cursor: default;
@@ -337,9 +247,7 @@ export const schedulingSharedStyles = css`
 
     .icon-button:focus-visible,
     .secondary-button:focus-visible,
-    .primary-button:focus-visible,
     .link-button:focus-visible,
-    .button-reset:focus-visible,
     .select-input:focus-visible,
     .number-input:focus-visible {
         outline: 2px solid var(--primary-color);
@@ -362,37 +270,6 @@ export const schedulingSharedStyles = css`
         background: var(--card-background-color);
         color: inherit;
         font: inherit;
-    }
-
-    .radio-group {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin: 0;
-        padding: 0;
-        border: none;
-    }
-
-    .radio-option {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .inline-error {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding: 12px;
-        border: 1px solid color-mix(in srgb, var(--error-color) 35%, var(--divider-color));
-        border-radius: 12px;
-        background: color-mix(in srgb, var(--error-color) 10%, var(--card-background-color));
-    }
-
-    .inline-error-title {
-        color: var(--error-color);
-        font-size: 0.9rem;
-        font-weight: 700;
     }
 
     .sr-only {

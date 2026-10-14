@@ -1,6 +1,5 @@
-import type { SlotForecastMap, SlotForecastPoint } from "./slot-forecast-model";
+import type { SlotForecastMap } from "./slot-forecast-model";
 import { getScheduleGridScaleMagnitude } from "./grid-surplus-display";
-import { collectScheduleHourForecasts } from "./schedule-hour-bucket-builder";
 import type {
     ScheduleTableDayAggregateModel,
     ScheduleTableForecastMeta,
@@ -9,41 +8,6 @@ import type {
 import type { ScheduleDisplaySlot } from "../schedule-types";
 
 const ZERO_PRICE_RANGE_THRESHOLD = 0.05;
-
-export function aggregateScheduleHourForecast({
-    slots,
-    slotForecastMap,
-}: {
-    slots: readonly ScheduleDisplaySlot[];
-    slotForecastMap: SlotForecastMap;
-}): SlotForecastPoint | null {
-    const aggregate = _aggregateScheduleForecast({ slots, slotForecastMap });
-    if (aggregate === null) {
-        return null;
-    }
-
-    const forecastPoint: SlotForecastPoint = {
-        socPct: aggregate.socPct,
-        solarWh: aggregate.solarWh,
-        gridNetKwh: aggregate.gridImportKwh !== null && aggregate.gridExportKwh !== null
-            ? aggregate.gridExportKwh - aggregate.gridImportKwh
-            : null,
-        gridImportKwh: aggregate.gridImportKwh,
-        gridExportKwh: aggregate.gridExportKwh,
-        availableSurplusKwh: aggregate.availableSurplusKwh,
-        price: aggregate.price,
-    };
-
-    return forecastPoint.socPct === null
-        && forecastPoint.solarWh === null
-        && forecastPoint.gridNetKwh === null
-        && forecastPoint.gridImportKwh === null
-        && forecastPoint.gridExportKwh === null
-        && forecastPoint.availableSurplusKwh === null
-        && forecastPoint.price === null
-        ? null
-        : forecastPoint;
-}
 
 export function aggregateScheduleDayForecast({
     slots,
@@ -111,54 +75,14 @@ function _aggregateScheduleDayBatteryRange({
 export function buildScheduleTableForecastMeta({
     slotForecastMap,
     sections,
-    slots,
-    timeZone,
 }: {
     slotForecastMap: SlotForecastMap;
     sections: readonly ScheduleTableSectionModel[];
-    slots: readonly ScheduleDisplaySlot[];
-    timeZone: string;
 }): ScheduleTableForecastMeta {
-    const rowScale = {
-        solarMaxWh: 0,
-        gridMaxAbsKwh: 0,
-        priceMaxAbs: 0,
-    };
     const dayAggregateScale = {
         solarMaxWh: 0,
         gridMaxKwh: 0,
         priceMaxAbs: 0,
-    };
-
-    const scanPoint = (point: SlotForecastPoint | null | undefined): void => {
-        if (!point) {
-            return;
-        }
-
-        if (point.solarWh !== null) {
-            rowScale.solarMaxWh = Math.max(rowScale.solarMaxWh, point.solarWh);
-        }
-
-        if (
-            point.gridNetKwh !== null
-            || point.gridImportKwh !== null
-            || point.gridExportKwh !== null
-            || point.availableSurplusKwh !== null
-        ) {
-            rowScale.gridMaxAbsKwh = Math.max(
-                rowScale.gridMaxAbsKwh,
-                getScheduleGridScaleMagnitude({
-                    gridNetKwh: point.gridNetKwh,
-                    gridImportKwh: point.gridImportKwh,
-                    gridExportKwh: point.gridExportKwh,
-                    availableSurplusKwh: point.availableSurplusKwh,
-                }),
-            );
-        }
-
-        if (point.price !== null) {
-            rowScale.priceMaxAbs = Math.max(rowScale.priceMaxAbs, Math.abs(point.price));
-        }
     };
 
     const scanDayAggregate = (aggregate: ScheduleTableDayAggregateModel | null | undefined): void => {
@@ -195,14 +119,6 @@ export function buildScheduleTableForecastMeta({
         );
     };
 
-    for (const slot of slots) {
-        scanPoint(slotForecastMap.points.get(slot.id));
-    }
-
-    for (const point of collectScheduleHourForecasts({ slots, slotForecastMap, timeZone })) {
-        scanPoint(point);
-    }
-
     for (const section of sections) {
         scanDayAggregate(section.dayAggregate);
     }
@@ -213,7 +129,6 @@ export function buildScheduleTableForecastMeta({
         gridAvailable: slotForecastMap.gridAvailable,
         priceAvailable: slotForecastMap.priceAvailable,
         priceDisplayUnit: slotForecastMap.priceDisplayUnit,
-        rowScale,
         dayAggregateScale,
     };
 }

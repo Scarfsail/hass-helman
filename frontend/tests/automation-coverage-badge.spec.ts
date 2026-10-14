@@ -43,7 +43,6 @@ const CONFIG = {
 interface MountOptions {
     config?: unknown;
     /** Labels in their own column, as the scheduling card draws them. */
-    columnLabels?: boolean;
     /** What `helman/get_optimizer_schema` answers; the default names no kinds. */
     schema?: unknown;
     /** Refuse `helman/get_config` the way the backend refuses a non-admin. */
@@ -55,7 +54,6 @@ interface MountOptions {
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     const {
         config = CONFIG,
-        columnLabels = false,
         schema = { version: 2, kinds: [] },
         unauthorized = false,
         stallReads = false,
@@ -63,7 +61,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
 
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, hourMs, config, columnLabels, schema, unauthorized, stallReads }) => {
+    await page.evaluate(({ dayStartMs, hourMs, config, schema, unauthorized, stallReads }) => {
         const calls: { type: string; config?: unknown }[] = [];
         const globals = window as unknown as Record<string, unknown>;
         globals.__calls = calls;
@@ -134,7 +132,6 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             lane("boiler", "Boiler", "boiler"),
             lane("pump", "Pump", "pump"),
         ];
-        band.laneLabels = columnLabels ? "column" : "track";
         band.showForecastRows = false;
         band.showAxis = false;
         band.nowMs = dayStartMs;
@@ -197,7 +194,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             band.addEventListener(type, () => events.push(type));
         }
         document.body.appendChild(band);
-    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config, columnLabels, schema, unauthorized, stallReads });
+    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config, schema, unauthorized, stallReads });
 
     if (unauthorized || stallReads) {
         // No read will land, so there is no badge to wait for.
@@ -303,7 +300,7 @@ test.describe("automation coverage on the schedule band", () => {
     });
 
     test("pressing it does not also select the lane underneath", async ({ page }) => {
-        await mountBand(page, { columnLabels: true });
+        await mountBand(page);
         await badge(page, "inverter").click();
 
         expect(await readEvents(page)).toEqual([]);
