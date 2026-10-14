@@ -25,9 +25,6 @@ export function configDoc(): ConfigDocument;
 export function configDoc(overrides: Partial<ConfigDocument> = {}): ConfigDocument {
     return {
         config_version: 29,
-        energy_nodes: {},
-        devices: { consumers: [] },
-        automation: { enabled: false, appliance_optimizers: [], system_optimizers: [] },
         ...overrides,
     };
 }

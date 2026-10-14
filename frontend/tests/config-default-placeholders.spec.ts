@@ -212,4 +212,7 @@ test("saving writes no placeholder into the document", async ({ page }) => {
     };
     expect(saved.training?.training_time).toBeUndefined();
     expect(saved.training?.solar_bias).toEqual({ clamp_max: 2.5 });
+    expect(saved).not.toHaveProperty("energy_nodes");
+    expect(saved).not.toHaveProperty("devices");
+    expect(saved).not.toHaveProperty("automation");
 });
