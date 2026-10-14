@@ -117,8 +117,6 @@ export interface GetHistoryRequest {
 
 /** Response type for the "helman/get_history" WebSocket command. */
 export interface HistoryPayload {
-    buckets: number;
-    bucket_duration: number;
     entity_history: Record<string, number[]>;
 }
 
@@ -410,18 +408,12 @@ export interface GridForecastDTO {
     series: GridForecastSlotDTO[];
 }
 
-export interface GridForecastBaselineDTO {
-    importedFromGridKwh: number;
-    exportedToGridKwh: number;
-}
-
 export interface GridForecastSlotDTO {
     timestamp: string;
     durationHours: number;
     importedFromGridKwh: number;
     exportedToGridKwh: number;
     availableSurplusKwh?: number;
-    baseline?: GridForecastBaselineDTO;
 }
 
 export interface ForecastBandValueDTO {

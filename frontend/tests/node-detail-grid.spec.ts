@@ -208,7 +208,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     node?: string;
                     section?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/solar_bias/day_aggregates": async (msg: {
                     type: string;

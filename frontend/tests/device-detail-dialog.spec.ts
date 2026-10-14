@@ -153,7 +153,7 @@ async function mountCard(
                         return tree;
                     },
                     "helman/get_history": async (msg: any) => {
-                        return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                        return { entity_history: {} };
                     },
                     "helman/get_device_stats": async (msg: any) => {
                         (window as any).__deviceStatsRequests.push(msg.device_key);

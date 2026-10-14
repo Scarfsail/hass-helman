@@ -6,12 +6,10 @@ from typing import Any
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
 )
 
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
-    "baselineSeries",
 }
 
 
@@ -24,10 +22,8 @@ def build_grid_flow_forecast_response(
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"series", "resolution", "horizonHours"}
+        and key not in {"series"}
     }
-    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
-    response["horizonHours"] = forecast_days * 24
     response["series"] = []
 
     if snapshot.get("status") not in {"available", "partial"}:
@@ -42,36 +38,9 @@ def build_grid_flow_forecast_response(
     )
     response["series"] = [
         _build_public_entry(entry)
-        for entry in _merge_baseline_series(snapshot)[:target_count]
+        for entry in _read_entries(snapshot.get("series"))[:target_count]
     ]
     return response
-
-
-def _merge_baseline_series(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    series = _read_entries(snapshot.get("series"))
-    baseline_series = _read_entries(snapshot.get("baselineSeries"))
-    if not baseline_series:
-        return series
-    if len(series) != len(baseline_series):
-        raise ValueError(
-            "Grid flow baseline series must match effective series length"
-        )
-
-    merged: list[dict[str, Any]] = []
-    for entry, baseline_entry in zip(series, baseline_series, strict=True):
-        if entry.get("timestamp") != baseline_entry.get("timestamp"):
-            raise ValueError(
-                "Grid flow baseline series must align with effective series timestamps"
-            )
-        item = deepcopy(entry)
-        item["baselineImportedFromGridKwh"] = deepcopy(
-            baseline_entry.get("importedFromGridKwh")
-        )
-        item["baselineExportedToGridKwh"] = deepcopy(
-            baseline_entry.get("exportedToGridKwh")
-        )
-        merged.append(item)
-    return merged
 
 
 def _build_public_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -85,18 +54,6 @@ def _build_public_entry(entry: dict[str, Any]) -> dict[str, Any]:
         public_entry["availableSurplusKwh"] = deepcopy(
             entry.get("availableSurplusKwh")
         )
-    if (
-        "baselineImportedFromGridKwh" in entry
-        or "baselineExportedToGridKwh" in entry
-    ):
-        public_entry["baseline"] = {
-            "importedFromGridKwh": deepcopy(
-                entry.get("baselineImportedFromGridKwh")
-            ),
-            "exportedToGridKwh": deepcopy(
-                entry.get("baselineExportedToGridKwh")
-            ),
-        }
     return public_entry
 
 

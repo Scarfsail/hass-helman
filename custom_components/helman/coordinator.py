@@ -5836,12 +5836,7 @@ class HelmanCoordinator:
 
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
-        visualization = self._visualization_config()
-        buckets: int = visualization["history_buckets"]
-        bucket_duration: int = visualization["history_bucket_duration"]
         return {
-            "buckets": buckets,
-            "bucket_duration": bucket_duration,
             "entity_history": {eid: list(dq) for eid, dq in self._power_history.items()},
         }
 

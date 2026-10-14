@@ -19,8 +19,6 @@ BATTERY_PUBLIC_SERIES_FIELDS = (
     "hitMaxSoc",
     "limitedByChargePower",
     "limitedByDischargePower",
-    "baselineRemainingEnergyKwh",
-    "baselineSocPct",
 )
 
 GRID_FLOW_EFFECTIVE_SERIES_FIELDS = (
@@ -30,14 +28,6 @@ GRID_FLOW_EFFECTIVE_SERIES_FIELDS = (
     "exportedToGridKwh",
     "availableSurplusKwh",
 )
-
-GRID_FLOW_BASELINE_SERIES_FIELDS = (
-    "timestamp",
-    "durationHours",
-    "importedFromGridKwh",
-    "exportedToGridKwh",
-)
-
 
 def project_series_fields(
     raw_series: Any,

@@ -911,8 +911,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["scheduleAdjusted"])
         self.assertIn("baselineRemainingEnergyKwh", payload["series"][0])
         self.assertIn("baselineRemainingEnergyKwh", payload["series"][1])
-        self.assertIn("baselineSocPct", response["series"][0])
-        self.assertIn("baselineRemainingEnergyKwh", response["series"][0])
+        self.assertNotIn("baselineSocPct", response["series"][0])
+        self.assertNotIn("baselineRemainingEnergyKwh", response["series"][0])
 
     async def test_build_keeps_adjusted_series_for_future_charge_target_action(
         self,

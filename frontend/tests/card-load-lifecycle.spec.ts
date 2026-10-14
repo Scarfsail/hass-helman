@@ -96,8 +96,6 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
             [...liveIntervals.entries()].filter(([, delay]) => delay === bucket * 1000).map(([id]) => id);
 
         const historyPayload = {
-            buckets: 3,
-            bucket_duration: bucket,
             entity_history: {
                 "sensor.solar": [100, 100, 100],
                 "sensor.grid_in": [0, 0, 0],

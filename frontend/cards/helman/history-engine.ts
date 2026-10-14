@@ -28,7 +28,7 @@ export class HistoryEngine {
 
     /** Fill powerHistory and sourcePowerHistory from a backend history payload. */
     applyHistory(history: HistoryPayload, items: TreeItem[], sourceNodes: TreeItem[]): void {
-        const { entity_history, buckets } = history;
+        const { entity_history } = history;
         for (const item of items) {
             if (!item.powerSensorId) continue;
             const rawHistory = entity_history[item.powerSensorId];
@@ -37,13 +37,13 @@ export class HistoryEngine {
                 if (item.valueType === 'positive') h = h.map(v => Math.max(0, v));
                 else if (item.valueType === 'negative') h = h.map(v => Math.abs(Math.min(0, v)));
                 item.powerHistory = h;
-                item.historyBuckets = buckets;
+                item.historyBuckets = this._maxBuckets;
             }
             if (item.isSource) continue;
             // One source bucket per *actual* power bucket, never per configured
             // capacity: the backend returns the live deque contents, which are
-            // shorter than `buckets` until the buffers have filled (startup, or a
-            // subscription rebuild). Sized by `buckets` the two series started out
+            // shorter than the configured capacity until the buffers have filled (startup, or a
+            // subscription rebuild). Sized by the configured capacity the two series started out
             // different lengths, and since `_advanceTree` appends to both, that
             // offset survived every push and trim — attribution ended up describing
             // a different bucket than the one it was painted on (#227).
