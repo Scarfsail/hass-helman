@@ -86,8 +86,6 @@ def _make_snapshot() -> dict:
         "generatedAt": "2026-03-20T21:20:30+01:00",
         "startedAt": "2026-03-20T21:20:00+01:00",
         "unit": "kWh",
-        "resolution": "quarter_hour",
-        "horizonHours": 168,
         "sourceGranularityMinutes": 15,
         "partialReason": "solar_forecast_ended",
         "coverageUntil": "2026-03-20T23:00:00+01:00",
@@ -254,8 +252,6 @@ class BatteryForecastResponseTests(unittest.TestCase):
             forecast_days=1,
         )
 
-        self.assertEqual(response["resolution"], "quarter_hour")
-        self.assertEqual(response["horizonHours"], 24)
         self.assertEqual(len(response["series"]), 7)
         self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T21:20:00+01:00")
         self.assertEqual(len(response["actualHistory"]), 4)
@@ -280,7 +276,7 @@ class BatteryForecastResponseTests(unittest.TestCase):
             response["actualHistory"][-1]["timestamp"], "2026-03-20T20:45:00+01:00"
         )
 
-    def test_response_preserves_schedule_metadata_and_baseline_fields(self) -> None:
+    def test_response_preserves_schedule_metadata_but_omits_baseline_fields(self) -> None:
         response = battery_forecast_response.build_battery_forecast_response(
             _make_adjusted_snapshot(),
             forecast_days=1,
@@ -291,10 +287,8 @@ class BatteryForecastResponseTests(unittest.TestCase):
             response["scheduleAdjustmentCoverageUntil"],
             "2026-03-20T23:00:00+01:00",
         )
-        self.assertEqual(response["series"][0]["baselineRemainingEnergyKwh"], 4.9)
-        self.assertEqual(response["series"][0]["baselineSocPct"], 49.0)
-        self.assertEqual(response["series"][1]["baselineRemainingEnergyKwh"], 5.0)
-        self.assertEqual(response["series"][1]["baselineSocPct"], 50.0)
+        self.assertNotIn("baselineRemainingEnergyKwh", response["series"][0])
+        self.assertNotIn("baselineSocPct", response["series"][0])
 
     def test_response_does_not_expose_internal_baseline_series(self) -> None:
         snapshot = _make_adjusted_snapshot()

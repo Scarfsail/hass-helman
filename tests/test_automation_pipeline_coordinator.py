@@ -58,7 +58,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         for status in ("unavailable", "not_configured", "insufficient_history", None):
-            for anchor_field in ("currentSlot", "currentHour", None):
+            for anchor_field in ("currentSlot", None):
                 with self.subTest(status=status, anchor_field=anchor_field):
                     house_forecast = {"status": "available"}
                     if anchor_field is not None:

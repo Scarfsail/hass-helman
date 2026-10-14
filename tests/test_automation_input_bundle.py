@@ -364,8 +364,6 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         snapshot = _make_house_forecast()
         solar_snapshot = {
             "status": "available",
-            "resolution": "15m",
-            "horizonHours": 336,
             "generatedAt": REFERENCE_TIME.isoformat(),
             "points": [],
             "rawPoints": [],

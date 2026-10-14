@@ -38,6 +38,7 @@ from custom_components.helman.appliances.generic_appliance import (
 from custom_components.helman.automation.config import read_automation_config
 from custom_components.helman.automation.migration import migrate_config_document
 from custom_components.helman.config_validation import validate_config_document
+from custom_components.helman.const import CONFIG_DOCUMENT_VERSION
 from custom_components.helman.consumption_forecast_builder import (
     ConsumptionForecastBuilder,
 )
@@ -88,6 +89,28 @@ def _read_document(path: Path) -> dict:
     return data if isinstance(data, dict) else payload
 
 
+def _assert_migrated_validation(
+    testcase: unittest.TestCase, original: dict, migrated: dict
+) -> None:
+    """Current documents keep their content and errors; older ones become valid."""
+    version = original.get("config_version")
+    already_current = (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version >= CONFIG_DOCUMENT_VERSION
+    )
+    expected = validate_config_document(original).errors if already_current else []
+    actual = validate_config_document(migrated).errors
+    testcase.assertEqual(
+        actual,
+        expected,
+        "migration changed validation errors:\n"
+        + "\n".join(f"  {issue.path}: {issue.message}" for issue in actual),
+    )
+    if version == CONFIG_DOCUMENT_VERSION:
+        testcase.assertEqual(migrated, original)
+
+
 class StoredConfigMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         path = _find_stored_config()
@@ -115,17 +138,11 @@ class StoredConfigMigrationTests(unittest.TestCase):
                 )
         self.assertIsInstance(migrated_ids, list)
 
-    def test_the_migrated_config_passes_full_validation(self) -> None:
+    def test_migration_preserves_current_draft_errors_or_validates_legacy_config(self) -> None:
+        """Existing draft errors stay the same; older configs validate after migration."""
         migrated, _ids = migrate_config_document(self.document, self.preferences)
 
-        report = validate_config_document(migrated)
-
-        self.assertEqual(
-            report.errors,
-            [],
-            "migrated stored config does not validate:\n"
-            + "\n".join(f"  {issue.path}: {issue.message}" for issue in report.errors),
-        )
+        _assert_migrated_validation(self, self.document, migrated)
 
     def test_migrating_an_already_migrated_config_changes_nothing(self) -> None:
         once, _ids = migrate_config_document(self.document, self.preferences)
@@ -136,6 +153,59 @@ class StoredConfigMigrationTests(unittest.TestCase):
         # dropped `config_version` would rewrite the document under the user.
         self.assertEqual(twice, once)
         self.assertEqual(migrated_ids, [])
+
+
+class MigrationValidationInvariantTests(unittest.TestCase):
+    """Exercise the stored-config validation rule without a developer store."""
+
+    def test_current_incomplete_draft_keeps_its_errors(self) -> None:
+        original = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "energy_nodes": {"grid": {"max_allowed_export_power": -1}},
+        }
+        self.assertTrue(validate_config_document(original).errors)
+
+        migrated, _ids = migrate_config_document(original)
+
+        _assert_migrated_validation(self, original, migrated)
+
+    def test_current_document_with_new_error_is_rejected(self) -> None:
+        original = {"config_version": CONFIG_DOCUMENT_VERSION}
+        migrated, _ids = migrate_config_document(original)
+        migrated["energy_nodes"] = {"grid": {"max_allowed_export_power": -1}}
+
+        with self.assertRaises(AssertionError):
+            _assert_migrated_validation(self, original, migrated)
+
+    def test_current_document_with_valid_content_dropped_is_rejected(self) -> None:
+        original = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "visualization": {"history_buckets": 24},
+            "energy_nodes": {"grid": {"max_allowed_export_power": -1}},
+        }
+        migrated, _ids = migrate_config_document(original)
+        migrated.pop("visualization")
+
+        self.assertTrue(validate_config_document(original).errors)
+        self.assertEqual(
+            validate_config_document(migrated).errors,
+            validate_config_document(original).errors,
+        )
+        with self.assertRaises(AssertionError):
+            _assert_migrated_validation(self, original, migrated)
+
+    def test_legacy_document_must_validate_after_migration(self) -> None:
+        original = {"config_version": CONFIG_DOCUMENT_VERSION - 1}
+        migrated, _ids = migrate_config_document(original)
+        _assert_migrated_validation(self, original, migrated)
+
+        invalid = {
+            **original,
+            "energy_nodes": {"grid": {"max_allowed_export_power": -1}},
+        }
+        migrated_invalid, _ids = migrate_config_document(invalid)
+        with self.assertRaises(AssertionError):
+            _assert_migrated_validation(self, invalid, migrated_invalid)
 
 
 # --- the live shape, as a fixture ------------------------------------------

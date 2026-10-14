@@ -11,10 +11,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONFIG_DOCUMENT_VERSION,
     DATA_CHANGED_KIND_CONFIG,
-    DEFAULT_FORECAST_DAYS,
     DOMAIN,
     EVENT_DATA_CHANGED,
-    MAX_FORECAST_DAYS,
 )
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
@@ -28,9 +26,7 @@ from .solar_bias_correction.websocket import (
     _is_dashed_date,
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
-    ws_get_solar_bias_profile,
     ws_get_solar_bias_status,
-    ws_train_solar_bias_now,
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .training.websocket import ws_get_training_status, ws_train_now
@@ -52,9 +48,6 @@ SET_SCHEDULE_REQUEST_SCHEMA = vol.Schema(
 )
 GET_FORECAST_REQUEST_FIELDS = {
     vol.Required("type"): "helman/get_forecast",
-    vol.Optional("forecast_days", default=DEFAULT_FORECAST_DAYS): (
-        lambda value: _validate_forecast_days(value)
-    ),
 }
 
 
@@ -101,16 +94,6 @@ def _validate_optional_config_document(value: object) -> dict | None:
     raise vol.Invalid("saved_config must be a config document or null")
 
 
-def _validate_forecast_days(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise vol.Invalid("forecast_days must be an integer")
-    if value < 1 or value > MAX_FORECAST_DAYS:
-        raise vol.Invalid(
-            f"forecast_days must be between 1 and {MAX_FORECAST_DAYS}"
-        )
-    return value
-
-
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
     async_register_command(hass, ws_suggest_device_entities)
@@ -133,8 +116,6 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_report)
     async_register_command(hass, ws_get_node_detail)
     async_register_command(hass, ws_get_solar_bias_status)
-    async_register_command(hass, ws_train_solar_bias_now)
-    async_register_command(hass, ws_get_solar_bias_profile)
     async_register_command(hass, ws_get_solar_bias_inspector)
     async_register_command(hass, ws_get_solar_bias_day_aggregates)
     async_register_command(hass, ws_get_training_status)
@@ -831,7 +812,7 @@ async def ws_get_forecast(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
 
-    forecast = await coordinator.get_forecast(forecast_days=msg["forecast_days"])
+    forecast = await coordinator.get_forecast()
     connection.send_result(msg["id"], forecast)
 
 

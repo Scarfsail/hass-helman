@@ -8,12 +8,13 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
 )
 
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
     "forecastDaysAvailable",
+    "resolution",
+    "horizonHours",
 }
 
 
@@ -26,10 +27,8 @@ def build_house_forecast_response(
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"currentHour", "currentSlot", "series", "actualHistory", "resolution", "horizonHours"}
+        and key not in {"currentSlot", "series", "actualHistory"}
     }
-    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
-    response["horizonHours"] = forecast_days * 24
     response["actualHistory"] = []
     response["series"] = []
 

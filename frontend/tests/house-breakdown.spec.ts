@@ -583,7 +583,7 @@ test.describe("solar inspector house composition", () => {
                     "helman/get_history": async (msg: {
                         type: string;
                     }) => {
-                        return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                        return { entity_history: {} };
                     }
                 }).callWS,
             };

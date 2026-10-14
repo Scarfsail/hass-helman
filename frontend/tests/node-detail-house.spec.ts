@@ -259,8 +259,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             solar: { ...forecastDefaults.solar, status: "unavailable", points: [], actualHistory: [] },
             house_consumption: {
                 ...forecastDefaults.house_consumption,
-                status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh", resolution: "quarter_hour",
-                horizonHours: 48, trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
+                status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh",
+                trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
                 actualHistory: [],
                 currentSlot: houseSlot(now, 0.3),
                 series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, 0.25)),
@@ -294,7 +294,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     section?: string;
                     report?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_schedule": async (msg: {
                     type: string;

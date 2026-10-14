@@ -87,10 +87,10 @@ export function cardTree(gridValueType: ValueType = "default"): TreePayload {
 
 export function forecastPayload(overrides: Partial<ForecastPayload> = {}): ForecastPayload {
     return {
-        solar: { status: "unavailable", unit: "Wh", resolution: "quarter_hour", horizonHours: 0, actualHistory: [], points: [] },
-        grid: { status: "unavailable", generatedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 0, startedAt: null, partialReason: null, coverageUntil: null, currentImportPrice: null, importPriceUnit: null, importPricePoints: [], currentExportPrice: null, exportPriceUnit: null, exportPricePoints: [], series: [] },
-        house_consumption: { status: "unavailable", generatedAt: null, unit: "Wh", resolution: "quarter_hour", horizonHours: 0, trainingWindowDays: 0, historyDaysAvailable: 0, requiredHistoryDays: 0, model: null, actualHistory: [], series: [] },
-        battery_capacity: { status: "unavailable", generatedAt: null, startedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 0, model: null, nominalCapacityKwh: null, currentRemainingEnergyKwh: null, currentSoc: null, minSoc: null, maxSoc: null, chargeEfficiency: null, dischargeEfficiency: null, maxChargePowerW: null, maxDischargePowerW: null, partialReason: null, coverageUntil: null, actualHistory: [], series: [] },
+        solar: { status: "unavailable", unit: "Wh", actualHistory: [], points: [] },
+        grid: { status: "unavailable", generatedAt: null, unit: "kWh", startedAt: null, partialReason: null, coverageUntil: null, currentImportPrice: null, importPriceUnit: null, importPricePoints: [], currentExportPrice: null, exportPriceUnit: null, exportPricePoints: [], series: [] },
+        house_consumption: { status: "unavailable", generatedAt: null, unit: "Wh", trainingWindowDays: 0, historyDaysAvailable: 0, requiredHistoryDays: 0, model: null, actualHistory: [], series: [] },
+        battery_capacity: { status: "unavailable", generatedAt: null, startedAt: null, unit: "kWh", model: null, nominalCapacityKwh: null, currentRemainingEnergyKwh: null, currentSoc: null, minSoc: null, maxSoc: null, chargeEfficiency: null, dischargeEfficiency: null, maxChargePowerW: null, maxDischargePowerW: null, partialReason: null, coverageUntil: null, actualHistory: [], series: [] },
         ...overrides,
     };
 }

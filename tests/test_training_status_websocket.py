@@ -732,34 +732,6 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((house_job.calls, appliance_job.calls), (1, 0))
         service.async_train.assert_not_awaited()
 
-    async def test_legacy_solar_run_in_flight_rejects_every_unified_run(self) -> None:
-        for job in (None, "solar_bias", "house_consumption", "appliance_energy"):
-            with self.subTest(job=job):
-                service = _make_bias_service()
-                service._training_in_progress = True
-                house_job = _StubJob("profile_trained")
-                appliance_job = _StubJob("estimates_trained")
-                coordinator = _make_coordinator(
-                    bias_service=service,
-                    house_job=house_job,
-                    appliance_job=appliance_job,
-                )
-
-                connection = await _train_now(coordinator, job=job)
-
-                self.assertEqual(connection.results, [])
-                self.assertEqual(
-                    connection.errors,
-                    [
-                        (
-                            1,
-                            "training_in_progress",
-                            "Training is already running: solar_bias",
-                        )
-                    ],
-                )
-                self.assertEqual((house_job.calls, appliance_job.calls), (0, 0))
-
     async def test_reload_mid_run_refreshes_and_adopts_persisted_artifacts(self) -> None:
         old_store = _make_store()
         new_store = _make_store()

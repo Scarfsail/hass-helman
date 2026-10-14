@@ -305,7 +305,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     section?: string;
                     device_id?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_schedule": async (msg: {
                     type: string;

@@ -180,7 +180,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             ...forecastDefaults,
             battery_capacity: {
                 ...forecastDefaults.battery_capacity,
-                status: "available", generatedAt: null, startedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 48,
+                status: "available", generatedAt: null, startedAt: null, unit: "kWh",
                 model: null, nominalCapacityKwh: 17.3, currentRemainingEnergyKwh: 11.6, currentSoc: 67, minSoc: 10, maxSoc: 100,
                 chargeEfficiency: 0.95, dischargeEfficiency: 0.95, maxChargePowerW: 5000, maxDischargePowerW: 6000,
                 partialReason: null, coverageUntil: null, actualHistory: [],
@@ -233,7 +233,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     node?: string;
                     section?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_schedule": async (msg: {
                     type: string;

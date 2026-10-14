@@ -117,8 +117,6 @@ export interface GetHistoryRequest {
 
 /** Response type for the "helman/get_history" WebSocket command. */
 export interface HistoryPayload {
-    buckets: number;
-    bucket_duration: number;
     entity_history: Record<string, number[]>;
 }
 
@@ -334,7 +332,6 @@ export type ForecastStatus =
     | "available";
 
 /** Every forecast payload is on the canonical 15-minute grid. */
-export type ForecastResolution = "quarter_hour";
 
 export interface ForecastPointDTO {
     timestamp: string;
@@ -366,8 +363,6 @@ export interface SolarForecastDTO {
     status: ForecastStatus;
     staleness?: ForecastHealthDTO | null;
     unit: string | null;
-    resolution: ForecastResolution;
-    horizonHours: number;
     remainingTodayKwh?: number | null;
     remainingTodayEnergyEntityId?: string | null;
     actualHistory: ForecastPointDTO[];
@@ -399,8 +394,6 @@ export interface GridForecastDTO {
     status: ForecastStatus;
     generatedAt: string | null;
     unit: string;
-    resolution: ForecastResolution;
-    horizonHours: number;
     startedAt: string | null;
     partialReason: string | null;
     coverageUntil: string | null;
@@ -415,18 +408,12 @@ export interface GridForecastDTO {
     series: GridForecastSlotDTO[];
 }
 
-export interface GridForecastBaselineDTO {
-    importedFromGridKwh: number;
-    exportedToGridKwh: number;
-}
-
 export interface GridForecastSlotDTO {
     timestamp: string;
     durationHours: number;
     importedFromGridKwh: number;
     exportedToGridKwh: number;
     availableSurplusKwh?: number;
-    baseline?: GridForecastBaselineDTO;
 }
 
 export interface ForecastBandValueDTO {
@@ -470,15 +457,12 @@ export interface HouseConsumptionForecastDTO {
     staleness?: ForecastHealthDTO | null;
     generatedAt: string | null;
     unit: string;
-    resolution: ForecastResolution;
-    horizonHours: number;
     trainingWindowDays: number;
     historyDaysAvailable: number;
     requiredHistoryDays: number;
     model: string | null;
     actualHistory: HouseConsumptionActualHourDTO[];
     currentSlot?: HouseConsumptionForecastHourDTO;
-    currentHour?: HouseConsumptionForecastHourDTO;
     series: HouseConsumptionForecastHourDTO[];
 }
 
@@ -511,8 +495,6 @@ export interface BatteryCapacityForecastDTO {
     generatedAt: string | null;
     startedAt: string | null;
     unit: "kWh";
-    resolution: ForecastResolution;
-    horizonHours: number;
     model: string | null;
     nominalCapacityKwh: number | null;
     currentRemainingEnergyKwh: number | null;
@@ -538,7 +520,6 @@ export interface ForecastPayload {
 
 export interface GetForecastRequest {
     type: "helman/get_forecast";
-    forecast_days?: number;
 }
 
 export type ScheduleActionKind =

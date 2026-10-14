@@ -45,12 +45,11 @@ def build_adjusted_house_forecast(
 def _index_house_entries(house_forecast: dict[str, Any]) -> dict[str, dict[str, Any]]:
     entries_by_slot: dict[str, dict[str, Any]] = {}
 
-    for field_name in ("currentSlot", "currentHour"):
-        entry = house_forecast.get(field_name)
-        if isinstance(entry, dict):
-            slot_id = _entry_slot_id(entry)
-            if slot_id is not None:
-                entries_by_slot[slot_id] = entry
+    entry = house_forecast.get("currentSlot")
+    if isinstance(entry, dict):
+        slot_id = _entry_slot_id(entry)
+        if slot_id is not None:
+            entries_by_slot[slot_id] = entry
 
     series = house_forecast.get("series")
     if not isinstance(series, list):

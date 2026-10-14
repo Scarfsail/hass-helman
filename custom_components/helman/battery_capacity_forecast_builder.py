@@ -24,7 +24,6 @@ from .battery_state import (
 from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
     MAX_FORECAST_DAYS,
 )
 from .recorder_hourly_series import get_local_current_slot_start
@@ -102,7 +101,6 @@ class BatteryCapacityForecastBuilder:
                 status="not_configured",
                 settings=settings,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         if live_state is None:
@@ -111,7 +109,6 @@ class BatteryCapacityForecastBuilder:
                 status="unavailable",
                 settings=settings,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         house_status = house_forecast.get("status")
@@ -124,7 +121,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
             )
         if house_status != "available":
             _LOGGER.warning(
@@ -135,7 +131,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         solar_status = solar_forecast.get("status")
@@ -148,7 +143,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         started_at_local = dt_util.as_local(started_at)
@@ -179,7 +173,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         solar_by_slot = self._build_solar_slot_map(solar_forecast)
@@ -200,7 +193,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
             )
 
         slot_inputs, coverage_until, partial_reason = slot_inputs_result
@@ -231,7 +223,6 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
-                horizon_hours=horizon_hours,
                 started_at=started_at_local,
                 partial_reason=partial_reason,
                 coverage_until=coverage_until,
@@ -247,7 +238,6 @@ class BatteryCapacityForecastBuilder:
             settings=settings,
             live_state=live_state,
             model=model,
-            horizon_hours=horizon_hours,
             started_at=started_at_local,
             coverage_until=coverage_until,
             actual_history=actual_history,
@@ -473,8 +463,6 @@ class BatteryCapacityForecastBuilder:
         hour stale is a real staleness condition, not a race.
         """
         current_slot = house_forecast.get("currentSlot")
-        if not isinstance(current_slot, dict):
-            current_slot = house_forecast.get("currentHour")
 
         if isinstance(current_slot, dict):
             timestamp = self._parse_timestamp(current_slot.get("timestamp"))
@@ -491,8 +479,6 @@ class BatteryCapacityForecastBuilder:
     def _describe_house_anchor(self, house_forecast: dict[str, Any]) -> str:
         """The house payload's own current slot, for the unavailable warning."""
         current_slot = house_forecast.get("currentSlot")
-        if not isinstance(current_slot, dict):
-            current_slot = house_forecast.get("currentHour")
         if not isinstance(current_slot, dict):
             return "absent"
         timestamp = self._parse_timestamp(current_slot.get("timestamp"))
@@ -614,7 +600,6 @@ class BatteryCapacityForecastBuilder:
         *,
         status: str,
         settings: BatteryForecastSettings,
-        horizon_hours: int,
         live_state: BatteryLiveState | None = None,
         model: str | None = None,
         started_at: datetime | None = None,
@@ -631,8 +616,6 @@ class BatteryCapacityForecastBuilder:
             "generatedAt": dt_util.now().isoformat(),
             "startedAt": started_at.isoformat() if started_at is not None else None,
             "unit": "kWh",
-            "resolution": FORECAST_CANONICAL_RESOLUTION,
-            "horizonHours": horizon_hours,
             "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
             "model": model,
             "nominalCapacityKwh": (

@@ -109,7 +109,7 @@ async function mountCard(page: Page, powers: { solar: number; house: number; bat
                 "helman/get_history": async (msg: {
                     type: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_node_detail": async (msg: {
                     type: string;

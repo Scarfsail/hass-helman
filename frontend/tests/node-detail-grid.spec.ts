@@ -148,7 +148,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             ...forecastDefaults,
             grid: {
                 ...forecastDefaults.grid,
-                status: "available", generatedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 48,
+                status: "available", generatedAt: null, unit: "kWh",
                 startedAt: null, partialReason: null, coverageUntil: null, scheduleAdjusted: true,
                 currentImportPrice: v.staleCurrentPrice ? 3.0 : 4.2, importPriceUnit: "CZK/kWh",
                 importPricePoints: [
@@ -208,7 +208,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     node?: string;
                     section?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/solar_bias/day_aggregates": async (msg: {
                     type: string;

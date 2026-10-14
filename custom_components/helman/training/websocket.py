@@ -61,10 +61,8 @@ async def ws_train_now(
     # No await from here until the run is dispatched: the busy check and the
     # dispatch are atomic on the event loop.
     solar_service = run_coordinator._solar_bias_service
-    if batch.is_running or solar_service.is_training:
+    if batch.is_running:
         current_job = batch.current_job
-        if current_job is None and solar_service.is_training:
-            current_job = "solar_bias"
         connection.send_error(
             msg["id"],
             "training_in_progress",

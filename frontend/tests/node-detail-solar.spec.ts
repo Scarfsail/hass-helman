@@ -266,7 +266,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             ...forecastDefaults,
             solar: {
                 ...forecastDefaults.solar,
-                status: v.forecastStatus ?? "available", unit: "Wh", resolution: "quarter_hour", horizonHours: 168,
+                status: v.forecastStatus ?? "available", unit: "Wh",
                 actualHistory: points.actual, points: points.raw, adjustedPoints: points.adjusted,
                 biasCorrection: {
                     status: "applied", effectiveVariant: "adjusted",
@@ -329,7 +329,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     node?: string;
                     section?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_schedule": async (msg: {
                     type: string;

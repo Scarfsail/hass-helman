@@ -115,10 +115,6 @@ PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
 
 
-class TrainingInProgressError(RuntimeError):
-    pass
-
-
 class BiasNotConfiguredError(RuntimeError):
     pass
 
@@ -178,8 +174,6 @@ class SolarBiasCorrectionService:
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
         self._is_stale = False
-        self._training_lock = asyncio.Lock()
-        self._training_in_progress = False
         self._last_emitted_status: tuple[str, str] | None = None
         #: The recorder's last answer about where the meters' history begins, and
         #: when it was asked. ``None`` for "asked, and there is nothing" -- which
@@ -193,11 +187,6 @@ class SolarBiasCorrectionService:
         #: racing it. A card mounting into an aggregate view dispatches the day
         #: and span commands together, and both ask for the floor.
         self._history_floor_lock = asyncio.Lock()
-
-    @property
-    def is_training(self) -> bool:
-        """Whether a solar-bias training run currently owns the service."""
-        return self._training_in_progress
 
     async def async_setup(self) -> None:
         stored = self._store.profile
@@ -237,8 +226,6 @@ class SolarBiasCorrectionService:
         self._is_stale = metadata.training_config_fingerprint != current_fingerprint
 
     async def async_train(self) -> dict[str, Any]:
-        if self._training_in_progress:
-            raise TrainingInProgressError("Solar bias training already in progress")
         if not self._cfg.enabled:
             raise BiasNotConfiguredError("Solar bias correction is disabled")
 
@@ -246,8 +233,6 @@ class SolarBiasCorrectionService:
         previous_metadata = self._metadata
         previous_explainability = self._explainability
         previous_is_stale = self._is_stale
-        self._training_in_progress = True
-        await self._training_lock.acquire()
         # Use this service instance's configuration throughout the training run.
         cfg = self._cfg
         try:
@@ -301,10 +286,6 @@ class SolarBiasCorrectionService:
             self._explainability = previous_explainability if preserve_profile else None
             self._is_stale = previous_is_stale
             await self._store.async_save(self._serialize_state())
-        finally:
-            self._training_lock.release()
-            self._training_in_progress = False
-
         payload = self.get_status_payload()
         self._hass.bus.async_fire("helman_solar_bias_trained", payload)
         return payload
@@ -371,16 +352,6 @@ class SolarBiasCorrectionService:
         # needing an entity of its own — everything else it reads has a default
         # or comes from the power devices already configured.
         return self._cfg.slot_invalidation_max_battery_soc_percent is not None
-
-    def get_profile_payload(self) -> dict[str, Any] | None:
-        if not self._has_usable_profile():
-            return None
-
-        return {
-            "trainedAt": self._trained_at,
-            "factors": deepcopy(self._profile.factors),
-            "omittedSlots": list(self._profile.omitted_slots),
-        }
 
     async def async_get_span_aggregates(
         self,

@@ -81,7 +81,7 @@ async function mountCard(page: Page): Promise<void> {
                     type: string;
                     section?: string;
                 }) => {
-                    return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                    return { entity_history: {} };
                 },
                 "helman/get_node_detail": async (msg: {
                     type: string;

@@ -5,7 +5,6 @@ from typing import Any
 
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .forecast_series_fields import (
-    GRID_FLOW_BASELINE_SERIES_FIELDS,
     GRID_FLOW_EFFECTIVE_SERIES_FIELDS,
     project_series_fields,
 )
@@ -39,12 +38,5 @@ def build_grid_flow_forecast_snapshot(
         battery_snapshot.get("series"),
         GRID_FLOW_EFFECTIVE_SERIES_FIELDS,
     )
-
-    baseline_series = battery_snapshot.get("baselineSeries")
-    if isinstance(baseline_series, list):
-        snapshot["baselineSeries"] = project_series_fields(
-            baseline_series,
-            GRID_FLOW_BASELINE_SERIES_FIELDS,
-        )
 
     return snapshot

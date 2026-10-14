@@ -75,8 +75,6 @@ test.describe("HistoryEngine power/source pairing", () => {
         const node = consumerNode();
         engine(hass({})).applyHistory(
             {
-                buckets: 5,
-                bucket_duration: 60,
                 entity_history: {
                     [LOAD]: [100, 100],
                     [RATIO_SOLAR]: [100, 100],
@@ -88,6 +86,7 @@ test.describe("HistoryEngine power/source pairing", () => {
         );
 
         expect(node.powerHistory).toEqual([100, 100]);
+        expect(node.historyBuckets).toBe(5);
         expect(node.sourcePowerHistory).toHaveLength(2);
         expect(attribution(node)).toEqual(["solar", "solar"]);
     });
@@ -98,8 +97,6 @@ test.describe("HistoryEngine power/source pairing", () => {
         const node = consumerNode();
         engine(hass({})).applyHistory(
             {
-                buckets: 5,
-                bucket_duration: 60,
                 entity_history: {
                     [LOAD]: [100, 200, 300],
                     [RATIO_SOLAR]: [100, 0, 50],
@@ -127,8 +124,6 @@ test.describe("HistoryEngine power/source pairing", () => {
         const eng = engine(states);
         eng.applyHistory(
             {
-                buckets: 5,
-                bucket_duration: 60,
                 entity_history: {
                     [LOAD]: [100, 100],
                     [RATIO_SOLAR]: [100, 100],
@@ -157,7 +152,7 @@ test.describe("HistoryEngine power/source pairing", () => {
         const sources = sourceNodes();
         const states = hass({ [LOAD]: 100, [RATIO_SOLAR]: 100, [RATIO_GRID]: 0 });
         const eng = engine(states);
-        eng.applyHistory({ buckets: 5, bucket_duration: 60, entity_history: {} } as any, [node], sources);
+        eng.applyHistory({ entity_history: {} } as any, [node], sources);
 
         eng.advanceBuckets([node], sources);
         states.states[RATIO_SOLAR] = { state: "0" };
@@ -179,7 +174,7 @@ test.describe("HistoryEngine power/source pairing", () => {
         const states = hass({ [LOAD]: 100, [RATIO_SOLAR]: 100, [RATIO_GRID]: 0 });
         const eng = engine(states);
         eng.applyHistory(
-            { buckets: 5, bucket_duration: 60, entity_history: { [RATIO_SOLAR]: [100], [RATIO_GRID]: [0] } } as any,
+            { entity_history: { [RATIO_SOLAR]: [100], [RATIO_GRID]: [0] } } as any,
             [node],
             sources,
         );
@@ -197,7 +192,7 @@ test.describe("HistoryEngine power/source pairing", () => {
         const sources = sourceNodes();
         const states = hass({ [LOAD]: 100, [RATIO_SOLAR]: 0, [RATIO_GRID]: 0 });
         const eng = engine(states);
-        eng.applyHistory({ buckets: 5, bucket_duration: 60, entity_history: {} } as any, [node], sources);
+        eng.applyHistory({ entity_history: {} } as any, [node], sources);
 
         eng.advanceBuckets([node], sources);
 
@@ -218,7 +213,7 @@ test.describe("HistoryEngine power/source pairing", () => {
             [RATIO_GRID]: 0,
         });
         const eng = engine(states);
-        eng.applyHistory({ buckets: 5, bucket_duration: 60, entity_history: {} } as any, HistoryEngine.walkTree([house]), sources);
+        eng.applyHistory({ entity_history: {} } as any, HistoryEngine.walkTree([house]), sources);
 
         eng.advanceBuckets([house], sources);
 
